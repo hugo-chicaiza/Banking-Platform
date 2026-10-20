@@ -1,8 +1,5 @@
 # Banking-Plataform
 
-# Project Name
-
-Brief description of the project and its purpose.
 
 ## Repository Structure
 
