@@ -15,7 +15,7 @@ Welcome to the project's documentation hub. This vault contains the official pro
 - [[05-GithubActions/CI-Pipeline|CI Pipeline]]
 ## Documentation
 - [[06-Development/Setup-Guide|Development Setup Guide]]
-- [Interactive API Documentation](https://)
+- [Piloto de contratos OpenAPI y visualización local](02-Backend/Contratos-API.md)
 ##  Deployment
 
 - [[07-Deployment/Deployment-Guide|Deployment Guide]]

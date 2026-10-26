@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Enquo — contrato piloto ATM-13</title>
+    <link rel="stylesheet"
+      href="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5.34.0/swagger-ui.css"
+      integrity="sha384-4c3vsE5f+trhFyHrFrLM1fFGUn531NIaC7dcqEWIJdoRQJ5CkJbSuSCwXLpaS1KF"
+      crossorigin="anonymous">
+    <style>
+      body { margin: 0; background: #fafafa; font-family: system-ui, sans-serif; }
+      header { padding: 20px max(20px, calc((100% - 1460px) / 2)); background: #edf3f8; color: #172b3a; }
+      header h1 { margin: 0 0 8px; font-size: 21px; }
+      header p { margin: 7px 0; line-height: 1.5; }
+      header a { color: #145987; }
+      #load-error { padding: 24px; color: #8b2020; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>Propuesta de contrato ATM-13</h1>
+      <p>Vista de revisión del archivo de esta rama. No hay backend conectado y «Try it out» está deshabilitado.</p>
+      <p><a href="./enquo-v1.yaml">Consultar el YAML</a> ·
+        <a href="https://github.com/hugo-chicaiza/Banking-Platform/issues/102">Historia T-09</a></p>
+    </header>
+    <p id="load-error" role="status">Cargando Swagger UI. Esta vista necesita conexión al CDN de Swagger UI.</p>
+    <div id="swagger-ui"></div>
+    <script
+      src="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5.34.0/swagger-ui-bundle.js"
+      integrity="sha384-9Td7MKiIr2S83E1kZyyVi8KdJw/S8CpAvu0llLyMeg0xq/hDGiZJfVn0fV4llCmK"
+      crossorigin="anonymous"></script>
+    <script>
+      if (typeof SwaggerUIBundle === "function") {
+        document.getElementById("load-error").hidden = true;
+        SwaggerUIBundle({
+          url: "./enquo-v1.yaml",
+          dom_id: "#swagger-ui",
+          deepLinking: true,
+          displayOperationId: true,
+          docExpansion: "full",
+          defaultModelsExpandDepth: 1,
+          supportedSubmitMethods: [],
+          tryItOutEnabled: false,
+          persistAuthorization: false,
+          validatorUrl: "none",
+          presets: [SwaggerUIBundle.presets.apis],
+          layout: "BaseLayout"
+        });
+      }
+    </script>
+  </body>
+</html>

@@ -1,0 +1,186 @@
+openapi: 3.1.1
+info:
+  title: Enquo API — piloto de contrato ATM-13
+  version: 0.1.0-draft
+  description: |-
+    Propuesta para revisar el contrato antes de implementar el backend.
+    Este piloto contiene únicamente ATM-13, relacionado con T-09 e issue #102.
+    No describe la API completa ni confirma que esta operación esté implementada.
+
+    Fuente: backlog_banking_platform_v2.xlsx, Backlog fila 34,
+    Endpoints fila 64 y Esquemas filas 377–382.
+    Las referencias a tablas del Excel son documentación interna;
+    no implican que el DTO sea una tabla de base de datos.
+servers:
+  - url: /api/v1
+    description: Prefijo propuesto para la API; el visor no conecta un backend.
+tags:
+  - name: ATM
+    description: Operaciones del módulo ATM incluidas en el piloto.
+x-pilot-decisions:
+  - El Excel confirma método, ruta, roles, respuesta 200 y campos de Gaveta.
+  - El transporte Bearer para operadores es una propuesta que debe revisar el equipo.
+  - Los errores generales 401, 403 y 404 y su formato son propuestas del piloto.
+  - Solo idGaveta está marcado requerido en el Excel; revisar los demás campos antes de aprobar.
+  - Los campos sin marca se modelan como no obligatorios y no nulos si están presentes; esta interpretación requiere acuerdo.
+  - Confirmar alcance por agencia, respuesta para un terminal sin gavetas y semántica de estados A e I.
+paths:
+  /atm/terminales/{idATM}/gavetas:
+    get:
+      operationId: atmConsultarGavetas
+      tags: [ATM]
+      summary: Consultar gavetas y efectivo actual por denominación
+      description: |-
+        El Excel permite esta operación a SUPERVISOR, CAJERO y ADMIN.
+        Backend deberá comprobar tanto el rol como el acceso al terminal;
+        declarar Bearer en OpenAPI no implementa esos permisos.
+
+        Lee ATM.Gaveta según Endpoints. No escribe tablas en esa fila.
+        Los importes de efectivo pueden relacionarse con la denominación,
+        pero no se añade un campo de valor nominal que Gaveta no define.
+      x-endpoint-id: ATM-13
+      x-historias: [T-09]
+      x-issue: https://github.com/hugo-chicaiza/Banking-Platform/issues/102
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: idATM
+          in: path
+          required: true
+          description: Identificador del terminal. El modelo ATMTerminal lo define como int; los límites deben acordarse.
+          schema:
+            type: integer
+          example: 1
+      responses:
+        '200':
+          description: |-
+            Gavetas del terminal. El contenido de ejemplo es ficticio.
+            Propuesta por confirmar: devolver un arreglo vacío si el terminal
+            existe y no tiene gavetas asociadas.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Gaveta'
+              examples:
+                conGavetas:
+                  summary: Gaveta con datos ficticios
+                  value:
+                    - idGaveta: 1
+                      numeroGaveta: 1
+                      idDenominacion: 3
+                      capacidad: 1000
+                      cantidadActual: 100
+                      estado: A
+                sinGavetas:
+                  summary: Propuesta de resultado vacío por confirmar
+                  value: []
+        '401':
+          description: 'Propuesta: sesión de operador ausente o inválida.'
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Sesión no válida
+                status: 401
+                code: SESION_NO_VALIDA
+                detail: Se requiere una sesión válida de operador.
+                traceId: req-ejemplo-001
+        '403':
+          description: 'Propuesta: falta de rol o de acceso al terminal solicitado.'
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Acceso no autorizado
+                status: 403
+                code: ACCESO_DENEGADO
+                detail: El usuario no puede consultar este terminal.
+                traceId: req-ejemplo-002
+        '404':
+          description: 'Propuesta: el terminal solicitado no existe.'
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Terminal no encontrado
+                status: 404
+                code: ATM_NO_ENCONTRADO
+                detail: No existe el terminal solicitado.
+                traceId: req-ejemplo-003
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |-
+        Propuesta de autenticación de operadores. No confundir con el
+        sessionToken de un cliente autenticado con tarjeta y PIN.
+  schemas:
+    Gaveta:
+      type: object
+      description: |-
+        Campos de Esquemas A377:E382. Solo idGaveta está marcado Sí.
+        La obligatoriedad y nullabilidad de los demás campos debe revisarse.
+        Por ahora se omiten de required y no admiten null si están presentes.
+      required: [idGaveta]
+      properties:
+        idGaveta:
+          type: integer
+        numeroGaveta:
+          type: integer
+        idDenominacion:
+          type: integer
+        capacidad:
+          type: integer
+        cantidadActual:
+          type: integer
+        estado:
+          type: string
+          enum: [A, I]
+          description: Valores del Excel; confirmar su significado y reglas.
+    ProblemDetails:
+      type: object
+      description: |-
+        Campos de Esquemas A2:E8. Su utilización y los códigos de error
+        para ATM-13 son propuestas del piloto, no errores específicos
+        listados en Endpoints para esta operación.
+      required: [type, title, status, code]
+      properties:
+        type:
+          type: string
+          description: URI o identificador del tipo de error.
+        title:
+          type: string
+        status:
+          type: integer
+          description: Estado HTTP de la respuesta.
+        code:
+          type: string
+          description: Código de negocio que debe homologarse con el equipo.
+        detail:
+          type: string
+        traceId:
+          type: string
+          description: Identificador de correlación; no contiene credenciales.
+        errors:
+          type: array
+          items:
+            $ref: '#/components/schemas/FieldError'
+    FieldError:
+      type: object
+      description: Campos de Esquemas A9:E10.
+      required: [field, message]
+      properties:
+        field:
+          type: string
+        message:
+          type: string
