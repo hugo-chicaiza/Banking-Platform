@@ -24,8 +24,8 @@ Use Conventional Commits to keep commit messages consistent and descriptive.
 
 | Area          | Convention                        | Example                       |
 | ------------- | --------------------------------- | ----------------------------- |
-| Backend       | `feature/backend-<issue>-<name>`  | `feat/backend-1-createClient` |
-| Frontend      | `feature/frontend-<issue>-<name>` | `feat/frontend-2-login`       |
+| Backend       | `feat/backend-<issue>-<name>`  | `feat/backend-1-createClient` |
+| Frontend      | `feat/frontend-<issue>-<name>` | `feat/frontend-2-login`       |
 | QA            | `test/<name>`                     | `test/flow-1-back2Front`      |
 | Documentation | `docs/<name>`                     | `docs/update-1-roadmap`       |
 
