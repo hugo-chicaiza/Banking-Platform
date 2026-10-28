@@ -1,0 +1,95 @@
+name: Backend CI
+
+on:
+  push:
+    branches:
+      - 'feat/backend-*'
+  pull_request:
+    branches:
+      - develop
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  quality-security:
+    name: Backend Quality and Security
+    if: >-
+      github.event_name != 'pull_request' ||
+      startsWith(github.head_ref, 'feat/backend-')
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install tools and backend dependencies
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f Backend/requirements.txt ]; then
+            pip install -r Backend/requirements.txt
+          fi
+          pip install ruff pyright bandit pip-audit
+
+      - name: Check formatting
+        run: |
+          if find Backend -type f -name '*.py' -print -quit 2>/dev/null | grep -q .; then
+            ruff format --check Backend
+          else
+            echo "SKIPPED: No Python files found."
+          fi
+
+      - name: Lint Python code
+        run: |
+          if find Backend -type f -name '*.py' -print -quit 2>/dev/null | grep -q .; then
+            ruff check Backend
+          else
+            echo "SKIPPED: No Python files found."
+          fi
+
+      - name: Check Python syntax
+        run: |
+          if find Backend -type f -name '*.py' -print -quit 2>/dev/null | grep -q .; then
+            python -m compileall -q Backend
+          else
+            echo "SKIPPED: No Python files found."
+          fi
+
+      - name: Check types
+        run: |
+          if find Backend -type f -name '*.py' -print -quit 2>/dev/null | grep -q .; then
+            pyright Backend
+          else
+            echo "SKIPPED: No Python files found."
+          fi
+
+      - name: Scan Python security issues
+        run: |
+          if find Backend -type f -name '*.py' -print -quit 2>/dev/null | grep -q .; then
+            bandit -r Backend -x Backend/tests
+          else
+            echo "SKIPPED: No Python files found."
+          fi
+
+      - name: Audit dependencies
+        run: |
+          if [ -f Backend/requirements.txt ]; then
+            pip-audit -r Backend/requirements.txt
+          else
+            echo "SKIPPED: requirements.txt not found."
+          fi
+
+      - name: Scan for secrets
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
