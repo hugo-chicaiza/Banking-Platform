@@ -114,11 +114,17 @@ Los dos que más aportan:
     || { echo "::error::La CSP no es estricta"; exit 1; }
   ```
 
-Y un detalle de cadena de suministro: el job de calidad instala con
-`npm ci --ignore-scripts`, para que los scripts de instalación de ninguna
-dependencia transitiva ejecuten código en el runner — el vector habitual de los
-ataques a npm. El job de compilación sí los permite, porque `esbuild` los
-necesita.
+Y un detalle de cadena de suministro: **los cuatro jobs instalan con
+`npm ci --ignore-scripts`**, para que los scripts de instalación de ninguna
+dependencia transitiva ejecuten código arbitrario en el runner — el vector
+habitual de los ataques a npm (`githubactions:S6505`).
+
+> La primera versión solo lo ponía en el job de calidad, suponiendo que
+> `esbuild` necesitaba su script de instalación para resolver el binario de la
+> plataforma. **Es falso:** lo resuelve por dependencias opcionales. Con un
+> `node_modules` limpio y `--ignore-scripts`, la compilación de los tres
+> entornos y las pruebas pasan igual. Lo señaló SonarQube y se comprobó en
+> local antes de cambiarlo.
 
 ## Backend — lo que corre hoy
 
@@ -295,15 +301,38 @@ Todo está fijado: dependencias, acciones de GitHub, herramientas, imagen base.
 | Acciones de GitHub | etiqueta de versión exacta o SHA | `.github/workflows/*.yml` |
 | Herramientas en los workflows | versión exacta | en cada paso |
 
-**Sobre etiqueta frente a SHA.** Fijar por SHA (`@a1b2c3d...`) es más estricto:
-una etiqueta se puede mover a otro commit, un SHA no. La contrapartida es que
-el workflow se vuelve ilegible y nadie sabe qué versión está usando.
+**Etiqueta frente a SHA: el criterio acordado.** Fijar por SHA (`@a1b2c3d…`)
+es más estricto, porque una etiqueta se puede mover a otro commit y un SHA no.
+La contrapartida es que el workflow se vuelve menos legible.
 
-El repositorio usa hoy las dos formas: `gitleaks-action` va por SHA desde el
-PR #227 (lo exigía una regla de Sonar), y el resto por etiqueta exacta con
-Dependabot encargado de actualizarlas. **Conviene unificar el criterio**; la
-recomendación, si el proyecto pasa a manejar dinero real, es SHA en todo.
-Queda como punto a decidir.
+La regla del repositorio, que es la que aplica SonarQube
+(`githubactions:S7637`):
+
+| Quién publica la acción | Cómo se fija | Ejemplo |
+| --- | --- | --- |
+| GitHub (`actions/*`, `github/*`) | **Etiqueta** de versión exacta | `actions/checkout@v7.0.1` |
+| **Cualquier tercero** | **SHA completo**, con la versión en un comentario | `amannn/action-semantic-pull-request@48f2562… # v6.1.1` |
+
+El razonamiento: una acción de terceros es código ajeno que se ejecuta con
+acceso al repositorio y al token. Si quien la publica mueve la etiqueta —o
+pierde el control de su cuenta— el SHA es lo único que impide que ese cambio
+entre en el CI sin que nadie lo revise. Es la categoría **OWASP Top 10:2025
+A03 — Software Supply Chain Failures**.
+
+Para las acciones de GitHub la etiqueta basta: el riesgo de que `actions/*`
+mueva una etiqueta de forma maliciosa no es comparable, y la legibilidad sí
+importa.
+
+Dependabot actualiza ambas formas, incluidos los SHA.
+
+**Cómo obtener el SHA de una etiqueta:**
+
+```shell
+gh api repos/amannn/action-semantic-pull-request/git/ref/tags/v6.1.1 --jq .object.sha
+```
+
+(Si el objeto es de tipo `tag` y no `commit`, hay que resolverlo una vez más
+con `git/tags/<sha>`; son las etiquetas anotadas.)
 
 ## Lo que NO verifica el CI
 

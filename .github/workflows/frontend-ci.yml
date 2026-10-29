@@ -96,11 +96,13 @@ jobs:
           cache: npm
           cache-dependency-path: Frontend/package-lock.json
 
-      # Aquí sí se permiten los scripts: esbuild y @parcel/watcher necesitan su
-      # paso de instalación para resolver el binario de la plataforma, y sin
-      # ellos la compilación no funciona.
+      # `--ignore-scripts` también aquí. La suposición inicial era que esbuild
+      # necesitaba su script de instalación para resolver el binario de la
+      # plataforma; es falso, lo resuelve por dependencias opcionales. Con un
+      # `node_modules` limpio, la compilación y las pruebas pasan igual.
+      # Comprobado en local y señalado por SonarQube (githubactions:S6505).
       - name: Instalar dependencias
-        run: npm ci
+        run: npm ci --ignore-scripts
 
       # Los umbrales están en vitest-base.config.mts (80 % líneas, 70 % ramas).
       # Si la cobertura baja, el comando falla; no es una advertencia.
@@ -147,7 +149,7 @@ jobs:
           cache-dependency-path: Frontend/package-lock.json
 
       - name: Instalar dependencias
-        run: npm ci
+        run: npm ci --ignore-scripts
 
       # Se compilan los tres: una configuración de entorno rota solo aparece al
       # compilar ESA configuración, y descubrirlo en el despliegue a staging es
@@ -281,14 +283,14 @@ jobs:
 
       - name: Analizar con SonarQube
         if: steps.token.outputs.disponible == 'true'
-        uses: SonarSource/sonarqube-scan-action@v8.4.0
+        uses: SonarSource/sonarqube-scan-action@4d1dc0c91ee400dcf8a6dddf2f705ac36542e304 # v8.4.0
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
 
       - name: Esperar la puerta de calidad
         if: steps.token.outputs.disponible == 'true'
-        uses: SonarSource/sonarqube-quality-gate-action@v1.2.1
+        uses: SonarSource/sonarqube-quality-gate-action@7a5fffe8e523c40e0c740b6bc2712ab503e52efa # v1.2.1
         timeout-minutes: 5
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
