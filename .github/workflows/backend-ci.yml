@@ -74,6 +74,14 @@ jobs:
             echo "SKIPPED: No Python files found."
           fi
 
+      - name: Run tests
+        run: |
+          if find Backend/tests -type f -name 'test_*.py' -print -quit 2>/dev/null | grep -q .; then
+            pytest Backend/tests
+          else
+            echo "SKIPPED: No tests found."
+          fi
+
       - name: Scan Python security issues
         run: |
           if find Backend -type f -name '*.py' -print -quit 2>/dev/null | grep -q .; then
