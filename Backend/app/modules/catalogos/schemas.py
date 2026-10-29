@@ -21,3 +21,13 @@ class TipoMovimientoCaja(CamelModel):
     codigo: str
     descripcion: str
     naturaleza: Literal["I", "E"]
+
+
+class Agencia(CamelModel):
+    id_agencia: str
+    codigo: str
+    nombre: str
+    tipo_agencia: Literal["Sucursal", "Matriz"]
+    provincia: str
+    ciudad: str
+    estado: Literal["A", "I", "C"]
