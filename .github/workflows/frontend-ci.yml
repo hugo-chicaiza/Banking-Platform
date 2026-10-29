@@ -225,13 +225,22 @@ jobs:
         continue-on-error: true
         run: npm audit --audit-level=critical
 
-      # Comprueba que el lockfile corresponde al package.json. `npm ci` ya
-      # falla si no coinciden, pero este paso lo dice con un mensaje claro en
-      # lugar de un error de resolución de dependencias.
+      # Comprueba que el lockfile corresponde al package.json.
+      #
+      # Se usa `npm ci --dry-run` y NO `npm ls`: este job no instala
+      # dependencias a propósito (las auditorías resuelven contra el lockfile),
+      # y `npm ls` sin `node_modules` informa de que falta todo y devuelve 1,
+      # así que fallaba siempre. `--dry-run` hace la resolución completa sin
+      # escribir nada y devuelve 1 solo si package.json y el lock no coinciden.
+      #
+      # El paso es redundante con los otros jobs —`npm ci` ya falla si están
+      # desincronizados— pero da un mensaje que dice qué hacer, en lugar de un
+      # error de resolución de dependencias.
       - name: Verificar que el lockfile está sincronizado
         run: |
-          if ! npm ls --all --omit=dev > /dev/null 2>&1; then
-            echo "::error title=Lockfile::package-lock.json no corresponde a package.json. Ejecutar 'npm install' y subir el lockfile."
+          if ! npm ci --dry-run --ignore-scripts > /dev/null 2>&1; then
+            echo "::error title=Lockfile::package-lock.json no corresponde a package.json. Ejecutar 'npm install' en Frontend/ y subir el lockfile actualizado."
+            npm ci --dry-run --ignore-scripts 2>&1 | tail -20
             exit 1
           fi
           echo "El lockfile está sincronizado."
