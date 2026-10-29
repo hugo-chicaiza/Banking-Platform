@@ -82,7 +82,7 @@ reabriría el agujero descrito arriba.
 | [`backend-ci.yml`](../../.github/workflows/backend-ci.yml) | todo PR a `main`/`develop` | sí |
 | [`frontend-ci.yml`](../../.github/workflows/frontend-ci.yml) | PR que toca `Frontend/**` | sí |
 | [`pr-governance.yml`](../../.github/workflows/pr-governance.yml) | todo PR | sí (rama, título, archivos prohibidos) |
-| [`dependency-review.yml`](../../.github/workflows/dependency-review.yml) | todo PR | sí (severidad alta o licencia vetada) |
+| [`dependency-review.yml`](../../.github/workflows/dependency-review.yml) | todo PR | **no todavía** — ver abajo |
 | [`codeql.yml`](../../.github/workflows/codeql.yml) | todo PR + lunes 06:00 UTC | no (informa en Security) |
 | [`openapi-ci.yml`](../../.github/workflows/openapi-ci.yml) | PR que toca el contrato | sí (cuando el contrato exista) |
 
@@ -213,6 +213,58 @@ Los umbrales se configuran en la interfaz de Sonar, sobre el **código nuevo**:
 > **Estos umbrales están escritos aquí a propósito.** Viven en la interfaz de
 > Sonar, donde se pueden cambiar sin que aparezca en ningún PR. Tenerlos en el
 > repositorio hace que un cambio sea visible y revisable.
+
+## Revisión de dependencias — pendiente de un ajuste del repositorio
+
+`dependency-review.yml` mira el **diff** del PR y señala la dependencia que se
+está **añadiendo**, con su vulnerabilidad y su licencia. Es distinto de
+`pip-audit` y `npm audit`, que auditan lo que ya hay: el valor está en avisar
+*antes* de integrar, cuando quitar la dependencia cuesta un commit y no cuando
+ya hay código que la usa.
+
+> [!WARNING]
+> **Hoy este control informa pero no protege.** La acción responde:
+>
+> ```
+> Dependency review is not supported on this repository.
+> Please ensure that Dependency graph is enabled.
+> ```
+>
+> El **grafo de dependencias** del repositorio está desactivado. Se activa en
+> **Settings → Security and analysis → Dependency graph** y requiere permisos
+> de administración.
+>
+> Mientras tanto el paso lleva `continue-on-error: true`, para que un ajuste
+> que nadie con permisos ha tocado no deje en rojo todos los PR del
+> repositorio. El job deja un aviso visible en el resumen para que un job
+> verde no se confunda con una revisión hecha.
+>
+> **Al activar el grafo hay que quitar el `continue-on-error`** de
+> `.github/workflows/dependency-review.yml`. Está marcado con un comentario en
+> el propio archivo.
+
+Cuando esté activo bloqueará por:
+
+| Motivo | Umbral |
+| --- | --- |
+| Vulnerabilidad en una dependencia que el PR añade | severidad `high` o superior |
+| Licencia vetada | `GPL-2.0-only`, `GPL-2.0-or-later`, `GPL-3.0-only`, `GPL-3.0-or-later`, `AGPL-3.0-only`, `AGPL-3.0-or-later` |
+
+Las licencias vetadas obligan a publicar el código fuente del software que las
+enlaza. No es una opinión sobre ellas, es una restricción del modelo de
+negocio. `SSPL-1.0` también lo estaría, pero **no es un identificador SPDX**
+(no está aprobada por la OSI) y la acción no lo admite; si alguna vez entra una
+dependencia con SSPL habrá que detectarla en la revisión del PR.
+
+> Dos detalles de configuración que hacen fallar la acción **sin revisar
+> nada**, y que cuestan tiempo de diagnosticar porque el mensaje es el mismo
+> («Invalid license(s)»):
+>
+> 1. `deny-licenses` se parsea como lista **separada por comas**. Un bloque
+>    YAML `|` llega como una sola cadena con saltos de línea y se rechaza
+>    entera.
+> 2. Los identificadores tienen que ser SPDX **vigentes**: `GPL-3.0` y
+>    `AGPL-3.0` a secas están obsoletos.
 
 ## CodeQL
 

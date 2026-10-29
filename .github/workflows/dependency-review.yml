@@ -39,7 +39,24 @@ jobs:
         with:
           persist-credentials: false
 
+      # `continue-on-error` es TEMPORAL y hay que quitarlo.
+      #
+      # Motivo: el **grafo de dependencias** del repositorio no está activado,
+      # y sin él la acción no puede funcionar:
+      #
+      #     Dependency review is not supported on this repository.
+      #     Please ensure that Dependency graph is enabled.
+      #
+      # Activarlo requiere permisos de administración (Settings → Security and
+      # analysis → Dependency graph), así que no se puede hacer desde un PR.
+      # Mientras tanto, el job informa en lugar de dejar TODOS los PR del
+      # repositorio en rojo por un ajuste que nadie con permisos ha tocado.
+      #
+      # QUITAR esta línea en cuanto el grafo esté activo: hasta entonces, este
+      # control informa pero no protege. Ver docs/08-Quality/Quality-Gates.md
       - uses: actions/dependency-review-action@v5.0.0
+        id: revision
+        continue-on-error: true
         with:
           # Bloquea a partir de severidad alta. `moderate` generaría demasiado
           # ruido en las dependencias de desarrollo y el equipo acabaría
@@ -75,3 +92,24 @@ jobs:
 
           comment-summary-in-pr: on-failure
           warn-only: false
+
+      # Deja constancia visible de que el control no protegió, para que no se
+      # confunda un job verde con una revisión hecha.
+      - name: Informar del estado del control
+        if: steps.revision.outcome != 'success'
+        run: |
+          {
+            echo "### Revisión de dependencias: no se ejecutó"
+            echo ""
+            echo "El control no pudo revisar las dependencias de este PR."
+            echo ""
+            echo "La causa más probable es que el **grafo de dependencias** del"
+            echo "repositorio esté desactivado. Se activa en"
+            echo "**Settings → Security and analysis → Dependency graph**, y"
+            echo "requiere permisos de administración."
+            echo ""
+            echo "Mientras tanto, las dependencias nuevas hay que revisarlas a"
+            echo "mano en el diff del PR."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          echo "::warning title=Revisión de dependencias::El control no se ejecutó. Revisar las dependencias nuevas a mano y activar el grafo de dependencias en Settings."
