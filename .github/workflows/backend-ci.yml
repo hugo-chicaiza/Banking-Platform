@@ -35,7 +35,8 @@ jobs:
 
       - name: Install tools and backend dependencies
         # Lock con hashes + solo binarios: versiones verificadas y sin ejecutar setup.py (Sonar S8544/S8541)
-        run: pip install --require-hashes --only-binary :all: -r Backend/requirements-dev.txt
+        run: |
+          pip install --require-hashes --only-binary :all: -r Backend/requirements-dev.txt
 
       - name: Check formatting
         run: |
