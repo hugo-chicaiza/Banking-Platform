@@ -45,3 +45,20 @@ def listar_tipos_movimiento_caja(conn: Connection) -> list[dict[str, Any]]:
         ORDER BY Naturaleza, Codigo
         """,
     )
+
+
+def listar_agencias(conn: Connection) -> list[dict[str, Any]]:
+    # CAT-06: la tabla Agencia no tiene Nombre; se usa Codigo como nombre (acordado
+    # con el equipo). Provincia y ciudad vienen de Catalogo.Ciudad.
+    return _rows(
+        conn,
+        """
+        SELECT a.IdAgencia AS id_agencia, a.Codigo AS codigo,
+               a.Codigo AS nombre, a.TipoAgencia AS tipo_agencia,
+               c.Provincia AS provincia, c.Nombre AS ciudad,
+               a.Estado AS estado
+        FROM Organizacion.Agencia AS a
+        JOIN Catalogo.Ciudad AS c ON c.IdCiudad = a.IdCiudad
+        ORDER BY a.Codigo
+        """,
+    )
