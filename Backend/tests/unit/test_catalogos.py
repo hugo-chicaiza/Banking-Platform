@@ -98,3 +98,72 @@ def test_tipos_movimiento_caja_con_datos(client, monkeypatch):
 
 
 # TODO(F-03): agregar test_sin_token_401 cuando require_auth valide el JWT
+
+
+def test_tipos_antecedente_con_datos(client, monkeypatch):
+    rows = [
+        {
+            "id_tipo_antecedente": 2,
+            "nombre": "Lista OFAC",
+            "categoria": "Critico",
+            "puede_impedir_vinculacion": True,
+        },
+        {
+            "id_tipo_antecedente": 3,
+            "nombre": "Verificación adicional",
+            "categoria": "EnRevision",
+            "puede_impedir_vinculacion": False,
+        },
+    ]
+
+    monkeypatch.setattr(
+        repository,
+        "listar_tipos_antecedente",
+        lambda conn: rows,
+    )
+
+    response = client.get("/api/v1/catalogos/tipos-antecedente")
+
+    assert response.status_code == 200
+    assert response.json() == [
+        {
+            "idTipoAntecedente": 2,
+            "nombre": "Lista OFAC",
+            "categoria": "Critico",
+            "puedeImpedirVinculacion": True,
+        },
+        {
+            "idTipoAntecedente": 3,
+            "nombre": "Verificación adicional",
+            "categoria": "EnRevision",
+            "puedeImpedirVinculacion": False,
+        },
+    ]
+
+
+def test_tipos_antecedente_sin_datos(client, monkeypatch):
+    monkeypatch.setattr(
+        repository,
+        "listar_tipos_antecedente",
+        lambda conn: [],
+    )
+
+    response = client.get("/api/v1/catalogos/tipos-antecedente")
+
+    assert response.status_code == 200
+    assert response.json() == []
+
+
+def test_tipos_antecedente_sql_filtra_y_ordena(monkeypatch):
+    from unittest.mock import MagicMock
+
+    conn = MagicMock()
+    conn.execute.return_value.mappings.return_value = []
+
+    repository.listar_tipos_antecedente(conn)
+
+    sql = str(conn.execute.call_args.args[0])
+
+    assert "FROM Catalogo.TipoAntecedente" in sql
+    assert "WHERE Estado = 'Activo'" in sql
+    assert "ORDER BY Categoria, Nombre" in sql

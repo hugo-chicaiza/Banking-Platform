@@ -45,3 +45,19 @@ def listar_tipos_movimiento_caja(conn: Connection) -> list[dict[str, Any]]:
         ORDER BY Naturaleza, Codigo
         """,
     )
+
+
+def listar_tipos_antecedente(conn: Connection) -> list[dict[str, Any]]:
+    return _rows(
+        conn,
+        """
+        SELECT
+            IdTipoAntecedente AS id_tipo_antecedente,
+            Nombre AS nombre,
+            Categoria AS categoria,
+            PuedeImpedirVinculacion AS puede_impedir_vinculacion
+        FROM Catalogo.TipoAntecedente
+        WHERE Estado = 'Activo'
+        ORDER BY Categoria, Nombre
+        """,
+    )

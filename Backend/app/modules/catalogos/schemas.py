@@ -21,3 +21,10 @@ class TipoMovimientoCaja(CamelModel):
     codigo: str
     descripcion: str
     naturaleza: Literal["I", "E"]
+
+
+class TipoAntecedente(CamelModel):
+    id_tipo_antecedente: int
+    nombre: str
+    categoria: Literal["EnRevision", "Critico"]
+    puede_impedir_vinculacion: bool

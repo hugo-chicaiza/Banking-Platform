@@ -35,3 +35,29 @@ def test_tipos_movimiento_caja_ordenados(conn):
     filas = repository.listar_tipos_movimiento_caja(conn)
     claves = [(f["naturaleza"], f["codigo"]) for f in filas]
     assert claves == sorted(claves)
+
+
+def test_tipos_antecedente_ordenados(conn):
+    filas = repository.listar_tipos_antecedente(conn)
+
+    claves = [(fila["categoria"], fila["nombre"]) for fila in filas]
+
+    assert claves == sorted(claves)
+
+
+def test_tipos_antecedente_solo_activos(conn):
+    from sqlalchemy import text
+
+    filas = repository.listar_tipos_antecedente(conn)
+
+    total_activos = conn.execute(
+        text(
+            """
+            SELECT COUNT(*)
+            FROM Catalogo.TipoAntecedente
+            WHERE Estado = 'Activo'
+            """
+        )
+    ).scalar_one()
+
+    assert len(filas) == total_activos
