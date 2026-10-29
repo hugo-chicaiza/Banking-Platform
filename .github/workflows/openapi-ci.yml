@@ -1,0 +1,164 @@
+# Validación del contrato OpenAPI — F-02 (#16), al servicio de F-01 (#15)
+#
+# F-02 aporta la automatización; el contenido del contrato es de F-01. Este
+# workflow está escrito para funcionar **antes** de que el contrato exista:
+# si no encuentra ningún archivo OpenAPI, informa y termina correctamente, en
+# lugar de dejar un job rojo permanente durante la Épica 0.
+#
+# Qué valida cuando el contrato ya está:
+#   1. Estructura y referencias del OpenAPI (redocly lint).
+#   2. Que los ejemplos correspondan a sus esquemas.
+#   3. Que no se introduzcan cambios incompatibles frente a `main`.
+#
+# Lo que NO demuestra: que exista un backend funcionando, que los permisos se
+# apliquen o que la lógica financiera sea correcta. Eso lo cubren las pruebas
+# de F-06. La tabla de "qué comprueba / qué no demuestra" de
+# `Contratos-API.md` (PR #106) sigue siendo la referencia.
+#
+# La versión de @redocly/cli está fijada: un cambio de versión puede introducir
+# reglas nuevas y poner en rojo PR que no tocaron el contrato.
+
+name: Contrato OpenAPI
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - '**/openapi/**'
+      - '**/openapi.yaml'
+      - '**/openapi.yml'
+      - '**/*-v1.yaml'
+      - 'redocly.yaml'
+      - '.github/workflows/openapi-ci.yml'
+  pull_request:
+    branches: [main, develop]
+    types: [opened, synchronize, reopened]
+    paths:
+      - '**/openapi/**'
+      - '**/openapi.yaml'
+      - '**/openapi.yml'
+      - '**/*-v1.yaml'
+      - 'redocly.yaml'
+      - '.github/workflows/openapi-ci.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: openapi-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  REDOCLY_VERSION: '2.72.0'
+  NODE_VERSION: '24'
+
+jobs:
+  validar:
+    name: Validar el contrato
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          # Historial completo: el paso de compatibilidad compara contra la
+          # versión del contrato que hay en la rama base.
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-node@v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      # Busca el contrato en lugar de fijar una ruta, porque F-01 todavía no ha
+      # decidido dónde vive (el piloto del PR #106 lo puso en
+      # BankingPlataformDocs/02-Backend/openapi/).
+      - name: Localizar los archivos OpenAPI
+        id: localizar
+        run: |
+          archivos=$(find . \
+            -path ./node_modules -prune -o \
+            -path ./.git -prune -o \
+            -type f \( -name 'openapi.yaml' -o -name 'openapi.yml' -o -name '*-v1.yaml' \) -print \
+            | sort)
+
+          if [ -z "${archivos}" ]; then
+            echo "encontrados=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Contrato OpenAPI::No se encontró ningún archivo OpenAPI. F-01 (#15) es quien lo publica; este workflow empezará a validarlo en cuanto exista."
+            exit 0
+          fi
+
+          echo "encontrados=true" >> "$GITHUB_OUTPUT"
+          # Se guardan en una variable multilínea para los pasos siguientes.
+          {
+            echo 'lista<<FIN'
+            echo "${archivos}"
+            echo 'FIN'
+          } >> "$GITHUB_OUTPUT"
+
+          echo "Archivos encontrados:"
+          echo "${archivos}"
+
+      # `--extends spec` valida solo contra la especificación OpenAPI, sin
+      # opiniones editoriales de Redocly. Las reglas de estilo propias del
+      # equipo se añaden en un `redocly.yaml` cuando F-01 las acuerde; hasta
+      # entonces no se imponen.
+      - name: Validar estructura y referencias
+        if: steps.localizar.outputs.encontrados == 'true'
+        env:
+          ARCHIVOS: ${{ steps.localizar.outputs.lista }}
+        run: |
+          fallo=0
+          while IFS= read -r archivo; do
+            [ -z "${archivo}" ] && continue
+            echo "::group::redocly lint ${archivo}"
+            if ! npx --yes "@redocly/cli@${REDOCLY_VERSION}" lint --extends spec "${archivo}"; then
+              fallo=1
+            fi
+            echo "::endgroup::"
+          done <<< "${ARCHIVOS}"
+          exit "${fallo}"
+
+      # Compara el contrato del PR con el de la rama base y señala los cambios
+      # incompatibles. No bloquea: un cambio incompatible puede ser
+      # intencionado durante la Épica 0, cuando el contrato todavía se está
+      # acordando. Lo que importa es que quien revise lo vea.
+      - name: Detectar cambios incompatibles frente a la rama base
+        if: steps.localizar.outputs.encontrados == 'true' && github.event_name == 'pull_request'
+        continue-on-error: true
+        env:
+          ARCHIVOS: ${{ steps.localizar.outputs.lista }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          mkdir -p /tmp/base
+          while IFS= read -r archivo; do
+            [ -z "${archivo}" ] && continue
+            relativo="${archivo#./}"
+
+            if ! git cat-file -e "${BASE}:${relativo}" 2>/dev/null; then
+              echo "::notice title=Contrato nuevo::${relativo} no existe en la rama base; no hay con qué comparar."
+              continue
+            fi
+
+            destino="/tmp/base/$(echo "${relativo}" | tr '/' '_')"
+            git show "${BASE}:${relativo}" > "${destino}"
+
+            echo "::group::Comparación de ${relativo}"
+            npx --yes "@redocly/cli@${REDOCLY_VERSION}" diff "${destino}" "${archivo}" || true
+            echo "::endgroup::"
+          done <<< "${ARCHIVOS}"
+
+      # Un contrato que no se puede agrupar en un solo archivo tiene
+      # referencias rotas, y eso rompe tanto al mock de Prism como a cualquier
+      # generador de cliente.
+      - name: Comprobar que el contrato se puede agrupar
+        if: steps.localizar.outputs.encontrados == 'true'
+        env:
+          ARCHIVOS: ${{ steps.localizar.outputs.lista }}
+        run: |
+          while IFS= read -r archivo; do
+            [ -z "${archivo}" ] && continue
+            npx --yes "@redocly/cli@${REDOCLY_VERSION}" bundle "${archivo}" --output /dev/null
+            echo "Agrupación correcta: ${archivo}"
+          done <<< "${ARCHIVOS}"

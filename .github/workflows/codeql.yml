@@ -1,0 +1,81 @@
+# CodeQL — análisis estático de seguridad (SAST) — F-02 (#16)
+#
+# Qué aporta sobre lo que ya hacen ruff, bandit y eslint-plugin-security: esas
+# herramientas miran patrones dentro de un archivo. CodeQL sigue el flujo de
+# datos **entre** archivos y funciones, así que detecta la clase de defecto que
+# importa en una aplicación bancaria: un valor que entra por un parámetro HTTP
+# y llega sin validar a una consulta SQL, a un `eval` o a una respuesta.
+#
+# Es gratuito en repositorios públicos. Si el repositorio pasa a privado,
+# requiere GitHub Advanced Security; en ese caso este workflow se desactiva y
+# se anota la decisión en docs/08-Quality/Quality-Gates.md.
+#
+# Los resultados salen en la pestaña Security → Code scanning alerts, y en los
+# PR como comentario sobre la línea afectada.
+#
+# https://codeql.github.com/
+
+name: CodeQL
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+    types: [opened, synchronize, reopened]
+  schedule:
+    # Lunes a las 06:00 UTC (01:00 en Ecuador). El análisis programado importa
+    # porque las consultas de CodeQL se actualizan: un defecto que hoy no se
+    # detecta puede detectarse el mes que viene sin que el código cambie.
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+
+concurrency:
+  group: codeql-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  analizar:
+    name: Analizar ${{ matrix.lenguaje }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    permissions:
+      contents: read
+      security-events: write   # para publicar las alertas
+      actions: read
+
+    strategy:
+      # `fail-fast: false`: si el análisis de Python falla, se quiere ver de
+      # todas formas el resultado del de TypeScript.
+      fail-fast: false
+      matrix:
+        include:
+          - lenguaje: python
+            build-mode: none
+          - lenguaje: javascript-typescript
+            build-mode: none
+
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Inicializar CodeQL
+        uses: github/codeql-action/init@v4
+        with:
+          languages: ${{ matrix.lenguaje }}
+          build-mode: ${{ matrix.build-mode }}
+          # `security-extended` añade consultas de precisión media sobre el
+          # conjunto por defecto. En una aplicación que mueve dinero, el coste
+          # de revisar algún falso positivo es menor que el de no detectar un
+          # flujo de datos sin validar.
+          queries: security-extended
+
+      - name: Analizar
+        uses: github/codeql-action/analyze@v4
+        with:
+          category: /language:${{ matrix.lenguaje }}

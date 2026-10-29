@@ -1,14 +1,48 @@
+# Backend CI
+#
+# Cambio de F-02 (#16) sobre este archivo: SOLO el disparador y el filtro de
+# ejecución. Los pasos se dejan tal cual, incluido el endurecimiento que
+# introdujo el PR #227 (`--require-hashes --only-binary`, gitleaks fijado por
+# SHA), que se conserva íntegro.
+#
+# --- Por qué se cambia el disparador ---
+#
+# Antes, el job se filtraba por el NOMBRE de la rama:
+#
+#     if: github.event_name != 'pull_request' ||
+#         startsWith(github.head_ref, 'feat/backend-')
+#
+# Eso dejaba un agujero real: un PR desde `fix/`, `hotfix/`, `docs/`, `test/`
+# o `chore/` —es decir, cinco de los siete carriles de la convención— no
+# ejecutaba ningún control. Y como GitHub cuenta un job OMITIDO como
+# SATISFECHO a efectos de una verificación obligatoria de rama, en cuanto se
+# active la protección de `main` esos PR se integrarían con el CI «en verde»
+# sin haber corrido ni un linter.
+#
+# Evidencia: Actions → Backend CI #15, rama `feature/docs-1-update`, `skipped`.
+#
+# El filtro se elimina y el job pasa a ejecutarse en todo PR a `main` y a
+# `develop`. No hace falta un filtro por ruta: cada paso ya comprueba por su
+# cuenta si hay algo que analizar y se salta solo cuando no lo hay, de modo
+# que un PR que no toca el backend sigue siendo barato pero devuelve un
+# resultado REAL en lugar de uno omitido.
+#
+# El criterio de aceptación de F-02 pide además que corra en cada PR a `main`.
+
 name: Backend CI
 
 on:
   push:
-    branches:
-      - 'feat/backend-*'
+    branches: [main, develop]
   pull_request:
-    branches:
-      - develop
-    types: [opened, synchronize, reopened]
+    branches: [main, develop]
+    types: [opened, synchronize, reopened, ready_for_review]
   workflow_dispatch:
+
+# Al subir un commit nuevo, el resultado del anterior ya no interesa.
+concurrency:
+  group: backend-ci-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -17,10 +51,8 @@ permissions:
 jobs:
   quality-security:
     name: Backend Quality and Security
-    if: >-
-      github.event_name != 'pull_request' ||
-      startsWith(github.head_ref, 'feat/backend-')
     runs-on: ubuntu-latest
+    timeout-minutes: 20
 
     steps:
       - name: Checkout repository

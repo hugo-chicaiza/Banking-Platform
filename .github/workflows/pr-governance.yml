@@ -1,0 +1,173 @@
+# Gobernanza de los pull requests — F-02 (#16)
+#
+# Verifica en automático las convenciones que el README ya describe, para que
+# dejen de depender de que alguien se acuerde de revisarlas:
+#
+#   * Nombre de la rama (una rama por historia).
+#   * Formato Conventional Commits en el título del PR.
+#   * Que el PR referencie su issue.
+#   * Tamaño del PR (un PR enorme no se revisa de verdad, se aprueba).
+#   * Que no entren archivos que nunca deben versionarse.
+#
+# Son controles *sociales*, no técnicos: informan y bloquean lo que se puede
+# comprobar sin ambigüedad. Todos los mensajes de error dicen qué hacer, no
+# solo que algo está mal.
+
+name: Gobernanza del PR
+
+on:
+  pull_request:
+    branches: [main, develop]
+    types: [opened, edited, synchronize, reopened, ready_for_review]
+
+concurrency:
+  group: pr-governance-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  convenciones:
+    name: Convenciones de rama y título
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      # Convención del README, ampliada en CONTRIBUTING.md con el carril
+      # `chore/` para el trabajo de infraestructura, que no es backend ni
+      # frontend (F-02 es justamente de ese tipo).
+      - name: Verificar el nombre de la rama
+        env:
+          RAMA: ${{ github.head_ref }}
+        run: |
+          patron='^(feat/(backend|frontend)-[0-9]+-[A-Za-z0-9._-]+|test/[A-Za-z0-9._-]+|docs/[A-Za-z0-9._-]+|chore/[0-9]+-[A-Za-z0-9._-]+|fix/[A-Za-z0-9._-]+|hotfix/[A-Za-z0-9._-]+)$'
+
+          if ! printf '%s' "${RAMA}" | grep -Eq "${patron}"; then
+            cat <<'AYUDA'
+          ::error title=Nombre de rama::La rama no sigue la convención del equipo.
+
+          Formatos admitidos (ver CONTRIBUTING.md):
+            feat/backend-<issue>-<nombre>    feat/backend-16-config-entornos
+            feat/frontend-<issue>-<nombre>   feat/frontend-21-layout-base
+            chore/<issue>-<nombre>           chore/16-setup-entornos-ci
+            test/<nombre>                    test/flujo-deposito-atm
+            docs/<nombre>                    docs/actualizar-roadmap
+            fix/<nombre>  ·  hotfix/<nombre>
+
+          Para renombrar la rama sin perder el trabajo:
+            git branch -m <nombre-nuevo>
+            git push origin -u <nombre-nuevo>
+            git push origin --delete <nombre-anterior>
+          AYUDA
+            echo "Rama recibida: ${RAMA}"
+            exit 1
+          fi
+
+          echo "Nombre de rama correcto: ${RAMA}"
+
+      # El título del PR es lo que acaba en el historial de `main`, porque la
+      # integración a `main` es con squash. Si el título no sigue la
+      # convención, el historial deja de ser legible.
+      - name: Verificar el título (Conventional Commits)
+        uses: amannn/action-semantic-pull-request@v6.1.1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          # Los mismos tipos que la tabla del README.
+          types: |
+            feat
+            fix
+            chore
+            docs
+            test
+            refactor
+            perf
+            ci
+            build
+            revert
+          requireScope: false
+          subjectPattern: ^(?![A-Z])(?!.*\.$).+$
+          subjectPatternError: |
+            El asunto del título («{subject}») debe empezar en minúscula y no
+            terminar en punto.
+
+            Ejemplos correctos:
+              feat(backend): añade validación de cédula
+              chore: configura proyecto, entornos y CI
+              fix(frontend): corrige el guard de rol
+
+  # ------------------------------------------------------------------
+  contenido:
+    name: Contenido del PR
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      # No bloquea: hay PR legítimos sin issue (una corrección de una errata en
+      # un README). Informa para que quien revise lo tenga en cuenta.
+      - name: Comprobar que se referencia un issue
+        env:
+          CUERPO: ${{ github.event.pull_request.body }}
+          TITULO: ${{ github.event.pull_request.title }}
+        run: |
+          if printf '%s %s' "${TITULO}" "${CUERPO}" | grep -Eq '#[0-9]+'; then
+            echo "El PR referencia al menos un issue."
+          else
+            echo "::warning title=Trazabilidad::El PR no referencia ningún issue. Añadir 'Closes #<número>' en la descripción para que el tablero se actualice solo."
+          fi
+
+      # Un PR de 2000 líneas no se revisa: se aprueba. Esto no bloquea, pero
+      # deja el aviso visible para que quien revise pida dividirlo si procede.
+      - name: Medir el tamaño del PR
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          CABEZA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          # Se excluyen los archivos generados y la documentación del backlog:
+          # un cambio de 4000 líneas en package-lock.json no es trabajo que
+          # haya que revisar línea por línea.
+          cambios=$(git diff --numstat "${BASE}" "${CABEZA}" -- \
+            ':(exclude)**/package-lock.json' \
+            ':(exclude)GitHubProject_Files/**' \
+            | awk '{ suma += $1 + $2 } END { print suma + 0 }')
+
+          echo "Líneas cambiadas (sin contar archivos generados ni el backlog): ${cambios}"
+          echo "### Tamaño del PR: ${cambios} líneas" >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "${cambios}" -gt 1000 ]; then
+            echo "::warning title=Tamaño del PR::${cambios} líneas cambiadas. Un PR de este tamaño es difícil de revisar con rigor; valorar dividirlo por historia."
+          fi
+
+      # Esto SÍ bloquea. Son archivos que no deben estar en el repositorio bajo
+      # ninguna circunstancia; .gitignore los cubre, pero un `git add -f` o un
+      # .gitignore incompleto en una rama antigua se los salta.
+      - name: Comprobar que no entran archivos prohibidos
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          CABEZA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          prohibidos=$(git diff --name-only --diff-filter=A "${BASE}" "${CABEZA}" \
+            | grep -Ei '(^|/)\.env$|(^|/)\.env\.(local|development|staging|production)$|\.(pem|key|pfx|p12|jks|keystore|PublishSettings)$|(^|/)node_modules/|(^|/)\.venv/|(^|/)antenv/|\.(bak|mdf|ldf)$' \
+            || true)
+
+          if [ -n "${prohibidos}" ]; then
+            echo "::error title=Archivos prohibidos::El PR añade archivos que no deben versionarse:"
+            echo "${prohibidos}"
+            cat <<'AYUDA'
+
+          Qué hacer:
+            1. git rm --cached <archivo>
+            2. Comprobar que .gitignore lo cubre.
+            3. Si el archivo contenía una credencial real, ROTARLA: sigue en el
+               historial aunque se borre el archivo. Ver SECURITY.md
+          AYUDA
+            exit 1
+          fi
+
+          echo "No se añaden archivos prohibidos."

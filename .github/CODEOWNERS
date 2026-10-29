@@ -1,0 +1,67 @@
+# CODEOWNERS — F-02 (#16)
+#
+# Para qué: GitHub pide revisión automáticamente a quien corresponde según los
+# archivos que toca el PR. Dos efectos concretos:
+#
+#   1. Nadie tiene que acordarse de a quién etiquetar.
+#   2. Si en la protección de rama se activa «Require review from Code Owners»,
+#      un cambio en el CI, en la configuración de seguridad o en el contrato de
+#      API no se puede integrar sin que lo vea la persona responsable de esa
+#      área. Es separación de responsabilidades, no burocracia.
+#
+# Cómo se lee: gana la ÚLTIMA regla que coincide. Por eso lo general va arriba
+# y lo específico abajo.
+#
+# IMPORTANTE: quien figure aquí debe tener permiso de escritura en el
+# repositorio; si no, GitHub ignora la regla en silencio. Las asignaciones de
+# abajo salen de los responsables del tablero del proyecto y hay que
+# confirmarlas con el equipo antes de activar la regla en la protección de rama.
+#
+# https://docs.github.com/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+
+# --- Por defecto ----------------------------------------------------
+# Todo lo que no tenga una regla más específica lo revisa quien lleva el
+# repositorio.
+*                               @hugo-chicaiza
+
+# --- Backend --------------------------------------------------------
+/Backend/                       @hugo-chicaiza @Squierdan
+
+# El código transversal lo usan todas las épicas: un cambio aquí afecta a
+# todos los módulos, así que lo revisan dos personas.
+/Backend/app/core/              @hugo-chicaiza @Squierdan
+
+# --- Frontend -------------------------------------------------------
+/Frontend/                      @hugo-chicaiza @Djtv1304
+
+# --- Infraestructura y CI -------------------------------------------
+# Quien puede cambiar un workflow puede cambiar lo que el CI verifica, y
+# también lo que se despliega. Es la parte del repositorio con más alcance.
+/.github/                       @hugo-chicaiza
+/.github/workflows/             @hugo-chicaiza
+/.github/dependabot.yml         @hugo-chicaiza
+/.github/CODEOWNERS             @hugo-chicaiza
+
+# --- Configuración con efecto en seguridad --------------------------
+# Un cambio en cualquiera de estos archivos puede desactivar un control sin
+# que se note en el diff del código.
+/.gitleaks.toml                 @hugo-chicaiza
+/sonar-project.properties       @hugo-chicaiza
+/SECURITY.md                    @hugo-chicaiza
+/Backend/pyproject.toml         @hugo-chicaiza @Squierdan
+/Backend/Dockerfile             @hugo-chicaiza
+/Backend/.env.example           @hugo-chicaiza @Squierdan
+/Frontend/eslint.config.mjs     @hugo-chicaiza @Djtv1304
+/Frontend/angular.json          @hugo-chicaiza @Djtv1304
+
+# --- Contrato de API ------------------------------------------------
+# El contrato es el acuerdo entre backend, frontend y QA: lo revisan las tres
+# áreas (F-01).
+/**/openapi/                    @hugo-chicaiza @Squierdan @Djtv1304
+/**/openapi.yaml                @hugo-chicaiza @Squierdan @Djtv1304
+
+# --- Documentación --------------------------------------------------
+/docs/                          @hugo-chicaiza
+
+# El backlog en Obsidian lo mantiene quien gestiona el tablero.
+/GitHubProject_Files/           @hugo-chicaiza

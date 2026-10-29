@@ -1,0 +1,19 @@
+<!--
+  Cáscara mínima del proyecto (F-02).
+
+  El layout real —encabezado, menú lateral, rutas por rol, páginas 404 y de
+  acceso denegado— es alcance de F-05 (#21). Esta plantilla solo demuestra que
+  la aplicación arranca, enruta y pasa las pruebas, para que el CI tenga algo
+  que compilar y verificar desde el primer día.
+-->
+<main class="shell">
+  <h1>{{ title() }}</h1>
+  <p class="shell__env">
+    Entorno: <strong data-testid="env-name">{{ environmentName }}</strong> · API:
+    <code data-testid="api-base-url">{{ apiBaseUrl }}</code>
+  </p>
+  <p class="shell__note">
+    Base del proyecto lista (F-02). El layout y el ruteo por rol llegan en F-05.
+  </p>
+  <router-outlet />
+</main>

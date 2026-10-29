@@ -1,0 +1,59 @@
+# Revisión de dependencias en el PR — F-02 (#16)
+#
+# Qué hace que `pip-audit` y `npm audit` no hagan: mira el **diff** del PR y
+# señala la dependencia que se está añadiendo o subiendo de versión, con su
+# vulnerabilidad y su licencia, como comentario en el propio PR.
+#
+# El valor está en el momento: avisa *antes* de integrar, cuando quitar la
+# dependencia cuesta un commit, y no después, cuando ya hay código que la usa.
+# Es la categoría OWASP Top 10:2025 A03 — Software Supply Chain Failures.
+#
+# Gratuito en repositorios públicos.
+
+name: Revisión de dependencias
+
+on:
+  pull_request:
+    branches: [main, develop]
+    types: [opened, synchronize, reopened]
+
+concurrency:
+  group: dependency-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  revisar:
+    name: Revisar dependencias nuevas
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    permissions:
+      contents: read
+      pull-requests: write   # para dejar el resumen como comentario
+
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/dependency-review-action@v5.0.0
+        with:
+          # Bloquea a partir de severidad alta. `moderate` generaría demasiado
+          # ruido en las dependencias de desarrollo y el equipo acabaría
+          # ignorando el control, que es peor que no tenerlo.
+          fail-on-severity: high
+
+          # Licencias que no se pueden usar en un producto cerrado: obligan a
+          # publicar el código fuente del software que las enlaza. No es una
+          # opinión sobre ellas, es una restricción del modelo de negocio.
+          deny-licenses: |
+            GPL-2.0
+            GPL-3.0
+            AGPL-3.0
+            SSPL-1.0
+
+          comment-summary-in-pr: on-failure
+          warn-only: false

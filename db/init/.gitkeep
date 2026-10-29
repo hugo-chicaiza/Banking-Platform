@@ -1,0 +1,19 @@
+Este directorio existe para que `docker compose` pueda montarlo antes de que
+haya scripts.
+
+Los scripts `.sql` que se coloquen aquí los ejecuta el servicio `db-init` en
+orden alfabético, una vez que SQL Server responde. Conviene numerarlos para
+fijar el orden:
+
+    010-esquema-cooperativa.sql
+    020-esquema-seguridad.sql
+    030-migracion-brechas.sql
+    040-catalogos.sql
+    050-semilla.sql
+
+Responsables:
+
+- Esquema y migración de brechas → F-08 (#108)
+- Catálogos y semilla            → F-07 (#107)
+
+F-02 solo deja el mecanismo listo; no define el contenido.

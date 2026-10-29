@@ -1,0 +1,309 @@
+# CI del frontend — F-02 (#16)
+#
+# Mismo diseño que backend-ci.yml: filtros por ruta en lugar de por nombre de
+# rama, permisos mínimos, un job final `frontend-ci` como única verificación
+# obligatoria. Ver los comentarios de backend-ci.yml para el razonamiento.
+#
+# Nota sobre las pruebas: Angular 22 usa Vitest sobre jsdom
+# (`@angular/build:unit-test`), así que el runner no necesita Chrome ni Karma.
+
+name: Frontend CI
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - 'Frontend/**'
+      - '.github/workflows/frontend-ci.yml'
+      - 'sonar-project.properties'
+  pull_request:
+    branches: [main, develop]
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - 'Frontend/**'
+      - '.github/workflows/frontend-ci.yml'
+      - 'sonar-project.properties'
+  workflow_dispatch:
+
+concurrency:
+  group: frontend-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: '24'
+
+jobs:
+  # ------------------------------------------------------------------
+  calidad:
+    name: Formato, lint y tipos
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: Frontend
+
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: Frontend/package-lock.json
+
+      # `npm ci`, no `npm install`: instala exactamente lo que fija el lockfile
+      # y falla si package.json y el lock no coinciden, en lugar de resolver
+      # versiones nuevas en silencio (OWASP Top 10:2025 A03).
+      #
+      # `--ignore-scripts` evita que los scripts de instalación de cualquier
+      # dependencia transitiva ejecuten código arbitrario en el runner, que es
+      # el vector habitual de los ataques a la cadena de suministro de npm.
+      # Angular no los necesita para linter, tipos ni pruebas.
+      - name: Instalar dependencias
+        run: npm ci --ignore-scripts
+
+      - name: Verificar formato
+        run: npm run format:check
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Comprobar tipos
+        run: npm run typecheck
+
+  # ------------------------------------------------------------------
+  pruebas:
+    name: Pruebas y cobertura
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: Frontend
+
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: Frontend/package-lock.json
+
+      # Aquí sí se permiten los scripts: esbuild y @parcel/watcher necesitan su
+      # paso de instalación para resolver el binario de la plataforma, y sin
+      # ellos la compilación no funciona.
+      - name: Instalar dependencias
+        run: npm ci
+
+      # Los umbrales están en vitest-base.config.mts (80 % líneas, 70 % ramas).
+      # Si la cobertura baja, el comando falla; no es una advertencia.
+      - name: Ejecutar pruebas
+        run: npm run test:ci
+
+      - name: Publicar reportes
+        if: always()
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: frontend-reportes
+          path: |
+            Frontend/reports/
+            Frontend/coverage/
+          retention-days: 14
+          if-no-files-found: warn
+
+      - name: Guardar cobertura para SonarQube
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: frontend-cobertura
+          path: Frontend/coverage/lcov.info
+          retention-days: 1
+          if-no-files-found: error
+
+  # ------------------------------------------------------------------
+  compilacion:
+    name: Compilar los tres entornos
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: Frontend
+
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: Frontend/package-lock.json
+
+      - name: Instalar dependencias
+        run: npm ci
+
+      # Se compilan los tres: una configuración de entorno rota solo aparece al
+      # compilar ESA configuración, y descubrirlo en el despliegue a staging es
+      # tarde. El de producción además activa la CSP estricta y la integridad
+      # de subrecursos, que es lo que de verdad hay que validar.
+      - name: Compilar desarrollo
+        run: npm run build:dev
+
+      - name: Compilar staging
+        run: npm run build:staging
+
+      - name: Compilar producción
+        run: npm run build
+
+      # Comprueba que la CSP por hash que genera el compilador acabó en el
+      # index.html. Si alguien quita `security.autoCsp` de angular.json, el
+      # build sigue funcionando y la protección desaparece sin avisar.
+      - name: Verificar la CSP estricta del artefacto de producción
+        run: |
+          indice=dist/frontend/browser/index.html
+
+          if [ ! -f "${indice}" ]; then
+            echo "::error title=Compilación::No se encontró ${indice}"
+            exit 1
+          fi
+
+          if ! grep -q "Content-Security-Policy" "${indice}"; then
+            echo "::error title=Seguridad::El index.html de producción no lleva Content-Security-Policy. Revisar security.autoCsp en angular.json."
+            exit 1
+          fi
+
+          if ! grep -q "strict-dynamic" "${indice}"; then
+            echo "::error title=Seguridad::La CSP no es estricta (falta strict-dynamic)."
+            exit 1
+          fi
+
+          echo "CSP estricta presente en el artefacto de producción."
+
+      - name: Publicar el artefacto de producción
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: frontend-dist-produccion
+          path: Frontend/dist/frontend/
+          retention-days: 7
+          if-no-files-found: error
+
+  # ------------------------------------------------------------------
+  seguridad:
+    name: Seguridad de las dependencias
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: Frontend
+
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: Frontend/package-lock.json
+
+      # No hace falta instalar: `npm audit` resuelve contra el lockfile.
+      # `--omit=dev` porque una vulnerabilidad en una herramienta de
+      # compilación no llega al navegador del usuario.
+      - name: Auditar dependencias de ejecución
+        run: npm audit --omit=dev --audit-level=high
+
+      - name: Auditar dependencias de desarrollo
+        # No bloquea: lo informa y Dependabot abre el PR de actualización.
+        continue-on-error: true
+        run: npm audit --audit-level=critical
+
+      # Comprueba que el lockfile corresponde al package.json. `npm ci` ya
+      # falla si no coinciden, pero este paso lo dice con un mensaje claro en
+      # lugar de un error de resolución de dependencias.
+      - name: Verificar que el lockfile está sincronizado
+        run: |
+          if ! npm ls --all --omit=dev > /dev/null 2>&1; then
+            echo "::error title=Lockfile::package-lock.json no corresponde a package.json. Ejecutar 'npm install' y subir el lockfile."
+            exit 1
+          fi
+          echo "El lockfile está sincronizado."
+
+  # ------------------------------------------------------------------
+  sonarqube:
+    name: SonarQube
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: [pruebas]
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository
+
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Descargar la cobertura del job de pruebas
+        uses: actions/download-artifact@v8.0.2
+        with:
+          name: frontend-cobertura
+          path: Frontend/coverage/
+
+      - name: Comprobar si hay token de SonarQube
+        id: token
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        run: |
+          if [ -n "${SONAR_TOKEN}" ]; then
+            echo "disponible=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "disponible=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=SonarQube::SONAR_TOKEN no está configurado; el análisis se omite. Ver docs/08-Quality/Quality-Gates.md"
+          fi
+
+      - name: Analizar con SonarQube
+        if: steps.token.outputs.disponible == 'true'
+        uses: SonarSource/sonarqube-scan-action@v8.4.0
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+
+      - name: Esperar la puerta de calidad
+        if: steps.token.outputs.disponible == 'true'
+        uses: SonarSource/sonarqube-quality-gate-action@v1.2.1
+        timeout-minutes: 5
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+
+  # ------------------------------------------------------------------
+  frontend-ci:
+    name: Frontend CI
+    runs-on: ubuntu-latest
+    if: always()
+    needs: [calidad, pruebas, compilacion, seguridad, sonarqube]
+
+    steps:
+      - name: Comprobar el resultado de los jobs
+        env:
+          RESULTADOS: ${{ toJSON(needs) }}
+        run: |
+          echo "${RESULTADOS}"
+
+          fallidos=$(echo "${RESULTADOS}" \
+            | python3 -c "import json,sys; d=json.load(sys.stdin); print(' '.join(k for k,v in d.items() if v['result'] not in ('success','skipped')))")
+
+          if [ -n "${fallidos}" ]; then
+            echo "::error title=Frontend CI::Jobs con resultado no satisfactorio: ${fallidos}"
+            exit 1
+          fi
+
+          echo "Todos los controles del frontend pasaron."

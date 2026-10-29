@@ -1,0 +1,54 @@
+/* Configuración raíz de TypeScript del frontend.
+ * Referencias:
+ *  - https://www.typescriptlang.org/tsconfig
+ *  - https://angular.dev/reference/configs/angular-compiler-options
+ *
+ * Las banderas estrictas están declaradas de forma explícita (no solo `strict: true`)
+ * para que quede por escrito qué se exige y por qué; quitar una debe discutirse en PR.
+ */
+{
+  "compileOnSave": false,
+  "compilerOptions": {
+    /* --- Corrección de tipos: evita que valores nulos o `any` lleguen a la UI --- */
+    "strict": true,
+    "noImplicitOverride": true,
+    "noImplicitReturns": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUncheckedIndexedAccess": true,
+    "noPropertyAccessFromIndexSignature": true,
+    "exactOptionalPropertyTypes": true,
+    "useUnknownInCatchVariables": true,
+
+    /* --- Higiene: código muerto detectado por el compilador, no en revisión manual --- */
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "forceConsistentCasingInFileNames": true,
+
+    /* --- Plataforma --- */
+    "skipLibCheck": true,
+    "isolatedModules": true,
+    "experimentalDecorators": true,
+    "importHelpers": true,
+    "target": "ES2022",
+    "module": "preserve"
+  },
+  "angularCompilerOptions": {
+    "enableI18nLegacyMessageIdFormat": false,
+    "strictInjectionParameters": true,
+    "strictInputAccessModifiers": true,
+    "strictTemplates": true,
+    /* Un binding inválido en la plantilla debe romper la compilación, no fallar en runtime. */
+    "extendedDiagnostics": {
+      "defaultCategory": "error"
+    }
+  },
+  "files": [],
+  "references": [
+    {
+      "path": "./tsconfig.app.json"
+    },
+    {
+      "path": "./tsconfig.spec.json"
+    }
+  ]
+}

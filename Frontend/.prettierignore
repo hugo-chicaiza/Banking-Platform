@@ -1,0 +1,9 @@
+# Artefactos generados
+dist/
+coverage/
+reports/
+.angular/
+node_modules/
+
+# Lo genera npm, no se formatea a mano
+package-lock.json

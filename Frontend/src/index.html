@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <title>Banking Platform</title>
+    <base href="/" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <!--
+      Cabeceras de seguridad enviadas como meta porque no dependen del servidor.
+      Las que SÍ dependen del servidor (Strict-Transport-Security, X-Frame-Options,
+      Content-Security-Policy completa) se configuran en el host que sirve estos
+      archivos; ver docs/07-Deployment/Environments.md.
+
+      La CSP estricta por hash la genera el compilador: `security.autoCsp` en
+      angular.json para las configuraciones `staging` y `production`.
+    -->
+    <meta name="referrer" content="strict-origin-when-cross-origin" />
+
+    <!-- No indexar: es una aplicación interna de la cooperativa, no un sitio público. -->
+    <meta name="robots" content="noindex, nofollow" />
+
+    <link rel="icon" type="image/x-icon" href="favicon.ico" />
+  </head>
+  <body>
+    <app-root></app-root>
+  </body>
+</html>

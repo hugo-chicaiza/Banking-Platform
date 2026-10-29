@@ -1,0 +1,146 @@
+# Entorno de desarrollo local — F-02 (#16)
+#
+# Para qué: que cualquiera del equipo levante las dependencias de la
+# aplicación con un comando, en la misma versión, sin instalar SQL Server en su
+# máquina. Elimina la clase de incidencia «a mí me funciona».
+#
+# Lo que levanta:
+#   sqlserver → SQL Server 2022 con CooperativaDB y SeguridadDB (vacías)
+#   mock      → mock del contrato OpenAPI (opcional, perfil `mock`)
+#
+# Lo que NO levanta: la aplicación. El backend y el frontend se ejecutan en la
+# máquina, con recarga en caliente, que es más rápido para desarrollar. La
+# imagen del backend (`Backend/Dockerfile`) es para desplegar, no para esto.
+#
+# Uso:
+#   cp .env.example .env     (PowerShell: Copy-Item .env.example .env)
+#   docker compose up -d sqlserver
+#   docker compose --profile mock up -d        # añade el mock de F-01
+#   docker compose logs -f sqlserver
+#   docker compose down                        # para
+#   docker compose down -v                     # para y BORRA los datos
+#
+# Los esquemas y la semilla son alcance de F-07 y F-08. Esto solo deja el
+# motor disponible y las dos bases creadas.
+
+name: banking-platform
+
+services:
+  sqlserver:
+    # Imagen oficial de Microsoft. La etiqueta fija la versión mayor: no se usa
+    # `latest` para que el motor no cambie de versión sin que nadie lo decida.
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    container_name: bp-sqlserver
+    restart: unless-stopped
+
+    environment:
+      ACCEPT_EULA: 'Y'
+      # Sin valor por defecto a propósito: `docker compose up` falla si no se
+      # creó el `.env`. Una contraseña por defecto acaba copiada a un servidor
+      # real, y un SQL Server con la contraseña del ejemplo público es un
+      # incidente (OWASP Top 10:2025 A02 — Security Misconfiguration).
+      MSSQL_SA_PASSWORD: ${MSSQL_SA_PASSWORD:?Falta MSSQL_SA_PASSWORD. Copiar .env.example a .env y poner una contraseña.}
+      # Developer: edición gratuita con todas las funciones, no apta para
+      # producción. Es la correcta para un entorno local.
+      MSSQL_PID: Developer
+      MSSQL_TCP_PORT: '1433'
+      # Zona horaria de Ecuador: las fechas contables dependen de ella (ver
+      # G-13 en F-08), y una diferencia de horas desplaza el cierre diario.
+      TZ: America/Guayaquil
+
+    ports:
+      # Solo 127.0.0.1: sin esto, Docker publica el puerto en todas las
+      # interfaces y el SQL Server queda accesible desde la red local (y desde
+      # la wifi de la cafetería).
+      - '127.0.0.1:1433:1433'
+
+    volumes:
+      - sqlserver-data:/var/opt/mssql
+      # Los scripts de este directorio los ejecuta el servicio `db-init`.
+      # F-07 y F-08 ponen aquí el esquema y la semilla.
+      - ./db/init:/docker-entrypoint-initdb.d:ro
+
+    healthcheck:
+      # `-C` confía en el certificado autofirmado del contenedor; `-N` cifra la
+      # conexión. Son aceptables aquí y solo aquí.
+      test:
+        - CMD-SHELL
+        - /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P "$$MSSQL_SA_PASSWORD" -N -C -Q "SELECT 1" -b -o /dev/null
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 40s
+
+    # SQL Server necesita al menos 2 GB. Sin el límite, en una máquina con poca
+    # memoria el motor arranca y muere sin un mensaje que lo explique.
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+        reservations:
+          memory: 2G
+
+  # ------------------------------------------------------------------
+  # Crea las dos bases en cuanto el motor responde. Se ejecuta una vez y
+  # termina: no es un servicio permanente.
+  db-init:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    container_name: bp-db-init
+    restart: 'no'
+    depends_on:
+      sqlserver:
+        condition: service_healthy
+    environment:
+      MSSQL_SA_PASSWORD: ${MSSQL_SA_PASSWORD:?Falta MSSQL_SA_PASSWORD}
+    entrypoint:
+      - /bin/bash
+      - -c
+      - |
+        set -euo pipefail
+        sqlcmd="/opt/mssql-tools18/bin/sqlcmd -S sqlserver -U sa -P $$MSSQL_SA_PASSWORD -N -C -b"
+
+        echo "Creando las bases si no existen..."
+        $$sqlcmd -Q "IF DB_ID('CooperativaDB') IS NULL CREATE DATABASE CooperativaDB;"
+        $$sqlcmd -Q "IF DB_ID('SeguridadDB')   IS NULL CREATE DATABASE SeguridadDB;"
+
+        echo "Bases disponibles:"
+        $$sqlcmd -Q "SELECT name FROM sys.databases WHERE name IN ('CooperativaDB','SeguridadDB');"
+
+        # Los scripts de esquema y semilla los aportan F-08 y F-07.
+        if compgen -G "/scripts/*.sql" > /dev/null; then
+          for script in /scripts/*.sql; do
+            echo "Ejecutando $$script"
+            $$sqlcmd -i "$$script"
+          done
+        else
+          echo "No hay scripts en db/init/. El esquema es alcance de F-08 y la semilla de F-07."
+        fi
+
+        echo "Inicialización terminada."
+    volumes:
+      - ./db/init:/scripts:ro
+
+  # ------------------------------------------------------------------
+  # Mock del contrato OpenAPI. Perfil aparte porque solo hace falta mientras el
+  # backend no responda, y porque el contrato es alcance de F-01 (#15): si no
+  # existe el archivo, este servicio no arranca.
+  #
+  #   docker compose --profile mock up -d
+  mock:
+    image: stoplight/prism:5
+    container_name: bp-mock-openapi
+    restart: unless-stopped
+    profiles: [mock]
+    command: >-
+      mock --host 0.0.0.0 --port 4010 --errors
+      /contrato/openapi.yaml
+    ports:
+      - '127.0.0.1:4010:4010'
+    volumes:
+      # AJUSTAR cuando F-01 decida la ruta definitiva del contrato. El piloto
+      # del PR #106 lo tenía en BankingPlataformDocs/02-Backend/openapi/.
+      - ./Backend/openapi:/contrato:ro
+
+volumes:
+  sqlserver-data:
+    name: bp-sqlserver-data

@@ -1,0 +1,162 @@
+# Dependabot — F-02 (#16)
+#
+# Para qué: fijar versiones exactas hace reproducible el entorno, pero deja al
+# proyecto congelado en las versiones del día que se fijaron, vulnerabilidades
+# incluidas. Dependabot resuelve la contradicción: las versiones siguen fijas y
+# cada actualización entra por un PR que pasa el CI completo.
+#
+# Cómo se evita que esto genere ruido:
+#   * Agrupaciones: una actualización menor de Angular son ~10 paquetes; un
+#     solo PR en lugar de diez.
+#   * Cadencia semanal, no diaria.
+#   * Tope de PR abiertos simultáneos.
+#   * Las subidas de versión MAYOR van en su propio PR: rompen cosas y hay que
+#     leerlas, no aprobarlas en lote.
+#
+# Las alertas de seguridad NO respetan esta cadencia: Dependabot abre el PR en
+# cuanto se publica el aviso, que es lo que se quiere.
+#
+# https://docs.github.com/code-security/dependabot/dependabot-version-updates
+
+version: 2
+
+updates:
+  # ----------------------------------------------------------------
+  - package-ecosystem: pip
+    directory: /Backend
+    schedule:
+      interval: weekly
+      day: monday
+      time: '07:00'
+      timezone: America/Guayaquil
+    open-pull-requests-limit: 5
+    target-branch: develop
+    labels:
+      - dependencies
+      - backend
+    commit-message:
+      prefix: chore
+      prefix-development: chore
+      include: scope
+    groups:
+      # Las versiones de FastAPI, Pydantic y Starlette están acopladas entre
+      # sí: actualizar una sola suele romper la compatibilidad.
+      fastapi:
+        patterns:
+          - fastapi
+          - pydantic*
+          - starlette
+          - uvicorn*
+        update-types: [minor, patch]
+      herramientas-calidad:
+        patterns:
+          - ruff
+          - mypy
+          - bandit*
+          - pip-audit
+        update-types: [minor, patch]
+      herramientas-pruebas:
+        patterns:
+          - pytest*
+          - httpx*
+          - coverage
+        update-types: [minor, patch]
+    ignore:
+      # Las mayores se tratan a mano: hay que leer la guía de migración.
+      - dependency-name: '*'
+        update-types: [version-update:semver-major]
+
+  # ----------------------------------------------------------------
+  - package-ecosystem: npm
+    directory: /Frontend
+    schedule:
+      interval: weekly
+      day: monday
+      time: '07:00'
+      timezone: America/Guayaquil
+    open-pull-requests-limit: 5
+    target-branch: develop
+    labels:
+      - dependencies
+      - frontend
+    commit-message:
+      prefix: chore
+      prefix-development: chore
+      include: scope
+    groups:
+      # Angular se actualiza en bloque: el CLI, el compilador y los paquetes de
+      # runtime tienen que estar en la misma versión menor.
+      angular:
+        patterns:
+          - '@angular/*'
+          - '@angular-eslint/*'
+          - angular-eslint
+        update-types: [minor, patch]
+      herramientas-calidad:
+        patterns:
+          - eslint*
+          - '@eslint/*'
+          - typescript-eslint
+          - prettier
+        update-types: [minor, patch]
+      herramientas-pruebas:
+        patterns:
+          - vitest
+          - '@vitest/*'
+          - jsdom
+        update-types: [minor, patch]
+    ignore:
+      - dependency-name: '*'
+        update-types: [version-update:semver-major]
+      # TypeScript lo fija Angular en su peerDependency (`>=6.0 <6.1`).
+      # Subirlo por separado rompe la compilación; se sube con Angular.
+      - dependency-name: typescript
+        update-types: [version-update:semver-minor, version-update:semver-major]
+
+  # ----------------------------------------------------------------
+  # Las acciones de GitHub son código de terceros que se ejecuta con acceso al
+  # repositorio y al token: mantenerlas al día es un control de seguridad, no
+  # mantenimiento rutinario (OWASP Top 10:2025 A03).
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: '07:00'
+      timezone: America/Guayaquil
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+      - ci
+    commit-message:
+      prefix: ci
+      include: scope
+    groups:
+      acciones-oficiales:
+        patterns:
+          - 'actions/*'
+          - 'github/*'
+      acciones-terceros:
+        patterns:
+          - '*'
+        exclude-patterns:
+          - 'actions/*'
+          - 'github/*'
+
+  # ----------------------------------------------------------------
+  - package-ecosystem: docker
+    directory: /Backend
+    schedule:
+      interval: weekly
+      day: monday
+      time: '07:00'
+      timezone: America/Guayaquil
+    open-pull-requests-limit: 2
+    target-branch: develop
+    labels:
+      - dependencies
+      - backend
+      - docker
+    commit-message:
+      prefix: chore
+      include: scope

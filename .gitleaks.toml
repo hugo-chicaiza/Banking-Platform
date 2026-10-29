@@ -1,0 +1,150 @@
+# Configuración de gitleaks — F-02
+#
+# gitleaks busca credenciales en el diff de cada PR y en el historial. Este
+# archivo parte de las reglas que trae por defecto y solo añade dos cosas:
+# reglas propias del proyecto y una lista de excepciones acotada.
+#
+# Criterio para las excepciones: se excluye por RUTA solo lo que por definición
+# no puede contener un secreto real (plantillas y fixtures). Nunca se excluye
+# una ruta "porque da falsos positivos": si un archivo de código los da, se
+# arregla el archivo.
+#
+# Uso local, antes de abrir el PR:
+#   gitleaks git --config .gitleaks.toml --redact
+#   gitleaks dir --config .gitleaks.toml --redact      (archivos sin commitear)
+#
+# https://github.com/gitleaks/gitleaks
+
+[extend]
+useDefault = true
+
+# --- Reglas propias --------------------------------------------------
+
+[[rules]]
+id = "cadena-conexion-sqlserver"
+description = "Cadena de conexión a SQL Server con contraseña en texto"
+#
+# La regla busca la forma de una cadena de conexión ODBC/ADO
+# (`...;PWD=valor;...`), no cualquier aparición de la palabra «password».
+# Cada pieza del patrón descarta un falso positivo concreto:
+#
+#   (?:^|[;,"'\s(])  — frontera previa. Descarta `db_password=` y
+#                      `jwt_secret_key=`, que son argumentos de Python, no
+#                      claves de una cadena de conexión.
+#   [^;'"{}$<>\s]    — primer carácter del valor. Descarta las
+#                      interpolaciones (`PWD={password}`, `PWD=$VAR`) y los
+#                      marcadores de documentación (`PWD=<tu-clave>`).
+#   (?:;|["']|$)     — terminador. El valor acaba en `;` o al cerrar la cadena.
+#
+# Comprobado contra el código de este repositorio: sin este nivel de
+# precisión, la regla marcaba `db_password=SecretStr("x")` y
+# `f"PWD={password}"`, y una regla que da falsos positivos en cada PR acaba
+# desactivada, que es peor que no tenerla.
+regex = '''(?i)(?:^|[;,"'\s(])(?:password|pwd)\s*=\s*([^;'"{}$<>\s][^;'"{}]*)(?:;|["']|$)'''
+secretGroup = 1
+tags = ["database", "sqlserver"]
+[rules.allowlist]
+# `regexTarget = "line"` es imprescindible: por defecto gitleaks compara las
+# excepciones contra el VALOR capturado, y estos patrones nombran la clave
+# (`password=`), que está en la línea pero no en el valor. Sin esto, ninguna
+# excepción se aplicaría nunca y la regla marcaría cada asignación de Python.
+regexTarget = "line"
+regexes = [
+  # Llamada a función: `password=SecretStr(...)`, `password=get_secret()`.
+  '''(?i)(?:password|pwd)\s*=\s*[A-Za-z_][A-Za-z0-9_.]*\s*\(''',
+  # Ausencia de valor.
+  '''(?i)(?:password|pwd)\s*=\s*(?:None|null|""|''|\s*$)''',
+  # Marcadores de documentación.
+  '''(?i)(?:password|pwd)\s*=\s*(?:tu|su|la|el)[-_ ]''',
+  # Valores cuyo propio nombre dice que son de prueba y no abren nada.
+  '''(?i)(?:password|pwd)\s*=\s*[^;'"]*(?:prueba|pruebas|test|ejemplo|example|changeme|placeholder|_ci\b|ci\b)''',
+]
+
+[[rules]]
+id = "jwt-secret-con-valor"
+description = "BP_JWT_SECRET_KEY con un valor asignado"
+regex = '''(?i)BP_JWT_SECRET_KEY\s*[:=]\s*[^\s<#'"][^\s#]{7,}'''
+tags = ["jwt", "banking-platform"]
+[rules.allowlist]
+regexTarget = "line"
+regexes = [
+  '''(?i)BP_JWT_SECRET_KEY\s*[:=]\s*$''',
+  # Referencia a un secret de GitHub Actions: es el nombre, no el valor.
+  '''(?i)BP_JWT_SECRET_KEY\s*[:=]\s*\$\{\{''',
+  '''(?i)BP_JWT_SECRET_KEY\s*[:=]\s*<[^>]+>''',
+  # Valor que usa el CI para comprobar que la aplicación arranca con una
+  # configuración de producción válida. No firma nada en ningún entorno real;
+  # el propio texto lo dice.
+  '''(?i)BP_JWT_SECRET_KEY\s*[:=]\s*clave-de-verificacion-de-ci''',
+  # Claves de prueba del backend.
+  '''(?i)BP_JWT_SECRET_KEY\s*[:=]\s*[^\s#]*(?:prueba|pruebas|test)''',
+]
+
+[[rules]]
+id = "perfil-publicacion-azure"
+description = "Perfil de publicación de Azure (lleva credenciales de despliegue)"
+regex = '''<publishProfile[^>]*userPWD\s*=\s*"[^"]+"'''
+tags = ["azure", "deploy"]
+
+[[rules]]
+id = "pan-tarjeta"
+description = "Posible número de tarjeta en el código o en los datos de prueba"
+# 13 a 19 dígitos: el rango de ISO/IEC 7812. No es un secreto de
+# autenticación, pero PCI DSS prohíbe almacenarlo sin protección, y un PAN en
+# un repositorio público es un incidente.
+regex = '''\b(?:4[0-9]{12}(?:[0-9]{3})?|5[1-5][0-9]{14}|3[47][0-9]{13}|6(?:011|5[0-9]{2})[0-9]{12})\b'''
+tags = ["pci", "pan"]
+[rules.allowlist]
+regexes = [
+  # PAN de prueba publicados por las marcas, los que usa todo el mundo en los
+  # ejemplos. No corresponden a ninguna cuenta.
+  '''4111111111111111''',
+  '''4242424242424242''',
+  '''5555555555554444''',
+  '''378282246310005''',
+]
+
+# --- Excepciones globales --------------------------------------------
+
+[allowlist]
+description = "Rutas y valores que por definición no contienen un secreto real"
+
+paths = [
+  # Plantillas de configuración: documentan nombres, no valores.
+  '''\.env\.example$''',
+  # Lockfiles: solo nombres de paquete y hashes de integridad.
+  '''package-lock\.json$''',
+  # Backlog en Obsidian: documentación funcional con ejemplos de petición y
+  # respuesta. Si aquí apareciera una credencial real sería un problema de la
+  # ficha, no del código; se revisa aparte.
+  '''^GitHubProject_Files/''',
+
+  # --- Artefactos no versionados -----------------------------------
+  # `gitleaks git` no los ve (no están en el historial), pero
+  # `gitleaks dir`, que es como se ejecuta en local, sí. Sin estas
+  # exclusiones el comando devuelve cientos de hallazgos de dependencias
+  # de terceros y nadie vuelve a ejecutarlo.
+  '''(^|/)\.venv/''',
+  '''(^|/)venv/''',
+  '''(^|/)antenv/''',
+  '''(^|/)node_modules/''',
+  '''(^|/)__pycache__/''',
+  '''(^|/)\.angular/''',
+  '''(^|/)dist/''',
+  '''(^|/)coverage/''',
+  '''(^|/)reports/''',
+  '''(^|/)htmlcov/''',
+  '''\.pyc$''',
+]
+
+regexTarget = "line"
+regexes = [
+  # Tokens de ejemplo que se usan en la documentación de JWT.
+  '''eyJhbGciOiJIUzI1NiJ9\.\.\.''',
+  '''eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9\.ey''',
+  # Referencias a secrets de GitHub Actions: es el nombre, no el valor.
+  '''\$\{\{\s*secrets\.[A-Z0-9_]+\s*\}\}''',
+  # Marcadores de documentación.
+  '''<(?:tu|su|el)[-_ ][^>]+>''',
+  '''(?i)\b(?:changeme|placeholder|ejemplo|example|dummy)\b''',
+]

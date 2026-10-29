@@ -1,0 +1,45 @@
+# .editorconfig — F-02
+#
+# Hace que el editor de cada quien produzca el mismo formato, sin que haga falta
+# acordarse de configurarlo. Lo entienden VS Code, Visual Studio, PyCharm,
+# WebStorm, Sublime, Vim y Neovim (algunos necesitan una extensión).
+#
+# No sustituye a Ruff ni a Prettier: ellos son la autoridad y el CI los verifica.
+# Esto evita que el editor pelee contra ellos mientras se escribe.
+# https://editorconfig.org
+
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 2
+max_line_length = 100
+
+[*.py]
+# PEP 8. Coincide con ruff format.
+indent_size = 4
+
+[*.{ts,js,mts,mjs,json,jsonc,html,scss,css,yml,yaml}]
+indent_size = 2
+
+[*.md]
+# Dos espacios al final de línea significan salto de línea en Markdown.
+trim_trailing_whitespace = false
+max_line_length = off
+
+[*.{bat,cmd,ps1,psm1}]
+end_of_line = crlf
+
+[Makefile]
+indent_style = tab
+
+[*.sql]
+indent_size = 4
+
+[{package.json,package-lock.json,angular.json,tsconfig*.json}]
+# Los generan herramientas; se respeta su formato.
+indent_size = 2

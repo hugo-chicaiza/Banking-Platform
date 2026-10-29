@@ -1,0 +1,92 @@
+####################################################################
+# .gitattributes — F-02
+#
+# Por qué importa en este equipo: se trabaja en Windows y el CI corre en Linux.
+# Sin esto, cada quien sube el archivo con los finales de línea de su sistema y
+# aparecen dos problemas reales:
+#
+#  1. Diffs con el archivo entero cambiado, donde no se ve la modificación real
+#     y la revisión del PR deja de servir para nada.
+#  2. Un `.sh` con CRLF no se ejecuta en Linux: falla con "bad interpreter".
+#
+# `text=auto eol=lf` normaliza a LF en el repositorio y deja que Git entregue
+# a cada quien lo que su sistema espera en el directorio de trabajo.
+####################################################################
+
+# Por defecto: Git detecta si es texto y lo guarda con LF.
+* text=auto eol=lf
+
+# --- Archivos que SIEMPRE son texto con LF --------------------------
+*.py      text eol=lf
+*.pyi     text eol=lf
+*.ts      text eol=lf
+*.mts     text eol=lf
+*.js      text eol=lf
+*.mjs     text eol=lf
+*.json    text eol=lf
+*.jsonc   text eol=lf
+*.html    text eol=lf
+*.css     text eol=lf
+*.scss    text eol=lf
+*.md      text eol=lf
+*.yml     text eol=lf
+*.yaml    text eol=lf
+*.toml    text eol=lf
+*.cfg     text eol=lf
+*.ini     text eol=lf
+*.sh      text eol=lf
+*.sql     text eol=lf
+*.env.example text eol=lf
+Dockerfile  text eol=lf
+.gitignore  text eol=lf
+.gitattributes text eol=lf
+.editorconfig  text eol=lf
+
+# --- Archivos que necesitan CRLF ------------------------------------
+# Un .ps1 o .bat con LF puede comportarse de forma inesperada en Windows.
+*.ps1     text eol=crlf
+*.psm1    text eol=crlf
+*.bat     text eol=crlf
+*.cmd     text eol=crlf
+
+# --- Binarios: Git no debe tocarlos ni intentar fusionarlos ---------
+*.png     binary
+*.jpg     binary
+*.jpeg    binary
+*.gif     binary
+*.ico     binary
+*.webp    binary
+*.pdf     binary
+*.woff    binary
+*.woff2   binary
+*.ttf     binary
+*.eot     binary
+*.zip     binary
+*.gz      binary
+*.7z      binary
+*.xlsx    binary
+*.docx    binary
+*.pptx    binary
+*.bak     binary
+
+# --- Lockfiles ------------------------------------------------------
+# Se versionan (son la garantía de instalaciones reproducibles) pero se marcan
+# como generados para que GitHub los colapse en el diff del PR: un cambio de
+# 4000 líneas en package-lock.json entierra los 3 archivos que hay que revisar.
+package-lock.json  linguist-generated=true -diff
+Frontend/package-lock.json linguist-generated=true -diff
+
+# --- Estadísticas del repositorio -----------------------------------
+# GitHub calcula el lenguaje del proyecto con esto. Sin excluirlos, el
+# repositorio aparece como "Markdown" por el volumen de GitHubProject_Files.
+GitHubProject_Files/** linguist-documentation=true
+docs/**                linguist-documentation=true
+
+# --- Archivos que no deben salir en el paquete de código ------------
+# `export-ignore` los excluye de `git archive`, que es lo que usan algunos
+# flujos de despliegue para empaquetar el repositorio.
+.github/**        export-ignore
+GitHubProject_Files/** export-ignore
+docs/**           export-ignore
+.gitattributes    export-ignore
+.gitignore        export-ignore
