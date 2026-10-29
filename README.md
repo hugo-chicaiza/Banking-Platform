@@ -59,7 +59,7 @@ Full structure and rules: [`Backend/TreeFolderStructure.md`](Backend/TreeFolderS
 
 ### Run the CI checks locally (before pushing)
 
-From the repository root, with `Backend/.venv` created (`py -3.14 -m venv Backend/.venv` and `Backend/.venv/Scripts/python -m pip install -r Backend/requirements-dev.txt`):
+From the repository root, with `Backend/.venv` created (`py -3.14 -m venv Backend/.venv` and `Backend/.venv/Scripts/python -m pip install --require-hashes --only-binary :all: -r Backend/requirements-dev.txt`):
 
 ```
 Backend/.venv/Scripts/ruff format Backend          # fix formatting
@@ -67,6 +67,24 @@ Backend/.venv/Scripts/ruff check Backend --fix     # lint and auto-fix
 Backend/.venv/Scripts/pyright --pythonpath Backend/.venv/Scripts/python.exe Backend
 Backend/.venv/Scripts/python -m pytest Backend/tests
 Backend/.venv/Scripts/python -m bandit -q -r Backend -x Backend/tests,Backend/.venv
+```
+
+### Dependencies (locked with hashes)
+
+Edit only the `.in` files; the `.txt` files are generated locks (exact versions + hashes) used by CI and Azure.
+
+| File | Edit? | Purpose |
+|---|---|---|
+| `Backend/requirements.in` | Yes | Runtime dependencies (version ranges) |
+| `Backend/requirements-dev.in` | Yes | Test and CI tools |
+| `Backend/requirements.txt` | No (generated) | Runtime lock installed by Azure |
+| `Backend/requirements-dev.txt` | No (generated) | Dev lock installed by CI and locally |
+
+After changing a `.in` file, regenerate both locks from `Backend/` and commit them:
+
+```
+.venv/Scripts/uv pip compile requirements.in --universal --generate-hashes --python-version 3.14 -o requirements.txt
+.venv/Scripts/uv pip compile requirements-dev.in --universal --generate-hashes --python-version 3.14 -o requirements-dev.txt
 ```
 
 ## Getting Started
