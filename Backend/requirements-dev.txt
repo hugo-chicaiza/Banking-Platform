@@ -1,0 +1,11 @@
+-r requirements.txt
+
+# Pruebas
+pytest>=8.4
+pytest-cov>=7.0
+
+# Calidad y seguridad (mismas herramientas que backend-ci.yml)
+ruff>=0.14
+pyright>=1.1.400
+bandit>=1.8
+pip-audit>=2.9

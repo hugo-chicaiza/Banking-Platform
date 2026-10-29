@@ -1,0 +1,84 @@
+# ============================================================
+# Banking-Platform · repositorio solo backend (FastAPI)
+# ============================================================
+
+# --- Secretos / configuración local (ASVS V13: nunca en el repo) ---
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.pfx
+*.p12
+*.crt
+*.publishsettings
+*.PublishSettings
+local.settings.json
+secrets/
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+.eggs/
+build/
+dist/
+pip-wheel-metadata/
+*.spec
+
+# --- Entornos virtuales (antenv = nombre usado por Azure App Service) ---
+.venv/
+venv/
+env/
+antenv/
+.python-version
+
+# --- Pruebas, cobertura y herramientas de calidad ---
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+junit*.xml
+.tox/
+.nox/
+.ruff_cache/
+.mypy_cache/
+.pyright/
+.hypothesis/
+
+# --- Logs y datos locales (pueden contener PII / datos de tarjeta) ---
+*.log
+logs/
+*.sqlite
+*.sqlite3
+*.db
+*.bak
+*.bacpac
+dumps/
+
+# --- Azure ---
+.azure/
+.deployment
+*.zip
+
+# --- IDE / editores ---
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+.idea/
+*.swp
+*.swo
+*~
+
+# --- Asistentes de IA ---
+.claude/settings.local.json
+graphify-out/
+
+# --- Sistema operativo ---
+.DS_Store
+Thumbs.db
+desktop.ini
