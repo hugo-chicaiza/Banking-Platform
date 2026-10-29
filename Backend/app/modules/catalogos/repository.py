@@ -45,3 +45,24 @@ def listar_tipos_movimiento_caja(conn: Connection) -> list[dict[str, Any]]:
         ORDER BY Naturaleza, Codigo
         """,
     )
+
+
+def listar_canales(conn: Connection) -> list[dict[str, Any]]:
+    # CAT-08: solo canales activos, ordenados por nombre.
+    return _rows(
+        conn,
+        """
+        SELECT
+            IdCanal AS id_canal,
+            CodigoCanal AS codigo_canal,
+            NombreCanal AS nombre_canal,
+            RequiereTarjeta AS requiere_tarjeta,
+            RequierePin AS requiere_pin,
+            RequiereTerminal AS requiere_terminal,
+            RequiereJornadaCaja AS requiere_jornada_caja,
+            ModoDigitalPresencial AS modo
+        FROM Canal.Canal
+        WHERE Estado = 'A'
+        ORDER BY NombreCanal ASC
+        """,
+    )
