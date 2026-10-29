@@ -35,5 +35,14 @@ backend/
 │   └── integrations/
 │       └── buro.py                # Simulated credit bureau client (replace with a real one later)
 │
+├── tests/
+│   ├── unit/                      # Pure logic, no DB (e.g. amortizacion.py)
+│   └── integration/               # Router → service → repository against a test DB
+│
+├── .env.example                   # Copy to .env; in Azure use App Settings
+├── requirements.txt               # Runtime (Python 3.14)
+└── requirements-dev.txt           # Tests + CI tools
 ```
+
+> Rule: a module may call another module's `service`, never its `repository`.
 
