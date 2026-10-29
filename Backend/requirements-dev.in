@@ -1,0 +1,25 @@
+# Entrada editable de dependencias de desarrollo. El lock se genera, no se edita a mano:
+#   uv pip compile requirements-dev.in --universal --generate-hashes --python-version 3.14 -o requirements-dev.txt
+#
+# Setup local (desde Backend/):
+# 1. python -m venv .venv
+# 2. .venv\Scripts\activate.bat
+# 3. python -m pip install --require-hashes --only-binary :all: -r requirements-dev.txt
+## python -m app
+
+-r requirements.in
+# Mismas versiones exactas que producción
+-c requirements.txt
+
+# Pruebas
+pytest>=8.4
+pytest-cov>=7.0
+
+# Calidad y seguridad (mismas herramientas que backend-ci.yml)
+ruff>=0.14
+pyright>=1.1.400
+bandit>=1.8
+pip-audit>=2.9
+
+# Genera los locks (requirements.txt / requirements-dev.txt)
+uv>=0.13

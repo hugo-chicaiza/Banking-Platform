@@ -41,8 +41,10 @@ backend/
 │   └── integration/               # Router → service → repository against a test DB
 │
 ├── .env.example                   # Copy to .env; in Azure use App Settings
-├── requirements.txt               # Runtime (Python 3.14)
-└── requirements-dev.txt           # Tests + CI tools
+├── requirements.in                # Runtime dependencies (edit this)
+├── requirements.txt               # Generated lock with hashes (Azure installs it)
+├── requirements-dev.in            # Tests + CI tools (edit this)
+└── requirements-dev.txt           # Generated dev lock with hashes (CI installs it)
 ```
 
 > Rule: a module may call another module's `service`, never its `repository`.
