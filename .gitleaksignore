@@ -1,0 +1,4 @@
+# False positives: placeholder tokens in old API doc examples (AUT-01, AUT-02, commit 595c713); not real credentials.
+595c713515497af16bdfedd91827d9685169c284:BankingPlataformDocs/GitHubProject_Files/E0 Fundación/F-03 Autenticación y roles/AUT-01 POST auth-login.md:generic-api-key:56
+595c713515497af16bdfedd91827d9685169c284:BankingPlataformDocs/GitHubProject_Files/E0 Fundación/F-03 Autenticación y roles/AUT-01 POST auth-login.md:generic-api-key:57
+595c713515497af16bdfedd91827d9685169c284:BankingPlataformDocs/GitHubProject_Files/E0 Fundación/F-03 Autenticación y roles/AUT-02 POST auth-refresh.md:generic-api-key:45

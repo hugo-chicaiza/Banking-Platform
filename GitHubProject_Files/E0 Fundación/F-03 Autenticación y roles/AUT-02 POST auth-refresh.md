@@ -42,7 +42,7 @@ Entrega un access token nuevo a partir de un refresh token válido, sin pedir la
 ## Request
 
 ```json
-{ "refreshToken": "8f14e45f-ceea-467a-9575-7b0c1f2c3a4d" }
+{ "refreshToken": "<refresh-token>" }
 ```
 
 ## Response `200`

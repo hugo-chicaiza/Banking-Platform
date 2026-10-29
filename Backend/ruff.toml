@@ -1,0 +1,2 @@
+# Raíz del código: permite a ruff reconocer "app" como first-party al correr desde la raíz del repo (CI)
+src = ["."]
