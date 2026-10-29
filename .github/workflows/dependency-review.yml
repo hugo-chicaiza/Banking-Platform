@@ -49,11 +49,24 @@ jobs:
           # Licencias que no se pueden usar en un producto cerrado: obligan a
           # publicar el código fuente del software que las enlaza. No es una
           # opinión sobre ellas, es una restricción del modelo de negocio.
+          #
+          # Los nombres tienen que ser identificadores SPDX VÁLIDOS Y VIGENTES.
+          # `GPL-3.0` y `AGPL-3.0` a secas están obsoletos en SPDX y la acción
+          # los rechaza con «Invalid license(s) in deny-licenses», de modo que
+          # el job falla sin llegar a revisar nada: parece un control activo y
+          # no lo es. Hay que usar las variantes `-only` y `-or-later`.
+          #
+          # `SSPL-1.0` NO está en la lista de SPDX (no es una licencia
+          # aprobada por la OSI), así que no se puede expresar aquí. Si alguna
+          # vez entra una dependencia con SSPL, habrá que detectarla en la
+          # revisión del PR.
           deny-licenses: |
-            GPL-2.0
-            GPL-3.0
-            AGPL-3.0
-            SSPL-1.0
+            GPL-2.0-only
+            GPL-2.0-or-later
+            GPL-3.0-only
+            GPL-3.0-or-later
+            AGPL-3.0-only
+            AGPL-3.0-or-later
 
           comment-summary-in-pr: on-failure
           warn-only: false

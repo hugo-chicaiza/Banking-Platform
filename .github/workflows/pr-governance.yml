@@ -87,15 +87,30 @@ jobs:
             build
             revert
           requireScope: false
-          subjectPattern: ^(?![A-Z])(?!.*\.$).+$
+          # El asunto empieza en minúscula y no termina en punto, PERO se
+          # admite una sigla en mayúsculas al principio.
+          #
+          #   [A-Z]{2,}(?![a-z])  → sigla: CI, API, CORS, JWT, ATM, PIN
+          #   [^A-Z]              → cualquier otro inicio que no sea mayúscula
+          #
+          # La excepción de la sigla no es un capricho: sin ella, títulos
+          # legítimos como «fix(backend): CORS rechaza el origen del frontend»
+          # o «feat: API de catálogos» se rechazarían, y una regla que bloquea
+          # lo correcto acaba desactivada.
+          subjectPattern: ^(?!.*\.$)(?:[A-Z]{2,}(?![a-z])|[^A-Z]).*$
           subjectPatternError: |
-            El asunto del título («{subject}») debe empezar en minúscula y no
-            terminar en punto.
+            El asunto del título («{subject}») debe empezar en minúscula —o en
+            una sigla en mayúsculas— y no terminar en punto.
 
-            Ejemplos correctos:
+            Correctos:
               feat(backend): añade validación de cédula
               chore: configura proyecto, entornos y CI
-              fix(frontend): corrige el guard de rol
+              fix(frontend): CORS rechaza el origen del frontend
+              feat: API de catálogos
+
+            Incorrectos:
+              feat: Añade validación de cédula      (palabra normal en mayúscula)
+              fix: corrige el guard de rol.         (termina en punto)
 
   # ------------------------------------------------------------------
   contenido:
