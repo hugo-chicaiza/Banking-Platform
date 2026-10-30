@@ -62,3 +62,20 @@ def listar_agencias(conn: Connection) -> list[dict[str, Any]]:
         ORDER BY a.Codigo
         """,
     )
+
+
+def listar_tipos_credito(conn: Connection) -> list[dict[str, Any]]:
+    # CAT-09: solo tipos activos, ordenados por nombre. Las condiciones
+    # (tasa, plazo, montos) se piden con CRE-01.
+    return _rows(
+        conn,
+        """
+        SELECT IdTipoCredito AS id_tipo_credito,
+               CodigoTipoCredito AS codigo_tipo_credito,
+               Nombre AS nombre,
+               Descripcion AS descripcion
+        FROM Credito.TipoCredito
+        WHERE Estado = 'A'
+        ORDER BY Nombre
+        """,
+    )

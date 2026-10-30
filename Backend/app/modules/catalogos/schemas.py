@@ -31,3 +31,10 @@ class Agencia(CamelModel):
     provincia: str
     ciudad: str
     estado: Literal["A", "I", "C"]
+
+
+class TipoCredito(CamelModel):
+    id_tipo_credito: int
+    codigo_tipo_credito: str
+    nombre: str
+    descripcion: str | None = None
