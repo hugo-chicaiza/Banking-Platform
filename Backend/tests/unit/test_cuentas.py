@@ -80,7 +80,9 @@ _PAYLOAD = {
 }
 
 
-def _patch_repo(monkeypatch, *, cliente=None, riesgo=None, producto=None, agencia=None, cuenta=None):
+def _patch_repo(
+    monkeypatch, *, cliente=None, riesgo=None, producto=None, agencia=None, cuenta=None
+):
     """Aplica stubs al módulo repository para el caso de prueba indicado."""
     monkeypatch.setattr(repository, "obtener_cliente", lambda conn, _id: cliente)
     monkeypatch.setattr(repository, "obtener_riesgo_vigente", lambda conn, _id: riesgo)
@@ -194,7 +196,11 @@ def test_producto_tipo_incorrecto_422(client, monkeypatch):
         monkeypatch,
         cliente=_CLIENTE_ACTIVO,
         riesgo=_RIESGO_APROBADO,
-        producto={"tipo_producto": "Tarjeta", "estado": "A", "monto_apertura_minimo": Decimal(0)},
+        producto={
+            "tipo_producto": "Tarjeta",
+            "estado": "A",
+            "monto_apertura_minimo": Decimal(0),
+        },
     )
 
     r = client.post("/api/v1/cuentas", json=_PAYLOAD)
@@ -213,7 +219,11 @@ def test_producto_inactivo_422(client, monkeypatch):
         monkeypatch,
         cliente=_CLIENTE_ACTIVO,
         riesgo=_RIESGO_APROBADO,
-        producto={"tipo_producto": "Cuenta", "estado": "I", "monto_apertura_minimo": Decimal(0)},
+        producto={
+            "tipo_producto": "Cuenta",
+            "estado": "I",
+            "monto_apertura_minimo": Decimal(0),
+        },
     )
 
     r = client.post("/api/v1/cuentas", json=_PAYLOAD)

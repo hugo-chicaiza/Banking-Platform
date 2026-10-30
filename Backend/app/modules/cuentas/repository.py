@@ -139,7 +139,7 @@ def abrir_cuenta(
         {"numero_cuenta": numero_cuenta},
     )
 
-    if cuenta is None:  # pragma: no cover 
+    if cuenta is None:  # pragma: no cover
         raise RuntimeError("usp_AbrirCuenta no devolvió la cuenta creada")
 
     return cuenta

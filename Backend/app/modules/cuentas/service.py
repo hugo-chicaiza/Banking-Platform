@@ -89,12 +89,22 @@ def abrir_cuenta(
     # 2. Riesgo vigente no rechazado
     riesgo = repository.obtener_riesgo_vigente(conn, payload.id_cliente)
     if riesgo is not None and riesgo["estado"] == "Rechazado":
-        raise _problema(409, "RIESGO_RECHAZADO", "El cliente tiene riesgo vigente rechazado.")
+        raise _problema(
+            409, "RIESGO_RECHAZADO", "El cliente tiene riesgo vigente rechazado."
+        )
 
     # 3. Producto existe, es de tipo Cuenta y está activo
     producto = repository.obtener_producto(conn, payload.id_producto)
-    if producto is None or producto["tipo_producto"] != "Cuenta" or producto["estado"] != "A":
-        raise _problema(422, "PRODUCTO_NO_ES_CUENTA", "El producto no es de tipo Cuenta o no está activo.")
+    if (
+        producto is None
+        or producto["tipo_producto"] != "Cuenta"
+        or producto["estado"] != "A"
+    ):
+        raise _problema(
+            422,
+            "PRODUCTO_NO_ES_CUENTA",
+            "El producto no es de tipo Cuenta o no está activo.",
+        )
 
     # 4. Monto de apertura cubre el mínimo
     # El monto declarado no viaja en el payload de CTA-01; la validación
@@ -104,10 +114,14 @@ def abrir_cuenta(
     # 5. Agencia existe y está activa
     agencia = repository.obtener_agencia(conn, payload.id_agencia)
     if agencia is None or agencia["estado"] != "A":
-        raise _problema(409, "AGENCIA_INACTIVA", "La agencia no existe o no está activa.")
+        raise _problema(
+            409, "AGENCIA_INACTIVA", "La agencia no existe o no está activa."
+        )
 
     # 6. Generar NumeroCuenta
-    numero_cuenta = _generar_numero_cuenta(conn, payload.tipo_cuenta, payload.id_producto)
+    numero_cuenta = _generar_numero_cuenta(
+        conn, payload.tipo_cuenta, payload.id_producto
+    )
 
     # 7. Ejecutar el SP; captura THROWs de la DB
     try:

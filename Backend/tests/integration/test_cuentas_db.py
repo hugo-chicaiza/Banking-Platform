@@ -108,8 +108,16 @@ def test_tabla_cuenta_tiene_columnas(conn):
     from sqlalchemy import text
 
     columnas = [
-        "IdCuenta", "NumeroCuenta", "IdCliente", "IdProducto",
-        "IdAgencia", "TipoCuenta", "IdMoneda", "Saldo", "SaldoRetenido", "Estado",
+        "IdCuenta",
+        "NumeroCuenta",
+        "IdCliente",
+        "IdProducto",
+        "IdAgencia",
+        "TipoCuenta",
+        "IdMoneda",
+        "Saldo",
+        "SaldoRetenido",
+        "Estado",
     ]
     row = conn.execute(
         text(
@@ -123,7 +131,9 @@ def test_tabla_cuenta_tiene_columnas(conn):
         ),
         {"cols": tuple(columnas)},
     ).scalar_one()
-    assert row == len(columnas), f"Cuentas.Cuenta no tiene todas las columnas esperadas ({row}/{len(columnas)})"
+    assert row == len(columnas), (
+        f"Cuentas.Cuenta no tiene todas las columnas esperadas ({row}/{len(columnas)})"
+    )
 
 
 def test_sp_abrir_cuenta_existe(conn):

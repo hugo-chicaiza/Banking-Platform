@@ -1,7 +1,8 @@
 from typing import Literal
-from pydantic import Field
-from app.core.schemas import CamelModel, Money
 
+from pydantic import Field
+
+from app.core.schemas import CamelModel, Money
 
 TipoCuenta = Literal["Ahorro", "Corriente"]
 
@@ -27,6 +28,7 @@ class CuentaCreate(CamelModel):
 
 
 # Respuesta de cuenta
+
 
 class Cuenta(CamelModel):
     """Representación de una cuenta bancaria devuelta por el API."""
