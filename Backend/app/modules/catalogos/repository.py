@@ -3,8 +3,12 @@ from typing import Any
 from sqlalchemy import Connection, text
 
 
-def _rows(conn: Connection, sql: str) -> list[dict[str, Any]]:
-    return [dict(row) for row in conn.execute(text(sql)).mappings()]
+def _rows(
+    conn: Connection, sql: str, parameters: dict[str, Any] | None = None
+) -> list[dict[str, Any]]:
+    return [
+        dict(row) for row in conn.execute(text(sql), parameters or {}).mappings()
+    ]
 
 
 def listar_paises(conn: Connection) -> list[dict[str, Any]]:
@@ -61,4 +65,33 @@ def listar_agencias(conn: Connection) -> list[dict[str, Any]]:
         JOIN Catalogo.Ciudad AS c ON c.IdCiudad = a.IdCiudad
         ORDER BY a.Codigo
         """,
+    )
+
+
+def listar_productos(conn: Connection, tipo: str | None = None) -> list[dict[str, Any]]:
+    filtro_tipo = "\n          AND p.TipoProducto = :tipo" if tipo is not None else ""
+    parametros = {"tipo": tipo} if tipo is not None else None
+    return _rows(
+        conn,
+        f"""
+        SELECT p.IdProducto AS id_producto,
+               p.CodigoProducto AS codigo_producto,
+               p.NombreProducto AS nombre_producto,
+               p.TipoProducto AS tipo_producto,
+               CASE WHEN p.TipoProducto = 'Cuenta'
+                    THEN p.MontoAperturaMinimo END AS monto_apertura_minimo,
+               CASE WHEN p.TipoProducto = 'Credito'
+                    THEN p.IdTipoCredito END AS id_tipo_credito,
+               CASE WHEN p.TipoProducto = 'Tarjeta'
+                    THEN r.IdRed END AS id_red,
+               CASE WHEN p.TipoProducto = 'Cuenta'
+                    THEN p.TipoCuenta END AS tipo_cuenta,
+               p.PermiteOperacionesPresenciales
+                    AS permite_operaciones_presenciales
+        FROM ProductosFinancieros.Producto AS p
+        LEFT JOIN ProductosFinancieros.Red AS r ON r.IdRed = p.IdRed
+        WHERE p.Estado = 'A'{filtro_tipo}
+        ORDER BY p.TipoProducto, p.NombreProducto
+        """,
+        parametros,
     )

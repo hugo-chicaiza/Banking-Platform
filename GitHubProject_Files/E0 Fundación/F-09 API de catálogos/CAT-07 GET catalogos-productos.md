@@ -42,7 +42,7 @@ Lista los productos financieros, con filtro opcional por tipo. Lo usan A-01, emi
 ## Response `200`
 
 ```json
-[ { "idProducto": 1, "codigoProducto": "AHO-01", "nombreProducto": "Ahorro a la vista", "tipoProducto": "Cuenta", "montoAperturaMinimo": 10.00, "idTipoCredito": null, "idRed": null, "tipoCuenta": "Ahorros", "permiteOperacionesPresenciales": true } ]
+[ { "idProducto": 1, "codigoProducto": "AHO-01", "nombreProducto": "Ahorro a la vista", "tipoProducto": "Cuenta", "montoAperturaMinimo": 10.00, "idTipoCredito": null, "idRed": null, "tipoCuenta": "Ahorro", "permiteOperacionesPresenciales": true } ]
 ```
 
 ## Errores
@@ -51,9 +51,12 @@ Formato ProblemDetails (ver F-04). Solo 400/401/403.
 
 ## Definición de terminado
 
-- [ ] Coincide con `openapi.yaml`
-- [ ] Prueba: sin filtro, cada tipo, tipo inválido, sin token
+- [x] Coincide con el OpenAPI generado por FastAPI (este checkout no contiene `openapi.yaml`).
+- [x] Pruebas: sin filtro, cada tipo y tipo inválido.
+- [ ] Sin token → 401 (depende de F-03; `require_auth()` aún no valida JWT).
 
-## Pendiente
+## Implementación backend
 
-- El contrato tiene `marca`; la DB usa `IdRed` → `ProductosFinancieros.Red` y agrega `TipoCuenta`. Actualizar el esquema `Producto` en `openapi.yaml`.
+- La consulta usa `ProductosFinancieros.Producto` y `ProductosFinancieros.Red`; expone `idRed` y `tipoCuenta` en lugar de `marca`.
+- La DB mantiene `MontoAperturaMinimo` como NOT NULL; la API lo devuelve solo para `Cuenta` y `null` para los demás tipos. `idTipoCredito`, `idRed` y `tipoCuenta` también se proyectan según el tipo de producto.
+- La prueba de integración requiere CooperativaDB configurada. La prueba sin token queda pendiente hasta completar F-03; este endpoint no debe considerarse listo para producción antes de validar JWT.

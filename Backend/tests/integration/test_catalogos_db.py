@@ -35,3 +35,35 @@ def test_tipos_movimiento_caja_ordenados(conn):
     filas = repository.listar_tipos_movimiento_caja(conn)
     claves = [(f["naturaleza"], f["codigo"]) for f in filas]
     assert claves == sorted(claves)
+
+
+def test_productos_activos_ordenados_y_filtrados_por_tipo(conn):
+    productos = repository.listar_productos(conn)
+    claves = [
+        (p["tipo_producto"].casefold(), p["nombre_producto"].casefold())
+        for p in productos
+    ]
+    assert claves == sorted(claves)
+
+    for producto in productos:
+        if producto["tipo_producto"] == "Cuenta":
+            assert producto["monto_apertura_minimo"] is not None
+            assert producto["tipo_cuenta"] in {"Corriente", "Ahorro"}
+            assert producto["id_tipo_credito"] is None
+            assert producto["id_red"] is None
+        elif producto["tipo_producto"] == "Tarjeta":
+            assert producto["id_red"] is not None
+            assert producto["monto_apertura_minimo"] is None
+            assert producto["id_tipo_credito"] is None
+            assert producto["tipo_cuenta"] is None
+        else:
+            assert producto["tipo_producto"] == "Credito"
+            assert producto["id_tipo_credito"] is not None
+            assert producto["monto_apertura_minimo"] is None
+            assert producto["id_red"] is None
+            assert producto["tipo_cuenta"] is None
+
+    for tipo in ("Cuenta", "Tarjeta", "Credito"):
+        filtrados = repository.listar_productos(conn, tipo)
+        assert all(p["tipo_producto"] == tipo for p in filtrados)
+        assert filtrados == [p for p in productos if p["tipo_producto"] == tipo]
