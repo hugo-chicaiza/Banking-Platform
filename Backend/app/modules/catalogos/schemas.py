@@ -38,3 +38,10 @@ class TipoCredito(CamelModel):
     codigo_tipo_credito: str
     nombre: str
     descripcion: str | None = None
+
+
+class Ciudad(CamelModel):
+    id_ciudad: int
+    codigo_pais: str
+    nombre: str
+    provincia: str
