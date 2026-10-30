@@ -11,8 +11,6 @@ from app.modules.catalogos.schemas import (
     Denominacion,
     Pais,
     Agencia,
-    Denominacion,
-    Pais,
     TipoCredito,
     TipoMovimientoCaja,
 )
