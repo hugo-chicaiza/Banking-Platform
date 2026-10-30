@@ -10,6 +10,9 @@ from app.modules.catalogos.schemas import (
     Denominacion,
     Pais,
     TipoAntecedente,
+    Canal,
+    Agencia,
+    TipoCredito,
     TipoMovimientoCaja,
 )
 
@@ -38,3 +41,14 @@ def listar_tipos_movimiento_caja(conn: Db) -> Any:
 @router.get("/tipos-antecedente", response_model=list[TipoAntecedente])
 def listar_tipos_antecedente(conn: Db) -> Any:
     return repository.listar_tipos_antecedente(conn)
+@router.get("/canales", response_model=list[Canal])
+def listar_canales(conn: Db) -> Any:
+    return repository.listar_canales(conn)
+@router.get("/agencias", response_model=list[Agencia])
+def listar_agencias(conn: Db) -> Any:
+    return repository.listar_agencias(conn)
+
+
+@router.get("/tipos-credito", response_model=list[TipoCredito])
+def listar_tipos_credito(conn: Db) -> Any:
+    return repository.listar_tipos_credito(conn)

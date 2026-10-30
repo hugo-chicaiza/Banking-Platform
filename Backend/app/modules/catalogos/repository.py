@@ -47,6 +47,7 @@ def listar_tipos_movimiento_caja(conn: Connection) -> list[dict[str, Any]]:
     )
 
 
+
 def listar_tipos_antecedente(conn: Connection) -> list[dict[str, Any]]:
     return _rows(
         conn,
@@ -59,5 +60,60 @@ def listar_tipos_antecedente(conn: Connection) -> list[dict[str, Any]]:
         FROM Catalogo.TipoAntecedente
         WHERE Estado = 'Activo'
         ORDER BY Categoria, Nombre
+        """,
+    )
+
+
+def listar_canales(conn: Connection) -> list[dict[str, Any]]:
+    # CAT-08: solo canales activos, ordenados por nombre.
+    return _rows(
+        conn,
+        """
+        SELECT
+            IdCanal AS id_canal,
+            CodigoCanal AS codigo_canal,
+            NombreCanal AS nombre_canal,
+            RequiereTarjeta AS requiere_tarjeta,
+            RequierePin AS requiere_pin,
+            RequiereTerminal AS requiere_terminal,
+            RequiereJornadaCaja AS requiere_jornada_caja,
+            ModoDigitalPresencial AS modo
+        FROM Canal.Canal
+        WHERE Estado = 'A'
+        ORDER BY NombreCanal ASC
+        """,
+    )
+
+
+def listar_agencias(conn: Connection) -> list[dict[str, Any]]:
+    # CAT-06: la tabla Agencia no tiene Nombre; se usa Codigo como nombre (acordado
+    # con el equipo). Provincia y ciudad vienen de Catalogo.Ciudad.
+    return _rows(
+        conn,
+        """
+        SELECT a.IdAgencia AS id_agencia, a.Codigo AS codigo,
+               a.Codigo AS nombre, a.TipoAgencia AS tipo_agencia,
+               c.Provincia AS provincia, c.Nombre AS ciudad,
+               a.Estado AS estado
+        FROM Organizacion.Agencia AS a
+        JOIN Catalogo.Ciudad AS c ON c.IdCiudad = a.IdCiudad
+        ORDER BY a.Codigo
+        """,
+    )
+
+
+def listar_tipos_credito(conn: Connection) -> list[dict[str, Any]]:
+    # CAT-09: solo tipos activos, ordenados por nombre. Las condiciones
+    # (tasa, plazo, montos) se piden con CRE-01.
+    return _rows(
+        conn,
+        """
+        SELECT IdTipoCredito AS id_tipo_credito,
+               CodigoTipoCredito AS codigo_tipo_credito,
+               Nombre AS nombre,
+               Descripcion AS descripcion
+        FROM Credito.TipoCredito
+        WHERE Estado = 'A'
+        ORDER BY Nombre
         """,
     )

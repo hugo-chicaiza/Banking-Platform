@@ -1,3 +1,4 @@
+
 from decimal import Decimal
 
 import pytest
@@ -17,14 +18,24 @@ def client():
 
 
 def test_paises_con_datos(client, monkeypatch):
-    rows = [{"codigo_pais": "ECU", "codigo_numerico": "218", "nombre_pais": "Ecuador"}]
+    rows = [
+        {
+            "codigo_pais": "ECU",
+            "codigo_numerico": "218",
+            "nombre_pais": "Ecuador",
+        }
+    ]
     monkeypatch.setattr(repository, "listar_paises", lambda conn: rows)
 
     r = client.get("/api/v1/catalogos/paises")
 
     assert r.status_code == 200
     assert r.json() == [
-        {"codigoPais": "ECU", "codigoNumerico": "218", "nombrePais": "Ecuador"}
+        {
+            "codigoPais": "ECU",
+            "codigoNumerico": "218",
+            "nombrePais": "Ecuador",
+        }
     ]
 
 
@@ -82,7 +93,11 @@ def test_tipos_movimiento_caja_con_datos(client, monkeypatch):
             "naturaleza": "I",
         }
     ]
-    monkeypatch.setattr(repository, "listar_tipos_movimiento_caja", lambda conn: rows)
+    monkeypatch.setattr(
+        repository,
+        "listar_tipos_movimiento_caja",
+        lambda conn: rows,
+    )
 
     r = client.get("/api/v1/catalogos/tipos-movimiento-caja")
 
@@ -98,6 +113,11 @@ def test_tipos_movimiento_caja_con_datos(client, monkeypatch):
 
 
 # TODO(F-03): agregar test_sin_token_401 cuando require_auth valide el JWT
+
+
+# ---------------------------------------------------------------------
+# CATÁLOGO: TIPOS DE ANTECEDENTE (feat/backend-117-tipos-antecedente)
+# ---------------------------------------------------------------------
 
 
 def test_tipos_antecedente_con_datos(client, monkeypatch):
@@ -167,3 +187,58 @@ def test_tipos_antecedente_sql_filtra_y_ordena(monkeypatch):
     assert "FROM Catalogo.TipoAntecedente" in sql
     assert "WHERE Estado = 'Activo'" in sql
     assert "ORDER BY Categoria, Nombre" in sql
+
+
+# ---------------------------------------------------------------------
+# CATÁLOGO: CANALES (develop / CAT-08)
+# ---------------------------------------------------------------------
+
+
+def test_canales_con_datos(client, monkeypatch):
+    rows = [
+        {
+            "id_canal": 2,
+            "codigo_canal": "ATM",
+            "nombre_canal": "Cajero automático",
+            "requiere_tarjeta": True,
+            "requiere_pin": True,
+            "requiere_terminal": True,
+            "requiere_jornada_caja": False,
+            "modo": "Presencial",
+        }
+    ]
+
+    monkeypatch.setattr(
+        repository,
+        "listar_canales",
+        lambda conn: rows,
+    )
+
+    r = client.get("/api/v1/catalogos/canales")
+
+    assert r.status_code == 200
+    assert r.json() == [
+        {
+            "idCanal": 2,
+            "codigoCanal": "ATM",
+            "nombreCanal": "Cajero automático",
+            "requiereTarjeta": True,
+            "requierePin": True,
+            "requiereTerminal": True,
+            "requiereJornadaCaja": False,
+            "modo": "Presencial",
+        }
+    ]
+
+
+def test_canales_sin_datos(client, monkeypatch):
+    monkeypatch.setattr(
+        repository,
+        "listar_canales",
+        lambda conn: [],
+    )
+
+    r = client.get("/api/v1/catalogos/canales")
+
+    assert r.status_code == 200
+    assert r.json() == []

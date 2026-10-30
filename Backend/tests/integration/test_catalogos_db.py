@@ -37,6 +37,7 @@ def test_tipos_movimiento_caja_ordenados(conn):
     assert claves == sorted(claves)
 
 
+
 def test_tipos_antecedente_ordenados(conn):
     filas = repository.listar_tipos_antecedente(conn)
 
@@ -56,6 +57,32 @@ def test_tipos_antecedente_solo_activos(conn):
             SELECT COUNT(*)
             FROM Catalogo.TipoAntecedente
             WHERE Estado = 'Activo'
+            """
+        )
+    ).scalar_one()
+
+    assert len(filas) == total_activos
+
+
+def test_canales_ordenados_por_nombre(conn):
+    filas = repository.listar_canales(conn)
+
+    nombres = [f["nombre_canal"] for f in filas]
+
+    assert nombres == sorted(nombres, key=str.casefold)
+
+
+def test_canales_solo_activos(conn):
+    from sqlalchemy import text
+
+    filas = repository.listar_canales(conn)
+
+    total_activos = conn.execute(
+        text(
+            """
+            SELECT COUNT(*)
+            FROM Canal.Canal
+            WHERE Estado = 'A'
             """
         )
     ).scalar_one()
