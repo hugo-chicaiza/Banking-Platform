@@ -3,8 +3,10 @@ from typing import Any
 from sqlalchemy import Connection, text
 
 
-def _rows(conn: Connection, sql: str) -> list[dict[str, Any]]:
-    return [dict(row) for row in conn.execute(text(sql)).mappings()]
+def _rows(
+    conn: Connection, sql: str, params: dict[str, Any] | None = None
+) -> list[dict[str, Any]]:
+    return [dict(row) for row in conn.execute(text(sql), params or {}).mappings()]
 
 
 def listar_paises(conn: Connection) -> list[dict[str, Any]]:
@@ -63,7 +65,10 @@ def listar_canales(conn: Connection) -> list[dict[str, Any]]:
             ModoDigitalPresencial AS modo
         FROM Canal.Canal
         WHERE Estado = 'A'
-        ORDER BY NombreCanal ASC
+        ORDER BY NombreCanal ASC""",
+    )
+
+
 def listar_agencias(conn: Connection) -> list[dict[str, Any]]:
     # CAT-06: la tabla Agencia no tiene Nombre; se usa Codigo como nombre (acordado
     # con el equipo). Provincia y ciudad vienen de Catalogo.Ciudad.
@@ -96,3 +101,38 @@ def listar_tipos_credito(conn: Connection) -> list[dict[str, Any]]:
         ORDER BY Nombre
         """,
     )
+
+
+def _escapar_like(valor: str) -> str:
+    # '!' es el carácter de escape; evita que %, _ y [ actúen como comodines.
+    for caracter in ("!", "%", "_", "["):
+        valor = valor.replace(caracter, "!" + caracter)
+    return valor
+
+
+def existe_pais(conn: Connection, codigo_pais: str) -> bool:
+    return bool(
+        _rows(
+            conn,
+            "SELECT 1 AS existe FROM Catalogo.Paises WHERE CodigoPais = :codigo",
+            {"codigo": codigo_pais},
+        )
+    )
+
+
+def listar_ciudades(
+    conn: Connection, codigo_pais: str, q: str | None = None
+) -> list[dict[str, Any]]:
+    sql = """
+        SELECT IdCiudad AS id_ciudad, CodigoPais AS codigo_pais,
+               Nombre AS nombre, Provincia AS provincia
+        FROM Catalogo.Ciudad
+        WHERE CodigoPais = :codigo
+    """
+    params: dict[str, Any] = {"codigo": codigo_pais}
+    if q:
+        # Sin mayúsculas ni tildes: la colación de la tabla distingue tildes.
+        sql += " AND Nombre COLLATE Latin1_General_CI_AI LIKE :patron ESCAPE '!'"
+        params["patron"] = f"%{_escapar_like(q)}%"
+    sql += " ORDER BY Provincia, Nombre"
+    return _rows(conn, sql, params)
