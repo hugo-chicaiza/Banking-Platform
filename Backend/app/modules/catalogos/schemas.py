@@ -32,3 +32,18 @@ class Canal(CamelModel):
     requiere_terminal: bool
     requiere_jornada_caja: bool
     modo: Literal["Digital", "Presencial", "Ambos"]
+class Agencia(CamelModel):
+    id_agencia: str
+    codigo: str
+    nombre: str
+    tipo_agencia: Literal["Sucursal", "Matriz"]
+    provincia: str
+    ciudad: str
+    estado: Literal["A", "I", "C"]
+
+
+class TipoCredito(CamelModel):
+    id_tipo_credito: int
+    codigo_tipo_credito: str
+    nombre: str
+    descripcion: str | None = None
