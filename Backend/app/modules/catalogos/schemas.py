@@ -23,6 +23,17 @@ class TipoMovimientoCaja(CamelModel):
     naturaleza: Literal["I", "E"]
 
 
+class Canal(CamelModel):
+    id_canal: int
+    codigo_canal: str
+    nombre_canal: str
+    requiere_tarjeta: bool
+    requiere_pin: bool
+    requiere_terminal: bool
+    requiere_jornada_caja: bool
+    modo: Literal["Digital", "Presencial", "Ambos"]
+
+
 class Agencia(CamelModel):
     id_agencia: str
     codigo: str

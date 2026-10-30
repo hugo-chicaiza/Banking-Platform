@@ -98,3 +98,53 @@ def test_tipos_movimiento_caja_con_datos(client, monkeypatch):
 
 
 # TODO(F-03): agregar test_sin_token_401 cuando require_auth valide el JWT
+
+
+def test_canales_con_datos(client, monkeypatch):
+    rows = [
+        {
+            "id_canal": 2,
+            "codigo_canal": "ATM",
+            "nombre_canal": "Cajero automático",
+            "requiere_tarjeta": True,
+            "requiere_pin": True,
+            "requiere_terminal": True,
+            "requiere_jornada_caja": False,
+            "modo": "Presencial",
+        }
+    ]
+
+    monkeypatch.setattr(
+        repository,
+        "listar_canales",
+        lambda conn: rows,
+    )
+
+    r = client.get("/api/v1/catalogos/canales")
+
+    assert r.status_code == 200
+    assert r.json() == [
+        {
+            "idCanal": 2,
+            "codigoCanal": "ATM",
+            "nombreCanal": "Cajero automático",
+            "requiereTarjeta": True,
+            "requierePin": True,
+            "requiereTerminal": True,
+            "requiereJornadaCaja": False,
+            "modo": "Presencial",
+        }
+    ]
+
+
+def test_canales_sin_datos(client, monkeypatch):
+    monkeypatch.setattr(
+        repository,
+        "listar_canales",
+        lambda conn: [],
+    )
+
+    r = client.get("/api/v1/catalogos/canales")
+
+    assert r.status_code == 200
+    assert r.json() == []

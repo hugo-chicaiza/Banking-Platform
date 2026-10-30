@@ -49,6 +49,26 @@ def listar_tipos_movimiento_caja(conn: Connection) -> list[dict[str, Any]]:
     )
 
 
+def listar_canales(conn: Connection) -> list[dict[str, Any]]:
+    # CAT-08: solo canales activos, ordenados por nombre.
+    return _rows(
+        conn,
+        """
+        SELECT
+            IdCanal AS id_canal,
+            CodigoCanal AS codigo_canal,
+            NombreCanal AS nombre_canal,
+            RequiereTarjeta AS requiere_tarjeta,
+            RequierePin AS requiere_pin,
+            RequiereTerminal AS requiere_terminal,
+            RequiereJornadaCaja AS requiere_jornada_caja,
+            ModoDigitalPresencial AS modo
+        FROM Canal.Canal
+        WHERE Estado = 'A'
+        ORDER BY NombreCanal ASC""",
+    )
+
+
 def listar_agencias(conn: Connection) -> list[dict[str, Any]]:
     # CAT-06: la tabla Agencia no tiene Nombre; se usa Codigo como nombre (acordado
     # con el equipo). Provincia y ciudad vienen de Catalogo.Ciudad.
