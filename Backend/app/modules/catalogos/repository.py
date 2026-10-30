@@ -6,9 +6,7 @@ from sqlalchemy import Connection, text
 def _rows(
     conn: Connection, sql: str, parameters: dict[str, Any] | None = None
 ) -> list[dict[str, Any]]:
-    return [
-        dict(row) for row in conn.execute(text(sql), parameters or {}).mappings()
-    ]
+    return [dict(row) for row in conn.execute(text(sql), parameters or {}).mappings()]
 
 
 def listar_paises(conn: Connection) -> list[dict[str, Any]]:

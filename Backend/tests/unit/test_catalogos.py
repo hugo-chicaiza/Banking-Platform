@@ -235,17 +235,17 @@ def test_productos_openapi_generado_expone_enum_y_problem_details():
     assert tipo["schema"]["enum"] == ["Cuenta", "Tarjeta", "Credito"]
     problem_content = operation["responses"]["400"]["content"]
     assert list(problem_content) == ["application/problem+json"]
-    assert "traceId" in problem_content["application/problem+json"]["schema"][
-        "properties"
-    ]
+    assert (
+        "traceId" in problem_content["application/problem+json"]["schema"]["properties"]
+    )
     assert all(
-        list(operation["responses"][status]["content"])
-        == ["application/problem+json"]
+        list(operation["responses"][status]["content"]) == ["application/problem+json"]
         for status in ("400", "401", "403")
     )
-    assert operation["responses"]["200"]["content"]["application/json"]["schema"][
-        "type"
-    ] == "array"
+    assert (
+        operation["responses"]["200"]["content"]["application/json"]["schema"]["type"]
+        == "array"
+    )
     product_schema = app.openapi()["components"]["schemas"]["Producto"]
     assert set(product_schema["properties"]) == {
         "idProducto",
@@ -261,7 +261,9 @@ def test_productos_openapi_generado_expone_enum_y_problem_details():
 
 
 def test_productos_router_usa_autenticacion_central():
-    route = next(route for route in router.routes if route.path == "/catalogos/productos")
+    route = next(
+        route for route in router.routes if route.path == "/catalogos/productos"
+    )
 
     assert any(
         dependency.call.__name__ == "require_auth"

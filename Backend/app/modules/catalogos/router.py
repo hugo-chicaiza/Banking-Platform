@@ -83,21 +83,15 @@ def listar_agencias(conn: Db) -> Any:
     responses={
         400: {
             "description": "El parámetro tipo no pertenece al enum permitido.",
-            "content": {
-                "application/problem+json": {"schema": PROBLEM_DETAILS_SCHEMA}
-            },
+            "content": {"application/problem+json": {"schema": PROBLEM_DETAILS_SCHEMA}},
         },
         401: {
             "description": "Falta autenticación válida.",
-            "content": {
-                "application/problem+json": {"schema": PROBLEM_DETAILS_SCHEMA}
-            },
+            "content": {"application/problem+json": {"schema": PROBLEM_DETAILS_SCHEMA}},
         },
         403: {
             "description": "El usuario no tiene permisos.",
-            "content": {
-                "application/problem+json": {"schema": PROBLEM_DETAILS_SCHEMA}
-            },
+            "content": {"application/problem+json": {"schema": PROBLEM_DETAILS_SCHEMA}},
         },
     },
 )
