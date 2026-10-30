@@ -1,6 +1,8 @@
 from fastapi import FastAPI
 
 from app.core.config import get_settings
+from app.modules.catalogos.router import router as catalogos_router
+from app.modules.cuentas.router import router as cuentas_router
 from app.smoke_test import router as smoke_test_router  # SMOKE-TEST: borrar
 
 settings = get_settings()
@@ -13,5 +15,9 @@ app = FastAPI(
     redoc_url=None,
     openapi_url=None if is_prod else "/openapi.json",
 )
+
+API_V1 = "/api/v1"
+app.include_router(catalogos_router, prefix=API_V1)
+app.include_router(cuentas_router, prefix=API_V1)
 
 app.include_router(smoke_test_router)  # SMOKE-TEST: borrar

@@ -53,8 +53,8 @@ Valida usuario y contraseña y devuelve access token, refresh token y datos de l
 
 ```json
 {
-  "accessToken": "eyJhbGciOiJIUzI1NiJ9...",
-  "refreshToken": "8f14e45f-ceea-467a-9575-7b0c1f2c3a4d",
+  "accessToken": "<access-token-jwt>",
+  "refreshToken": "<refresh-token>",
   "expiresIn": 900,
   "usuario": { "idUsuario": 12, "nombre": "María López", "roles": ["CAJERO"], "idAgencia": "001" }
 }
