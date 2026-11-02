@@ -34,6 +34,34 @@ class Canal(CamelModel):
     modo: Literal["Digital", "Presencial", "Ambos"]
 
 
+class ActividadEconomica(CamelModel):
+    id_actividad_economica: int
+    descripcion: str
+    area_actividad: str
+
+
+class TipoAntecedente(CamelModel):
+    id_tipo_antecedente: int
+    nombre: str
+    categoria: Literal["EnRevision", "Critico"]
+    puede_impedir_vinculacion: bool
+
+
+TipoProducto = Literal["Cuenta", "Tarjeta", "Credito"]
+
+
+class Producto(CamelModel):
+    id_producto: int
+    codigo_producto: str
+    nombre_producto: str
+    tipo_producto: TipoProducto
+    monto_apertura_minimo: Money | None = None
+    id_tipo_credito: int | None = None
+    id_red: int | None = None
+    tipo_cuenta: str | None = None
+    permite_operaciones_presenciales: bool
+
+
 class Agencia(CamelModel):
     id_agencia: str
     codigo: str

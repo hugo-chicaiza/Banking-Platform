@@ -100,6 +100,128 @@ def test_tipos_movimiento_caja_con_datos(client, monkeypatch):
 # TODO(F-03): agregar test_sin_token_401 cuando require_auth valide el JWT
 
 
+def test_actividades_economicas_con_datos(client, monkeypatch):
+    rows = [
+        {
+            "id_actividad_economica": 4,
+            "descripcion": "Comercio al por menor",
+            "area_actividad": "Comercio",
+        }
+    ]
+    monkeypatch.setattr(repository, "listar_actividades_economicas", lambda conn: rows)
+
+    r = client.get("/api/v1/catalogos/actividades-economicas")
+
+    assert r.status_code == 200
+    assert r.json() == [
+        {
+            "idActividadEconomica": 4,
+            "descripcion": "Comercio al por menor",
+            "areaActividad": "Comercio",
+        }
+    ]
+
+
+def test_tipos_antecedente_con_datos(client, monkeypatch):
+    rows = [
+        {
+            "id_tipo_antecedente": 2,
+            "nombre": "Lista OFAC",
+            "categoria": "Critico",
+            "puede_impedir_vinculacion": True,
+        }
+    ]
+    monkeypatch.setattr(repository, "listar_tipos_antecedente", lambda conn: rows)
+
+    r = client.get("/api/v1/catalogos/tipos-antecedente")
+
+    assert r.status_code == 200
+    assert r.json() == [
+        {
+            "idTipoAntecedente": 2,
+            "nombre": "Lista OFAC",
+            "categoria": "Critico",
+            "puedeImpedirVinculacion": True,
+        }
+    ]
+
+
+_PRODUCTO_CUENTA = {
+    "id_producto": 1,
+    "codigo_producto": "AHO001",
+    "nombre_producto": "Ahorro a la vista",
+    "tipo_producto": "Cuenta",
+    "monto_apertura_minimo": Decimal("20.00"),
+    "id_tipo_credito": None,
+    "id_red": None,
+    "tipo_cuenta": "Ahorro",
+    "permite_operaciones_presenciales": True,
+}
+
+
+def test_productos_sin_filtro_devuelve_nulos_y_monto_numerico(client, monkeypatch):
+    llamada = {}
+
+    def listar(_conn, tipo):
+        llamada["tipo"] = tipo
+        return [_PRODUCTO_CUENTA]
+
+    monkeypatch.setattr(repository, "listar_productos", listar)
+
+    r = client.get("/api/v1/catalogos/productos")
+
+    assert r.status_code == 200
+    assert llamada["tipo"] is None
+    assert r.json() == [
+        {
+            "idProducto": 1,
+            "codigoProducto": "AHO001",
+            "nombreProducto": "Ahorro a la vista",
+            "tipoProducto": "Cuenta",
+            "montoAperturaMinimo": 20.0,
+            "idTipoCredito": None,
+            "idRed": None,
+            "tipoCuenta": "Ahorro",
+            "permiteOperacionesPresenciales": True,
+        }
+    ]
+
+
+@pytest.mark.parametrize("tipo", ["Cuenta", "Tarjeta", "Credito"])
+def test_productos_filtra_por_cada_tipo(client, monkeypatch, tipo):
+    llamada = {}
+
+    def listar(_conn, recibido):
+        llamada["tipo"] = recibido
+        return []
+
+    monkeypatch.setattr(repository, "listar_productos", listar)
+
+    r = client.get("/api/v1/catalogos/productos", params={"tipo": tipo})
+
+    assert r.status_code == 200
+    assert llamada["tipo"] == tipo
+
+
+@pytest.mark.parametrize("tipo", ["Otro", "cuenta", "' OR 1=1 --"])
+def test_productos_tipo_invalido_400(client, tipo):
+    r = client.get("/api/v1/catalogos/productos", params={"tipo": tipo})
+
+    assert r.status_code == 400
+    assert r.headers["content-type"].startswith("application/problem+json")
+    assert r.json()["code"] == "DATOS_INVALIDOS"
+    assert r.json()["errors"][0]["field"] == "tipo"
+    assert tipo not in r.text
+
+
+@pytest.mark.parametrize("query", ["tipo=Cuenta&tipo=Credito", "otro=1"])
+def test_productos_parametros_ambiguos_400(client, query):
+    r = client.get(f"/api/v1/catalogos/productos?{query}")
+
+    assert r.status_code == 400
+    assert r.json()["code"] == "PARAMETRO_INVALIDO"
+
+
 def test_canales_con_datos(client, monkeypatch):
     rows = [
         {

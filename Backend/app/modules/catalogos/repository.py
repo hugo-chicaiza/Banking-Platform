@@ -49,6 +49,57 @@ def listar_tipos_movimiento_caja(conn: Connection) -> list[dict[str, Any]]:
     )
 
 
+def listar_actividades_economicas(conn: Connection) -> list[dict[str, Any]]:
+    # CAT-03: solo activas; el frontend agrupa por área
+    return _rows(
+        conn,
+        """
+        SELECT IdActividadEconomica AS id_actividad_economica,
+               Descripcion AS descripcion, AreaActividad AS area_actividad
+        FROM Catalogo.ActividadEconomica
+        WHERE Estado = 'A'
+        ORDER BY AreaActividad, Descripcion
+        """,
+    )
+
+
+def listar_tipos_antecedente(conn: Connection) -> list[dict[str, Any]]:
+    # CAT-04: puede_impedir_vinculacion solo informa; la regla que bloquea vive en C-08
+    return _rows(
+        conn,
+        """
+        SELECT IdTipoAntecedente AS id_tipo_antecedente, Nombre AS nombre,
+               Categoria AS categoria,
+               PuedeImpedirVinculacion AS puede_impedir_vinculacion
+        FROM Catalogo.TipoAntecedente
+        WHERE Estado = 'Activo'
+        ORDER BY Categoria, Nombre
+        """,
+    )
+
+
+def listar_productos(conn: Connection, tipo: str | None) -> list[dict[str, Any]]:
+    # CAT-07: solo activos; los campos que no aplican al tipo van en NULL
+    return _rows(
+        conn,
+        """
+        SELECT IdProducto AS id_producto, CodigoProducto AS codigo_producto,
+               NombreProducto AS nombre_producto, TipoProducto AS tipo_producto,
+               CASE WHEN TipoProducto = 'Cuenta'
+                    THEN MontoAperturaMinimo END AS monto_apertura_minimo,
+               CASE WHEN TipoProducto = 'Credito'
+                    THEN IdTipoCredito END AS id_tipo_credito,
+               CASE WHEN TipoProducto = 'Tarjeta' THEN IdRed END AS id_red,
+               CASE WHEN TipoProducto = 'Cuenta' THEN TipoCuenta END AS tipo_cuenta,
+               PermiteOperacionesPresenciales AS permite_operaciones_presenciales
+        FROM ProductosFinancieros.Producto
+        WHERE Estado = 'A' AND (:tipo IS NULL OR TipoProducto = :tipo)
+        ORDER BY TipoProducto, NombreProducto
+        """,
+        {"tipo": tipo},
+    )
+
+
 def listar_canales(conn: Connection) -> list[dict[str, Any]]:
     # CAT-08: solo canales activos, ordenados por nombre.
     return _rows(

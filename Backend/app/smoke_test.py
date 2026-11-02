@@ -1,6 +1,6 @@
-"""SMOKE-TEST temporal: verifica el despliegue en Azure App Service.
+"""Endpoint temporal para comprobar el despliegue en Azure.
 
-Para borrarlo: eliminar este archivo y las 2 líneas marcadas "SMOKE-TEST" en app/main.py.
+Para quitarlo: borrar este archivo y las 2 líneas SMOKE-TEST de app/main.py.
 """
 
 import logging
@@ -16,14 +16,16 @@ logger = logging.getLogger(__name__)
 
 
 def _db_ok(db: Literal["cooperativa", "seguridad"]) -> bool:
+    settings = get_settings()
     try:
         with pyodbc.connect(
-            get_settings().odbc_connection_string(db), timeout=5
+            settings.odbc_connection_string(db),
+            timeout=settings.db_connection_timeout,
         ) as conn:
             conn.execute("SELECT 1").fetchone()
         return True
     except pyodbc.Error:
-        # El detalle va solo al log; la respuesta no revela información interna
+        # El detalle va al log; la respuesta solo dice si conectó
         logger.exception("smoke-test: fallo de conexión a %s", db)
         return False
 

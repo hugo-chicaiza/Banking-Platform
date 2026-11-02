@@ -37,6 +37,66 @@ def test_tipos_movimiento_caja_ordenados(conn):
     assert claves == sorted(claves)
 
 
+def _contar(conn, sql: str) -> int:
+    from sqlalchemy import text
+
+    return conn.execute(text(sql)).scalar_one()
+
+
+def test_actividades_economicas_solo_activas_y_ordenadas(conn):
+    filas = repository.listar_actividades_economicas(conn)
+
+    total = _contar(
+        conn, "SELECT COUNT(*) FROM Catalogo.ActividadEconomica WHERE Estado = 'A'"
+    )
+    assert len(filas) == total
+    claves = [
+        (f["area_actividad"].casefold(), f["descripcion"].casefold()) for f in filas
+    ]
+    assert [c[0] for c in claves] == sorted(c[0] for c in claves)
+
+
+def test_tipos_antecedente_solo_activos_y_categoria_valida(conn):
+    filas = repository.listar_tipos_antecedente(conn)
+
+    total = _contar(
+        conn, "SELECT COUNT(*) FROM Catalogo.TipoAntecedente WHERE Estado = 'Activo'"
+    )
+    assert len(filas) == total
+    assert {f["categoria"] for f in filas} <= {"EnRevision", "Critico"}
+    categorias = [f["categoria"] for f in filas]
+    assert categorias == sorted(categorias)
+
+
+def test_productos_sin_filtro_y_por_cada_tipo(conn):
+    todos = repository.listar_productos(conn, None)
+
+    total = _contar(
+        conn, "SELECT COUNT(*) FROM ProductosFinancieros.Producto WHERE Estado = 'A'"
+    )
+    assert len(todos) == total
+    por_tipo = 0
+    for tipo in ("Cuenta", "Tarjeta", "Credito"):
+        filas = repository.listar_productos(conn, tipo)
+        por_tipo += len(filas)
+        assert {f["tipo_producto"] for f in filas} <= {tipo}
+    assert por_tipo == total
+
+
+def test_productos_campos_que_no_aplican_van_en_null(conn):
+    for fila in repository.listar_productos(conn, None):
+        tipo = fila["tipo_producto"]
+        if tipo != "Cuenta":
+            assert fila["monto_apertura_minimo"] is None
+            assert fila["tipo_cuenta"] is None
+        if tipo != "Credito":
+            assert fila["id_tipo_credito"] is None
+        if tipo != "Tarjeta":
+            assert fila["id_red"] is None
+        else:
+            assert fila["id_red"] is not None
+
+
 def test_canales_ordenados_por_nombre(conn):
     filas = repository.listar_canales(conn)
 
