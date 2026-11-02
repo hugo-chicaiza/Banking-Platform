@@ -4,9 +4,11 @@ No requieren base de datos: se monkeypatcha el repositorio.
 """
 
 from datetime import date, datetime, time
+from unittest.mock import Mock
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import Connection
 
 from app.core.db import cooperativa
 from app.main import app
@@ -182,9 +184,6 @@ def test_ahora_ecuador_es_naive_y_esta_en_utc_menos_5():
 
 def test_resolver_id_fecha_contable_devuelve_el_id(monkeypatch):
     monkeypatch.setattr(repository, "id_fecha_contable", lambda conn, fh: 7)
-    assert (
-        service.resolver_id_fecha_contable(
-            None, datetime.fromisoformat("2026-01-07T09:00:00")
-        )
-        == 7
-    )
+    conn = Mock(spec=Connection)
+    fecha_hora = datetime.fromisoformat("2026-01-07T09:00:00")
+    assert service.resolver_id_fecha_contable(conn, fecha_hora) == 7
