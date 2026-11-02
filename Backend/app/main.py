@@ -2,6 +2,7 @@ from fastapi import FastAPI
 
 from app.core.config import get_settings
 from app.modules.catalogos.router import router as catalogos_router
+from app.modules.contabilidad.router import router as contabilidad_router
 from app.modules.cuentas.router import router as cuentas_router
 from app.smoke_test import router as smoke_test_router  # SMOKE-TEST: borrar
 
@@ -18,6 +19,7 @@ app = FastAPI(
 
 API_V1 = "/api/v1"
 app.include_router(catalogos_router, prefix=API_V1)
+app.include_router(contabilidad_router, prefix=API_V1)
 app.include_router(cuentas_router, prefix=API_V1)
 
 app.include_router(smoke_test_router)  # SMOKE-TEST: borrar
