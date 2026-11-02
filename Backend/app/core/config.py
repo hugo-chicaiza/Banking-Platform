@@ -8,12 +8,18 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
-    app_env: Literal["development", "staging", "production"] = "production"
+    app_env: Literal["development", "staging", "production"] = "development"
     app_name: str = "banking-platform-backend"
     log_level: str = "INFO"
     # Puerto no estándar; local solo en loopback. En Azure: APP_HOST=0.0.0.0 y WEBSITES_PORT=APP_PORT
     app_host: str = "127.0.0.1"
     app_port: int = 8471
+    # Por minuto y por IP. Mientras no se configure el proxy en Azure, todos llegan con
+    # la misma IP y comparten el límite.
+    limite_peticiones_activo: bool = True
+    limite_lectura_por_minuto: int = 300
+    limite_escritura_por_minuto: int = 60
+    limite_sensible_por_minuto: int = 5
 
     db_driver: str = "ODBC Driver 18 for SQL Server"
     db_port: int = 1433
