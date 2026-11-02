@@ -4,6 +4,7 @@ from app.core.config import get_settings
 from app.core.middleware import TraceIdMiddleware
 from app.core.rate_limit import LimitePeticionesMiddleware
 from app.modules.catalogos.router import router as catalogos_router
+from app.modules.clientes.router import router as clientes_router
 from app.modules.contabilidad.router import router as contabilidad_router
 from app.modules.cuentas.router import router as cuentas_router
 from app.modules.tarjetas.router import router as tarjetas_router
@@ -31,6 +32,7 @@ app.add_middleware(TraceIdMiddleware)
 
 API_V1 = "/api/v1"
 app.include_router(catalogos_router, prefix=API_V1)
+app.include_router(clientes_router, prefix=API_V1)
 app.include_router(contabilidad_router, prefix=API_V1)
 app.include_router(cuentas_router, prefix=API_V1)
 app.include_router(tarjetas_router, prefix=API_V1)
