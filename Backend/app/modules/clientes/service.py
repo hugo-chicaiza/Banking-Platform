@@ -232,28 +232,23 @@ def registrar_cliente(
             f"La actividad económica con id {payload.id_actividad_economica} no existe en el catálogo.",
         )
 
-    if not repository.existe_pais(conn, payload.codigo_pais_nacionalidad):
-        raise _problema(
-            422,
-            "CATALOGO_INVALIDO",
-            f"El país de nacionalidad '{payload.codigo_pais_nacionalidad}' no existe en el catálogo.",
-        )
-
-    dir_payload = payload.direccion
-    if not repository.existe_pais(conn, dir_payload.codigo_pais):
-        raise _problema(
-            422,
-            "CATALOGO_INVALIDO",
-            f"El país de la dirección '{dir_payload.codigo_pais}' no existe en el catálogo.",
-        )
-
-    if not repository.existe_ciudad(
-        conn, dir_payload.id_ciudad, dir_payload.codigo_pais
+    for codigo, etiqueta in (
+        (payload.codigo_pais_nacionalidad, "nacionalidad"),
+        (payload.direccion.codigo_pais, "la dirección"),
     ):
+        if not repository.existe_pais(conn, codigo):
+            raise _problema(
+                422,
+                "CATALOGO_INVALIDO",
+                f"El país de {etiqueta} '{codigo}' no existe en el catálogo.",
+            )
+
+    direccion = payload.direccion
+    if not repository.existe_ciudad(conn, direccion.id_ciudad, direccion.codigo_pais):
         raise _problema(
             422,
             "CATALOGO_INVALIDO",
-            f"La ciudad con id {dir_payload.id_ciudad} no existe o no pertenece al país '{dir_payload.codigo_pais}'.",
+            f"La ciudad con id {direccion.id_ciudad} no existe o no pertenece al país '{direccion.codigo_pais}'.",
         )
 
     # 7. Inserción en Base de Datos

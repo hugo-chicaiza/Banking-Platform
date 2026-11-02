@@ -7,10 +7,12 @@ No requieren base de datos: se monkeypatcha el repositorio.
 """
 
 from datetime import UTC, date, datetime, timedelta
+from typing import cast
 from unittest.mock import MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import Connection
 
 from app.core.db import cooperativa
 from app.main import app
@@ -39,6 +41,16 @@ def client():
     app.dependency_overrides[cooperativa] = lambda: _FakeConn()
     yield TestClient(app)
     app.dependency_overrides.clear()
+
+
+def _assert_http_error(
+    exc_info: pytest.ExceptionInfo[service.HTTPException], status: int, code: str
+) -> None:
+    """Verifica status y code asegurando tipo dict para Pyright."""
+    assert exc_info.value.status_code == status
+    detail = exc_info.value.detail
+    assert isinstance(detail, dict)
+    assert detail.get("code") == code
 
 
 # ---------------------------------------------------------------------------
@@ -240,7 +252,7 @@ def _patch_repo_catalogos_ok(monkeypatch):
 
 
 def test_registrar_cliente_natural_exitoso(monkeypatch):
-    conn = _FakeConn()
+    conn = cast(Connection, _FakeConn())
     payload = _payload_natural_valido()
 
     _patch_repo_catalogos_ok(monkeypatch)
@@ -300,7 +312,7 @@ def test_registrar_cliente_natural_exitoso(monkeypatch):
 
 
 def test_registrar_cliente_juridico_exitoso(monkeypatch):
-    conn = _FakeConn()
+    conn = cast(Connection, _FakeConn())
     payload = _payload_natural_valido()
     payload.tipo_cliente = "Juridico"
     payload.identificacion = RUC_VALIDO
@@ -351,46 +363,55 @@ def test_registrar_cliente_juridico_exitoso(monkeypatch):
     assert cliente.apellidos is None
 
 
-def test_registrar_cliente_sin_consentimiento_422(monkeypatch):
-    conn = _FakeConn()
-    payload = _payload_natural_valido()
-    payload.consentimiento_datos = False
+def test_registrar_cliente_validaciones_negocio_422(monkeypatch):
+    conn = cast(Connection, _FakeConn())
+    _patch_repo_catalogos_ok(monkeypatch)
+    monkeypatch.setattr(
+        repository, "obtener_cliente_por_identificacion", lambda c, doc: None
+    )
 
-    with pytest.raises(service.HTTPException) as exc:
-        service.registrar_cliente(conn, payload, 1, "127.0.0.1")
+    # 1. Sin consentimiento
+    p_consent = _payload_natural_valido()
+    p_consent.consentimiento_datos = False
+    with pytest.raises(service.HTTPException) as exc1:
+        service.registrar_cliente(conn, p_consent, 1, "127.0.0.1")
+    _assert_http_error(exc1, 422, "CONSENTIMIENTO_REQUERIDO")
 
-    assert exc.value.status_code == 422
-    assert exc.value.detail["code"] == "CONSENTIMIENTO_REQUERIDO"
+    # 2. Fecha nacimiento futura
+    p_fecha = _payload_natural_valido()
+    p_fecha.fecha_nacimiento = date.today() + timedelta(days=1)
+    with pytest.raises(service.HTTPException) as exc2:
+        service.registrar_cliente(conn, p_fecha, 1, "127.0.0.1")
+    _assert_http_error(exc2, 422, "FECHA_NACIMIENTO_INVALIDA")
 
+    # 3. Documento con formato inválido
+    p_doc = _payload_natural_valido()
+    p_doc.identificacion = "1710034064"
+    with pytest.raises(service.HTTPException) as exc3:
+        service.registrar_cliente(conn, p_doc, 1, "127.0.0.1")
+    _assert_http_error(exc3, 422, "DOCUMENTO_INVALIDO")
 
-def test_registrar_cliente_fecha_futura_422(monkeypatch):
-    conn = _FakeConn()
-    payload = _payload_natural_valido()
-    payload.fecha_nacimiento = date.today() + timedelta(days=1)
+    # 4. Tipo persona Natural con razonSocial prohibida
+    p_nat = _payload_natural_valido()
+    p_nat.razon_social = "No permitida"
+    with pytest.raises(service.HTTPException) as exc4:
+        service.registrar_cliente(conn, p_nat, 1, "127.0.0.1")
+    _assert_http_error(exc4, 422, "TIPO_PERSONA_INVALIDO")
 
-    with pytest.raises(service.HTTPException) as exc:
-        service.registrar_cliente(conn, payload, 1, "127.0.0.1")
-
-    assert exc.value.status_code == 422
-    assert exc.value.detail["code"] == "FECHA_NACIMIENTO_INVALIDA"
-
-
-def test_registrar_cliente_documento_invalido_422(monkeypatch):
-    conn = _FakeConn()
-    payload = _payload_natural_valido()
-    payload.identificacion = "1710034064"  # Dígito verificador incorrecto
-
-    with pytest.raises(service.HTTPException) as exc:
-        service.registrar_cliente(conn, payload, 1, "127.0.0.1")
-
-    assert exc.value.status_code == 422
-    assert exc.value.detail["code"] == "DOCUMENTO_INVALIDO"
+    # 5. Tipo persona Juridico con apellidos prohibidos
+    p_jur = _payload_natural_valido()
+    p_jur.tipo_cliente = "Juridico"
+    p_jur.identificacion = RUC_VALIDO
+    p_jur.tipo_documento = "R"
+    p_jur.razon_social = "Empresa S.A."
+    p_jur.apellidos = "No permitidos"
+    with pytest.raises(service.HTTPException) as exc5:
+        service.registrar_cliente(conn, p_jur, 1, "127.0.0.1")
+    _assert_http_error(exc5, 422, "TIPO_PERSONA_INVALIDO")
 
 
 def test_registrar_cliente_duplicado_409(monkeypatch):
-    conn = _FakeConn()
-    payload = _payload_natural_valido()
-
+    conn = cast(Connection, _FakeConn())
     monkeypatch.setattr(
         repository,
         "obtener_cliente_por_identificacion",
@@ -398,80 +419,27 @@ def test_registrar_cliente_duplicado_409(monkeypatch):
     )
 
     with pytest.raises(service.HTTPException) as exc:
-        service.registrar_cliente(conn, payload, 1, "127.0.0.1")
+        service.registrar_cliente(conn, _payload_natural_valido(), 1, "127.0.0.1")
 
-    assert exc.value.status_code == 409
-    assert exc.value.detail["code"] == "CLIENTE_DUPLICADO"
-
-
-def test_registrar_cliente_natural_invalido_con_razon_social_422(monkeypatch):
-    conn = _FakeConn()
-    payload = _payload_natural_valido()
-    payload.razon_social = "No debe tener razón social"
-
-    monkeypatch.setattr(
-        repository, "obtener_cliente_por_identificacion", lambda c, doc: None
-    )
-
-    with pytest.raises(service.HTTPException) as exc:
-        service.registrar_cliente(conn, payload, 1, "127.0.0.1")
-
-    assert exc.value.status_code == 422
-    assert exc.value.detail["code"] == "TIPO_PERSONA_INVALIDO"
+    _assert_http_error(exc, 409, "CLIENTE_DUPLICADO")
 
 
-def test_registrar_cliente_juridico_invalido_con_apellidos_422(monkeypatch):
-    conn = _FakeConn()
-    payload = _payload_natural_valido()
-    payload.tipo_cliente = "Juridico"
-    payload.identificacion = RUC_VALIDO
-    payload.tipo_documento = "R"
-    payload.razon_social = "Empresa S.A."
-    payload.apellidos = "No debe tener apellidos"
-
-    monkeypatch.setattr(
-        repository, "obtener_cliente_por_identificacion", lambda c, doc: None
-    )
-
-    with pytest.raises(service.HTTPException) as exc:
-        service.registrar_cliente(conn, payload, 1, "127.0.0.1")
-
-    assert exc.value.status_code == 422
-    assert exc.value.detail["code"] == "TIPO_PERSONA_INVALIDO"
-
-
-def test_registrar_cliente_catalogo_pais_invalido_422(monkeypatch):
-    conn = _FakeConn()
-    payload = _payload_natural_valido()
-
+def test_registrar_cliente_catalogos_invalidos_422(monkeypatch):
+    conn = cast(Connection, _FakeConn())
     _patch_repo_catalogos_ok(monkeypatch)
     monkeypatch.setattr(
         repository, "obtener_cliente_por_identificacion", lambda c, doc: None
     )
-    monkeypatch.setattr(repository, "existe_pais", lambda conn, codigo: False)
 
-    with pytest.raises(service.HTTPException) as exc:
-        service.registrar_cliente(conn, payload, 1, "127.0.0.1")
+    # 1. Pais no existe
+    monkeypatch.setattr(repository, "existe_pais", lambda c, cod: False)
+    with pytest.raises(service.HTTPException) as exc1:
+        service.registrar_cliente(conn, _payload_natural_valido(), 1, "127.0.0.1")
+    _assert_http_error(exc1, 422, "CATALOGO_INVALIDO")
 
-    assert exc.value.status_code == 422
-    assert exc.value.detail["code"] == "CATALOGO_INVALIDO"
-
-
-def test_registrar_cliente_catalogo_ciudad_invalida_422(monkeypatch):
-    conn = _FakeConn()
-    payload = _payload_natural_valido()
-
-    monkeypatch.setattr(
-        repository, "obtener_cliente_por_identificacion", lambda c, doc: None
-    )
-    monkeypatch.setattr(repository, "existe_pais", lambda conn, codigo: True)
-    monkeypatch.setattr(
-        repository, "existe_actividad_economica", lambda conn, id_act: True
-    )
-    monkeypatch.setattr(repository, "existe_ciudad", lambda conn, id_c, codigo: False)
-
-    with pytest.raises(service.HTTPException) as exc:
-        service.registrar_cliente(conn, payload, 1, "127.0.0.1")
-
-    assert exc.value.status_code == 422
-    assert exc.value.detail["code"] == "CATALOGO_INVALIDO"
+    # 2. Ciudad no existe
+    monkeypatch.setattr(repository, "existe_pais", lambda c, cod: True)
+    monkeypatch.setattr(repository, "existe_ciudad", lambda c, cid, cod: False)
+    with pytest.raises(service.HTTPException) as exc2:
+        service.registrar_cliente(conn, _payload_natural_valido(), 1, "127.0.0.1")
+    _assert_http_error(exc2, 422, "CATALOGO_INVALIDO")
