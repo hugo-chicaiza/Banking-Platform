@@ -8,6 +8,5 @@ uvicorn.run(
     host=settings.app_host,
     port=settings.app_port,
     reload=settings.app_env == "development",
-    proxy_headers=True,
     server_header=False,
 )

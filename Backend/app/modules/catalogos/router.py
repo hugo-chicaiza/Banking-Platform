@@ -4,21 +4,30 @@ from fastapi import APIRouter, Depends, HTTPException, Path, Query
 from sqlalchemy import Connection
 
 from app.core.db import cooperativa
+from app.core.errors import RESPUESTAS_ERROR, ProblemDetailsRoute, solo_parametros
 from app.core.security import require_auth
 from app.modules.catalogos import repository
 from app.modules.catalogos.schemas import (
+    ActividadEconomica,
     Agencia,
     Canal,
     Ciudad,
     Denominacion,
     Pais,
+    Producto,
+    TipoAntecedente,
     TipoCredito,
     TipoMovimientoCaja,
+    TipoProducto,
 )
 
 # Catálogos de solo lectura: sin service.py porque no hay reglas de negocio
 router = APIRouter(
-    prefix="/catalogos", tags=["catalogos"], dependencies=[Depends(require_auth)]
+    prefix="/catalogos",
+    tags=["catalogos"],
+    dependencies=[Depends(require_auth)],
+    route_class=ProblemDetailsRoute,
+    responses=RESPUESTAS_ERROR,
 )
 Db = Annotated[Connection, Depends(cooperativa)]
 
@@ -53,6 +62,25 @@ def listar_tipos_credito(conn: Db) -> Any:
     return repository.listar_tipos_credito(conn)
 
 
+@router.get("/actividades-economicas", response_model=list[ActividadEconomica])
+def listar_actividades_economicas(conn: Db) -> Any:
+    return repository.listar_actividades_economicas(conn)
+
+
+@router.get("/tipos-antecedente", response_model=list[TipoAntecedente])
+def listar_tipos_antecedente(conn: Db) -> Any:
+    return repository.listar_tipos_antecedente(conn)
+
+
+@router.get(
+    "/productos",
+    response_model=list[Producto],
+    dependencies=[Depends(solo_parametros("tipo"))],
+)
+def listar_productos(conn: Db, tipo: TipoProducto | None = None) -> Any:
+    return repository.listar_productos(conn, tipo)
+
+
 @router.get("/paises/{codigo_pais}/ciudades", response_model=list[Ciudad])
 def listar_ciudades(
     conn: Db,
@@ -61,7 +89,6 @@ def listar_ciudades(
 ) -> Any:
     codigo_pais = codigo_pais.upper()
     if not repository.existe_pais(conn, codigo_pais):
-        # Temporal hasta F-04 (ProblemDetails): el code del contrato va en detail.
         raise HTTPException(
             status_code=404,
             detail={"code": "PAIS_NO_ENCONTRADO", "message": "El país no existe"},
