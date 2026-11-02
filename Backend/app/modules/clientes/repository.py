@@ -97,6 +97,29 @@ def crear_cliente(
     estado_inicial = "Pendiente"
 
     # 1. Insertar Clientes.Cliente
+    datos_cliente = {
+        "identificacion": payload.identificacion,
+        "tipo_documento": payload.tipo_documento,
+        "tipo_cliente": payload.tipo_cliente,
+        "nombres": payload.nombres,
+        "apellidos": payload.apellidos,
+        "razon_social": payload.razon_social,
+        "nombre_comercial": payload.nombre_comercial,
+        "id_actividad_economica": payload.id_actividad_economica,
+        "fecha_nacimiento": payload.fecha_nacimiento,
+        "genero": payload.genero,
+        "estado_civil": payload.estado_civil,
+        "codigo_pais_nacionalidad": payload.codigo_pais_nacionalidad,
+        "telefono_convencional": payload.telefono_convencional,
+        "telefono_celular": payload.telefono_celular,
+        "email": payload.email,
+        "consentimiento_datos": payload.consentimiento_datos,
+        "fecha_consentimiento": ahora,
+        "estado": estado_inicial,
+        "fecha_registro": ahora,
+        "creado_por": creado_por,
+    }
+
     sql_cliente = """
         DECLARE @TblCliente TABLE (IdCliente INT);
 
@@ -121,28 +144,7 @@ def crear_cliente(
     row_cliente = _one(
         conn,
         sql_cliente,
-        {
-            "identificacion": payload.identificacion,
-            "tipo_documento": payload.tipo_documento,
-            "tipo_cliente": payload.tipo_cliente,
-            "nombres": payload.nombres,
-            "apellidos": payload.apellidos,
-            "razon_social": payload.razon_social,
-            "nombre_comercial": payload.nombre_comercial,
-            "id_actividad_economica": payload.id_actividad_economica,
-            "fecha_nacimiento": payload.fecha_nacimiento,
-            "genero": payload.genero,
-            "estado_civil": payload.estado_civil,
-            "codigo_pais_nacionalidad": payload.codigo_pais_nacionalidad,
-            "telefono_convencional": payload.telefono_convencional,
-            "telefono_celular": payload.telefono_celular,
-            "email": payload.email,
-            "consentimiento_datos": payload.consentimiento_datos,
-            "fecha_consentimiento": ahora,
-            "estado": estado_inicial,
-            "fecha_registro": ahora,
-            "creado_por": creado_por,
-        },
+        datos_cliente,
     )
     if not row_cliente or "id_cliente" not in row_cliente:
         raise RuntimeError("No se pudo obtener el IdCliente generado tras el INSERT.")
@@ -151,6 +153,17 @@ def crear_cliente(
 
     # 2. Insertar Clientes.Direcciones
     dir_payload = payload.direccion
+    datos_direccion = {
+        "tipo_direccion": dir_payload.tipo_direccion,
+        "codigo_pais": dir_payload.codigo_pais,
+        "id_ciudad": dir_payload.id_ciudad,
+        "sector": dir_payload.sector,
+        "calle_direccion": dir_payload.calle_direccion,
+        "referencia_ubicacion": dir_payload.referencia_ubicacion,
+        "codigo_postal": dir_payload.codigo_postal,
+        "es_principal": dir_payload.es_principal,
+        "estado": "Activo",
+    }
     sql_direccion = """
         DECLARE @TblDireccion TABLE (IdDireccion INT);
 
@@ -173,15 +186,7 @@ def crear_cliente(
         sql_direccion,
         {
             "id_cliente": id_cliente,
-            "tipo_direccion": dir_payload.tipo_direccion,
-            "codigo_pais": dir_payload.codigo_pais,
-            "id_ciudad": dir_payload.id_ciudad,
-            "sector": dir_payload.sector,
-            "calle_direccion": dir_payload.calle_direccion,
-            "referencia_ubicacion": dir_payload.referencia_ubicacion,
-            "codigo_postal": dir_payload.codigo_postal,
-            "es_principal": dir_payload.es_principal,
-            "estado": "Activo",
+            **datos_direccion,
             "fecha_registro": ahora,
         },
     )
@@ -215,38 +220,11 @@ def crear_cliente(
 
     direccion_dict = {
         "id_direccion": id_direccion,
-        "tipo_direccion": dir_payload.tipo_direccion,
-        "codigo_pais": dir_payload.codigo_pais,
-        "id_ciudad": dir_payload.id_ciudad,
-        "sector": dir_payload.sector,
-        "calle_direccion": dir_payload.calle_direccion,
-        "referencia_ubicacion": dir_payload.referencia_ubicacion,
-        "codigo_postal": dir_payload.codigo_postal,
-        "es_principal": dir_payload.es_principal,
-        "estado": "Activo",
+        **datos_direccion,
     }
 
     return {
         "id_cliente": id_cliente,
-        "identificacion": payload.identificacion,
-        "tipo_documento": payload.tipo_documento,
-        "tipo_cliente": payload.tipo_cliente,
-        "nombres": payload.nombres,
-        "apellidos": payload.apellidos,
-        "razon_social": payload.razon_social,
-        "nombre_comercial": payload.nombre_comercial,
-        "id_actividad_economica": payload.id_actividad_economica,
-        "fecha_nacimiento": payload.fecha_nacimiento,
-        "genero": payload.genero,
-        "estado_civil": payload.estado_civil,
-        "codigo_pais_nacionalidad": payload.codigo_pais_nacionalidad,
-        "telefono_convencional": payload.telefono_convencional,
-        "telefono_celular": payload.telefono_celular,
-        "email": payload.email,
-        "consentimiento_datos": payload.consentimiento_datos,
-        "fecha_consentimiento": ahora,
-        "estado": estado_inicial,
-        "fecha_registro": ahora,
-        "creado_por": creado_por,
+        **datos_cliente,
         "direcciones": [direccion_dict],
     }
