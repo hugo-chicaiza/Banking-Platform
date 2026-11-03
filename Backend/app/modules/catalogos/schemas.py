@@ -1,6 +1,6 @@
 from typing import Literal
 
-from app.core.schemas import CamelModel, Money
+from app.core.api.schemas import CamelModel, Money
 
 
 class Pais(CamelModel):

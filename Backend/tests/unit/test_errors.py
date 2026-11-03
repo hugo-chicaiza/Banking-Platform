@@ -8,9 +8,9 @@ from fastapi.testclient import TestClient
 from pydantic import BaseModel
 from sqlalchemy.exc import DBAPIError, SQLAlchemyError
 
-from app.core.db import cooperativa
-from app.core.errors import ProblemDetailsRoute
-from app.core.middleware import TraceIdMiddleware
+from app.core.api.errors import ProblemDetailsRoute
+from app.core.api.middleware import TraceIdMiddleware
+from app.core.database.db import cooperativa
 from app.main import app as app_real
 from app.modules.catalogos import repository as repo_catalogos
 

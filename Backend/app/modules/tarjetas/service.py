@@ -14,8 +14,8 @@ from pydantic import SecretStr
 from sqlalchemy import Connection
 from sqlalchemy.exc import DBAPIError
 
-from app.core import audit
-from app.core.errors import traducir_error_bd
+from app.core.api.errors import traducir_error_bd
+from app.core.security import audit
 from app.modules.tarjetas import repository
 from app.modules.tarjetas.schemas import (
     PageTarjeta,

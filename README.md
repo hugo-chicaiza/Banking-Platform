@@ -55,7 +55,7 @@ Full structure and rules: [`Backend/TreeFolderStructure.md`](Backend/TreeFolderS
 - **One file per layer per module.** Add your endpoints to the existing files of the module; never create parallel files.
 - **Split by sub-domain, not by size of the endpoint list.** Only when a module has sub-topics with their own rules (e.g. `creditos/solicitudes/`, `creditos/pagos/`) or a file passes ~400-500 lines.
 - **A module calls another module's `service`, never its `repository`.**
-- **Each value in one place:** environment values in `.env` / `core/config.py`, shared values as constants in `core/`.
+- **Each value in one place:** environment values in `.env` / `core/config/settings.py`, shared values as constants in the matching `core/` folder (`config/`, `database/`, `security/`, `api/`).
 
 ### Run the CI checks locally (before pushing)
 

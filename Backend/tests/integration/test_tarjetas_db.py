@@ -14,10 +14,10 @@ from fastapi.testclient import TestClient
 from sqlalchemy import Connection, text
 from sqlalchemy.exc import DBAPIError
 
-from app.core import audit
-from app.core.config import get_settings
-from app.core.db import cooperativa, get_engine
-from app.core.errors import traducir_error_bd
+from app.core.api.errors import traducir_error_bd
+from app.core.config.settings import get_settings
+from app.core.database.db import cooperativa, get_engine
+from app.core.security import audit
 from app.main import app
 from app.modules.tarjetas import repository, router
 

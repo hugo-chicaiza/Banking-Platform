@@ -8,10 +8,10 @@ from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request, Res
 from pydantic import SecretStr
 from sqlalchemy import Connection
 
-from app.core.config import get_settings
-from app.core.db import cooperativa, get_engine
-from app.core.errors import RESPUESTAS_ERROR, ProblemDetailsRoute, solo_parametros
-from app.core.security import require_auth
+from app.core.api.errors import RESPUESTAS_ERROR, ProblemDetailsRoute, solo_parametros
+from app.core.config.settings import get_settings
+from app.core.database.db import cooperativa, get_engine
+from app.core.security.auth import require_auth
 from app.modules.tarjetas import service
 from app.modules.tarjetas.schemas import (
     MAX_INT,

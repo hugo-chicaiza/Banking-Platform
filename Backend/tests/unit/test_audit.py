@@ -5,8 +5,8 @@ import logging
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import SQLAlchemyError
 
-from app.core import audit
-from app.core.db import cooperativa
+from app.core.database.db import cooperativa
+from app.core.security import audit
 from app.main import app
 from app.modules.tarjetas import repository, router
 from tests.unit.test_tarjetas import BASE, FILA, PAYLOAD

@@ -1,7 +1,7 @@
 import pytest
 
-from app.core import audit
-from app.core.rate_limit import contador
+from app.core.api.rate_limit import contador
+from app.core.security import audit
 
 
 @pytest.fixture(autouse=True)

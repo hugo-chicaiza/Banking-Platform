@@ -3,8 +3,8 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, Path
 from sqlalchemy import Connection
 
-from app.core.db import cooperativa
-from app.core.security import require_auth
+from app.core.database.db import cooperativa
+from app.core.security.auth import require_auth
 from app.modules.contabilidad import service
 from app.modules.contabilidad.schemas import FechaContable
 

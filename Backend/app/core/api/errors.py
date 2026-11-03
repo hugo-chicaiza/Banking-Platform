@@ -17,7 +17,7 @@ from fastapi.routing import APIRoute
 from sqlalchemy.exc import DBAPIError, SQLAlchemyError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from app.core.middleware import obtener_trace_id
+from app.core.api.middleware import obtener_trace_id
 
 logger = logging.getLogger(__name__)
 
