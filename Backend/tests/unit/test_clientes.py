@@ -6,6 +6,7 @@
 - CLI-10 · POST /api/v1/clientes/{idCliente}/direcciones
 - CLI-11 · PATCH /api/v1/clientes/{idCliente}/direcciones/{idDireccion}
 - CLI-12 · DELETE /api/v1/clientes/{idCliente}/direcciones/{idDireccion}
+- CLI-13 / CLI-14 · Registro e historial de evaluaciones de riesgo
 
 No requieren base de datos: se monkeypatcha el repositorio.
 """
@@ -16,12 +17,13 @@ from unittest.mock import MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 from sqlalchemy import Connection
 
 from app.core.db import cooperativa
 from app.main import app
-from app.modules.clientes import repository, service
-from app.modules.clientes.schemas import ClienteCreate, DireccionCreate
+from app.modules.clientes import repository, router, service
+from app.modules.clientes.schemas import ClienteCreate, DireccionCreate, RiesgoCreate
 
 # Cédulas y RUCs válidos conocidos
 CEDULA_VALIDA_1 = "1710034065"
@@ -32,11 +34,15 @@ PASAPORTE_VALIDO = "A12345678"
 
 
 class _FakeConn:
+    def __init__(self) -> None:
+        self.commits = 0
+        self.rollbacks = 0
+
     def commit(self) -> None:
-        pass
+        self.commits += 1
 
     def rollback(self) -> None:
-        pass
+        self.rollbacks += 1
 
 
 @pytest.fixture()
@@ -803,3 +809,331 @@ def test_cli12_eliminar_direccion_principal_inactiva_ok(monkeypatch):
 
     # No lanza excepción
     service.eliminar_direccion(conn, 10, 5)
+
+
+# CLI-13 / CLI-14 · Riesgo: respuestas SQL programadas, sin BD ni sockets.
+def _payload_riesgo_create(**overrides: Any) -> RiesgoCreate:
+    return RiesgoCreate(
+        **{
+            "nivel_riesgo_laft": "Bajo",
+            "resultado_evaluacion": "Aprobado",
+            **overrides,
+        }
+    )
+
+
+def _riesgo_row(**overrides: Any) -> dict[str, Any]:
+    return {
+        **_payload_riesgo_create().model_dump(),
+        "id_evaluacion": 20,
+        "id_cliente": 10,
+        "fecha_evaluacion": datetime(2026, 11, 3, 15, tzinfo=UTC),
+        "evaluador": 1,
+        "es_vigente": True,
+        "estado_cliente": "Activo",
+        **overrides,
+    }
+
+
+class _RiesgoConn(_FakeConn):
+    """Respuestas de SQL Server; no implementa ni prueba el trigger real."""
+
+    def __init__(self, respuestas: list[list[dict[str, Any]]]) -> None:
+        super().__init__()
+        self.respuestas = respuestas.copy()
+        self.consultas: list[tuple[str, dict[str, Any]]] = []
+
+    def execute(self, statement: Any, params: dict[str, Any]) -> MagicMock:
+        self.consultas.append((str(statement), params))
+        resultado = MagicMock()
+        resultado.mappings.return_value = self.respuestas.pop(0)
+        return resultado
+
+
+@pytest.mark.parametrize(
+    ("estado_inicial", "resultado", "estado_final"),
+    [
+        ("Pendiente", "Aprobado", "Activo"),
+        ("Pendiente", "Rechazado", "Bloqueado"),
+        ("Activo", "Rechazado", "Bloqueado"),
+        ("Pendiente", "Observado", "Pendiente"),
+        ("Activo", "Observado", "Activo"),
+        ("Bloqueado", "Aprobado", "Bloqueado"),
+    ],
+)
+def test_cli13_lee_vigencia_y_estado_posteriores_al_trigger(
+    estado_inicial: str, resultado: str, estado_final: str
+):
+    fila = _riesgo_row(resultado_evaluacion=resultado, estado_cliente=estado_final)
+    db = _RiesgoConn(
+        [
+            [{"id_cliente": 10, "estado": estado_inicial}],
+            [{"id_evaluacion": 20}],
+            [fila],
+            [],
+        ]
+    )
+    riesgo = service.registrar_evaluacion_riesgo(
+        cast(Connection, db),
+        10,
+        _payload_riesgo_create(resultado_evaluacion=resultado),
+        1,
+        "192.0.2.10",
+    )
+
+    assert riesgo.estado_cliente == estado_final
+    assert riesgo.es_vigente is True
+    assert riesgo.id_evaluacion == 20
+    assert riesgo.fecha_evaluacion == fila["fecha_evaluacion"]
+    assert (db.commits, db.rollbacks) == (1, 0)
+    assert not db.respuestas
+    insert_sql, insert_params = db.consultas[1]
+    assert "OUTPUT INSERTED.IdEvaluacion INTO" in insert_sql
+    assert ":observaciones, 0" in insert_sql
+    assert insert_params["evaluador"] == 1
+    assert insert_params["id_cliente"] == 10
+    assert db.consultas[2][1]["id_evaluacion"] == 20
+    audit_sql, audit_params = db.consultas[3]
+    assert "INSERT INTO Clientes.ClientesHis" in audit_sql
+    assert audit_params["tipo_operacion"] == "I"
+    assert audit_params["direccion_ip"] == "192.0.2.10"
+    assert audit_params["modificado_por"] == 1
+
+
+def test_cli13_antecedente_activo_y_parametros_ligados():
+    observaciones = "Revisión 'PEP'; -- texto sin interpolar"
+    payload = _payload_riesgo_create(
+        nivel_riesgo_laft="Alto",
+        es_pep=True,
+        tiene_antecedentes=True,
+        id_tipo_antecedente=2,
+        observaciones=observaciones,
+    )
+    db = _RiesgoConn(
+        [
+            [{"id_cliente": 10, "estado": "Pendiente"}],
+            [{"existe": 1}],
+            [{"id_evaluacion": 20}],
+            [_riesgo_row(**payload.model_dump(), evaluador=12)],
+            [],
+        ]
+    )
+    riesgo = service.registrar_evaluacion_riesgo(
+        cast(Connection, db), 10, payload, 12, "192.0.2.10"
+    )
+    assert riesgo.tiene_antecedentes is True
+    assert riesgo.id_tipo_antecedente == 2
+    assert riesgo.es_pep is True
+    catalogo_sql, catalogo_params = db.consultas[1]
+    assert "Estado = 'Activo'" in catalogo_sql
+    assert catalogo_params == {"id_tipo_antecedente": 2}
+    insert_sql, insert_params = db.consultas[2]
+    assert observaciones not in insert_sql
+    assert insert_params["observaciones"] == observaciones
+    assert insert_params["evaluador"] == 12
+
+
+@pytest.mark.parametrize(
+    "cambios",
+    [
+        {"tiene_antecedentes": True},
+        {"tiene_antecedentes": True, "id_tipo_antecedente": None},
+        {"tiene_antecedentes": False, "id_tipo_antecedente": 1},
+        {"id_tipo_antecedente": 1},
+        {"id_tipo_antecedente": 0},
+    ],
+)
+def test_cli13_antecedentes_incoherentes_422(monkeypatch, cambios):
+    _patch_cliente_existe(monkeypatch)
+    insertar = MagicMock()
+    catalogo = MagicMock()
+    monkeypatch.setattr(repository, "insertar_evaluacion_riesgo", insertar)
+    monkeypatch.setattr(repository, "existe_tipo_antecedente_activo", catalogo)
+    with pytest.raises(service.HTTPException) as exc:
+        service.registrar_evaluacion_riesgo(
+            _fake_conn(), 10, _payload_riesgo_create(**cambios), 1, "192.0.2.10"
+        )
+    _assert_http_error(exc, 422, "ANTECEDENTE_REQUERIDO")
+    insertar.assert_not_called()
+    catalogo.assert_not_called()
+
+
+@pytest.mark.parametrize("id_tipo", [999, 2])
+def test_cli13_catalogo_inexistente_o_inactivo_422(id_tipo):
+    db = _RiesgoConn([[{"id_cliente": 10, "estado": "Activo"}], []])
+    with pytest.raises(service.HTTPException) as exc:
+        service.registrar_evaluacion_riesgo(
+            cast(Connection, db),
+            10,
+            _payload_riesgo_create(
+                tiene_antecedentes=True, id_tipo_antecedente=id_tipo
+            ),
+            1,
+            "192.0.2.10",
+        )
+    _assert_http_error(exc, 422, "CATALOGO_INVALIDO")
+    assert len(db.consultas) == 2
+    assert db.commits == 0
+
+
+@pytest.mark.parametrize(
+    ("cliente", "status", "code"),
+    [
+        (None, 404, "CLIENTE_NO_ENCONTRADO"),
+        ({"id_cliente": 10, "estado": "Eliminado"}, 409, "CLIENTE_ELIMINADO"),
+    ],
+)
+def test_cli13_cliente_invalido(cliente, status, code):
+    db = _RiesgoConn([[cliente] if cliente else []])
+    with pytest.raises(service.HTTPException) as exc:
+        service.registrar_evaluacion_riesgo(
+            cast(Connection, db), 10, _payload_riesgo_create(), 1, "192.0.2.10"
+        )
+    _assert_http_error(exc, status, code)
+    assert len(db.consultas) == 1
+    assert db.commits == 0
+
+
+@pytest.mark.parametrize("etapa", ["insertar", "leer", "auditar", "commit"])
+def test_cli13_revierte_transaccion_ante_fallos(etapa):
+    class _FallaConn(_RiesgoConn):
+        def execute(self, statement: Any, params: dict[str, Any]) -> MagicMock:
+            if len(self.consultas) == {"insertar": 1, "leer": 2, "auditar": 3}.get(
+                etapa, -1
+            ):
+                raise RuntimeError("Fallo simulado")
+            return super().execute(statement, params)
+
+        def commit(self) -> None:
+            if etapa == "commit":
+                raise RuntimeError("Fallo simulado")
+            super().commit()
+
+    db = _FallaConn(
+        [
+            [{"id_cliente": 10, "estado": "Pendiente"}],
+            [{"id_evaluacion": 20}],
+            [_riesgo_row()],
+            [],
+        ]
+    )
+    with pytest.raises(RuntimeError, match="Fallo simulado"):
+        service.registrar_evaluacion_riesgo(
+            cast(Connection, db), 10, _payload_riesgo_create(), 1, "192.0.2.10"
+        )
+    assert (db.commits, db.rollbacks) == (0, 1)
+
+
+@pytest.mark.parametrize("respuestas", [[[]], [[{"id_evaluacion": 20}], []]])
+def test_cli13_no_confirma_si_no_se_recupera_la_evaluacion(respuestas):
+    db = _RiesgoConn([[{"id_cliente": 10, "estado": "Pendiente"}], *respuestas])
+    with pytest.raises(RuntimeError, match="evaluación"):
+        service.registrar_evaluacion_riesgo(
+            cast(Connection, db), 10, _payload_riesgo_create(), 1, "192.0.2.10"
+        )
+    assert (db.commits, db.rollbacks) == (0, 1)
+
+
+def test_cli14_historial_ordenado_y_vigencia():
+    filas = [
+        _riesgo_row(),
+        _riesgo_row(id_evaluacion=19, es_vigente=False),
+        _riesgo_row(
+            id_evaluacion=18,
+            fecha_evaluacion=datetime(2026, 11, 2, 15, tzinfo=UTC),
+            es_vigente=False,
+        ),
+    ]
+    db = _RiesgoConn([[{"id_cliente": 10, "estado": "Activo"}], filas])
+    historial = service.listar_evaluaciones_riesgo(cast(Connection, db), 10)
+    assert [r.id_evaluacion for r in historial] == [20, 19, 18]
+    assert [r.es_vigente for r in historial] == [True, False, False]
+    sql, params = db.consultas[1]
+    assert "ORDER BY r.FechaEvaluacion DESC, r.IdEvaluacion DESC" in sql
+    assert params == {"id_cliente": 10, "id_evaluacion": None}
+    assert (db.commits, db.rollbacks) == (0, 0)
+
+
+@pytest.mark.parametrize("estado", ["Activo", "Eliminado"])
+def test_cli14_historial_vacio(estado):
+    db = _RiesgoConn([[{"id_cliente": 10, "estado": estado}], []])
+    assert service.listar_evaluaciones_riesgo(cast(Connection, db), 10) == []
+
+
+def test_cli14_cliente_no_encontrado_404():
+    db = _RiesgoConn([[]])
+    with pytest.raises(service.HTTPException) as exc:
+        service.listar_evaluaciones_riesgo(cast(Connection, db), 999)
+    _assert_http_error(exc, 404, "CLIENTE_NO_ENCONTRADO")
+
+
+@pytest.mark.parametrize(
+    "cambios",
+    [
+        {"nivel_riesgo_laft": "Critico"},
+        {"resultado_evaluacion": "Pendiente"},
+        {"observaciones": "x" * 251},
+    ],
+)
+def test_riesgo_rechaza_valores_fuera_del_contrato(cambios):
+    with pytest.raises(ValidationError):
+        _payload_riesgo_create(**cambios)
+
+
+def test_riesgo_aliases_defaults_y_limite_observaciones():
+    payload = RiesgoCreate.model_validate(
+        {
+            "nivelRiesgoLAFT": "Medio",
+            "resultadoEvaluacion": "Observado",
+            "observaciones": "x" * 250,
+        }
+    )
+    assert payload.es_pep is False
+    assert payload.tiene_antecedentes is False
+    assert payload.id_tipo_antecedente is None
+    serializado = payload.model_dump(by_alias=True)
+    assert serializado["nivelRiesgoLAFT"] == "Medio"
+    assert serializado["esPEP"] is False
+    assert "nivelRiesgoLaft" not in serializado
+
+
+def test_riesgo_contrato_openapi_sin_sockets():
+    from app.core.errors import ProblemDetailsRoute
+
+    contrato = app.openapi()
+    path = contrato["paths"]["/api/v1/clientes/{idCliente}/evaluaciones-riesgo"]
+    for metodo, operacion, status in [
+        ("post", "CLI13", "201"),
+        ("get", "CLI14", "200"),
+    ]:
+        assert path[metodo]["operationId"] == operacion
+        assert status in path[metodo]["responses"]
+        assert "application/problem+json" in path[metodo]["responses"]["404"]["content"]
+    assert path["post"]["x-roles"] == ["ASESOR", "SUPERVISOR", "ADMIN"]
+    assert "AUDITOR" in path["get"]["x-roles"]
+    assert "AUDITOR" not in path["post"]["x-roles"]
+    rutas = [
+        r
+        for r in router._riesgo_router.routes
+        if isinstance(r, ProblemDetailsRoute) and "evaluaciones-riesgo" in r.path
+    ]
+    assert len(rutas) == 2
+    assert all(isinstance(r, ProblemDetailsRoute) for r in rutas)
+
+
+def test_cli13_router_propaga_evaluador_e_ip(monkeypatch):
+    from starlette.requests import Request
+
+    registrar = MagicMock(return_value=service.RiesgoRegistrado(**_riesgo_row()))
+    monkeypatch.setattr(service, "registrar_evaluacion_riesgo", registrar)
+    request = Request(
+        {
+            "type": "http",
+            "headers": [(b"x-forwarded-for", b"192.0.2.10, 192.0.2.20")],
+        }
+    )
+    conn = _fake_conn()
+    payload = _payload_riesgo_create()
+    resultado = router.registrar_evaluacion_riesgo(10, payload, request, conn)
+    registrar.assert_called_once_with(conn, 10, payload, 1, "192.0.2.10")
+    assert resultado.es_vigente is True

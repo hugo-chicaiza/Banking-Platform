@@ -11,6 +11,9 @@ from app.modules.clientes.schemas import (
     Direccion,
     DireccionNueva,
     DireccionUpdate,
+    Riesgo,
+    RiesgoCreate,
+    RiesgoRegistrado,
     TipoDocumento,
     ValidacionIdentificacion,
 )
@@ -474,3 +477,56 @@ def eliminar_direccion(
     except Exception:
         conn.rollback()
         raise
+
+
+def registrar_evaluacion_riesgo(
+    conn: Connection,
+    id_cliente: int,
+    payload: RiesgoCreate,
+    evaluador: int,
+    direccion_ip: str,
+) -> RiesgoRegistrado:
+    """Valida y registra una evaluación con auditoría en una transacción."""
+    cliente = _validar_cliente_existe(conn, id_cliente)
+    _validar_cliente_no_eliminado(cliente, id_cliente)
+
+    if payload.tiene_antecedentes != (payload.id_tipo_antecedente is not None):
+        raise _problema(
+            422,
+            "ANTECEDENTE_REQUERIDO",
+            "El tipo de antecedente es obligatorio solo si tieneAntecedentes es true.",
+        )
+    if (
+        payload.id_tipo_antecedente is not None
+        and not repository.existe_tipo_antecedente_activo(
+            conn, payload.id_tipo_antecedente
+        )
+    ):
+        raise _problema(
+            422,
+            "CATALOGO_INVALIDO",
+            "El tipo de antecedente no existe o está inactivo.",
+        )
+
+    try:
+        row = repository.insertar_evaluacion_riesgo(
+            conn,
+            id_cliente,
+            payload.model_dump(),
+            evaluador=evaluador,
+            direccion_ip=direccion_ip,
+        )
+        resultado = RiesgoRegistrado(**row)
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    return resultado
+
+
+def listar_evaluaciones_riesgo(conn: Connection, id_cliente: int) -> list[Riesgo]:
+    """Historial descendente con la vigencia persistida por el trigger (CLI-14)."""
+    _validar_cliente_existe(conn, id_cliente)
+    return [
+        Riesgo(**row) for row in repository.listar_evaluaciones_riesgo(conn, id_cliente)
+    ]
