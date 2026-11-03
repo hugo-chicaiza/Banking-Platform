@@ -20,7 +20,7 @@ from fastapi.testclient import TestClient
 from pydantic import ValidationError
 from sqlalchemy import Connection
 
-from app.core.db import cooperativa
+from app.core.database.db import cooperativa
 from app.main import app
 from app.modules.clientes import repository, router, service
 from app.modules.clientes.schemas import ClienteCreate, DireccionCreate, RiesgoCreate
@@ -1098,7 +1098,7 @@ def test_riesgo_aliases_defaults_y_limite_observaciones():
 
 
 def test_riesgo_contrato_openapi_sin_sockets():
-    from app.core.errors import ProblemDetailsRoute
+    from app.core.api.errors import ProblemDetailsRoute
 
     contrato = app.openapi()
     path = contrato["paths"]["/api/v1/clientes/{idCliente}/evaluaciones-riesgo"]

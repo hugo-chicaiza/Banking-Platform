@@ -3,7 +3,7 @@ from typing import Literal
 
 from pydantic import Field
 
-from app.core.schemas import CamelModel
+from app.core.api.schemas import CamelModel
 
 TipoDocumento = Literal["C", "R", "P"]
 TipoCliente = Literal["Natural", "Juridico"]

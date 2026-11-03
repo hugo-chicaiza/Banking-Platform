@@ -3,9 +3,9 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, HTTPException, Path, Query
 from sqlalchemy import Connection
 
-from app.core.db import cooperativa
-from app.core.errors import RESPUESTAS_ERROR, ProblemDetailsRoute, solo_parametros
-from app.core.security import require_auth
+from app.core.api.errors import RESPUESTAS_ERROR, ProblemDetailsRoute, solo_parametros
+from app.core.database.db import cooperativa
+from app.core.security.auth import require_auth
 from app.modules.catalogos import repository
 from app.modules.catalogos.schemas import (
     ActividadEconomica,

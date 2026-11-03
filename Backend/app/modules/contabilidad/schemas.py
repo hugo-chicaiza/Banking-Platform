@@ -1,6 +1,6 @@
 from datetime import date, time
 
-from app.core.schemas import CamelModel
+from app.core.api.schemas import CamelModel
 
 # CON-01 / CON-02 · Fecha contable
 

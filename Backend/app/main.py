@@ -1,8 +1,8 @@
 from fastapi import FastAPI
 
-from app.core.config import get_settings
-from app.core.middleware import TraceIdMiddleware
-from app.core.rate_limit import LimitePeticionesMiddleware
+from app.core.api.middleware import TraceIdMiddleware
+from app.core.api.rate_limit import LimitePeticionesMiddleware
+from app.core.config.settings import get_settings
 from app.modules.catalogos.router import router as catalogos_router
 from app.modules.clientes.router import router as clientes_router
 from app.modules.contabilidad.router import router as contabilidad_router

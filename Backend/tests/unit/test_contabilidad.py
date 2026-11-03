@@ -10,7 +10,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import Connection
 
-from app.core.db import cooperativa
+from app.core.database.db import cooperativa
 from app.main import app
 from app.modules.contabilidad import repository, service
 

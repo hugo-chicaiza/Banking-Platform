@@ -3,8 +3,8 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends
 from sqlalchemy import Connection
 
-from app.core.db import cooperativa
-from app.core.security import require_auth
+from app.core.database.db import cooperativa
+from app.core.security.auth import require_auth
 from app.modules.cuentas import service
 from app.modules.cuentas.schemas import Cuenta, CuentaCreate
 

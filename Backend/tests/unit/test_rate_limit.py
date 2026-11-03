@@ -4,8 +4,8 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from app.core.config import Settings
-from app.core.rate_limit import ContadorPeticiones, LimitePeticionesMiddleware
+from app.core.api.rate_limit import ContadorPeticiones, LimitePeticionesMiddleware
+from app.core.config.settings import Settings
 
 
 class _Reloj:

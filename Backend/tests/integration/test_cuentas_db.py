@@ -10,8 +10,8 @@ validan solo la existencia de filas de referencia.
 
 import pytest
 
-from app.core.config import get_settings
-from app.core.db import get_engine
+from app.core.config.settings import get_settings
+from app.core.database.db import get_engine
 from app.modules.cuentas import repository
 
 pytestmark = pytest.mark.skipif(

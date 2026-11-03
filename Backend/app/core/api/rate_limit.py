@@ -14,7 +14,7 @@ from typing import Literal
 
 from starlette.types import ASGIApp, Receive, Scope, Send
 
-from app.core.errors import respuesta_problema
+from app.core.api.errors import respuesta_problema
 
 logger = logging.getLogger(__name__)
 
