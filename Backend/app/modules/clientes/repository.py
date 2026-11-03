@@ -262,21 +262,8 @@ def _insertar_historial(
 
 
 # ---------------------------------------------------------------------------
-# Direcciones del cliente
+# CLI-09..CLI-12 · Direcciones del cliente
 # ---------------------------------------------------------------------------
-
-_SQL_DIRECCION_COLUMNS = """
-    IdDireccion          AS id_direccion,
-    TipoDireccion        AS tipo_direccion,
-    CodigoPais           AS codigo_pais,
-    IdCiudad             AS id_ciudad,
-    Sector               AS sector,
-    CalleDireccion       AS calle_direccion,
-    ReferenciaUbicacion  AS referencia_ubicacion,
-    CodigoPostal         AS codigo_postal,
-    EsPrincipal          AS es_principal,
-    Estado               AS estado
-"""
 
 
 def obtener_cliente_por_id(conn: Connection, id_cliente: int) -> dict[str, Any] | None:
@@ -297,8 +284,17 @@ def listar_direcciones(conn: Connection, id_cliente: int) -> list[dict[str, Any]
     """Direcciones Activo/Inactivo del cliente, principal primero (CLI-09)."""
     return _rows(
         conn,
-        f"""
-        SELECT {_SQL_DIRECCION_COLUMNS}
+        """
+        SELECT IdDireccion          AS id_direccion,
+               TipoDireccion        AS tipo_direccion,
+               CodigoPais           AS codigo_pais,
+               IdCiudad             AS id_ciudad,
+               Sector               AS sector,
+               CalleDireccion       AS calle_direccion,
+               ReferenciaUbicacion  AS referencia_ubicacion,
+               CodigoPostal         AS codigo_postal,
+               EsPrincipal          AS es_principal,
+               Estado               AS estado
         FROM Clientes.Direcciones
         WHERE IdCliente = :id_cliente
           AND Estado IN ('Activo', 'Inactivo')
@@ -339,7 +335,7 @@ def insertar_direccion(
         _desmarcar_principal(conn, id_cliente)
 
     ahora = datetime.now(UTC)
-    sql = f"""
+    sql = """
         DECLARE @TblDir TABLE (IdDireccion INT);
 
         INSERT INTO Clientes.Direcciones (
@@ -354,7 +350,16 @@ def insertar_direccion(
             :estado, :fecha_registro
         );
 
-        SELECT {_SQL_DIRECCION_COLUMNS}
+        SELECT IdDireccion          AS id_direccion,
+               TipoDireccion        AS tipo_direccion,
+               CodigoPais           AS codigo_pais,
+               IdCiudad             AS id_ciudad,
+               Sector               AS sector,
+               CalleDireccion       AS calle_direccion,
+               ReferenciaUbicacion  AS referencia_ubicacion,
+               CodigoPostal         AS codigo_postal,
+               EsPrincipal          AS es_principal,
+               Estado               AS estado
         FROM Clientes.Direcciones
         WHERE IdDireccion = (SELECT TOP 1 IdDireccion FROM @TblDir);
     """
@@ -395,8 +400,17 @@ def obtener_direccion(
     """Retorna la dirección si pertenece al cliente, o None."""
     return _one(
         conn,
-        f"""
-        SELECT {_SQL_DIRECCION_COLUMNS}
+        """
+        SELECT IdDireccion          AS id_direccion,
+               TipoDireccion        AS tipo_direccion,
+               CodigoPais           AS codigo_pais,
+               IdCiudad             AS id_ciudad,
+               Sector               AS sector,
+               CalleDireccion       AS calle_direccion,
+               ReferenciaUbicacion  AS referencia_ubicacion,
+               CodigoPostal         AS codigo_postal,
+               EsPrincipal          AS es_principal,
+               Estado               AS estado
         FROM Clientes.Direcciones
         WHERE IdDireccion = :id_direccion
           AND IdCliente = :id_cliente
@@ -415,7 +429,7 @@ def actualizar_direccion(
     direccion_ip: str,
     valores_anteriores: dict[str, Any],
 ) -> dict[str, Any]:
-    """Actualiza campos de una dirección y registra historial
+    """Actualiza campos de una dirección y registra historial (CLI-11).
 
     Si es_principal pasa a True, desmarca la anterior.
     Retorna el dict actualizado.
@@ -423,40 +437,49 @@ def actualizar_direccion(
     if cambios.get("es_principal"):
         _desmarcar_principal(conn, id_cliente)
 
-    # Mapa snake_case → columna SQL
-    col_map: dict[str, str] = {
-        "tipo_direccion": "TipoDireccion",
-        "codigo_pais": "CodigoPais",
-        "id_ciudad": "IdCiudad",
-        "sector": "Sector",
-        "calle_direccion": "CalleDireccion",
-        "referencia_ubicacion": "ReferenciaUbicacion",
-        "codigo_postal": "CodigoPostal",
-        "es_principal": "EsPrincipal",
-    }
-
-    sets: list[str] = []
     params: dict[str, Any] = {
         "id_direccion": id_direccion,
         "id_cliente": id_cliente,
+        "tipo_direccion": cambios.get(
+            "tipo_direccion", valores_anteriores["tipo_direccion"]
+        ),
+        "codigo_pais": cambios.get("codigo_pais", valores_anteriores["codigo_pais"]),
+        "id_ciudad": cambios.get("id_ciudad", valores_anteriores["id_ciudad"]),
+        "sector": cambios.get("sector", valores_anteriores.get("sector")),
+        "calle_direccion": cambios.get(
+            "calle_direccion", valores_anteriores["calle_direccion"]
+        ),
+        "referencia_ubicacion": cambios.get(
+            "referencia_ubicacion", valores_anteriores["referencia_ubicacion"]
+        ),
+        "codigo_postal": cambios.get(
+            "codigo_postal", valores_anteriores.get("codigo_postal")
+        ),
+        "es_principal": cambios.get("es_principal", valores_anteriores["es_principal"]),
     }
-    for campo, valor in cambios.items():
-        col = col_map[campo]
-        sets.append(f"{col} = :{campo}")
-        params[campo] = valor
 
-    if not sets:
-        row = obtener_direccion(conn, id_cliente, id_direccion)
-        if not row:
-            raise RuntimeError("Dirección no encontrada tras actualizar.")
-        return row
-
-    sql = f"""
+    sql = """
         UPDATE Clientes.Direcciones
-        SET {", ".join(sets)}
+        SET TipoDireccion = :tipo_direccion,
+            CodigoPais = :codigo_pais,
+            IdCiudad = :id_ciudad,
+            Sector = :sector,
+            CalleDireccion = :calle_direccion,
+            ReferenciaUbicacion = :referencia_ubicacion,
+            CodigoPostal = :codigo_postal,
+            EsPrincipal = :es_principal
         WHERE IdDireccion = :id_direccion AND IdCliente = :id_cliente;
 
-        SELECT {_SQL_DIRECCION_COLUMNS}
+        SELECT IdDireccion          AS id_direccion,
+               TipoDireccion        AS tipo_direccion,
+               CodigoPais           AS codigo_pais,
+               IdCiudad             AS id_ciudad,
+               Sector               AS sector,
+               CalleDireccion       AS calle_direccion,
+               ReferenciaUbicacion  AS referencia_ubicacion,
+               CodigoPostal         AS codigo_postal,
+               EsPrincipal          AS es_principal,
+               Estado               AS estado
         FROM Clientes.Direcciones
         WHERE IdDireccion = :id_direccion AND IdCliente = :id_cliente;
     """
