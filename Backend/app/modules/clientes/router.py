@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, Query, Request, Response
 from sqlalchemy import Connection
 
 from app.core.db import cooperativa
+from app.core.errors import RESPUESTAS_ERROR, ProblemDetailsRoute
 from app.core.security import require_auth
 from app.modules.clientes import service
 from app.modules.clientes.schemas import (
@@ -12,6 +13,9 @@ from app.modules.clientes.schemas import (
     Direccion,
     DireccionNueva,
     DireccionUpdate,
+    Riesgo,
+    RiesgoCreate,
+    RiesgoRegistrado,
     TipoDocumento,
     ValidacionIdentificacion,
 )
@@ -182,3 +186,40 @@ def _ip_cliente(request: Request) -> str:
     if request.client:
         return request.client.host
     return "127.0.0.1"
+
+
+# TODO(F-03): aplicar los roles declarados y extraer evaluador del JWT validado.
+_riesgo_router = APIRouter(route_class=ProblemDetailsRoute)
+
+
+@_riesgo_router.post(
+    "/{idCliente}/evaluaciones-riesgo",
+    operation_id="CLI13",
+    response_model=RiesgoRegistrado,
+    status_code=201,
+    responses=RESPUESTAS_ERROR,
+    openapi_extra={"x-roles": ["ASESOR", "SUPERVISOR", "ADMIN"]},
+)
+def registrar_evaluacion_riesgo(
+    idCliente: int, payload: RiesgoCreate, request: Request, conn: Db
+) -> RiesgoRegistrado:
+    """Registra riesgo y devuelve el estado posterior al trigger (CLI-13 / C-08)."""
+    evaluador = 1
+    return service.registrar_evaluacion_riesgo(
+        conn, idCliente, payload, evaluador, _ip_cliente(request)
+    )
+
+
+@_riesgo_router.get(
+    "/{idCliente}/evaluaciones-riesgo",
+    operation_id="CLI14",
+    response_model=list[Riesgo],
+    responses=RESPUESTAS_ERROR,
+    openapi_extra={"x-roles": ["ASESOR", "SUPERVISOR", "AUDITOR", "ADMIN"]},
+)
+def listar_evaluaciones_riesgo(idCliente: int, conn: Db) -> list[Riesgo]:
+    """Historial de evaluaciones por fecha e identificador descendentes (CLI-14)."""
+    return service.listar_evaluaciones_riesgo(conn, idCliente)
+
+
+router.include_router(_riesgo_router)

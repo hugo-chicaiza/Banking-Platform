@@ -516,3 +516,108 @@ def eliminar_direccion_logica(
         """),
         {"id_direccion": id_direccion, "id_cliente": id_cliente},
     )
+
+
+def existe_tipo_antecedente_activo(conn: Connection, id_tipo_antecedente: int) -> bool:
+    return (
+        _one(
+            conn,
+            """
+            SELECT 1 AS existe
+            FROM Catalogo.TipoAntecedente
+            WHERE IdTipoAntecedente = :id_tipo_antecedente AND Estado = 'Activo'
+            """,
+            {"id_tipo_antecedente": id_tipo_antecedente},
+        )
+        is not None
+    )
+
+
+def listar_evaluaciones_riesgo(
+    conn: Connection, id_cliente: int, *, id_evaluacion: int | None = None
+) -> list[dict[str, Any]]:
+    """Lee los valores finales después del trigger; también permite leer el alta."""
+    return _rows(
+        conn,
+        """
+        SELECT r.IdEvaluacion AS id_evaluacion,
+               r.IdCliente AS id_cliente,
+               r.NivelRiesgoLAFT AS nivel_riesgo_laft,
+               r.EsPEP AS es_pep,
+               r.ResultadoEvaluacion AS resultado_evaluacion,
+               r.FechaEvaluacion AS fecha_evaluacion,
+               r.Evaluador AS evaluador,
+               r.TieneAntecedentes AS tiene_antecedentes,
+               r.IdTipoAntecedente AS id_tipo_antecedente,
+               r.Observaciones AS observaciones,
+               r.EsVigente AS es_vigente,
+               c.Estado AS estado_cliente
+        FROM Clientes.RiesgoCliente AS r
+        JOIN Clientes.Cliente AS c ON c.IdCliente = r.IdCliente
+        WHERE r.IdCliente = :id_cliente
+          AND (:id_evaluacion IS NULL OR r.IdEvaluacion = :id_evaluacion)
+        ORDER BY r.FechaEvaluacion DESC, r.IdEvaluacion DESC
+        """,
+        {"id_cliente": id_cliente, "id_evaluacion": id_evaluacion},
+    )
+
+
+def insertar_evaluacion_riesgo(
+    conn: Connection,
+    id_cliente: int,
+    datos: dict[str, Any],
+    *,
+    evaluador: int,
+    direccion_ip: str,
+) -> dict[str, Any]:
+    """Inserta con EsVigente=0; el trigger mantiene vigencia y estado del cliente.
+
+    OUTPUT INTO captura solo la identidad; la lectura posterior refleja los
+    cambios del trigger, que OUTPUT INSERTED no devuelve directamente.
+    """
+    params = {
+        **datos,
+        "id_cliente": id_cliente,
+        "evaluador": evaluador,
+        "fecha_evaluacion": datetime.now(UTC),
+    }
+    row = _one(
+        conn,
+        """
+        SET NOCOUNT ON;
+        DECLARE @Evaluacion TABLE (IdEvaluacion INT);
+        INSERT INTO Clientes.RiesgoCliente (
+            IdCliente, NivelRiesgoLAFT, EsPEP, ResultadoEvaluacion,
+            FechaEvaluacion, Evaluador, TieneAntecedentes, IdTipoAntecedente,
+            Observaciones, EsVigente
+        )
+        OUTPUT INSERTED.IdEvaluacion INTO @Evaluacion
+        VALUES (
+            :id_cliente, :nivel_riesgo_laft, :es_pep, :resultado_evaluacion,
+            :fecha_evaluacion, :evaluador, :tiene_antecedentes, :id_tipo_antecedente,
+            :observaciones, 0
+        );
+        SELECT IdEvaluacion AS id_evaluacion FROM @Evaluacion;
+        """,
+        params,
+    )
+    if row is None:
+        raise RuntimeError("No se pudo obtener la evaluación insertada.")
+
+    filas = listar_evaluaciones_riesgo(
+        conn, id_cliente, id_evaluacion=row["id_evaluacion"]
+    )
+    if not filas:
+        raise RuntimeError("No se pudo leer la evaluación después del trigger.")
+
+    _insertar_historial(
+        conn,
+        id_cliente=id_cliente,
+        tipo_operacion="I",
+        campo="RIESGO",
+        valor_anterior=None,
+        modificado_por=evaluador,
+        direccion_ip=direccion_ip,
+        observaciones=f"Evaluación de riesgo {row['id_evaluacion']} registrada",
+    )
+    return filas[0]

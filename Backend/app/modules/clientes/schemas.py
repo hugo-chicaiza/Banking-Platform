@@ -147,3 +147,35 @@ class DireccionUpdate(CamelModel):
         default=None, min_length=6, max_length=6, pattern=r"^\d{6}$"
     )
     es_principal: bool | None = None
+
+
+# CLI-13 / CLI-14 · Evaluaciones de riesgo
+NivelRiesgoLAFT = Literal["Bajo", "Medio", "Alto"]
+ResultadoEvaluacion = Literal["Aprobado", "Observado", "Rechazado"]
+
+
+class RiesgoCreate(CamelModel):
+    """Evaluación LAFT, PEP y antecedentes (CLI-13)."""
+
+    nivel_riesgo_laft: NivelRiesgoLAFT = Field(alias="nivelRiesgoLAFT")
+    es_pep: bool = Field(default=False, alias="esPEP")
+    resultado_evaluacion: ResultadoEvaluacion
+    tiene_antecedentes: bool = False
+    id_tipo_antecedente: int | None = None
+    observaciones: str | None = Field(default=None, max_length=250)
+
+
+class Riesgo(RiesgoCreate):
+    """Evaluación persistida, incluida su vigencia (CLI-14)."""
+
+    id_evaluacion: int
+    id_cliente: int
+    fecha_evaluacion: datetime
+    evaluador: int
+    es_vigente: bool
+
+
+class RiesgoRegistrado(Riesgo):
+    """Evaluación y estado del cliente después del trigger (CLI-13)."""
+
+    estado_cliente: EstadoCliente
