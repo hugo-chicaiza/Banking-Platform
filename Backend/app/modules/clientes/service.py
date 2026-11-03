@@ -8,6 +8,9 @@ from app.modules.clientes import repository
 from app.modules.clientes.schemas import (
     Cliente,
     ClienteCreate,
+    Direccion,
+    DireccionNueva,
+    DireccionUpdate,
     TipoDocumento,
     ValidacionIdentificacion,
 )
@@ -265,3 +268,209 @@ def registrar_cliente(
         raise
 
     return Cliente(**cliente_dict)
+
+
+# ---------------------------------------------------------------------------
+# Helpers compartidos
+# ---------------------------------------------------------------------------
+
+
+def _validar_cliente_existe(conn: Connection, id_cliente: int) -> dict[str, Any]:
+    """Retorna datos del cliente o lanza 404."""
+    cliente = repository.obtener_cliente_por_id(conn, id_cliente)
+    if cliente is None:
+        raise _problema(
+            404,
+            "CLIENTE_NO_ENCONTRADO",
+            f"No se encontró un cliente con id {id_cliente}.",
+        )
+    return cliente
+
+
+def _validar_cliente_no_eliminado(cliente: dict[str, Any], id_cliente: int) -> None:
+    """Lanza 409 si el cliente está en estado Eliminado."""
+    if cliente.get("estado") == "Eliminado":
+        raise _problema(
+            409,
+            "CLIENTE_ELIMINADO",
+            f"El cliente {id_cliente} está en estado Eliminado.",
+        )
+
+
+def _validar_ciudad_pais(conn: Connection, id_ciudad: int, codigo_pais: str) -> None:
+    """Valida que la ciudad exista y pertenezca al país."""
+    if not repository.existe_ciudad(conn, id_ciudad, codigo_pais):
+        raise _problema(
+            422,
+            "CATALOGO_INVALIDO",
+            f"La ciudad con id {id_ciudad} no existe o no pertenece al país '{codigo_pais}'.",
+        )
+
+
+# ---------------------------------------------------------------------------
+# GET /api/v1/clientes/{idCliente}/direcciones
+# ---------------------------------------------------------------------------
+
+
+def listar_direcciones(conn: Connection, id_cliente: int) -> list[Direccion]:
+    """Retorna las direcciones activas e inactivas del cliente (CLI-09)."""
+    _validar_cliente_existe(conn, id_cliente)
+    filas = repository.listar_direcciones(conn, id_cliente)
+    return [Direccion(**fila) for fila in filas]
+
+
+# ---------------------------------------------------------------------------
+# CLI-10 · POST /api/v1/clientes/{idCliente}/direcciones
+# ---------------------------------------------------------------------------
+
+
+def agregar_direccion(
+    conn: Connection,
+    id_cliente: int,
+    payload: DireccionNueva,
+    modificado_por: int,
+    direccion_ip: str,
+) -> Direccion:
+    """Agrega una dirección al cliente (CLI-10).
+
+    Raises:
+        HTTPException 404 CLIENTE_NO_ENCONTRADO
+        HTTPException 409 CLIENTE_ELIMINADO
+        HTTPException 422 CATALOGO_INVALIDO
+    """
+    cliente = _validar_cliente_existe(conn, id_cliente)
+    _validar_cliente_no_eliminado(cliente, id_cliente)
+    _validar_ciudad_pais(conn, payload.id_ciudad, payload.codigo_pais)
+
+    datos = {
+        "tipo_direccion": payload.tipo_direccion,
+        "codigo_pais": payload.codigo_pais,
+        "id_ciudad": payload.id_ciudad,
+        "sector": payload.sector,
+        "calle_direccion": payload.calle_direccion,
+        "referencia_ubicacion": payload.referencia_ubicacion,
+        "codigo_postal": payload.codigo_postal,
+        "es_principal": payload.es_principal,
+    }
+
+    try:
+        row = repository.insertar_direccion(
+            conn,
+            id_cliente,
+            datos,
+            modificado_por=modificado_por,
+            direccion_ip=direccion_ip,
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+
+    return Direccion(**row)
+
+
+# ---------------------------------------------------------------------------
+# PATCH /api/v1/clientes/{idCliente}/direcciones/{idDireccion}
+# ---------------------------------------------------------------------------
+
+
+def editar_direccion(
+    conn: Connection,
+    id_cliente: int,
+    id_direccion: int,
+    payload: DireccionUpdate,
+    modificado_por: int,
+    direccion_ip: str,
+) -> Direccion:
+    """Edita una dirección o la promueve a principal (CLI-11).
+
+    Raises:
+        HTTPException 404 CLIENTE_NO_ENCONTRADO
+        HTTPException 404 DIRECCION_NO_ENCONTRADA
+        HTTPException 422 CATALOGO_INVALIDO
+    """
+    _validar_cliente_existe(conn, id_cliente)
+
+    actual = repository.obtener_direccion(conn, id_cliente, id_direccion)
+    if actual is None:
+        raise _problema(
+            404,
+            "DIRECCION_NO_ENCONTRADA",
+            f"No se encontró la dirección {id_direccion} para el cliente {id_cliente}.",
+        )
+
+    # Construir dict solo con campos enviados
+    cambios: dict[str, Any] = {}
+    enviados = payload.model_dump(exclude_unset=True)
+
+    # Si envían codigo_pais o id_ciudad, validar la combinación
+    codigo_pais_final = enviados.get("codigo_pais", actual["codigo_pais"])
+    id_ciudad_final = enviados.get("id_ciudad", actual["id_ciudad"])
+    if "codigo_pais" in enviados or "id_ciudad" in enviados:
+        _validar_ciudad_pais(conn, id_ciudad_final, codigo_pais_final)
+
+    for campo, valor in enviados.items():
+        if valor != actual.get(campo):
+            cambios[campo] = valor
+
+    if not cambios:
+        return Direccion(**actual)
+
+    try:
+        row = repository.actualizar_direccion(
+            conn,
+            id_cliente,
+            id_direccion,
+            cambios,
+            modificado_por=modificado_por,
+            direccion_ip=direccion_ip,
+            valores_anteriores=actual,
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+
+    return Direccion(**row)
+
+
+# ---------------------------------------------------------------------------
+# DELETE /api/v1/clientes/{idCliente}/direcciones/{idDireccion}
+# ---------------------------------------------------------------------------
+
+
+def eliminar_direccion(
+    conn: Connection,
+    id_cliente: int,
+    id_direccion: int,
+) -> None:
+    """Baja lógica de una dirección (CLI-12).
+
+    Raises:
+        HTTPException 404 CLIENTE_NO_ENCONTRADO
+        HTTPException 404 DIRECCION_NO_ENCONTRADA
+        HTTPException 409 NO_SE_PUEDE_ELIMINAR_PRINCIPAL
+    """
+    _validar_cliente_existe(conn, id_cliente)
+
+    actual = repository.obtener_direccion(conn, id_cliente, id_direccion)
+    if actual is None:
+        raise _problema(
+            404,
+            "DIRECCION_NO_ENCONTRADA",
+            f"No se encontró la dirección {id_direccion} para el cliente {id_cliente}.",
+        )
+
+    if actual.get("es_principal") and actual.get("estado") == "Activo":
+        raise _problema(
+            409,
+            "NO_SE_PUEDE_ELIMINAR_PRINCIPAL",
+            "No se puede eliminar la dirección principal activa. Asigne otra dirección como principal primero.",
+        )
+
+    try:
+        repository.eliminar_direccion_logica(conn, id_cliente, id_direccion)
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise

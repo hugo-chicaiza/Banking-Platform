@@ -13,6 +13,7 @@ TipoDireccion = Literal["Domicilio", "Trabajo", "Correspondencia", "Otra"]
 EstadoCliente = Literal[
     "Pendiente", "Activo", "Bloqueado", "Inactivo", "Cerrado", "Eliminado"
 ]
+EstadoDireccion = Literal["Activo", "Inactivo", "Eliminado"]
 
 # ---------------------------------------------------------------------------
 # CLI-01 · Validación de identificación
@@ -108,3 +109,41 @@ class Cliente(CamelModel):
     fecha_registro: datetime
     creado_por: int
     direcciones: list[Direccion]
+
+
+# ---------------------------------------------------------------------------
+# Administración de direcciones del cliente
+# ---------------------------------------------------------------------------
+
+
+class DireccionNueva(CamelModel):
+    """Body de POST /api/v1/clientes/{idCliente}/direcciones (CLI-10)."""
+
+    tipo_direccion: TipoDireccion = "Domicilio"
+    codigo_pais: str = Field(default="ECU", min_length=3, max_length=3)
+    id_ciudad: int
+    sector: str | None = None
+    calle_direccion: str = Field(min_length=1)
+    referencia_ubicacion: str = Field(min_length=1)
+    codigo_postal: str | None = Field(
+        default=None, min_length=6, max_length=6, pattern=r"^\d{6}$"
+    )
+    es_principal: bool = False
+
+
+class DireccionUpdate(CamelModel):
+    """Body de PATCH /api/v1/clientes/{idCliente}/direcciones/{idDireccion} (CLI-11).
+
+    Todos los campos son opcionales para soportar patch parcial.
+    """
+
+    tipo_direccion: TipoDireccion | None = None
+    codigo_pais: str | None = Field(default=None, min_length=3, max_length=3)
+    id_ciudad: int | None = None
+    sector: str | None = None
+    calle_direccion: str | None = Field(default=None, min_length=1)
+    referencia_ubicacion: str | None = Field(default=None, min_length=1)
+    codigo_postal: str | None = Field(
+        default=None, min_length=6, max_length=6, pattern=r"^\d{6}$"
+    )
+    es_principal: bool | None = None

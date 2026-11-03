@@ -197,25 +197,15 @@ def crear_cliente(
     )
 
     # 3. Insertar Clientes.ClientesHis (TipoOperacion = 'I')
-    sql_historial = """
-        INSERT INTO Clientes.ClientesHis (
-            IdCliente, TipoOperacion, CampoModificado, ValorAnterior,
-            ModificadoPor, DireccionIP, FechaModificacion, Observaciones
-        )
-        VALUES (
-            :id_cliente, 'I', 'CREACION', NULL,
-            :modificado_por, :direccion_ip, :fecha_modificacion, :observaciones
-        );
-    """
-    conn.execute(
-        text(sql_historial),
-        {
-            "id_cliente": id_cliente,
-            "modificado_por": creado_por,
-            "direccion_ip": direccion_ip,
-            "fecha_modificacion": ahora,
-            "observaciones": "Registro inicial de cliente",
-        },
+    _insertar_historial(
+        conn,
+        id_cliente=id_cliente,
+        tipo_operacion="I",
+        campo="CREACION",
+        valor_anterior=None,
+        modificado_por=creado_por,
+        direccion_ip=direccion_ip,
+        observaciones="Registro inicial de cliente",
     )
 
     direccion_dict = {
@@ -228,3 +218,301 @@ def crear_cliente(
         **datos_cliente,
         "direcciones": [direccion_dict],
     }
+
+
+# ---------------------------------------------------------------------------
+# Helpers de auditoría
+# ---------------------------------------------------------------------------
+
+
+def _insertar_historial(
+    conn: Connection,
+    *,
+    id_cliente: int,
+    tipo_operacion: str,
+    campo: str,
+    valor_anterior: str | None,
+    modificado_por: int,
+    direccion_ip: str,
+    observaciones: str,
+) -> None:
+    """Inserta una fila en Clientes.ClientesHis."""
+    conn.execute(
+        text("""
+            INSERT INTO Clientes.ClientesHis (
+                IdCliente, TipoOperacion, CampoModificado, ValorAnterior,
+                ModificadoPor, DireccionIP, FechaModificacion, Observaciones
+            )
+            VALUES (
+                :id_cliente, :tipo_operacion, :campo, :valor_anterior,
+                :modificado_por, :direccion_ip, :fecha_modificacion, :observaciones
+            );
+        """),
+        {
+            "id_cliente": id_cliente,
+            "tipo_operacion": tipo_operacion,
+            "campo": campo,
+            "valor_anterior": valor_anterior,
+            "modificado_por": modificado_por,
+            "direccion_ip": direccion_ip,
+            "fecha_modificacion": datetime.now(UTC),
+            "observaciones": observaciones,
+        },
+    )
+
+
+# ---------------------------------------------------------------------------
+# CLI-09..CLI-12 · Direcciones del cliente
+# ---------------------------------------------------------------------------
+
+
+def obtener_cliente_por_id(conn: Connection, id_cliente: int) -> dict[str, Any] | None:
+    """Retorna {id_cliente, estado} o None si no existe."""
+    return _one(
+        conn,
+        """
+        SELECT IdCliente AS id_cliente,
+               Estado    AS estado
+        FROM Clientes.Cliente
+        WHERE IdCliente = :id_cliente
+        """,
+        {"id_cliente": id_cliente},
+    )
+
+
+def listar_direcciones(conn: Connection, id_cliente: int) -> list[dict[str, Any]]:
+    """Direcciones Activo/Inactivo del cliente, principal primero (CLI-09)."""
+    return _rows(
+        conn,
+        """
+        SELECT IdDireccion          AS id_direccion,
+               TipoDireccion        AS tipo_direccion,
+               CodigoPais           AS codigo_pais,
+               IdCiudad             AS id_ciudad,
+               Sector               AS sector,
+               CalleDireccion       AS calle_direccion,
+               ReferenciaUbicacion  AS referencia_ubicacion,
+               CodigoPostal         AS codigo_postal,
+               EsPrincipal          AS es_principal,
+               Estado               AS estado
+        FROM Clientes.Direcciones
+        WHERE IdCliente = :id_cliente
+          AND Estado IN ('Activo', 'Inactivo')
+        ORDER BY EsPrincipal DESC, IdDireccion ASC
+        """,
+        {"id_cliente": id_cliente},
+    )
+
+
+def _desmarcar_principal(conn: Connection, id_cliente: int) -> None:
+    """Pone EsPrincipal = 0 en la dirección principal activa del cliente."""
+    conn.execute(
+        text("""
+            UPDATE Clientes.Direcciones
+            SET EsPrincipal = 0
+            WHERE IdCliente = :id_cliente
+              AND EsPrincipal = 1
+              AND Estado = 'Activo'
+        """),
+        {"id_cliente": id_cliente},
+    )
+
+
+def insertar_direccion(
+    conn: Connection,
+    id_cliente: int,
+    datos: dict[str, Any],
+    *,
+    modificado_por: int,
+    direccion_ip: str,
+) -> dict[str, Any]:
+    """Inserta una dirección y registra historial (CLI-10).
+
+    Si es_principal, desmarca la anterior primero.
+    Retorna el dict de la dirección creada.
+    """
+    if datos.get("es_principal"):
+        _desmarcar_principal(conn, id_cliente)
+
+    ahora = datetime.now(UTC)
+    sql = """
+        DECLARE @TblDir TABLE (IdDireccion INT);
+
+        INSERT INTO Clientes.Direcciones (
+            IdCliente, TipoDireccion, CodigoPais, IdCiudad, Sector,
+            CalleDireccion, ReferenciaUbicacion, CodigoPostal, EsPrincipal,
+            Estado, FechaRegistro
+        )
+        OUTPUT INSERTED.IdDireccion INTO @TblDir
+        VALUES (
+            :id_cliente, :tipo_direccion, :codigo_pais, :id_ciudad, :sector,
+            :calle_direccion, :referencia_ubicacion, :codigo_postal, :es_principal,
+            :estado, :fecha_registro
+        );
+
+        SELECT IdDireccion          AS id_direccion,
+               TipoDireccion        AS tipo_direccion,
+               CodigoPais           AS codigo_pais,
+               IdCiudad             AS id_ciudad,
+               Sector               AS sector,
+               CalleDireccion       AS calle_direccion,
+               ReferenciaUbicacion  AS referencia_ubicacion,
+               CodigoPostal         AS codigo_postal,
+               EsPrincipal          AS es_principal,
+               Estado               AS estado
+        FROM Clientes.Direcciones
+        WHERE IdDireccion = (SELECT TOP 1 IdDireccion FROM @TblDir);
+    """
+    params = {
+        "id_cliente": id_cliente,
+        "tipo_direccion": datos["tipo_direccion"],
+        "codigo_pais": datos["codigo_pais"],
+        "id_ciudad": datos["id_ciudad"],
+        "sector": datos.get("sector"),
+        "calle_direccion": datos["calle_direccion"],
+        "referencia_ubicacion": datos["referencia_ubicacion"],
+        "codigo_postal": datos.get("codigo_postal"),
+        "es_principal": datos.get("es_principal", False),
+        "estado": "Activo",
+        "fecha_registro": ahora,
+    }
+    row = _one(conn, sql, params)
+    if not row:
+        raise RuntimeError("No se pudo obtener la dirección insertada.")
+
+    _insertar_historial(
+        conn,
+        id_cliente=id_cliente,
+        tipo_operacion="I",
+        campo="DIRECCION",
+        valor_anterior=None,
+        modificado_por=modificado_por,
+        direccion_ip=direccion_ip,
+        observaciones=f"Dirección {row['id_direccion']} creada",
+    )
+
+    return row
+
+
+def obtener_direccion(
+    conn: Connection, id_cliente: int, id_direccion: int
+) -> dict[str, Any] | None:
+    """Retorna la dirección si pertenece al cliente, o None."""
+    return _one(
+        conn,
+        """
+        SELECT IdDireccion          AS id_direccion,
+               TipoDireccion        AS tipo_direccion,
+               CodigoPais           AS codigo_pais,
+               IdCiudad             AS id_ciudad,
+               Sector               AS sector,
+               CalleDireccion       AS calle_direccion,
+               ReferenciaUbicacion  AS referencia_ubicacion,
+               CodigoPostal         AS codigo_postal,
+               EsPrincipal          AS es_principal,
+               Estado               AS estado
+        FROM Clientes.Direcciones
+        WHERE IdDireccion = :id_direccion
+          AND IdCliente = :id_cliente
+        """,
+        {"id_direccion": id_direccion, "id_cliente": id_cliente},
+    )
+
+
+def actualizar_direccion(
+    conn: Connection,
+    id_cliente: int,
+    id_direccion: int,
+    cambios: dict[str, Any],
+    *,
+    modificado_por: int,
+    direccion_ip: str,
+    valores_anteriores: dict[str, Any],
+) -> dict[str, Any]:
+    """Actualiza campos de una dirección y registra historial (CLI-11).
+
+    Si es_principal pasa a True, desmarca la anterior.
+    Retorna el dict actualizado.
+    """
+    if cambios.get("es_principal"):
+        _desmarcar_principal(conn, id_cliente)
+
+    params: dict[str, Any] = {
+        "id_direccion": id_direccion,
+        "id_cliente": id_cliente,
+        "tipo_direccion": cambios.get(
+            "tipo_direccion", valores_anteriores["tipo_direccion"]
+        ),
+        "codigo_pais": cambios.get("codigo_pais", valores_anteriores["codigo_pais"]),
+        "id_ciudad": cambios.get("id_ciudad", valores_anteriores["id_ciudad"]),
+        "sector": cambios.get("sector", valores_anteriores.get("sector")),
+        "calle_direccion": cambios.get(
+            "calle_direccion", valores_anteriores["calle_direccion"]
+        ),
+        "referencia_ubicacion": cambios.get(
+            "referencia_ubicacion", valores_anteriores["referencia_ubicacion"]
+        ),
+        "codigo_postal": cambios.get(
+            "codigo_postal", valores_anteriores.get("codigo_postal")
+        ),
+        "es_principal": cambios.get("es_principal", valores_anteriores["es_principal"]),
+    }
+
+    sql = """
+        UPDATE Clientes.Direcciones
+        SET TipoDireccion = :tipo_direccion,
+            CodigoPais = :codigo_pais,
+            IdCiudad = :id_ciudad,
+            Sector = :sector,
+            CalleDireccion = :calle_direccion,
+            ReferenciaUbicacion = :referencia_ubicacion,
+            CodigoPostal = :codigo_postal,
+            EsPrincipal = :es_principal
+        WHERE IdDireccion = :id_direccion AND IdCliente = :id_cliente;
+
+        SELECT IdDireccion          AS id_direccion,
+               TipoDireccion        AS tipo_direccion,
+               CodigoPais           AS codigo_pais,
+               IdCiudad             AS id_ciudad,
+               Sector               AS sector,
+               CalleDireccion       AS calle_direccion,
+               ReferenciaUbicacion  AS referencia_ubicacion,
+               CodigoPostal         AS codigo_postal,
+               EsPrincipal          AS es_principal,
+               Estado               AS estado
+        FROM Clientes.Direcciones
+        WHERE IdDireccion = :id_direccion AND IdCliente = :id_cliente;
+    """
+    row = _one(conn, sql, params)
+    if not row:
+        raise RuntimeError("Dirección no encontrada tras actualizar.")
+
+    # Registrar cada cambio en historial
+    for campo in cambios:
+        _insertar_historial(
+            conn,
+            id_cliente=id_cliente,
+            tipo_operacion="U",
+            campo=f"DIRECCION.{campo}",
+            valor_anterior=str(valores_anteriores.get(campo)),
+            modificado_por=modificado_por,
+            direccion_ip=direccion_ip,
+            observaciones=f"Dirección {id_direccion} actualizada: {campo}",
+        )
+
+    return row
+
+
+def eliminar_direccion_logica(
+    conn: Connection, id_cliente: int, id_direccion: int
+) -> None:
+    """Baja lógica: Estado = 'Eliminado' (CLI-12)."""
+    conn.execute(
+        text("""
+            UPDATE Clientes.Direcciones
+            SET Estado = 'Eliminado'
+            WHERE IdDireccion = :id_direccion
+              AND IdCliente = :id_cliente
+        """),
+        {"id_direccion": id_direccion, "id_cliente": id_cliente},
+    )

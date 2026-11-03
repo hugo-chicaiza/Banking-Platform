@@ -2,12 +2,16 @@
 
 - CLI-01 · GET /api/v1/clientes/validar-identificacion
 - CLI-02 · POST /api/v1/clientes
+- CLI-09 · GET /api/v1/clientes/{idCliente}/direcciones
+- CLI-10 · POST /api/v1/clientes/{idCliente}/direcciones
+- CLI-11 · PATCH /api/v1/clientes/{idCliente}/direcciones/{idDireccion}
+- CLI-12 · DELETE /api/v1/clientes/{idCliente}/direcciones/{idDireccion}
 
 No requieren base de datos: se monkeypatcha el repositorio.
 """
 
 from datetime import UTC, date, datetime, timedelta
-from typing import cast
+from typing import Any, cast
 from unittest.mock import MagicMock
 
 import pytest
@@ -41,6 +45,11 @@ def client():
     app.dependency_overrides[cooperativa] = lambda: _FakeConn()
     yield TestClient(app)
     app.dependency_overrides.clear()
+
+
+def _fake_conn() -> Connection:
+    """Retorna un _FakeConn casteado a Connection para pyright."""
+    return cast(Connection, _FakeConn())
 
 
 def _assert_http_error(
@@ -252,7 +261,7 @@ def _patch_repo_catalogos_ok(monkeypatch):
 
 
 def test_registrar_cliente_natural_exitoso(monkeypatch):
-    conn = cast(Connection, _FakeConn())
+    conn = _fake_conn()
     payload = _payload_natural_valido()
 
     _patch_repo_catalogos_ok(monkeypatch)
@@ -312,7 +321,7 @@ def test_registrar_cliente_natural_exitoso(monkeypatch):
 
 
 def test_registrar_cliente_juridico_exitoso(monkeypatch):
-    conn = cast(Connection, _FakeConn())
+    conn = _fake_conn()
     payload = _payload_natural_valido()
     payload.tipo_cliente = "Juridico"
     payload.identificacion = RUC_VALIDO
@@ -364,7 +373,7 @@ def test_registrar_cliente_juridico_exitoso(monkeypatch):
 
 
 def test_registrar_cliente_validaciones_negocio_422(monkeypatch):
-    conn = cast(Connection, _FakeConn())
+    conn = _fake_conn()
     _patch_repo_catalogos_ok(monkeypatch)
     monkeypatch.setattr(
         repository, "obtener_cliente_por_identificacion", lambda c, doc: None
@@ -411,7 +420,7 @@ def test_registrar_cliente_validaciones_negocio_422(monkeypatch):
 
 
 def test_registrar_cliente_duplicado_409(monkeypatch):
-    conn = cast(Connection, _FakeConn())
+    conn = _fake_conn()
     monkeypatch.setattr(
         repository,
         "obtener_cliente_por_identificacion",
@@ -425,7 +434,7 @@ def test_registrar_cliente_duplicado_409(monkeypatch):
 
 
 def test_registrar_cliente_catalogos_invalidos_422(monkeypatch):
-    conn = cast(Connection, _FakeConn())
+    conn = _fake_conn()
     _patch_repo_catalogos_ok(monkeypatch)
     monkeypatch.setattr(
         repository, "obtener_cliente_por_identificacion", lambda c, doc: None
@@ -443,3 +452,354 @@ def test_registrar_cliente_catalogos_invalidos_422(monkeypatch):
     with pytest.raises(service.HTTPException) as exc2:
         service.registrar_cliente(conn, _payload_natural_valido(), 1, "127.0.0.1")
     _assert_http_error(exc2, 422, "CATALOGO_INVALIDO")
+
+
+# ===========================================================================
+# CLI-09..CLI-12 · Direcciones del cliente
+# ===========================================================================
+
+
+def _direccion_row(**overrides: Any) -> dict[str, Any]:
+    """Fábrica de fila de dirección para evitar duplicación (SonarQube)."""
+    base: dict[str, Any] = {
+        "id_direccion": 1,
+        "tipo_direccion": "Domicilio",
+        "codigo_pais": "ECU",
+        "id_ciudad": 1,
+        "sector": "La Mariscal",
+        "calle_direccion": "Av. Amazonas N24-123",
+        "referencia_ubicacion": "Frente al parque",
+        "codigo_postal": "170143",
+        "es_principal": True,
+        "estado": "Activo",
+    }
+    base.update(overrides)
+    return base
+
+
+def _patch_cliente_existe(
+    monkeypatch, *, estado: str = "Activo", id_cliente: int = 10
+) -> None:
+    """Mockea obtener_cliente_por_id para que retorne un cliente existente."""
+    monkeypatch.setattr(
+        repository,
+        "obtener_cliente_por_id",
+        lambda conn, cid: {"id_cliente": id_cliente, "estado": estado},
+    )
+
+
+def _patch_cliente_no_existe(monkeypatch) -> None:
+    """Mockea obtener_cliente_por_id para que retorne None."""
+    monkeypatch.setattr(repository, "obtener_cliente_por_id", lambda conn, cid: None)
+
+
+# ---------------------------------------------------------------------------
+# CLI-09 · Listar direcciones
+# ---------------------------------------------------------------------------
+
+
+def test_cli09_listar_direcciones_caso_feliz(monkeypatch):
+    conn = _fake_conn()
+    _patch_cliente_existe(monkeypatch)
+
+    filas = [
+        _direccion_row(id_direccion=1, es_principal=True),
+        _direccion_row(id_direccion=2, es_principal=False, estado="Inactivo"),
+    ]
+    monkeypatch.setattr(repository, "listar_direcciones", lambda conn, cid: filas)
+
+    resultado = service.listar_direcciones(conn, 10)
+
+    assert len(resultado) == 2
+    assert resultado[0].id_direccion == 1
+    assert resultado[0].es_principal is True
+    assert resultado[1].estado == "Inactivo"
+
+
+def test_cli09_listar_direcciones_cliente_no_existe(monkeypatch):
+    conn = _fake_conn()
+    _patch_cliente_no_existe(monkeypatch)
+
+    with pytest.raises(service.HTTPException) as exc:
+        service.listar_direcciones(conn, 999)
+
+    _assert_http_error(exc, 404, "CLIENTE_NO_ENCONTRADO")
+
+
+def test_cli09_listar_direcciones_vacia(monkeypatch):
+    conn = _fake_conn()
+    _patch_cliente_existe(monkeypatch)
+    monkeypatch.setattr(repository, "listar_direcciones", lambda conn, cid: [])
+
+    resultado = service.listar_direcciones(conn, 10)
+    assert resultado == []
+
+
+# ---------------------------------------------------------------------------
+# CLI-10 · Agregar dirección
+# ---------------------------------------------------------------------------
+
+
+def _payload_direccion_nueva(**overrides: Any) -> service.DireccionNueva:
+    """Fábrica de payload DireccionNueva para evitar duplicación."""
+    defaults: dict[str, Any] = {
+        "tipo_direccion": "Domicilio",
+        "codigo_pais": "ECU",
+        "id_ciudad": 1,
+        "sector": "La Mariscal",
+        "calle_direccion": "Av. Amazonas N24-123",
+        "referencia_ubicacion": "Frente al parque",
+        "codigo_postal": "170143",
+        "es_principal": False,
+    }
+    defaults.update(overrides)
+    return service.DireccionNueva(**defaults)
+
+
+def _patch_insertar_direccion(monkeypatch, **overrides: Any) -> None:
+    """Mockea insertar_direccion para retornar una dirección con overrides."""
+
+    def _insertar(conn, cid, datos, *, modificado_por, direccion_ip):
+        return _direccion_row(
+            id_direccion=10,
+            es_principal=datos.get("es_principal", False),
+            **overrides,
+        )
+
+    monkeypatch.setattr(repository, "insertar_direccion", _insertar)
+
+
+def test_cli10_agregar_direccion_caso_feliz(monkeypatch):
+    conn = _fake_conn()
+    _patch_cliente_existe(monkeypatch)
+    monkeypatch.setattr(repository, "existe_ciudad", lambda c, cid, cod: True)
+    _patch_insertar_direccion(monkeypatch)
+
+    resultado = service.agregar_direccion(
+        conn, 10, _payload_direccion_nueva(), 1, "127.0.0.1"
+    )
+
+    assert resultado.id_direccion == 10
+    assert resultado.estado == "Activo"
+
+
+def test_cli10_agregar_direccion_como_principal(monkeypatch):
+    conn = _fake_conn()
+    _patch_cliente_existe(monkeypatch)
+    monkeypatch.setattr(repository, "existe_ciudad", lambda c, cid, cod: True)
+    _patch_insertar_direccion(monkeypatch)
+
+    resultado = service.agregar_direccion(
+        conn, 10, _payload_direccion_nueva(es_principal=True), 1, "127.0.0.1"
+    )
+
+    assert resultado.es_principal is True
+
+
+def test_cli10_agregar_direccion_cliente_no_existe(monkeypatch):
+    conn = _fake_conn()
+    _patch_cliente_no_existe(monkeypatch)
+
+    with pytest.raises(service.HTTPException) as exc:
+        service.agregar_direccion(conn, 999, _payload_direccion_nueva(), 1, "127.0.0.1")
+
+    _assert_http_error(exc, 404, "CLIENTE_NO_ENCONTRADO")
+
+
+def test_cli10_agregar_direccion_cliente_eliminado(monkeypatch):
+    conn = _fake_conn()
+    _patch_cliente_existe(monkeypatch, estado="Eliminado")
+
+    with pytest.raises(service.HTTPException) as exc:
+        service.agregar_direccion(conn, 10, _payload_direccion_nueva(), 1, "127.0.0.1")
+
+    _assert_http_error(exc, 409, "CLIENTE_ELIMINADO")
+
+
+def test_cli10_agregar_direccion_ciudad_invalida(monkeypatch):
+    conn = _fake_conn()
+    _patch_cliente_existe(monkeypatch)
+    monkeypatch.setattr(repository, "existe_ciudad", lambda c, cid, cod: False)
+
+    with pytest.raises(service.HTTPException) as exc:
+        service.agregar_direccion(conn, 10, _payload_direccion_nueva(), 1, "127.0.0.1")
+
+    _assert_http_error(exc, 422, "CATALOGO_INVALIDO")
+
+
+# ---------------------------------------------------------------------------
+# CLI-11 · Editar dirección
+# ---------------------------------------------------------------------------
+
+
+def _payload_direccion_update(**overrides: Any) -> service.DireccionUpdate:
+    """Fábrica de payload DireccionUpdate para evitar duplicación."""
+    return service.DireccionUpdate(**overrides)
+
+
+def test_cli11_editar_direccion_caso_feliz(monkeypatch):
+    conn = _fake_conn()
+    _patch_cliente_existe(monkeypatch)
+
+    dir_actual = _direccion_row(id_direccion=5, sector="Centro")
+    monkeypatch.setattr(repository, "obtener_direccion", lambda c, cid, did: dir_actual)
+
+    dir_actualizada = _direccion_row(id_direccion=5, sector="Norte")
+    monkeypatch.setattr(
+        repository,
+        "actualizar_direccion",
+        lambda c, cid, did, cambios, **kw: dir_actualizada,
+    )
+
+    resultado = service.editar_direccion(
+        conn, 10, 5, _payload_direccion_update(sector="Norte"), 1, "127.0.0.1"
+    )
+
+    assert resultado.id_direccion == 5
+    assert resultado.sector == "Norte"
+
+
+def test_cli11_editar_direccion_promover_principal(monkeypatch):
+    conn = _fake_conn()
+    _patch_cliente_existe(monkeypatch)
+
+    dir_actual = _direccion_row(id_direccion=5, es_principal=False)
+    monkeypatch.setattr(repository, "obtener_direccion", lambda c, cid, did: dir_actual)
+
+    dir_actualizada = _direccion_row(id_direccion=5, es_principal=True)
+    monkeypatch.setattr(
+        repository,
+        "actualizar_direccion",
+        lambda c, cid, did, cambios, **kw: dir_actualizada,
+    )
+
+    resultado = service.editar_direccion(
+        conn, 10, 5, _payload_direccion_update(es_principal=True), 1, "127.0.0.1"
+    )
+
+    assert resultado.es_principal is True
+
+
+def test_cli11_editar_direccion_sin_cambios(monkeypatch):
+    conn = _fake_conn()
+    _patch_cliente_existe(monkeypatch)
+
+    dir_actual = _direccion_row(id_direccion=5, sector="La Mariscal")
+    monkeypatch.setattr(repository, "obtener_direccion", lambda c, cid, did: dir_actual)
+
+    # Enviar el mismo sector → no debería llamar a actualizar_direccion
+    resultado = service.editar_direccion(
+        conn, 10, 5, _payload_direccion_update(sector="La Mariscal"), 1, "127.0.0.1"
+    )
+
+    assert resultado.id_direccion == 5
+    assert resultado.sector == "La Mariscal"
+
+
+def test_cli11_editar_direccion_cliente_no_existe(monkeypatch):
+    conn = _fake_conn()
+    _patch_cliente_no_existe(monkeypatch)
+
+    with pytest.raises(service.HTTPException) as exc:
+        service.editar_direccion(
+            conn, 999, 5, _payload_direccion_update(sector="X"), 1, "127.0.0.1"
+        )
+
+    _assert_http_error(exc, 404, "CLIENTE_NO_ENCONTRADO")
+
+
+def test_cli11_editar_direccion_no_encontrada(monkeypatch):
+    conn = _fake_conn()
+    _patch_cliente_existe(monkeypatch)
+    monkeypatch.setattr(repository, "obtener_direccion", lambda c, cid, did: None)
+
+    with pytest.raises(service.HTTPException) as exc:
+        service.editar_direccion(
+            conn, 10, 999, _payload_direccion_update(sector="X"), 1, "127.0.0.1"
+        )
+
+    _assert_http_error(exc, 404, "DIRECCION_NO_ENCONTRADA")
+
+
+def test_cli11_editar_direccion_ciudad_invalida(monkeypatch):
+    conn = _fake_conn()
+    _patch_cliente_existe(monkeypatch)
+
+    dir_actual = _direccion_row(id_direccion=5)
+    monkeypatch.setattr(repository, "obtener_direccion", lambda c, cid, did: dir_actual)
+    monkeypatch.setattr(repository, "existe_ciudad", lambda c, cid, cod: False)
+
+    with pytest.raises(service.HTTPException) as exc:
+        service.editar_direccion(
+            conn, 10, 5, _payload_direccion_update(id_ciudad=999), 1, "127.0.0.1"
+        )
+
+    _assert_http_error(exc, 422, "CATALOGO_INVALIDO")
+
+
+# ---------------------------------------------------------------------------
+# CLI-12 · Eliminar dirección (baja lógica)
+# ---------------------------------------------------------------------------
+
+
+def test_cli12_eliminar_direccion_caso_feliz(monkeypatch):
+    conn = _fake_conn()
+    _patch_cliente_existe(monkeypatch)
+
+    dir_actual = _direccion_row(id_direccion=5, es_principal=False)
+    monkeypatch.setattr(repository, "obtener_direccion", lambda c, cid, did: dir_actual)
+    monkeypatch.setattr(
+        repository, "eliminar_direccion_logica", lambda c, cid, did: None
+    )
+
+    # No lanza excepción
+    service.eliminar_direccion(conn, 10, 5)
+
+
+def test_cli12_eliminar_direccion_principal_activa_409(monkeypatch):
+    conn = _fake_conn()
+    _patch_cliente_existe(monkeypatch)
+
+    dir_actual = _direccion_row(id_direccion=5, es_principal=True, estado="Activo")
+    monkeypatch.setattr(repository, "obtener_direccion", lambda c, cid, did: dir_actual)
+
+    with pytest.raises(service.HTTPException) as exc:
+        service.eliminar_direccion(conn, 10, 5)
+
+    _assert_http_error(exc, 409, "NO_SE_PUEDE_ELIMINAR_PRINCIPAL")
+
+
+def test_cli12_eliminar_direccion_cliente_no_existe(monkeypatch):
+    conn = _fake_conn()
+    _patch_cliente_no_existe(monkeypatch)
+
+    with pytest.raises(service.HTTPException) as exc:
+        service.eliminar_direccion(conn, 999, 5)
+
+    _assert_http_error(exc, 404, "CLIENTE_NO_ENCONTRADO")
+
+
+def test_cli12_eliminar_direccion_no_encontrada(monkeypatch):
+    conn = _fake_conn()
+    _patch_cliente_existe(monkeypatch)
+    monkeypatch.setattr(repository, "obtener_direccion", lambda c, cid, did: None)
+
+    with pytest.raises(service.HTTPException) as exc:
+        service.eliminar_direccion(conn, 10, 999)
+
+    _assert_http_error(exc, 404, "DIRECCION_NO_ENCONTRADA")
+
+
+def test_cli12_eliminar_direccion_principal_inactiva_ok(monkeypatch):
+    """Una dirección principal con estado Inactivo SÍ se puede eliminar."""
+    conn = _fake_conn()
+    _patch_cliente_existe(monkeypatch)
+
+    dir_actual = _direccion_row(id_direccion=5, es_principal=True, estado="Inactivo")
+    monkeypatch.setattr(repository, "obtener_direccion", lambda c, cid, did: dir_actual)
+    monkeypatch.setattr(
+        repository, "eliminar_direccion_logica", lambda c, cid, did: None
+    )
+
+    # No lanza excepción
+    service.eliminar_direccion(conn, 10, 5)

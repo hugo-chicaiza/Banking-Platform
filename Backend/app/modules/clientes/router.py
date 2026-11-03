@@ -1,6 +1,6 @@
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, Query, Request, Response
 from sqlalchemy import Connection
 
 from app.core.db import cooperativa
@@ -9,6 +9,9 @@ from app.modules.clientes import service
 from app.modules.clientes.schemas import (
     Cliente,
     ClienteCreate,
+    Direccion,
+    DireccionNueva,
+    DireccionUpdate,
     TipoDocumento,
     ValidacionIdentificacion,
 )
@@ -22,7 +25,7 @@ router = APIRouter(
 Db = Annotated[Connection, Depends(cooperativa)]
 
 # ---------------------------------------------------------------------------
-# CLI-01 · GET /api/v1/clientes/validar-identificacion
+# GET /api/v1/clientes/validar-identificacion
 # ---------------------------------------------------------------------------
 # Roles: ASESOR, ADMIN
 # TODO(F-03): restringir por rol cuando require_auth valide el JWT.
@@ -52,7 +55,7 @@ def validar_identificacion(
 
 
 # ---------------------------------------------------------------------------
-# CLI-02 · POST /api/v1/clientes
+# POST /api/v1/clientes
 # ---------------------------------------------------------------------------
 # Roles: ASESOR, ADMIN
 # TODO(F-03): restringir por rol y extraer creado_por del token JWT.
@@ -73,12 +76,109 @@ def registrar_cliente(
     creado_por = 1
 
     # Obtener IP del cliente para auditoría en ClientesHis
-    direccion_ip = request.headers.get("x-forwarded-for")
-    if direccion_ip:
-        direccion_ip = direccion_ip.split(",")[0].strip()
-    elif request.client:
-        direccion_ip = request.client.host
-    else:
-        direccion_ip = "127.0.0.1"
+    direccion_ip = _ip_cliente(request)
 
     return service.registrar_cliente(conn, payload, creado_por, direccion_ip)
+
+
+# ---------------------------------------------------------------------------
+# GET /api/v1/clientes/{idCliente}/direcciones
+# ---------------------------------------------------------------------------
+# Roles: ASESOR, ADMIN
+
+
+@router.get(
+    "/{idCliente}/direcciones",
+    response_model=list[Direccion],
+)
+def listar_direcciones(
+    idCliente: int,
+    conn: Db,
+) -> Any:
+    """Retorna las direcciones activas e inactivas del cliente (CLI-09 / C-07)."""
+    return service.listar_direcciones(conn, idCliente)
+
+
+# ---------------------------------------------------------------------------
+# POST /api/v1/clientes/{idCliente}/direcciones
+# ---------------------------------------------------------------------------
+# Roles: ASESOR, ADMIN
+
+
+@router.post(
+    "/{idCliente}/direcciones",
+    response_model=Direccion,
+    status_code=201,
+)
+def agregar_direccion(
+    idCliente: int,
+    payload: DireccionNueva,
+    request: Request,
+    conn: Db,
+) -> Any:
+    """Agrega una nueva dirección al cliente (CLI-10 / C-07)."""
+    modificado_por = 1
+    direccion_ip = _ip_cliente(request)
+    return service.agregar_direccion(
+        conn, idCliente, payload, modificado_por, direccion_ip
+    )
+
+
+# ---------------------------------------------------------------------------
+# PATCH /api/v1/clientes/{idCliente}/direcciones/{idDireccion}
+# ---------------------------------------------------------------------------
+# Roles: ASESOR, ADMIN
+
+
+@router.patch(
+    "/{idCliente}/direcciones/{idDireccion}",
+    response_model=Direccion,
+)
+def editar_direccion(
+    idCliente: int,
+    idDireccion: int,
+    payload: DireccionUpdate,
+    request: Request,
+    conn: Db,
+) -> Any:
+    """Edita una dirección o la promueve a principal (CLI-11 / C-07)."""
+    modificado_por = 1
+    direccion_ip = _ip_cliente(request)
+    return service.editar_direccion(
+        conn, idCliente, idDireccion, payload, modificado_por, direccion_ip
+    )
+
+
+# ---------------------------------------------------------------------------
+# DELETE /api/v1/clientes/{idCliente}/direcciones/{idDireccion}
+# ---------------------------------------------------------------------------
+# Roles: ASESOR, ADMIN
+
+
+@router.delete(
+    "/{idCliente}/direcciones/{idDireccion}",
+    status_code=204,
+)
+def eliminar_direccion(
+    idCliente: int,
+    idDireccion: int,
+    conn: Db,
+) -> Response:
+    """Baja lógica de una dirección (CLI-12 / C-07)."""
+    service.eliminar_direccion(conn, idCliente, idDireccion)
+    return Response(status_code=204)
+
+
+# ---------------------------------------------------------------------------
+# Helpers internos del router
+# ---------------------------------------------------------------------------
+
+
+def _ip_cliente(request: Request) -> str:
+    """Obtiene la IP del cliente desde los headers o la conexión."""
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    if request.client:
+        return request.client.host
+    return "127.0.0.1"
