@@ -67,6 +67,13 @@ Backend/.venv/Scripts/ruff check Backend --fix     # lint and auto-fix
 Backend/.venv/Scripts/pyright --pythonpath Backend/.venv/Scripts/python.exe Backend
 Backend/.venv/Scripts/python -m pytest Backend/tests
 Backend/.venv/Scripts/python -m bandit -q -r Backend -x Backend/tests,Backend/.venv
+
+Win
+Backend\.venv\Scripts\ruff.exe format Backend
+Backend\.venv\Scripts\ruff.exe check Backend --fix
+Backend\.venv\Scripts\pyright.exe --pythonpath Backend\.venv\Scripts\python.exe Backend
+Backend\.venv\Scripts\python.exe -m pytest Backend/tests
+Backend\.venv\Scripts\python.exe -m bandit -q -r Backend -x Backend/tests,Backend/.venv
 ```
 
 ### Dependencies (locked with hashes)

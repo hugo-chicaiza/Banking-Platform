@@ -45,6 +45,11 @@ def test_fuera_de_una_peticion_trace_id_es_guion():
     assert registro.__dict__["trace_id"] == "-"
 
 
+def test_clientes_http_no_escriben_urls_en_info():
+    for nombre in ("httpx", "httpcore", "uvicorn.access"):
+        assert not logging.getLogger(nombre).isEnabledFor(logging.INFO)
+
+
 def test_cada_peticion_deja_una_linea_sin_query_string(caplog):
     caplog.set_level(logging.INFO, logger="app.peticiones")
 

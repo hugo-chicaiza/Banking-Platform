@@ -64,6 +64,19 @@ backend/
 > Rule: every router uses the F-04 error format: `APIRouter(..., route_class=ProblemDetailsRoute,
 > responses=RESPUESTAS_ERROR)` from `core/api/errors.py`.
 >
+> Rule: errors. The mechanism lives once in `core/api/errors.py`: ProblemDetails format, traceId, DB error
+> translation and the helper that raises an error with its `code`. Database `THROW 5xxxx` numbers go only in
+> `_DB_ERRORES` there, because the same THROW can come from several modules (52001 fires for accounts and cards;
+> 51016 belongs to accounting but is raised by the cash SP). Business errors detected in Python
+> (`FECHA_INVALIDA`, `CLIENTE_DUPLICADO`) are raised from the module's own `service.py` and never move to `core/`.
+> No module keeps its own DB error table, regex or ProblemDetails builder: raise errors with
+> `problema(status, code, message)` from `core/api/errors.py`.
+>
+> Rule: error codes. One `code` per cause the user fixes differently. "Does not exist" and "not active" never
+> share a code: check `is None` apart from the state. A missing resource from the URL is 404
+> `<ENTITY>_NO_ENCONTRADA`; a missing id sent in the body is 422 `<ENTITY>_NO_ENCONTRADA`. The error table of a task
+> is the minimum, not the full list: add any missing case to the task file and test every code.
+>
 > Rule: logs. Each module only declares `logger = logging.getLogger(__name__)`; format, level (`LOG_LEVEL`) and
 > output are set once in `core/config/logs.py`, and every line carries the request's traceId. Every request is
 > already logged by the middleware, so a module logs only what that line does not show (a rejected operation,
