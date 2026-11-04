@@ -21,10 +21,10 @@ from workos.types.user_management.session import (
     RefreshWithSessionCookieSuccessResponse,
 )
 
-from app.core import security
-from app.core.config import get_settings
-from app.core.errors import ProblemDetailsRoute
-from app.core.security import COOKIE_SESION, require_roles
+from app.core.api.errors import ProblemDetailsRoute
+from app.core.config.settings import get_settings
+from app.core.security import auth as security
+from app.core.security.auth import COOKIE_SESION, require_roles
 from app.integrations import workos_client
 from app.main import app
 from app.modules.auth import service

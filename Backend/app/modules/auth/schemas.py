@@ -1,4 +1,4 @@
-from app.core.schemas import CamelModel
+from app.core.api.schemas import CamelModel
 
 
 class UsuarioSesion(CamelModel):

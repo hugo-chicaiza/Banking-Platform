@@ -14,8 +14,8 @@ import httpx
 from fastapi import HTTPException
 from workos.exceptions import BaseRequestException, ServerException
 
-from app.core import audit
-from app.core.security import (
+from app.core.security import audit
+from app.core.security.auth import (
     SesionValida,
     Usuario,
     renovar_sesion,

@@ -1,14 +1,14 @@
 from fastapi import FastAPI
 
-# TODO: Estos imports comentados venian de develop al realizar el merge, pero no se usan en main.py. Revisar si se pueden borrar.
+# TODO: Estos imports comentados venían de develop al realizar el merge, pero no se usan en main.py. Revisar si se pueden borrar.
 # from app.core.config import get_settings
 # from app.core.middleware import TraceIdMiddleware
 # from app.core.rate_limit import LimitePeticionesMiddleware
-from app.modules.auth.router import router as auth_router
 from app.core.api.middleware import TraceIdMiddleware
 from app.core.api.rate_limit import LimitePeticionesMiddleware
 from app.core.config.logs import configurar_logging
 from app.core.config.settings import get_settings
+from app.modules.auth.router import router as auth_router
 from app.modules.catalogos.router import router as catalogos_router
 from app.modules.clientes.router import router as clientes_router
 from app.modules.contabilidad.router import router as contabilidad_router

@@ -13,8 +13,8 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Cookie, Depends, Query, Request, Response
 from fastapi.responses import RedirectResponse
 
-from app.core.errors import RESPUESTAS_ERROR, ProblemDetailsRoute
-from app.core.security import (
+from app.core.api.errors import RESPUESTAS_ERROR, ProblemDetailsRoute
+from app.core.security.auth import (
     COOKIE_SESION,
     UsuarioActual,
     borrar_cookie_sesion,

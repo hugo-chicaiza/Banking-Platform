@@ -9,7 +9,7 @@ from functools import lru_cache
 from cryptography.fernet import Fernet
 from workos import WorkOSClient
 
-from app.core.config import get_settings
+from app.core.config.settings import get_settings
 
 
 @lru_cache
