@@ -118,7 +118,7 @@ def test_emision_rechazada_se_audita_sin_id(monkeypatch, eventos_auditados):
         None,
         "Fallido",
     )
-    assert evento.descripcion.endswith("CUENTA_NO_ACTIVA")
+    assert evento.descripcion.endswith("CUENTA_NO_ENCONTRADA")
 
 
 def test_lecturas_no_se_auditan(monkeypatch, eventos_auditados):

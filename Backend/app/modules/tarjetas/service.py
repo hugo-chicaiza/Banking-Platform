@@ -14,7 +14,7 @@ from pydantic import SecretStr
 from sqlalchemy import Connection
 from sqlalchemy.exc import DBAPIError
 
-from app.core.api.errors import traducir_error_bd
+from app.core.api.errors import problema, traducir_error_bd
 from app.core.security import audit
 from app.modules.tarjetas import repository
 from app.modules.tarjetas.schemas import (
@@ -36,11 +36,6 @@ _LONGITUD_PAN = 16
 _ESTADOS_TERMINALES = {"Cancelada", "Anulada", "Vencida", "Cerrada"}
 # TarjetaHis guarda hora de Ecuador, UTC-5 todo el año
 _ZONA_BD = timezone(timedelta(hours=-5))
-
-
-def _problema(status: int, code: str, message: str) -> HTTPException:
-    logger.warning("tarjetas: operacion rechazada status=%s code=%s", status, code)
-    return HTTPException(status_code=status, detail={"code": code, "message": message})
 
 
 @contextmanager
@@ -116,9 +111,7 @@ def _ordenamiento(
     campo, _, direccion = sort.partition(",")
     direccion = direccion or "asc"
     if campo not in permitidos or direccion not in {"asc", "desc"}:
-        raise _problema(
-            400, "SORT_INVALIDO", "El ordenamiento solicitado no es válido."
-        )
+        raise problema(400, "SORT_INVALIDO", "El ordenamiento solicitado no es válido.")
     return campo, direccion
 
 
@@ -154,24 +147,29 @@ def _validar_extension(conn: Connection, payload: TarjetaCreate) -> None:
     """La titular debe ser de la misma cuenta, no ser extensión y seguir vigente."""
     if not payload.es_extension:
         if payload.id_tarjeta_titular is not None:
-            raise _problema(
+            raise problema(
                 422,
                 "EXTENSION_REQUIERE_TITULAR",
                 "Solo una extensión puede indicar tarjeta titular.",
             )
         return
-    titular = (
-        repository.obtener_titular(conn, payload.id_tarjeta_titular)
-        if payload.id_tarjeta_titular is not None
-        else None
-    )
+    if payload.id_tarjeta_titular is None:
+        raise problema(
+            422,
+            "EXTENSION_REQUIERE_TITULAR",
+            "Una extensión necesita una tarjeta titular vigente de la misma cuenta.",
+        )
+    titular = repository.obtener_titular(conn, payload.id_tarjeta_titular)
+    if titular is None:
+        raise problema(
+            422, "TARJETA_TITULAR_NO_ENCONTRADA", "La tarjeta titular no existe."
+        )
     if (
-        titular is None
-        or titular["es_extension"]
+        titular["es_extension"]
         or titular["id_cuenta"] != payload.id_cuenta
         or titular["estado"] in _ESTADOS_TERMINALES
     ):
-        raise _problema(
+        raise problema(
             422,
             "EXTENSION_REQUIERE_TITULAR",
             "Una extensión necesita una tarjeta titular vigente de la misma cuenta.",
@@ -182,13 +180,13 @@ def _validar_envio(conn: Connection, payload: TarjetaCreate) -> None:
     if not payload.requiere_envio:
         return
     if payload.direccion_envio is None:
-        raise _problema(
+        raise problema(
             422, "DIRECCION_ENVIO_REQUERIDA", "El envío necesita una dirección."
         )
     if payload.id_ciudad_envio is not None and not repository.existe_ciudad(
         conn, payload.id_ciudad_envio
     ):
-        raise _problema(422, "CIUDAD_NO_ENCONTRADA", "La ciudad de envío no existe.")
+        raise problema(422, "CIUDAD_NO_ENCONTRADA", "La ciudad de envío no existe.")
 
 
 def crear_tarjeta(
@@ -200,23 +198,25 @@ def crear_tarjeta(
         ) as operacion,
         _transaccion(conn),
     ):
+        # Un id del cuerpo que no existe es 422 con su propio code; el 404 queda para
+        # el recurso de la URL. "No existe" y "no está activa" nunca comparten code.
         cuenta = repository.obtener_cuenta(conn, payload.id_cuenta)
-        if cuenta is None or cuenta["estado"] != "Activa":
-            raise _problema(409, "CUENTA_NO_ACTIVA", "La cuenta no está Activa.")
+        if cuenta is None:
+            raise problema(422, "CUENTA_NO_ENCONTRADA", "La cuenta no existe.")
+        if cuenta["estado"] != "Activa":
+            raise problema(409, "CUENTA_NO_ACTIVA", "La cuenta no está Activa.")
 
         producto = repository.obtener_producto(conn, payload.id_producto)
-        if (
-            producto is None
-            or producto["tipo_producto"] != "Tarjeta"
-            or producto["estado"] != "A"
-        ):
-            raise _problema(
+        if producto is None:
+            raise problema(422, "PRODUCTO_NO_ENCONTRADO", "El producto no existe.")
+        if producto["tipo_producto"] != "Tarjeta" or producto["estado"] != "A":
+            raise problema(
                 422, "PRODUCTO_NO_ES_TARJETA", "El producto no es de tipo Tarjeta."
             )
 
         subproducto = repository.obtener_subproducto_con_bin(conn, payload.id_producto)
         if subproducto is None:
-            raise _problema(
+            raise problema(
                 422, "BIN_INVALIDO", "El producto no tiene un BIN activo asociado."
             )
 
@@ -306,7 +306,7 @@ def buscar_tarjetas(
 
 
 def _tarjeta_no_encontrada() -> HTTPException:
-    return _problema(404, "TARJETA_NO_ENCONTRADA", "La tarjeta no existe.")
+    return problema(404, "TARJETA_NO_ENCONTRADA", "La tarjeta no existe.")
 
 
 def obtener_tarjeta(conn: Connection, id_tarjeta: int) -> Tarjeta:
@@ -349,16 +349,14 @@ def cambiar_estado(
             raise _tarjeta_no_encontrada()
         anterior = actual["estado_actual"]
         if not repository.existe_transicion(conn, anterior, payload.estado):
-            raise _problema(
+            raise problema(
                 409,
                 "TRANSICION_TARJETA_INVALIDA",
                 "El cambio de estado no está permitido.",
             )
         if payload.estado == "Activa" and not actual["pin_asignado"]:
-            raise _problema(
-                409,
-                "TRANSICION_TARJETA_INVALIDA",
-                "Activar la tarjeta exige un PIN asignado.",
+            raise problema(
+                409, "PIN_NO_ASIGNADO", "Asigne un PIN antes de activar la tarjeta."
             )
         repository.actualizar_estado(conn, id_tarjeta, payload.estado)
         repository.insertar_historial(
@@ -418,14 +416,14 @@ def asignar_pin(
         if actual is None:
             raise _tarjeta_no_encontrada()
         if actual["pin_asignado"]:
-            raise _problema(409, "PIN_YA_ASIGNADO", "La tarjeta ya tiene PIN.")
+            raise problema(409, "PIN_YA_ASIGNADO", "La tarjeta ya tiene PIN.")
         if es_pin_debil(pin.get_secret_value()):
-            raise _problema(422, "PIN_DEBIL", "El PIN es demasiado simple.")
+            raise problema(422, "PIN_DEBIL", "El PIN es demasiado simple.")
 
         # Antes de bloquear la fila, porque Argon2id es lento
         hash_pin = _hasher.hash(pin.get_secret_value())
         if not repository.marcar_pin_asignado(conn, id_tarjeta):
-            raise _problema(409, "PIN_YA_ASIGNADO", "La tarjeta ya tiene PIN.")
+            raise problema(409, "PIN_YA_ASIGNADO", "La tarjeta ya tiene PIN.")
         repository.insertar_historial(
             conn,
             id_tarjeta,
@@ -473,7 +471,7 @@ def obtener_historial(
         sort, repository.CAMPOS_ORDEN_HISTORIAL, ("fechaCambio", "desc")
     )
     if fecha_desde and fecha_hasta and fecha_desde > fecha_hasta:
-        raise _problema(
+        raise problema(
             400,
             "RANGO_FECHAS_INVALIDO",
             "fechaDesde no puede ser mayor que fechaHasta.",

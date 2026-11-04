@@ -68,3 +68,6 @@ def configurar_logging(nivel: str) -> None:
     # TraceIdMiddleware ya registra cada petición. El log de uvicorn se apaga porque
     # duplicaría la línea e incluye el query string, que puede traer cédulas o nombres.
     logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
+    # httpx (WorkOS, buró) escribe en INFO cada URL completa, con su query string
+    for cliente_http in ("httpx", "httpcore"):
+        logging.getLogger(cliente_http).setLevel(logging.WARNING)
