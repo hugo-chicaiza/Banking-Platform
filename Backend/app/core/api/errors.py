@@ -47,6 +47,15 @@ _DB_ERRORES: dict[int, tuple[int, str, str]] = {
         "TRANSICION_TARJETA_INVALIDA",
         "El cambio de estado de la tarjeta no está permitido.",
     ),
+    52101: (409, "CLIENTE_NO_ACTIVO", "El cliente no está Activo."),
+    52102: (409, "CLIENTE_NO_ACTIVO", "El cliente no está Activo."),
+    52103: (422, "PRODUCTO_NO_ES_CUENTA", "El subproducto no es válido."),
+    52104: (422, "PRODUCTO_NO_ES_CUENTA", "El subproducto no es de una cuenta."),
+    52105: (
+        422,
+        "MONTO_APERTURA_INSUFICIENTE",
+        "El monto inicial no cubre el mínimo de apertura.",
+    ),
     57001: (409, "REGISTRO_INMUTABLE", "El registro histórico no se puede modificar."),
 }
 

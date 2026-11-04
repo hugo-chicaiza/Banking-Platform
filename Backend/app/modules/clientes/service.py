@@ -31,6 +31,7 @@ from app.modules.clientes.schemas import (
     TipoDocumento,
     ValidacionIdentificacion,
 )
+from app.modules.cuentas.schemas import ID_MONEDA_USD
 
 _COEFICIENTES_MOD10 = [2, 1, 2, 1, 2, 1, 2, 1, 2]
 
@@ -419,7 +420,7 @@ def obtener_perfil_cliente(conn: Connection, id_cliente: int) -> ClientePerfil:
         cliente=cliente,
         riesgo_vigente=Riesgo(**riesgos[0]) if riesgos else None,
         cuentas=[
-            CuentaPerfil(**fila)
+            CuentaPerfil(**{**fila, "id_moneda": ID_MONEDA_USD})
             for fila in repository.listar_cuentas_perfil(conn, id_cliente)
         ],
         tarjetas=[
