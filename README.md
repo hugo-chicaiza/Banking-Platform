@@ -85,6 +85,10 @@ After changing a `.in` file, regenerate both locks from `Backend/` and commit th
 ```
 .venv/Scripts/uv pip compile requirements.in --universal --generate-hashes --python-version 3.14 -o requirements.txt
 .venv/Scripts/uv pip compile requirements-dev.in --universal --generate-hashes --python-version 3.14 -o requirements-dev.txt
+
+Win
+.venv\Scripts\uv.exe pip compile requirements.in --universal --generate-hashes --python-version 3.14 -o requirements.txt
+.venv\Scripts\uv.exe pip compile requirements-dev.in --universal --generate-hashes --python-version 3.14 -o requirements-dev.txt
 ```
 
 ## Getting Started
