@@ -1,9 +1,44 @@
+import json
 from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import Connection, bindparam, text
 
+from app.core.api.errors import problema
 from app.modules.clientes.schemas import ClienteCreate
+
+CAMPOS_EDICION_CLIENTE = {
+    "nombres": "Nombres",
+    "apellidos": "Apellidos",
+    "razon_social": "RazonSocial",
+    "nombre_comercial": "NombreComercial",
+    "id_actividad_economica": "IdActividadEconomica",
+    "estado_civil": "EstadoCivil",
+    "telefono_convencional": "TelefonoConvencional",
+    "telefono_celular": "TelefonoCelular",
+    "email": "Email",
+}
+
+
+def observaciones_cambio(valor_anterior: Any, valor_nuevo: Any, motivo: str) -> str:
+    """JSON ASCII: len coincide con bytes de VARCHAR; nunca se trunca."""
+    valor = json.dumps(
+        {
+            "v": 1,
+            "valorAnterior": valor_anterior,
+            "valorNuevo": valor_nuevo,
+            "motivo": motivo,
+        },
+        ensure_ascii=True,
+        separators=(",", ":"),
+    )
+    if len(valor) > 500:
+        raise problema(
+            422,
+            "AUDITORIA_EXCEDE_LIMITE",
+            "El cambio y su motivo exceden la capacidad del historial.",
+        )
+    return valor
 
 
 def _rows(
@@ -236,15 +271,41 @@ def _insertar_historial(
     direccion_ip: str,
     observaciones: str,
 ) -> None:
-    """Inserta una fila en Clientes.ClientesHis."""
+    """Compatibilidad de los endpoints existentes con el esquema Snap_* real."""
+    insertar_historial_cliente(
+        conn,
+        id_cliente=id_cliente,
+        tipo_operacion=tipo_operacion,
+        campo=campo,
+        modificado_por=modificado_por,
+        direccion_ip=direccion_ip,
+        observaciones=(
+            observaciones
+            if valor_anterior is None
+            else observaciones_cambio(valor_anterior, None, observaciones)
+        ),
+    )
+
+
+def insertar_historial_cliente(
+    conn: Connection,
+    *,
+    id_cliente: int,
+    tipo_operacion: str,
+    campo: str,
+    modificado_por: int,
+    direccion_ip: str,
+    observaciones: str,
+) -> None:
+    """Inserta solo columnas existentes; misma transacción que el cliente."""
     conn.execute(
         text("""
             INSERT INTO Clientes.ClientesHis (
-                IdCliente, TipoOperacion, CampoModificado, ValorAnterior,
+                IdCliente, TipoOperacion, CampoModificado,
                 ModificadoPor, DireccionIP, FechaModificacion, Observaciones
             )
             VALUES (
-                :id_cliente, :tipo_operacion, :campo, :valor_anterior,
+                :id_cliente, :tipo_operacion, :campo,
                 :modificado_por, :direccion_ip, :fecha_modificacion, :observaciones
             );
         """),
@@ -252,7 +313,6 @@ def _insertar_historial(
             "id_cliente": id_cliente,
             "tipo_operacion": tipo_operacion,
             "campo": campo,
-            "valor_anterior": valor_anterior,
             "modificado_por": modificado_por,
             "direccion_ip": direccion_ip,
             "fecha_modificacion": datetime.now(UTC),
@@ -436,6 +496,196 @@ def obtener_cliente_detalle(conn: Connection, id_cliente: int) -> dict[str, Any]
         conn, id_cliente=id_cliente, page_size=1, solo_direcciones_activas=True
     )
     return filas[0] if filas else None
+
+
+def bloquear_cliente(conn: Connection, id_cliente: int) -> dict[str, Any] | None:
+    """Bloqueo de actualización hasta commit/rollback, también con RCSI."""
+    return _one(
+        conn,
+        """
+        SELECT IdCliente AS id_cliente, Estado AS estado
+        FROM Clientes.Cliente WITH (UPDLOCK, HOLDLOCK)
+        WHERE IdCliente = :id_cliente
+    """,
+        {"id_cliente": id_cliente},
+    )
+
+
+def actualizar_cliente(
+    conn: Connection, id_cliente: int, cambios: dict[str, Any]
+) -> None:
+    params: dict[str, Any] = {"id_cliente": id_cliente}
+    for campo in CAMPOS_EDICION_CLIENTE:
+        params[campo] = cambios.get(campo)
+        params["enviado_" + campo] = campo in cambios
+    conn.execute(
+        text("""
+        UPDATE Clientes.Cliente
+        SET Nombres = CASE WHEN :enviado_nombres = 1 THEN :nombres ELSE Nombres END,
+            Apellidos = CASE WHEN :enviado_apellidos = 1 THEN :apellidos ELSE Apellidos END,
+            RazonSocial = CASE WHEN :enviado_razon_social = 1 THEN :razon_social ELSE RazonSocial END,
+            NombreComercial = CASE WHEN :enviado_nombre_comercial = 1 THEN :nombre_comercial ELSE NombreComercial END,
+            IdActividadEconomica = CASE WHEN :enviado_id_actividad_economica = 1 THEN :id_actividad_economica ELSE IdActividadEconomica END,
+            EstadoCivil = CASE WHEN :enviado_estado_civil = 1 THEN :estado_civil ELSE EstadoCivil END,
+            TelefonoConvencional = CASE WHEN :enviado_telefono_convencional = 1 THEN :telefono_convencional ELSE TelefonoConvencional END,
+            TelefonoCelular = CASE WHEN :enviado_telefono_celular = 1 THEN :telefono_celular ELSE TelefonoCelular END,
+            Email = CASE WHEN :enviado_email = 1 THEN :email ELSE Email END
+        WHERE IdCliente = :id_cliente
+    """),
+        params,
+    )
+
+
+def actualizar_estado_cliente(conn: Connection, id_cliente: int, estado: str) -> None:
+    conn.execute(
+        text("""
+        UPDATE Clientes.Cliente SET Estado = :estado WHERE IdCliente = :id_cliente
+    """),
+        {"id_cliente": id_cliente, "estado": estado},
+    )
+
+
+def cuentas_para_cambio_estado(
+    conn: Connection, id_cliente: int
+) -> list[dict[str, Any]]:
+    return _rows(
+        conn,
+        """
+        SELECT Estado AS estado, Saldo AS saldo, SaldoRetenido AS saldo_retenido
+        FROM Cuentas.Cuenta WITH (UPDLOCK, HOLDLOCK)
+        WHERE IdCliente = :id_cliente
+    """,
+        {"id_cliente": id_cliente},
+    )
+
+
+def desembolsos_para_cambio_estado(
+    conn: Connection, id_cliente: int
+) -> list[dict[str, Any]]:
+    # Se lee el rango completo: también bloquea nuevos desembolsos del cliente.
+    return _rows(
+        conn,
+        """
+        SELECT IdSolicitud AS id_solicitud, Estado AS estado
+        FROM Credito.CreditoDesembolso WITH (UPDLOCK, HOLDLOCK)
+        WHERE IdCliente = :id_cliente
+    """,
+        {"id_cliente": id_cliente},
+    )
+
+
+def resumen_para_cambio_estado(
+    conn: Connection, id_solicitud: int
+) -> list[dict[str, Any]]:
+    return _rows(
+        conn,
+        """
+        SELECT Version AS version, NumeroTotalCuotas AS numero_total_cuotas
+        FROM Credito.CreditoResumen WITH (UPDLOCK, HOLDLOCK)
+        WHERE IdSolicitud = :id_solicitud AND EsVigente = 1
+    """,
+        {"id_solicitud": id_solicitud},
+    )
+
+
+def cuotas_para_cambio_estado(
+    conn: Connection, id_solicitud: int
+) -> list[dict[str, Any]]:
+    """Cuotas del plan vigente, pagos y mora; no usa Estado de la solicitud."""
+    return _rows(
+        conn,
+        """
+        SELECT p.IdPlanCuota AS id_plan_cuota, p.Version AS version,
+               p.Numero AS numero, c.IdCuota AS id_cuota, c.Estado AS estado,
+               c.CapitalOriginal - c.CapitalAbonado AS capital_pendiente,
+               c.Interes AS interes, c.TotalSeguros AS seguros,
+               c.TotalImpuestos AS impuestos,
+               pg.capital_pagado, pg.interes_pagado, pg.seguros_pagados,
+               pg.impuestos_pagados,
+               COALESCE(m.mora_pendiente, 0) AS mora_pendiente
+        FROM Credito.CreditoPlanAmortizacion AS p WITH (UPDLOCK, HOLDLOCK)
+        LEFT JOIN Credito.CreditoCuota AS c WITH (UPDLOCK, HOLDLOCK)
+          ON c.IdPlanCuota = p.IdPlanCuota AND c.IdSolicitud = p.IdSolicitud
+        OUTER APPLY (
+            SELECT SUM(Capital) AS capital_pagado, SUM(Interes) AS interes_pagado,
+                   SUM(TotalSeguros) AS seguros_pagados, SUM(TotalImpuestos) AS impuestos_pagados
+            FROM Credito.CreditoCuotaPago WITH (UPDLOCK, HOLDLOCK)
+            WHERE IdCuota = c.IdCuota
+        ) AS pg
+        OUTER APPLY (
+            SELECT SUM(RecargoMora) AS mora_pendiente
+            FROM Credito.CreditoCuotaMora AS mora WITH (UPDLOCK, HOLDLOCK)
+            JOIN Credito.CreditoCuota AS cuota_mora WITH (UPDLOCK, HOLDLOCK)
+              ON cuota_mora.IdCuota = mora.IdCuota
+            WHERE cuota_mora.IdSolicitud = p.IdSolicitud AND mora.Liquidada = 0
+        ) AS m
+        WHERE p.IdSolicitud = :id_solicitud AND p.EsVigente = 1
+        ORDER BY p.Numero, p.IdPlanCuota
+    """,
+        {"id_solicitud": id_solicitud},
+    )
+
+
+def listar_historial_cliente(
+    conn: Connection,
+    id_cliente: int,
+    *,
+    page: int,
+    page_size: int,
+    campo: str,
+    direccion: str,
+) -> tuple[list[dict[str, Any]], int]:
+    """SQL estático; el servicio lee valorAnterior del JSON versionado."""
+    filas = _rows(
+        conn,
+        """
+        WITH Historial AS (
+            SELECT IdHistorial AS id_historial, TipoOperacion AS tipo_operacion,
+                   CampoModificado AS campo_modificado,
+                   ModificadoPor AS modificado_por, DireccionIP AS direccion_ip,
+                   FechaModificacion AS fecha_modificacion, Observaciones AS observaciones,
+                   ROW_NUMBER() OVER (ORDER BY
+                       CASE WHEN :campo = 'IdHistorial' AND :direccion = 'asc'
+                            THEN IdHistorial END ASC,
+                       CASE WHEN :campo = 'IdHistorial' AND :direccion = 'desc'
+                            THEN IdHistorial END DESC,
+                       CASE WHEN :campo = 'FechaModificacion' AND :direccion = 'asc'
+                            THEN FechaModificacion END ASC,
+                       CASE WHEN :campo = 'FechaModificacion' AND :direccion = 'desc'
+                            THEN FechaModificacion END DESC,
+                       CASE WHEN :campo = 'TipoOperacion' AND :direccion = 'asc'
+                            THEN TipoOperacion END ASC,
+                       CASE WHEN :campo = 'TipoOperacion' AND :direccion = 'desc'
+                            THEN TipoOperacion END DESC,
+                       CASE WHEN :campo = 'CampoModificado' AND :direccion = 'asc'
+                            THEN CampoModificado END ASC,
+                       CASE WHEN :campo = 'CampoModificado' AND :direccion = 'desc'
+                            THEN CampoModificado END DESC,
+                       CASE WHEN :campo = 'ModificadoPor' AND :direccion = 'asc'
+                            THEN ModificadoPor END ASC,
+                       CASE WHEN :campo = 'ModificadoPor' AND :direccion = 'desc'
+                            THEN ModificadoPor END DESC,
+                       IdHistorial DESC
+                   ) AS numero_fila
+            FROM Clientes.ClientesHis
+            WHERE IdCliente = :id_cliente
+        )
+        SELECT p.*, t.total
+        FROM (SELECT COUNT(*) AS total FROM Historial) AS t
+        LEFT JOIN Historial AS p
+          ON p.numero_fila > :offset AND p.numero_fila <= :limite
+        ORDER BY p.numero_fila
+        """,
+        {
+            "id_cliente": id_cliente,
+            "campo": campo,
+            "direccion": direccion,
+            "offset": (page - 1) * page_size,
+            "limite": page * page_size,
+        },
+    )
+    total = int(filas[0]["total"]) if filas else 0
+    return [fila for fila in filas if fila["id_historial"] is not None], total
 
 
 def listar_cuentas_perfil(conn: Connection, id_cliente: int) -> list[dict[str, Any]]:

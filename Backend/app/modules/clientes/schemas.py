@@ -1,7 +1,8 @@
 from datetime import date, datetime
 from typing import Literal
 
-from pydantic import Field
+from pydantic import ConfigDict, Field, field_validator
+from pydantic.json_schema import SkipJsonSchema
 
 from app.core.api.schemas import CamelModel, Money
 from app.modules.tarjetas.schemas import Tarjeta
@@ -12,7 +13,7 @@ Genero = Literal["M", "F"]
 EstadoCivil = Literal["Soltero", "Casado", "Divorciado", "Viudo", "Union Libre"]
 TipoDireccion = Literal["Domicilio", "Trabajo", "Correspondencia", "Otra"]
 EstadoCliente = Literal[
-    "Pendiente", "Activo", "Bloqueado", "Inactivo", "Cerrado", "Eliminado"
+    "Pendiente", "Activo", "Bloqueado", "Inactivo", "Cerrado", "Eliminado", "Suspendido"
 ]
 EstadoDireccion = Literal["Activo", "Inactivo", "Eliminado"]
 
@@ -112,6 +113,61 @@ class Cliente(CamelModel):
     direcciones: list[Direccion]
 
 
+class ClienteUpdate(CamelModel):
+    """CLI-05: omitir conserva el valor; null solo borra campos anulables."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    nombres: str | SkipJsonSchema[None] = Field(
+        default=None, min_length=1, max_length=250
+    )
+    apellidos: str | None = Field(default=None, min_length=1, max_length=250)
+    razon_social: str | None = Field(default=None, min_length=1, max_length=250)
+    nombre_comercial: str | None = Field(default=None, min_length=1, max_length=250)
+    id_actividad_economica: int | None = None
+    estado_civil: EstadoCivil | None = None
+    telefono_convencional: str | None = Field(default=None, max_length=15)
+    telefono_celular: str | SkipJsonSchema[None] = Field(
+        default=None, min_length=7, max_length=15
+    )
+    email: str | SkipJsonSchema[None] = Field(
+        default=None,
+        min_length=5,
+        max_length=150,
+        pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$",
+    )
+
+    @field_validator("nombres", "telefono_celular", "email", mode="before")
+    @classmethod
+    def no_anulable(cls, valor: str | None) -> str:
+        if valor is None:
+            raise ValueError("El campo no admite null.")
+        return valor
+
+    @field_validator("nombres", "apellidos", "razon_social", "nombre_comercial")
+    @classmethod
+    def texto_no_vacio(cls, valor: str | None) -> str | None:
+        if valor is not None and not valor.strip():
+            raise ValueError("El campo no puede contener solo espacios.")
+        return valor
+
+
+class ClienteEstadoUpdate(CamelModel):
+    """Contrato CLI-06; Observaciones es VARCHAR(500) en SQL Server."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    estado: Literal["Activo", "Inactivo", "Suspendido", "Bloqueado", "Eliminado"]
+    motivo: str = Field(min_length=1, max_length=500)
+
+    @field_validator("motivo")
+    @classmethod
+    def motivo_no_vacio(cls, valor: str) -> str:
+        if not valor.strip():
+            raise ValueError("El motivo no puede contener solo espacios.")
+        return valor
+
+
 # ---------------------------------------------------------------------------
 # Administración de direcciones del cliente
 # ---------------------------------------------------------------------------
@@ -184,6 +240,26 @@ class RiesgoRegistrado(Riesgo):
 
 class PageCliente(CamelModel):
     items: list[Cliente]
+    page: int
+    page_size: int
+    total: int
+
+
+class ClienteHistorial(CamelModel):
+    """Registro inmutable de ClientesHis (CLI-07)."""
+
+    id_historial: int
+    tipo_operacion: str
+    campo_modificado: str
+    valor_anterior: str | None = None
+    modificado_por: int
+    direccion_ip: str = Field(alias="direccionIP")
+    fecha_modificacion: datetime
+    observaciones: str
+
+
+class PageClienteHistorial(CamelModel):
+    items: list[ClienteHistorial]
     page: int
     page_size: int
     total: int

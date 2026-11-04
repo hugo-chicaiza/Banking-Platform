@@ -1,14 +1,20 @@
-from datetime import date
+import json
+from datetime import UTC, date, datetime
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from fastapi import HTTPException
 from sqlalchemy import Connection
 
+from app.core.api.errors import problema
 from app.modules.clientes import repository
 from app.modules.clientes.schemas import (
     Cliente,
     ClienteCreate,
+    ClienteEstadoUpdate,
+    ClienteHistorial,
     ClientePerfil,
+    ClienteUpdate,
     CreditoPerfil,
     CuentaPerfil,
     Direccion,
@@ -16,6 +22,7 @@ from app.modules.clientes.schemas import (
     DireccionUpdate,
     EstadoCliente,
     PageCliente,
+    PageClienteHistorial,
     Riesgo,
     RiesgoCreate,
     RiesgoRegistrado,
@@ -40,25 +47,324 @@ CAMPOS_ORDEN_CLIENTES = {
 
 
 def _problema(status: int, code: str, detail: str) -> HTTPException:
-    return HTTPException(
-        status_code=status,
-        detail={"code": code, "message": detail},
-    )
+    return problema(status, code, detail)
 
 
 def _orden_clientes(sort: str | None) -> tuple[str, str]:
+    return _orden_permitido(sort, CAMPOS_ORDEN_CLIENTES, ("IdCliente", "asc"))
+
+
+def _orden_permitido(
+    sort: str | None, campos: dict[str, str], defecto: tuple[str, str]
+) -> tuple[str, str]:
     if sort is None:
-        return CAMPOS_ORDEN_CLIENTES["idCliente"], "asc"
+        return defecto
     partes = sort.split(",")
-    if (
-        len(partes) != 2
-        or partes[0] not in CAMPOS_ORDEN_CLIENTES
-        or partes[1] not in ("asc", "desc")
-    ):
+    if len(partes) != 2 or partes[0] not in campos or partes[1] not in ("asc", "desc"):
         raise _problema(
             400, "SORT_INVALIDO", "Use un campo permitido y la dirección asc o desc."
         )
-    return CAMPOS_ORDEN_CLIENTES[partes[0]], partes[1]
+    return campos[partes[0]], partes[1]
+
+
+def listar_historial_cliente(
+    conn: Connection,
+    id_cliente: int,
+    *,
+    page: int = 1,
+    page_size: int = 20,
+    sort: str | None = None,
+) -> PageClienteHistorial:
+    """Historial de cualquier cliente, incluidos los eliminados (CLI-07)."""
+    campo, direccion = _orden_permitido(
+        sort,
+        {
+            "idHistorial": "IdHistorial",
+            "fechaModificacion": "FechaModificacion",
+            "tipoOperacion": "TipoOperacion",
+            "campoModificado": "CampoModificado",
+            "modificadoPor": "ModificadoPor",
+        },
+        ("FechaModificacion", "desc"),
+    )
+    if page < 1 or not 1 <= page_size <= 100:
+        raise problema(422, "PAGINACION_INVALIDA", "La paginación no es válida.")
+    _validar_cliente_existe(conn, id_cliente)
+    filas, total = repository.listar_historial_cliente(
+        conn,
+        id_cliente,
+        page=page,
+        page_size=page_size,
+        campo=campo,
+        direccion=direccion,
+    )
+    return PageClienteHistorial(
+        items=[_historial_desde_fila(fila) for fila in filas],
+        page=page,
+        page_size=page_size,
+        total=total,
+    )
+
+
+def _historial_desde_fila(fila: dict[str, Any]) -> ClienteHistorial:
+    datos = {**fila, "valor_anterior": None}
+    try:
+        observaciones = json.loads(fila["observaciones"])
+    except (ValueError, TypeError):
+        observaciones = None
+    if (
+        isinstance(observaciones, dict)
+        and type(observaciones.get("v")) is int
+        and observaciones["v"] == 1
+        and {"valorAnterior", "valorNuevo", "motivo"} <= observaciones.keys()
+        and isinstance(observaciones["motivo"], str)
+    ):
+        anterior = observaciones["valorAnterior"]
+        if anterior is None or type(anterior) in (str, int):
+            datos["valor_anterior"] = None if anterior is None else str(anterior)
+            fecha: datetime = datos["fecha_modificacion"]
+            # Solo nuestros registros v1 se escriben en UTC; el legado no se reinterpreta.
+            if fecha.tzinfo is None:
+                datos["fecha_modificacion"] = fecha.replace(tzinfo=UTC)
+    return ClienteHistorial(**datos)
+
+
+def _cliente_bloqueado(conn: Connection, id_cliente: int) -> Cliente:
+    if repository.bloquear_cliente(conn, id_cliente) is None:
+        raise problema(404, "CLIENTE_NO_ENCONTRADO", "No se encontró el cliente.")
+    return obtener_cliente(conn, id_cliente)
+
+
+def _validar_tipo_persona(datos: dict[str, Any]) -> None:
+    if datos["tipo_cliente"] == "Natural":
+        valido = (
+            bool(datos["apellidos"] and datos["genero"] and datos["estado_civil"])
+            and datos["razon_social"] is None
+        )
+    else:
+        valido = bool(datos["razon_social"]) and all(
+            datos[campo] is None for campo in ("apellidos", "genero", "estado_civil")
+        )
+    if not valido:
+        raise problema(
+            422,
+            "TIPO_PERSONA_INVALIDO",
+            "Los datos finales no cumplen las reglas del tipo de persona.",
+        )
+
+
+def _guardar_cambios_cliente(
+    conn: Connection,
+    actual: Cliente,
+    cambios: dict[str, Any],
+    *,
+    modificado_por: int,
+    direccion_ip: str,
+    motivo: str,
+) -> Cliente:
+    # Serializar todas las auditorías ANTES de la primera escritura.
+    anteriores = actual.model_dump()
+    auditorias = [
+        (
+            repository.CAMPOS_EDICION_CLIENTE.get(campo, "Estado"),
+            repository.observaciones_cambio(anteriores[campo], valor, motivo),
+        )
+        for campo, valor in cambios.items()
+    ]
+    if "estado" in cambios:
+        repository.actualizar_estado_cliente(conn, actual.id_cliente, cambios["estado"])
+    else:
+        repository.actualizar_cliente(conn, actual.id_cliente, cambios)
+    for campo, observaciones in auditorias:
+        repository.insertar_historial_cliente(
+            conn,
+            id_cliente=actual.id_cliente,
+            tipo_operacion="U",
+            campo=campo,
+            modificado_por=modificado_por,
+            direccion_ip=direccion_ip,
+            observaciones=observaciones,
+        )
+    resultado = obtener_cliente(conn, actual.id_cliente)
+    conn.commit()
+    return resultado
+
+
+def editar_cliente(
+    conn: Connection,
+    id_cliente: int,
+    payload: ClienteUpdate,
+    modificado_por: int,
+    direccion_ip: str,
+) -> Cliente:
+    """CLI-05: snapshot, modificación, auditoría y lectura en una transacción."""
+    try:
+        actual = _cliente_bloqueado(conn, id_cliente)
+        if actual.estado == "Eliminado":
+            raise problema(
+                409, "CLIENTE_NO_EDITABLE", "El cliente eliminado no se puede editar."
+            )
+        enviados = payload.model_dump(exclude_unset=True)
+        finales = actual.model_dump() | enviados
+        _validar_tipo_persona(finales)
+        cambios = {
+            campo: valor
+            for campo, valor in enviados.items()
+            if valor != getattr(actual, campo)
+        }
+        actividad = cambios.get("id_actividad_economica")
+        if actividad is not None and not repository.existe_actividad_economica(
+            conn, actividad
+        ):
+            raise problema(
+                422, "CATALOGO_INVALIDO", "La actividad económica no existe."
+            )
+        if not cambios:
+            conn.rollback()  # Libera el bloqueo de la lectura sin escrituras ni auditorías.
+            return actual
+        return _guardar_cambios_cliente(
+            conn,
+            actual,
+            cambios,
+            modificado_por=modificado_por,
+            direccion_ip=direccion_ip,
+            motivo="Actualización de datos",
+        )
+    except Exception:
+        conn.rollback()
+        raise
+
+
+_TRANSICIONES_CLIENTE = {
+    "Activo": {"Inactivo", "Suspendido", "Bloqueado", "Eliminado"},
+    "Inactivo": {"Activo", "Eliminado"},
+    "Suspendido": {"Activo", "Eliminado"},
+    "Bloqueado": {"Activo", "Eliminado"},
+    "Pendiente": {"Eliminado"},
+    "Cerrado": {"Eliminado"},
+    "Eliminado": set(),
+}
+
+
+def _deuda_no_verificable() -> HTTPException:
+    return problema(
+        503,
+        "DEUDA_CLIENTE_NO_VERIFICABLE",
+        "No se pudo comprobar la deuda vigente del cliente; revise el plan, cuotas y pagos.",
+    )
+
+
+def _importe(valor: Any) -> Decimal:
+    try:
+        importe = Decimal(str(valor))
+    except InvalidOperation:
+        raise _deuda_no_verificable() from None
+    if not importe.is_finite() or importe < 0:
+        raise _deuda_no_verificable()
+    return importe
+
+
+def _credito_tiene_deuda(conn: Connection, id_solicitud: int) -> bool:
+    """CR-06/CR-07: cuotas vigentes menos abonos, pagos comprobados y mora.
+
+    Un plan incompleto o un pago que no justifica sus componentes no demuestra
+    deuda cero; se informa la brecha en lugar de autorizar la baja.
+    """
+    resumenes = repository.resumen_para_cambio_estado(conn, id_solicitud)
+    cuotas = repository.cuotas_para_cambio_estado(conn, id_solicitud)
+    if len(resumenes) != 1:
+        raise _deuda_no_verificable()
+    resumen = resumenes[0]
+    cantidad = resumen["numero_total_cuotas"]
+    if (
+        cantidad < 1
+        or len(cuotas) != cantidad
+        or {c["numero"] for c in cuotas} != set(range(1, cantidad + 1))
+        or any(
+            c["version"] != resumen["version"] or c["id_cuota"] is None for c in cuotas
+        )
+    ):
+        raise _deuda_no_verificable()
+    # La mora agregada de toda la solicitud se repite por fila del plan.
+    deuda = max(_importe(c["mora_pendiente"]) for c in cuotas)
+    for cuota in cuotas:
+        componentes = ("capital_pendiente", "interes", "seguros", "impuestos")
+        importes = [_importe(cuota[c]) for c in componentes]
+        if cuota["estado"] in ("PENDIENTE", "VENCIDA"):
+            deuda += sum(importes, Decimal(0))
+        elif cuota["estado"] == "PAGADA":
+            pagos = (
+                "capital_pagado",
+                "interes_pagado",
+                "seguros_pagados",
+                "impuestos_pagados",
+            )
+            if any(cuota[c] is None for c in pagos) or any(
+                _importe(cuota[c]) < requerido
+                for c, requerido in zip(pagos, importes, strict=True)
+            ):
+                raise _deuda_no_verificable()
+        else:
+            raise _deuda_no_verificable()
+    return deuda > 0
+
+
+def _validar_productos_cliente(conn: Connection, id_cliente: int) -> None:
+    cuentas = repository.cuentas_para_cambio_estado(conn, id_cliente)
+    tiene_productos = any(
+        c["estado"] in ("Activa", "Bloqueada")
+        or _importe(c["saldo"]) > 0
+        or _importe(c["saldo_retenido"]) > 0
+        for c in cuentas
+    )
+    if not tiene_productos:
+        desembolsos = repository.desembolsos_para_cambio_estado(conn, id_cliente)
+        solicitudes = sorted(
+            {d["id_solicitud"] for d in desembolsos if d["estado"] == "DESEMBOLSADO"}
+        )
+        tiene_productos = any(
+            _credito_tiene_deuda(conn, solicitud) for solicitud in solicitudes
+        )
+    if tiene_productos:
+        raise problema(
+            409,
+            "CLIENTE_CON_PRODUCTOS_VIGENTES",
+            "El cliente conserva cuentas o créditos vigentes.",
+        )
+
+
+def cambiar_estado_cliente(
+    conn: Connection,
+    id_cliente: int,
+    payload: ClienteEstadoUpdate,
+    modificado_por: int,
+    direccion_ip: str,
+    roles: tuple[str, ...],
+) -> Cliente:
+    """CLI-06: roles de una identidad autenticada; mismo estado es conflicto."""
+    if not set(roles) & {"ASESOR", "SUPERVISOR", "ADMIN"}:
+        raise problema(403, "SIN_PERMISO", "No tiene permiso para esta operación.")
+    try:
+        actual = _cliente_bloqueado(conn, id_cliente)
+        if payload.estado not in _TRANSICIONES_CLIENTE.get(actual.estado, set()):
+            raise problema(
+                409,
+                "TRANSICION_CLIENTE_INVALIDA",
+                "El cambio de estado no está permitido.",
+            )
+        if payload.estado in ("Inactivo", "Eliminado"):
+            _validar_productos_cliente(conn, id_cliente)
+        return _guardar_cambios_cliente(
+            conn,
+            actual,
+            {"estado": payload.estado},
+            modificado_por=modificado_por,
+            direccion_ip=direccion_ip,
+            motivo=payload.motivo,
+        )
+    except Exception:
+        conn.rollback()
+        raise
 
 
 def listar_clientes(

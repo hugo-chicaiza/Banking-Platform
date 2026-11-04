@@ -34,13 +34,15 @@ url: https://github.com/hugo-chicaiza/Banking-Platform/issues/47
 
 ## Reglas de negocio
 
-- Transiciones: Activo ⇄ Inactivo · Activo → Suspendido → Activo · Activo → Bloqueado → Activo (solo SUPERVISOR) · cualquiera → Eliminado.
+- Transiciones: Activo ⇄ Inactivo · Activo → Suspendido → Activo · Activo → Bloqueado → Activo (ASESOR, SUPERVISOR, ADMIN; aclaración del solicitante del 2026-11-04) · cualquier estado no eliminado → Eliminado.
 - `ClientesHis` es inmutable (error DB 57001).
 
 ## Dependencias
 
 - Requiere: C-01, C-03
 
-## Pendiente
+## Decisiones confirmadas el 2026-11-04
 
-- Confirmar la regla: no inactivar ni eliminar con cuentas con saldo o créditos vigentes.
+- No inactivar ni eliminar si hay cuentas Activa/Bloqueada o cualquier cuenta con Saldo > 0 o SaldoRetenido > 0, ni crédito desembolsado con deuda pendiente. No se deduce la deuda del estado de la solicitud. Si no se puede comprobar, se rechaza el cambio informando la brecha.
+- Auditoría anterior/nuevo/motivo en JSON versionado en Observaciones VARCHAR(500), con rechazo si no cabe; sin migración.
+- Vínculo WorkOS → usuario entero mediante mapa administrado en configuración del servidor. Ausencia de vínculo impide escribir.
