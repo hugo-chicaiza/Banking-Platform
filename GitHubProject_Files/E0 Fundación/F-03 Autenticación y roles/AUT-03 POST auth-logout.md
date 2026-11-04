@@ -19,33 +19,38 @@ assignees: []
 url: https://github.com/hugo-chicaiza/Banking-Platform/issues/112
 ---
 
-`POST /api/v1/auth/logout` · **Roles:** AUTH · **Historia:** F-03 (#17) · **OpenAPI:** `AUT03`
+`POST /api/v1/auth/logout` · **Roles:** Cookie de sesión · **Historia:** F-03 (#17) · **OpenAPI:** `AUT03`
 
-Cierra la sesión del usuario del token y revoca su refresh token.
+Borra la cookie de sesión y devuelve la URL de WorkOS que cierra la sesión del Hosted UI.
 
-| Lee | Escribe | DB |
+| Lee | Escribe | Externo |
 |---|---|---|
-| — | `Seguridad.Sesiones` (`FechaFin`, `Estado`) | SeguridadDB |
+| Cookie `__Host-session` | `Auditoria.Auditoria` (LOGOUT) | WorkOS (`get_logout_url`) |
 
 ## Reglas de negocio
 
-1. Se cierra la sesión del usuario que viene en el JWT; no lleva body.
-2. Es idempotente: llamarlo dos veces responde 204.
-3. El access token sigue válido hasta vencer (máx. 15 min); el FE lo borra de inmediato.
+1. El FE debe navegar a `logoutUrl`: si no, AuthKit mantiene su sesión y el próximo login entra sin pedir credenciales.
+2. `logoutUrl` vuelve a `FRONTEND_URL/login` (registrar en WorkOS › Sign-out redirect).
+3. Idempotente: sin sesión o con sesión inválida responde `200` con `logoutUrl = FRONTEND_URL/login`.
+4. Si el access token venció se renueva primero para obtener el id de la sesión.
+5. Exige origen permitido (CSRF).
 
 ## Request
 
-Sin body. Cabecera `Authorization: Bearer <JWT>`.
+Sin body. Cookie `__Host-session`.
 
-## Response `204`
+## Response `200`
 
-Sin contenido.
+```json
+{ "logoutUrl": "https://api.workos.com/user_management/sessions/logout?session_id=...&return_to=..." }
+```
+
+`Set-Cookie: __Host-session=; Max-Age=0`.
 
 ## Errores
 
-Formato ProblemDetails (ver F-04). Solo 401 (sin token válido).
+Formato ProblemDetails (ver F-04). Solo `403 ORIGEN_NO_PERMITIDO`.
 
 ## Definición de terminado
 
-- [ ] Coincide con `openapi.yaml`
-- [ ] Prueba: logout, doble logout y refresh rechazado después del logout
+- [x] Logout, token vencido, sin sesión (doble logout) y otro sitio (`tests/unit/test_auth.py`)

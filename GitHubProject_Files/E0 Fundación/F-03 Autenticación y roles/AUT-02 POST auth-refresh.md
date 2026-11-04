@@ -19,50 +19,38 @@ assignees: []
 url: https://github.com/hugo-chicaiza/Banking-Platform/issues/111
 ---
 
-`POST /api/v1/auth/refresh` · **Roles:** Público · **Historia:** F-03 (#17) · **OpenAPI:** `AUT02`
+`POST /api/v1/auth/refresh` · **Roles:** Cookie de sesión · **Historia:** F-03 (#17) · **OpenAPI:** `AUT02`
 
-Entrega un access token nuevo a partir de un refresh token válido, sin pedir la contraseña.
+Renueva el access token de la sesión y reescribe la cookie `__Host-session`. Es opcional: `/me` y toda ruta protegida ya renuevan solas cuando el token vence.
 
-| Lee | Escribe | DB |
+| Lee | Escribe | Externo |
 |---|---|---|
-| `Seguridad.Sesiones`, `Organizacion.Usuarios`, `Seguridad.GruposUsuarios`, `Caja.CajerosAsignadosAgencia` | — | SeguridadDB |
+| Cookie `__Host-session` | Cookie `__Host-session` | WorkOS (refresh token) |
 
 ## Reglas de negocio
 
-1. El refresh token debe existir, no estar revocado y no estar vencido → si no, `401 TOKEN_INVALIDO`.
-2. Si el usuario fue bloqueado o desactivado después del login → `401 TOKEN_INVALIDO`.
-3. La respuesta tiene la misma forma que el login, con roles y agencia actualizados.
-
-## Flujo
-
-1. Validar el refresh token y su sesión.
-2. Revalidar estado del usuario, cargar roles y agencia.
-3. Generar access token y responder 200.
+1. WorkOS rota el refresh token: cada uno sirve una sola vez.
+2. Peticiones paralelas con la misma cookie vencida comparten una sola renovación (30 s, en memoria del proceso).
+3. Si la sesión fue revocada, venció o el usuario fue bloqueado en WorkOS → `401` y se borra la cookie.
+4. Exige origen permitido (CSRF): `Origin` = `FRONTEND_URL`.
 
 ## Request
 
-```json
-{ "refreshToken": "<refresh-token>" }
-```
+Sin body. Cookie `__Host-session`.
 
-## Response `200`
+## Response `204`
 
-Igual que AUT-01 (`LoginResponse`).
+Sin contenido. `Set-Cookie: __Host-session=<nueva>`.
 
 ## Errores
 
-Formato ProblemDetails (ver F-04). Además de 400:
+Formato ProblemDetails (ver F-04).
 
 | HTTP | `code` | Cuándo |
 |---|---|---|
-| 401 | `TOKEN_INVALIDO` | Token inexistente, revocado, vencido o usuario no activo |
+| 401 | `NO_AUTENTICADO` | Sin cookie, o sesión inválida, revocada o vencida |
+| 403 | `ORIGEN_NO_PERMITIDO` | `Origin`/`Sec-Fetch-Site` de otro sitio |
 
 ## Definición de terminado
 
-- [ ] Coincide con `openapi.yaml` (request, response y errores)
-- [ ] Prueba del caso feliz y de cada error de la tabla
-- [ ] FE renueva el token automáticamente ante un 401
-
-## Pendiente
-
-- Decidir si cada refresh rota el token (entrega uno nuevo y revoca el anterior).
+- [x] Renovación, sin cookie, otro origen, renovación compartida y cookie vieja rechazada (`tests/unit/test_auth.py`)
