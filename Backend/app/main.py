@@ -1,8 +1,9 @@
 from fastapi import FastAPI
 
-from app.core.config import get_settings
-from app.core.middleware import TraceIdMiddleware
-from app.core.rate_limit import LimitePeticionesMiddleware
+# TODO: Estos imports comentados venian de develop al realizar el merge, pero no se usan en main.py. Revisar si se pueden borrar.
+# from app.core.config import get_settings
+# from app.core.middleware import TraceIdMiddleware
+# from app.core.rate_limit import LimitePeticionesMiddleware
 from app.modules.auth.router import router as auth_router
 from app.core.api.middleware import TraceIdMiddleware
 from app.core.api.rate_limit import LimitePeticionesMiddleware
