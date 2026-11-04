@@ -9,8 +9,8 @@ from datetime import date, datetime
 import pytest
 from sqlalchemy import Connection
 
-from app.core.config import get_settings
-from app.core.db import get_engine
+from app.core.config.settings import get_settings
+from app.core.database.db import get_engine
 from app.modules.contabilidad import repository
 
 pytestmark = pytest.mark.skipif(

@@ -1093,7 +1093,7 @@ def test_riesgo_aliases_defaults_y_limite_observaciones():
 
 
 def test_riesgo_contrato_openapi_sin_sockets():
-    from app.core.errors import ProblemDetailsRoute
+    from app.core.api.errors import ProblemDetailsRoute
 
     contrato = app.openapi()
     path = contrato["paths"]["/api/v1/clientes/{idCliente}/evaluaciones-riesgo"]
@@ -1408,7 +1408,7 @@ def test_cli08_solicitud_sin_desembolso_admite_resumen_nulo():
 
 
 def test_consultas_contrato_openapi_sin_sockets():
-    from app.core.errors import ProblemDetailsRoute
+    from app.core.api.errors import ProblemDetailsRoute
 
     contrato = app.openapi()
     for sufijo, operacion, modelo, roles in [

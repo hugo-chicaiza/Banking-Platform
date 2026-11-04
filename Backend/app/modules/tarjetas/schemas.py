@@ -3,7 +3,7 @@ from typing import Annotated, Literal
 
 from pydantic import ConfigDict, Field, StrictBool, StrictInt, StringConstraints
 
-from app.core.schemas import CamelModel
+from app.core.api.schemas import CamelModel
 
 # Máximo de una columna int en SQL Server
 MAX_INT = 2_147_483_647

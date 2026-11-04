@@ -2,7 +2,7 @@ from typing import Literal
 
 from pydantic import Field
 
-from app.core.schemas import CamelModel, Money
+from app.core.api.schemas import CamelModel, Money
 
 TipoCuenta = Literal["Ahorro", "Corriente"]
 

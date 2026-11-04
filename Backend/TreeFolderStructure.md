@@ -3,17 +3,22 @@ treeView-beta
 backend/
 ├── app/
 │   ├── main.py                    # Creates FastAPI, adds middlewares, includes each module's router
-│   ├── core/                      # Shared code, no business logic
-│   │   ├── config.py              # Settings from .env (pydantic-settings)
-│   │   ├── db.py                  # 2 engines: CooperativaDB and SeguridadDB; connection per request
-│   │   ├── uow.py                 # "Unit of work": one DB transaction per money operation
-│   │   ├── security.py            # require\_auth (WorkOS JWT, F-03), require\_roles("CAJERO", ...)
-│   │   ├── schemas.py             # CamelModel (snake_case ↔ camelCase JSON), Money (Decimal → JSON number)
-│   │   ├── errors.py              # ProblemDetails + map THROW 5xxxx → HTTP/code (F-04 table)
-│   │   ├── audit.py               # Writes Auditoria.Auditoria
-│   │   ├── middleware.py          # X-Request-Id → traceId, request logging (masks PAN/PIN)
-│   │   ├── idempotency.py         # registroUnico handling (Idempotent-Replay)
-│   │   └── pagination.py          # page, pageSize ≤ 100, sort → {items, page, pageSize, total}
+│   ├── core/                      # Shared code, no business logic. One folder per concern, no loose files
+│   │   ├── config/
+│   │   │   └── settings.py        # Settings from .env (pydantic-settings)
+│   │   ├── database/
+│   │   │   ├── db.py              # 2 engines: CooperativaDB and SeguridadDB; connection per request
+│   │   │   └── uow.py             # (planned) "Unit of work": one DB transaction per money operation
+│   │   ├── security/
+│   │   │   ├── auth.py            # require\_auth (WorkOS JWT, F-03), require\_roles("CAJERO", ...)
+│   │   │   └── audit.py           # Writes Auditoria.Auditoria (F-04)
+│   │   └── api/                   # HTTP layer shared by every router
+│   │       ├── schemas.py         # CamelModel (snake_case ↔ camelCase JSON), Money (Decimal → JSON number)
+│   │       ├── errors.py          # ProblemDetails + map THROW 5xxxx → HTTP/code (F-04 table)
+│   │       ├── middleware.py      # X-Request-Id → traceId
+│   │       ├── rate_limit.py      # Requests per minute and IP → 429
+│   │       ├── idempotency.py     # (planned) registroUnico handling (Idempotent-Replay)
+│   │       └── pagination.py      # (planned) page, pageSize ≤ 100, sort → {items, page, pageSize, total}
 │   │
 │   ├── modules/
 │   │   ├── auth/                  # M0 · AUT-01..11 (SeguridadDB)
@@ -52,11 +57,33 @@ backend/
 > Rule: `service.py` lives inside each module and exists only when the module has business rules;
 > read-only modules (e.g. `catalogos`) go router → repository.
 >
-> Rule: every router declares `dependencies=[Depends(require_auth)]`; auth is implemented once in `core/security.py`.
+> Rule: every router declares `dependencies=[Depends(require_auth)]`; auth is implemented once in
+> `core/security/auth.py`.
+>
+> Rule: every router uses the F-04 error format: `APIRouter(..., route_class=ProblemDetailsRoute,
+> responses=RESPUESTAS_ERROR)` from `core/api/errors.py`.
+>
+> Rule: `core/` has no loose files. A new shared file goes in the folder of its concern (`config/`, `database/`,
+> `security/`, `api/`); create a new folder only for a new concern.
 >
 > Rule: a value defined in one place only. Environment-dependent values (DB names, servers, ports, keys) go in
-> `.env` / `core/config.py`; values shared by several modules (e.g. `/api/v1`, role names) go as constants in `core/`;
-> values used by a single module stay in that module.
+> `.env` / `core/config/settings.py`; values shared by several modules (e.g. `/api/v1`, role names) go as constants
+> in the matching `core/` folder; values used by a single module stay in that module.
+
+### Imports from `core/`
+
+Branches created before 2026-11-03 still use the old paths and must update them before merging:
+
+| Before | Now |
+|---|---|
+| `from app.core.config import ...` | `from app.core.config.settings import ...` |
+| `from app.core.db import ...` | `from app.core.database.db import ...` |
+| `from app.core.security import require_auth` | `from app.core.security.auth import require_auth` |
+| `from app.core import audit` | `from app.core.security import audit` |
+| `from app.core.schemas import ...` | `from app.core.api.schemas import ...` |
+| `from app.core.errors import ...` | `from app.core.api.errors import ...` |
+| `from app.core.middleware import ...` | `from app.core.api.middleware import ...` |
+| `from app.core.rate_limit import ...` | `from app.core.api.rate_limit import ...` |
 >
 > Rule: one `router.py`, `schemas.py`, `repository.py` (and `service.py` if needed) per module. Every developer adds
 > their endpoints to those files; never create parallel files (`router_cat02.py`). Split a module into sub-folders only
