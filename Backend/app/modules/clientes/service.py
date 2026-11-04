@@ -8,23 +8,122 @@ from app.modules.clientes import repository
 from app.modules.clientes.schemas import (
     Cliente,
     ClienteCreate,
+    ClientePerfil,
+    CreditoPerfil,
+    CuentaPerfil,
     Direccion,
     DireccionNueva,
     DireccionUpdate,
+    EstadoCliente,
+    PageCliente,
     Riesgo,
     RiesgoCreate,
     RiesgoRegistrado,
+    TarjetaPerfil,
+    TipoCliente,
     TipoDocumento,
     ValidacionIdentificacion,
 )
 
 _COEFICIENTES_MOD10 = [2, 1, 2, 1, 2, 1, 2, 1, 2]
 
+CAMPOS_ORDEN_CLIENTES = {
+    "idCliente": "IdCliente",
+    "identificacion": "Identificacion",
+    "tipoCliente": "TipoCliente",
+    "nombres": "Nombres",
+    "apellidos": "Apellidos",
+    "razonSocial": "RazonSocial",
+    "estado": "Estado",
+    "fechaRegistro": "FechaRegistro",
+}
+
 
 def _problema(status: int, code: str, detail: str) -> HTTPException:
     return HTTPException(
         status_code=status,
         detail={"code": code, "message": detail},
+    )
+
+
+def _orden_clientes(sort: str | None) -> tuple[str, str]:
+    if sort is None:
+        return CAMPOS_ORDEN_CLIENTES["idCliente"], "asc"
+    partes = sort.split(",")
+    if (
+        len(partes) != 2
+        or partes[0] not in CAMPOS_ORDEN_CLIENTES
+        or partes[1] not in ("asc", "desc")
+    ):
+        raise _problema(
+            400, "SORT_INVALIDO", "Use un campo permitido y la dirección asc o desc."
+        )
+    return CAMPOS_ORDEN_CLIENTES[partes[0]], partes[1]
+
+
+def listar_clientes(
+    conn: Connection,
+    *,
+    q: str | None = None,
+    identificacion: str | None = None,
+    tipo_cliente: TipoCliente | None = None,
+    estado: EstadoCliente | None = None,
+    page: int = 1,
+    page_size: int = 20,
+    sort: str | None = None,
+) -> PageCliente:
+    """Busca clientes con filtros combinados y ordenamiento permitido (CLI-03)."""
+    campo, direccion = _orden_clientes(sort)
+    filas, total = repository.consultar_clientes(
+        conn,
+        q=q,
+        identificacion=identificacion,
+        tipo_cliente=tipo_cliente,
+        estado=estado,
+        page=page,
+        page_size=page_size,
+        campo=campo,
+        direccion=direccion,
+    )
+    return PageCliente(
+        items=[Cliente(**fila) for fila in filas],
+        page=page,
+        page_size=page_size,
+        total=total,
+    )
+
+
+def obtener_cliente(conn: Connection, id_cliente: int) -> Cliente:
+    """Detalle con direcciones exclusivamente activas, compartido con CLI-08."""
+    fila = repository.obtener_cliente_detalle(conn, id_cliente)
+    if fila is None:
+        raise _problema(
+            404,
+            "CLIENTE_NO_ENCONTRADO",
+            f"No se encontró un cliente con id {id_cliente}.",
+        )
+    return Cliente(**fila)
+
+
+def obtener_perfil_cliente(conn: Connection, id_cliente: int) -> ClientePerfil:
+    """Consulta integral de solo lectura; la ausencia de productos es válida."""
+    cliente = obtener_cliente(conn, id_cliente)
+    riesgos = repository.listar_evaluaciones_riesgo(conn, id_cliente, solo_vigente=True)
+    return ClientePerfil(
+        cliente=cliente,
+        riesgo_vigente=Riesgo(**riesgos[0]) if riesgos else None,
+        cuentas=[
+            CuentaPerfil(**fila)
+            for fila in repository.listar_cuentas_perfil(conn, id_cliente)
+        ],
+        tarjetas=[
+            TarjetaPerfil(**fila)
+            for fila in repository.listar_tarjetas_perfil(conn, id_cliente)
+        ],
+        creditos=[
+            CreditoPerfil(**fila)
+            for fila in repository.listar_creditos_perfil(conn, id_cliente)
+        ],
     )
 
 

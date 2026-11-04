@@ -2,6 +2,7 @@
 
 - CLI-01 · GET /api/v1/clientes/validar-identificacion
 - CLI-02 · POST /api/v1/clientes
+- CLI-03 / CLI-04 / CLI-08 · Listado, detalle y perfil del cliente
 - CLI-09 · GET /api/v1/clientes/{idCliente}/direcciones
 - CLI-10 · POST /api/v1/clientes/{idCliente}/direcciones
 - CLI-11 · PATCH /api/v1/clientes/{idCliente}/direcciones/{idDireccion}
@@ -16,11 +17,9 @@ from typing import Any, cast
 from unittest.mock import MagicMock
 
 import pytest
-from fastapi.testclient import TestClient
 from pydantic import ValidationError
 from sqlalchemy import Connection
 
-from app.core.database.db import cooperativa
 from app.main import app
 from app.modules.clientes import repository, router, service
 from app.modules.clientes.schemas import ClienteCreate, DireccionCreate, RiesgoCreate
@@ -43,14 +42,6 @@ class _FakeConn:
 
     def rollback(self) -> None:
         self.rollbacks += 1
-
-
-@pytest.fixture()
-def client():
-    """Cliente HTTP sin base de datos real; inyecta FakeConn como conexión."""
-    app.dependency_overrides[cooperativa] = lambda: _FakeConn()
-    yield TestClient(app)
-    app.dependency_overrides.clear()
 
 
 def _fake_conn() -> Connection:
@@ -1050,7 +1041,11 @@ def test_cli14_historial_ordenado_y_vigencia():
     assert [r.es_vigente for r in historial] == [True, False, False]
     sql, params = db.consultas[1]
     assert "ORDER BY r.FechaEvaluacion DESC, r.IdEvaluacion DESC" in sql
-    assert params == {"id_cliente": 10, "id_evaluacion": None}
+    assert params == {
+        "id_cliente": 10,
+        "id_evaluacion": None,
+        "solo_vigente": False,
+    }
     assert (db.commits, db.rollbacks) == (0, 0)
 
 
@@ -1137,3 +1132,320 @@ def test_cli13_router_propaga_evaluador_e_ip(monkeypatch):
     resultado = router.registrar_evaluacion_riesgo(10, payload, request, conn)
     registrar.assert_called_once_with(conn, 10, payload, 1, "192.0.2.10")
     assert resultado.es_vigente is True
+
+
+def _cliente_row(**overrides: Any) -> dict[str, Any]:
+    datos = _payload_natural_valido().model_dump(exclude={"direccion"})
+    return {
+        **datos,
+        "id_cliente": 10,
+        "estado": "Activo",
+        "fecha_consentimiento": datetime(2026, 11, 3, 15, tzinfo=UTC),
+        "fecha_registro": datetime(2026, 11, 3, 15, tzinfo=UTC),
+        "creado_por": 1,
+        **overrides,
+    }
+
+
+def _perfil_mock(**overrides: Any) -> dict[str, Any]:
+    return {
+        "cuentas": [
+            {
+                "id_cuenta": 30,
+                "numero_cuenta": "100200300401",
+                "id_cliente": 10,
+                "id_agencia": "001",
+                "id_producto": 1,
+                "tipo_cuenta": "Ahorro",
+                "id_moneda": 840,
+                "saldo": "150.25",
+                "saldo_retenido": "20.00",
+                "saldo_disponible": "130.25",
+                "estado": "ACTIVA",
+                "fecha_apertura": datetime(2026, 11, 1, 15, tzinfo=UTC),
+            }
+        ],
+        "tarjetas": [
+            {
+                "id_tarjeta": 40,
+                "token_tarjeta": "TOKEN_FICTICIO",
+                "numero_enmascarado": "************1234",
+                "tipo_tarjeta": "Debito",
+                "nombre_tarjeta": "MARIA LOPEZ",
+                "id_cliente": 10,
+                "id_cuenta": 30,
+                "id_producto": 2,
+                "estado_actual": "Activa",
+                "pin_asignado": True,
+                "fecha_emision": date(2026, 11, 1),
+                "fecha_expiracion": date(2030, 11, 1),
+            }
+        ],
+        "creditos": [
+            {
+                "id_solicitud": 50,
+                "numero_solicitud": "SOL-50",
+                "tipo_credito": "Consumo",
+                "monto_desembolsado": "1000.00",
+                "saldo_capital": "500.00",
+                "proxima_cuota": date(2026, 12, 1),
+                "estado": "DESEMBOLSADA",
+            }
+        ],
+        **overrides,
+    }
+
+
+def _assert_solo_lectura(db: _RiesgoConn) -> None:
+    assert not db.respuestas
+    assert (db.commits, db.rollbacks) == (0, 0)
+    assert all(
+        palabra not in sql.upper()
+        for sql, _ in db.consultas
+        for palabra in ("INSERT ", "UPDATE ", "DELETE ")
+    )
+
+
+def test_cli03_filtros_combinados_y_direcciones_en_lote():
+    db = _RiesgoConn(
+        [
+            [_cliente_row(total=2), _cliente_row(id_cliente=11, total=2)],
+            [
+                _direccion_row(id_cliente=10),
+                _direccion_row(id_cliente=10, id_direccion=2),
+            ],
+        ]
+    )
+    resultado = service.listar_clientes(
+        cast(Connection, db),
+        q="María",
+        identificacion=CEDULA_VALIDA_1,
+        tipo_cliente="Natural",
+        estado="Activo",
+    )
+    assert (resultado.page, resultado.page_size, resultado.total) == (1, 20, 2)
+    assert [c.id_cliente for c in resultado.items] == [10, 11]
+    assert [d.id_direccion for d in resultado.items[0].direcciones] == [1, 2]
+    assert resultado.items[1].direcciones == []
+    sql, params = db.consultas[0]
+    assert params["q_like"] == "%María%"
+    assert params["identificacion"] == CEDULA_VALIDA_1
+    assert params["tipo_cliente"] == "Natural"
+    assert params["estado"] == "Activo"
+    assert "Identificacion = :identificacion" in sql
+    assert "TipoCliente = :tipo_cliente" in sql
+    assert "Estado = :estado" in sql
+    for columna in ("Identificacion", "Nombres", "Apellidos", "RazonSocial"):
+        assert f"{columna} LIKE :q_like" in sql
+    assert db.consultas[1][1] == {"ids_clientes": [10, 11], "solo_activas": False}
+    assert resultado.model_dump(by_alias=True)["pageSize"] == 20
+    _assert_solo_lectura(db)
+
+
+@pytest.mark.parametrize("q", [None, "Lopez", "1710", "Empresa", "' OR 1=1 --"])
+def test_cli03_q_usa_parametros_ligados(q):
+    db = _RiesgoConn([[{"id_cliente": None, "total": 0}]])
+    resultado = service.listar_clientes(cast(Connection, db), q=q)
+    sql, params = db.consultas[0]
+    assert params["q_like"] == (None if q is None else f"%{q}%")
+    assert (params["campo"], params["direccion"]) == ("IdCliente", "asc")
+    if q is not None:
+        assert q not in sql
+    assert resultado.items == []
+    assert resultado.total == 0
+    _assert_solo_lectura(db)
+
+
+@pytest.mark.parametrize(("page", "page_size", "total"), [(1, 20, 0), (3, 2, 4)])
+def test_cli03_pagina_vacia_conserva_total(page, page_size, total):
+    db = _RiesgoConn([[{"id_cliente": None, "total": total}]])
+    resultado = service.listar_clientes(
+        cast(Connection, db), page=page, page_size=page_size
+    )
+    assert resultado.items == []
+    assert (resultado.page, resultado.page_size, resultado.total) == (
+        page,
+        page_size,
+        total,
+    )
+    params = db.consultas[0][1]
+    assert params["offset"] == (page - 1) * page_size
+    assert params["limite"] == page * page_size
+    _assert_solo_lectura(db)
+
+
+@pytest.mark.parametrize("campo", list(service.CAMPOS_ORDEN_CLIENTES))
+@pytest.mark.parametrize("direccion", ["asc", "desc"])
+def test_cli03_orden_valido_y_paginacion(campo, direccion):
+    db = _RiesgoConn([[_cliente_row(total=7)], []])
+    resultado = service.listar_clientes(
+        cast(Connection, db), page=2, page_size=3, sort=f"{campo},{direccion}"
+    )
+    sql, params = db.consultas[0]
+    assert params["campo"] == service.CAMPOS_ORDEN_CLIENTES[campo]
+    assert params["direccion"] == direccion
+    assert (params["offset"], params["limite"]) == (3, 6)
+    assert f":campo = '{params['campo']}' AND :direccion = '{direccion}'" in sql
+    assert "IdCliente ASC" in sql
+    assert (resultado.page, resultado.page_size, resultado.total) == (2, 3, 7)
+    _assert_solo_lectura(db)
+
+
+@pytest.mark.parametrize(
+    "sort",
+    [
+        "",
+        "nombres",
+        "nombres,",
+        ",asc",
+        "nombres,ASC",
+        "nombres,otro",
+        "desconocido,asc",
+        "nombres,asc,desc",
+        "nombres; DROP TABLE Cliente,asc",
+        "nombres,desc;--",
+        " nombres,asc",
+    ],
+)
+def test_cli03_sort_invalido_400_antes_de_consultar(sort):
+    db = _RiesgoConn([])
+    with pytest.raises(service.HTTPException) as exc:
+        service.listar_clientes(cast(Connection, db), sort=sort)
+    _assert_http_error(exc, 400, "SORT_INVALIDO")
+    assert db.consultas == []
+
+
+@pytest.mark.parametrize("direcciones", [[], [_direccion_row(id_cliente=10)]])
+def test_cli04_detalle_solicita_solo_direcciones_activas(direcciones):
+    db = _RiesgoConn([[_cliente_row(total=1)], direcciones])
+    cliente = service.obtener_cliente(cast(Connection, db), 10)
+    assert cliente.id_cliente == 10
+    assert len(cliente.direcciones) == len(direcciones)
+    assert all(d.estado == "Activo" for d in cliente.direcciones)
+    assert db.consultas[0][1]["id_cliente"] == 10
+    sql, params = db.consultas[1]
+    assert "Estado = 'Activo'" in sql
+    assert params == {"ids_clientes": [10], "solo_activas": True}
+    _assert_solo_lectura(db)
+
+
+@pytest.mark.parametrize(
+    "consulta", [service.obtener_cliente, service.obtener_perfil_cliente]
+)
+def test_consulta_cliente_inexistente_404_sin_consultar_productos(consulta):
+    db = _RiesgoConn([[{"id_cliente": None, "total": 0}]])
+    with pytest.raises(service.HTTPException) as exc:
+        consulta(cast(Connection, db), 999)
+    _assert_http_error(exc, 404, "CLIENTE_NO_ENCONTRADO")
+    assert len(db.consultas) == 1
+    _assert_solo_lectura(db)
+
+
+@pytest.mark.parametrize("con_productos", [True, False])
+def test_cli08_perfil_integral_con_y_sin_productos(con_productos):
+    productos = (
+        _perfil_mock()
+        if con_productos
+        else _perfil_mock(cuentas=[], tarjetas=[], creditos=[])
+    )
+    riesgos = [_riesgo_row()] if con_productos else []
+    db = _RiesgoConn(
+        [
+            [_cliente_row(total=1)],
+            [_direccion_row(id_cliente=10)],
+            riesgos,
+            productos["cuentas"],
+            productos["tarjetas"],
+            productos["creditos"],
+        ]
+    )
+    perfil = service.obtener_perfil_cliente(cast(Connection, db), 10)
+    assert perfil.cliente.id_cliente == 10
+    assert [d.estado for d in perfil.cliente.direcciones] == ["Activo"]
+    assert db.consultas[1][1]["solo_activas"] is True
+    riesgo_sql, riesgo_params = db.consultas[2]
+    assert "r.EsVigente = 1" in riesgo_sql
+    assert riesgo_params["solo_vigente"] is True
+    for (sql, params), tabla in zip(
+        db.consultas[3:],
+        ["Cuentas.Cuenta", "Tarjeta.Tarjeta", "Credito.CreditoSolicitud"],
+        strict=True,
+    ):
+        assert tabla in sql
+        assert params == {"id_cliente": 10}
+        assert ":id_cliente" in sql
+    assert "RTRIM(NumeroEnmascarado)" in db.consultas[4][0]
+    assert "HashNumeroTarjeta" not in db.consultas[4][0]
+    assert "LEFT JOIN Credito.CreditoResumen" in db.consultas[5][0]
+    serializado = perfil.model_dump(mode="json", by_alias=True)
+    if con_productos:
+        assert perfil.riesgo_vigente is not None
+        assert perfil.riesgo_vigente.id_evaluacion == 20
+        assert serializado["riesgoVigente"]["nivelRiesgoLAFT"] == "Bajo"
+        assert serializado["cuentas"][0]["saldoDisponible"] == 130.25
+        assert serializado["tarjetas"][0]["numeroEnmascarado"] == "************1234"
+        assert serializado["creditos"][0]["saldoCapital"] == 500.0
+        assert "pan" not in {k.lower() for k in serializado["tarjetas"][0]}
+    else:
+        assert serializado["riesgoVigente"] is None
+        assert all(
+            serializado[campo] == [] for campo in ("cuentas", "tarjetas", "creditos")
+        )
+    _assert_solo_lectura(db)
+
+
+def test_cli08_solicitud_sin_desembolso_admite_resumen_nulo():
+    productos = _perfil_mock()
+    credito = productos["creditos"][0]
+    credito.update(monto_desembolsado=None, saldo_capital=None, proxima_cuota=None)
+    db = _RiesgoConn([[_cliente_row(total=1)], [], [], [], [], [credito]])
+    perfil = service.obtener_perfil_cliente(cast(Connection, db), 10)
+    assert len(perfil.creditos) == 1
+    assert perfil.creditos[0].monto_desembolsado is None
+    assert perfil.creditos[0].saldo_capital is None
+    assert perfil.creditos[0].proxima_cuota is None
+    _assert_solo_lectura(db)
+
+
+def test_consultas_contrato_openapi_sin_sockets():
+    from app.core.api.errors import ProblemDetailsRoute
+
+    contrato = app.openapi()
+    for sufijo, operacion, modelo, roles in [
+        ("", "CLI03", "PageCliente", router._ROLES_CONSULTA),
+        ("/{idCliente}", "CLI04", "Cliente", router._ROLES_CONSULTA),
+        (
+            "/{idCliente}/perfil",
+            "CLI08",
+            "ClientePerfil",
+            ["ASESOR", "SUPERVISOR", "ADMIN"],
+        ),
+    ]:
+        ruta = contrato["paths"][f"/api/v1/clientes{sufijo}"]["get"]
+        assert ruta["operationId"] == operacion
+        assert ruta["x-roles"] == roles
+        respuesta = ruta["responses"]["200"]["content"]["application/json"]["schema"]
+        assert respuesta["$ref"].endswith(f"/{modelo}")
+        for status in ("400", "401", "403", "404"):
+            assert "application/problem+json" in ruta["responses"][status]["content"]
+    parametros = {
+        p["name"]: p["schema"]
+        for p in contrato["paths"]["/api/v1/clientes"]["get"]["parameters"]
+    }
+    assert set(parametros) == {
+        "q",
+        "identificacion",
+        "tipoCliente",
+        "estado",
+        "page",
+        "pageSize",
+        "sort",
+    }
+    assert parametros["page"]["default"] == 1
+    assert parametros["page"]["minimum"] == 1
+    assert parametros["pageSize"]["default"] == 20
+    assert parametros["pageSize"]["minimum"] == 1
+    assert parametros["pageSize"]["maximum"] == 100
+    assert all(
+        isinstance(r, ProblemDetailsRoute) for r in router._consultas_router.routes
+    )
