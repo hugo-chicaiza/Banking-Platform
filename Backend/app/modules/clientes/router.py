@@ -4,18 +4,27 @@ from fastapi import APIRouter, Depends, Query, Request, Response
 from sqlalchemy import Connection
 
 from app.core.api.errors import RESPUESTAS_ERROR, ProblemDetailsRoute
+from app.core.api.middleware import ip_cliente
 from app.core.database.db import cooperativa
-from app.core.security.auth import require_auth
+from app.core.security.auth import (
+    Usuario,
+    UsuarioAuditoria,
+    require_auth,
+    require_roles,
+)
 from app.modules.clientes import service
 from app.modules.clientes.schemas import (
     Cliente,
     ClienteCreate,
+    ClienteEstadoUpdate,
     ClientePerfil,
+    ClienteUpdate,
     Direccion,
     DireccionNueva,
     DireccionUpdate,
     EstadoCliente,
     PageCliente,
+    PageClienteHistorial,
     Riesgo,
     RiesgoCreate,
     RiesgoRegistrado,
@@ -285,6 +294,88 @@ def listar_evaluaciones_riesgo(idCliente: int, conn: Db) -> list[Riesgo]:
     return service.listar_evaluaciones_riesgo(conn, idCliente)
 
 
+_edicion_router = APIRouter(
+    route_class=ProblemDetailsRoute,
+    responses={
+        **RESPUESTAS_ERROR,
+        503: {**RESPUESTAS_ERROR[500], "description": "Service Unavailable"},
+    },
+)
+EditorCliente = Annotated[Usuario, Depends(require_roles("ASESOR", "ADMIN"))]
+GestorEstado = Annotated[
+    Usuario, Depends(require_roles("ASESOR", "SUPERVISOR", "ADMIN"))
+]
+LectorHistorial = Annotated[
+    Usuario, Depends(require_roles("SUPERVISOR", "AUDITOR", "ADMIN"))
+]
+
+
+@_edicion_router.patch(
+    "/{idCliente}",
+    operation_id="CLI05",
+    response_model=Cliente,
+    openapi_extra={"x-roles": ["ASESOR", "ADMIN"]},
+)
+def editar_cliente(
+    idCliente: int,
+    payload: ClienteUpdate,
+    request: Request,
+    usuario: EditorCliente,
+    modificado_por: UsuarioAuditoria,
+    conn: Db,
+) -> Cliente:
+    """Edita datos y audita cada cambio con la identidad vinculada en el servidor."""
+    return service.editar_cliente(
+        conn, idCliente, payload, modificado_por, ip_cliente(request.scope)
+    )
+
+
+@_edicion_router.patch(
+    "/{idCliente}/estado",
+    operation_id="CLI06",
+    response_model=Cliente,
+    openapi_extra={"x-roles": ["ASESOR", "SUPERVISOR", "ADMIN"]},
+)
+def cambiar_estado_cliente(
+    idCliente: int,
+    payload: ClienteEstadoUpdate,
+    request: Request,
+    usuario: GestorEstado,
+    modificado_por: UsuarioAuditoria,
+    conn: Db,
+) -> Cliente:
+    """Transición explícita, con comprobación de productos para la baja."""
+    return service.cambiar_estado_cliente(
+        conn,
+        idCliente,
+        payload,
+        modificado_por,
+        ip_cliente(request.scope),
+        usuario.roles,
+    )
+
+
+@_edicion_router.get(
+    "/{idCliente}/historial",
+    operation_id="CLI07",
+    response_model=PageClienteHistorial,
+    openapi_extra={"x-roles": ["SUPERVISOR", "AUDITOR", "ADMIN"]},
+)
+def listar_historial_cliente(
+    idCliente: int,
+    usuario: LectorHistorial,
+    conn: Db,
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(alias="pageSize", ge=1, le=100)] = 20,
+    sort: str | None = None,
+) -> PageClienteHistorial:
+    """Historial inmutable; exige una sesión válida de WorkOS y el rol indicado."""
+    return service.listar_historial_cliente(
+        conn, idCliente, page=page, page_size=page_size, sort=sort
+    )
+
+
 router.include_router(_gestion_router, prefix="/clientes")
+router.include_router(_edicion_router, prefix="/clientes")
 router.include_router(_riesgo_router, prefix="/clientes")
 router.include_router(_consultas_router, prefix="/clientes")

@@ -12,7 +12,9 @@
 No requieren base de datos: se monkeypatcha el repositorio.
 """
 
+import json
 from datetime import UTC, date, datetime, timedelta
+from decimal import Decimal
 from typing import Any, cast
 from unittest.mock import MagicMock
 
@@ -20,9 +22,19 @@ import pytest
 from pydantic import ValidationError
 from sqlalchemy import Connection
 
+from app.core.config.settings import Settings
+from app.core.security import auth
+from app.core.security.auth import Usuario, require_roles
 from app.main import app
 from app.modules.clientes import repository, router, service
-from app.modules.clientes.schemas import ClienteCreate, DireccionCreate, RiesgoCreate
+from app.modules.clientes.schemas import (
+    ClienteCreate,
+    ClienteEstadoUpdate,
+    ClienteUpdate,
+    DireccionCreate,
+    PageClienteHistorial,
+    RiesgoCreate,
+)
 
 # Cédulas y RUCs válidos conocidos
 CEDULA_VALIDA_1 = "1710034065"
@@ -1449,3 +1461,1095 @@ def test_consultas_contrato_openapi_sin_sockets():
     assert all(
         isinstance(r, ProblemDetailsRoute) for r in router._consultas_router.routes
     )
+
+
+def _usuario_historial(*roles: str) -> Usuario:
+    return Usuario(
+        id_usuario="user_prueba",
+        id_sesion="session_prueba",
+        id_organizacion=None,
+        nombre="Usuario de prueba",
+        email="auditor@example.ec",
+        roles=roles,
+        permisos=(),
+        id_agencia=None,
+    )
+
+
+def _historial_row(**overrides: Any) -> dict[str, Any]:
+    return {
+        "id_historial": 1,
+        "tipo_operacion": "U",
+        "campo_modificado": "Email",
+        # El esquema SQL Server consultado no almacena ValorAnterior.
+        "valor_anterior": None,
+        "modificado_por": 12,
+        "direccion_ip": "192.0.2.10",
+        "fecha_modificacion": datetime(2026, 11, 4, 15, tzinfo=UTC),
+        "observaciones": "Actualización de datos",
+        "total": 1,
+        **overrides,
+    }
+
+
+@pytest.mark.parametrize("estado", ["Activo", "Eliminado"])
+def test_cli07_historial_y_aliases_sin_excluir_eliminados(estado):
+    db = _RiesgoConn([[{"id_cliente": 10, "estado": estado}], [_historial_row()]])
+    resultado = service.listar_historial_cliente(cast(Connection, db), 10)
+    assert len(resultado.items) == resultado.total == 1
+    assert (resultado.page, resultado.page_size) == (1, 20)
+    item = resultado.model_dump(by_alias=True)["items"][0]
+    assert item["direccionIP"] == "192.0.2.10"
+    assert "direccionIp" not in item
+    assert item["valorAnterior"] is None
+    sql, params = db.consultas[1]
+    assert "WHERE IdCliente = :id_cliente" in sql
+    assert "ValorAnterior AS" not in sql
+    assert "ValorNuevo" not in sql
+    assert "Estado" not in sql
+    assert "IdHistorial DESC" in sql
+    assert "ORDER BY p.numero_fila" in sql
+    assert params == {
+        "id_cliente": 10,
+        "campo": "FechaModificacion",
+        "direccion": "desc",
+        "offset": 0,
+        "limite": 20,
+    }
+    _assert_solo_lectura(db)
+
+
+@pytest.mark.parametrize(("page", "total"), [(1, 0), (9, 3)])
+def test_cli07_pagina_vacia_conserva_total(page, total):
+    db = _RiesgoConn(
+        [
+            [{"id_cliente": 10, "estado": "Activo"}],
+            [{"id_historial": None, "total": total}],
+        ]
+    )
+    resultado = service.listar_historial_cliente(
+        cast(Connection, db), 10, page=page, page_size=2
+    )
+    assert resultado.items == []
+    assert resultado.total == total
+    assert (resultado.page, resultado.page_size) == (page, 2)
+    assert db.consultas[1][1]["offset"] == (page - 1) * 2
+    assert db.consultas[1][1]["limite"] == page * 2
+    assert "LEFT JOIN Historial" in db.consultas[1][0]
+    _assert_solo_lectura(db)
+
+
+def test_cli07_cliente_no_encontrado():
+    db = _RiesgoConn([[]])
+    with pytest.raises(service.HTTPException) as exc:
+        service.listar_historial_cliente(cast(Connection, db), 999)
+    _assert_http_error(exc, 404, "CLIENTE_NO_ENCONTRADO")
+    assert len(db.consultas) == 1
+    _assert_solo_lectura(db)
+
+
+@pytest.mark.parametrize("id_cliente", [10, 11])
+def test_cli07_propaga_filtro_de_cliente(id_cliente):
+    db = _RiesgoConn(
+        [[{"id_cliente": id_cliente, "estado": "Activo"}], [_historial_row()]]
+    )
+    service.listar_historial_cliente(cast(Connection, db), id_cliente)
+    assert all(params["id_cliente"] == id_cliente for _, params in db.consultas)
+    # Se comprueban parámetros y SQL, no la ejecución de filtros en SQL Server.
+    _assert_solo_lectura(db)
+
+
+@pytest.mark.parametrize(
+    ("campo", "columna"),
+    [
+        ("idHistorial", "IdHistorial"),
+        ("fechaModificacion", "FechaModificacion"),
+        ("tipoOperacion", "TipoOperacion"),
+        ("campoModificado", "CampoModificado"),
+        ("modificadoPor", "ModificadoPor"),
+    ],
+)
+@pytest.mark.parametrize("direccion", ["asc", "desc"])
+def test_cli07_orden_permitido_y_desempate(campo, columna, direccion):
+    db = _RiesgoConn([[{"id_cliente": 10, "estado": "Activo"}], [_historial_row()]])
+    service.listar_historial_cliente(
+        cast(Connection, db), 10, sort=f"{campo},{direccion}"
+    )
+    sql, params = db.consultas[1]
+    assert (params["campo"], params["direccion"]) == (columna, direccion)
+    assert f"THEN {columna} END {direccion.upper()}" in sql
+    assert "IdHistorial DESC\n" in sql
+    _assert_solo_lectura(db)
+
+
+@pytest.mark.parametrize(
+    "sort",
+    [
+        "",
+        "fechaModificacion",
+        "fechaModificacion,DESC",
+        "fechaModificacion,desc,asc",
+        "fechaModificacion, desc",
+        "observaciones,asc",
+        "IdHistorial,asc",
+        "idHistorial; DROP TABLE Clientes.ClientesHis,asc",
+    ],
+)
+def test_cli07_sort_invalido_no_consulta_bd(sort):
+    db = _RiesgoConn([])
+    with pytest.raises(service.HTTPException) as exc:
+        service.listar_historial_cliente(cast(Connection, db), 10, sort=sort)
+    _assert_http_error(exc, 400, "SORT_INVALIDO")
+    assert db.consultas == []
+
+
+@pytest.mark.parametrize(("page", "page_size"), [(0, 20), (1, 0), (1, 101)])
+def test_cli07_paginacion_invalida_no_consulta_bd(page, page_size):
+    db = _RiesgoConn([])
+    with pytest.raises(service.HTTPException) as exc:
+        service.listar_historial_cliente(
+            cast(Connection, db), 10, page=page, page_size=page_size
+        )
+    _assert_http_error(exc, 422, "PAGINACION_INVALIDA")
+    assert db.consultas == []
+
+
+@pytest.mark.parametrize("rol", ["SUPERVISOR", "AUDITOR", "ADMIN"])
+def test_cli07_autorizacion_admite_roles_del_contrato(rol):
+    usuario = _usuario_historial(rol)
+    autorizar = require_roles("SUPERVISOR", "AUDITOR", "ADMIN")
+    assert autorizar(usuario) is usuario
+
+
+@pytest.mark.parametrize("roles", [(), ("ASESOR",), ("CAJERO",)])
+def test_cli07_autorizacion_rechaza_otros_roles(roles):
+    autorizar = require_roles("SUPERVISOR", "AUDITOR", "ADMIN")
+    with pytest.raises(service.HTTPException) as exc:
+        autorizar(_usuario_historial(*roles))
+    _assert_http_error(exc, 403, "SIN_PERMISO")
+
+
+def test_cli07_router_propaga_argumentos(monkeypatch):
+    esperado = PageClienteHistorial(items=[], page=3, page_size=7, total=0)
+    listar = MagicMock(return_value=esperado)
+    monkeypatch.setattr(service, "listar_historial_cliente", listar)
+    conn = _fake_conn()
+    resultado = router.listar_historial_cliente(
+        10, _usuario_historial("AUDITOR"), conn, 3, 7, "idHistorial,asc"
+    )
+    assert resultado is esperado
+    listar.assert_called_once_with(
+        conn, 10, page=3, page_size=7, sort="idHistorial,asc"
+    )
+
+
+def test_cli07_openapi_y_sesion_obligatoria_sin_sockets():
+    from fastapi.dependencies.models import Dependant
+
+    from app.core.api.errors import ProblemDetailsRoute
+    from app.core.security.auth import usuario_actual
+
+    def llamadas(dependencia: Dependant) -> list[Any]:
+        return [dependencia.call] + [
+            llamada for hijo in dependencia.dependencies for llamada in llamadas(hijo)
+        ]
+
+    contrato = app.openapi()
+    ruta = contrato["paths"]["/api/v1/clientes/{idCliente}/historial"]["get"]
+    assert ruta["operationId"] == "CLI07"
+    assert ruta["x-roles"] == ["SUPERVISOR", "AUDITOR", "ADMIN"]
+    assert ruta["security"] == [{"APIKeyCookie": []}]
+    assert "application/problem+json" in ruta["responses"]["404"]["content"]
+    parametros = {p["name"]: p["schema"] for p in ruta["parameters"]}
+    assert parametros["page"]["minimum"] == 1
+    assert parametros["page"]["default"] == 1
+    assert parametros["pageSize"]["minimum"] == 1
+    assert parametros["pageSize"]["maximum"] == 100
+    assert parametros["pageSize"]["default"] == 20
+    esquema = contrato["components"]["schemas"]["ClienteHistorial"]
+    assert "direccionIP" in esquema["properties"]
+    assert "direccionIp" not in esquema["properties"]
+    rutas = [
+        r for r in router._edicion_router.routes if isinstance(r, ProblemDetailsRoute)
+    ]
+    assert len(rutas) == 3
+    assert all(usuario_actual in llamadas(r.dependant) for r in rutas)
+
+
+def test_cli05_patch_distingue_omision_de_null():
+    assert ClienteUpdate().model_dump(exclude_unset=True) == {}
+    payload = ClienteUpdate.model_validate({"nombreComercial": None})
+    assert payload.model_fields_set == {"nombre_comercial"}
+    assert payload.model_dump(exclude_unset=True) == {"nombre_comercial": None}
+
+
+@pytest.mark.parametrize(
+    "campo",
+    [
+        "identificacion",
+        "tipoDocumento",
+        "tipoCliente",
+        "estado",
+        "desconocido",
+        "modificadoPor",
+        "roles",
+        "direccionIP",
+    ],
+)
+def test_cli05_rechaza_campos_fuera_del_contrato(campo):
+    with pytest.raises(ValidationError):
+        ClienteUpdate.model_validate({campo: "valor"})
+
+
+@pytest.mark.parametrize("campo", ["nombres", "telefonoCelular", "email"])
+def test_cli05_rechaza_null_en_campos_no_anulables(campo):
+    with pytest.raises(ValidationError):
+        ClienteUpdate.model_validate({campo: None})
+
+
+@pytest.mark.parametrize(
+    ("campo", "maximo"),
+    [
+        ("nombres", 250),
+        ("apellidos", 250),
+        ("razonSocial", 250),
+        ("nombreComercial", 250),
+        ("telefonoConvencional", 15),
+        ("telefonoCelular", 15),
+        ("email", 150),
+    ],
+)
+def test_cli05_longitudes_coinciden_con_metadatos(campo, maximo):
+    valor = "x" * maximo if campo != "email" else "x" * (maximo - 6) + "@a.com"
+    ClienteUpdate.model_validate({campo: valor})
+    with pytest.raises(ValidationError):
+        ClienteUpdate.model_validate({campo: "x" + valor})
+
+
+def test_cli05_estado_civil_de_catalogo():
+    assert ClienteUpdate(estado_civil="Soltero").estado_civil == "Soltero"
+    with pytest.raises(ValidationError):
+        ClienteUpdate.model_validate({"estadoCivil": "Desconocido"})
+
+
+@pytest.mark.parametrize("motivo", [None, "", " ", "\t\n", "x" * 501])
+def test_cli06_rechaza_motivo_invalido(motivo):
+    with pytest.raises(ValidationError):
+        ClienteEstadoUpdate.model_validate({"estado": "Activo", "motivo": motivo})
+
+
+def test_cli06_motivo_obligatorio_y_maximo_real():
+    with pytest.raises(ValidationError):
+        ClienteEstadoUpdate.model_validate({"estado": "Activo"})
+    payload = ClienteEstadoUpdate(estado="Suspendido", motivo="x" * 500)
+    assert len(payload.motivo) == 500
+
+
+@pytest.mark.parametrize("email", ["sin-arroba", "a@", "a b@correo.ec", "a@correo"])
+def test_cli05_formato_email_invalido(email):
+    with pytest.raises(ValidationError):
+        ClienteUpdate(email=email)
+
+
+@pytest.mark.parametrize(
+    "estado", ["Activo", "Inactivo", "Suspendido", "Bloqueado", "Eliminado"]
+)
+def test_cli06_estados_admitidos(estado):
+    payload = ClienteEstadoUpdate.model_validate(
+        {"estado": estado, "motivo": "Revisión"}
+    )
+    assert payload.estado == estado
+
+
+class _EscrituraConn(_RiesgoConn):
+    """Solo simula respuestas/fallos; no simula atomicidad ni triggers de SQL Server."""
+
+    def __init__(
+        self, respuestas: list[list[dict[str, Any]]], fallo: int | str | None = None
+    ) -> None:
+        super().__init__(respuestas)
+        self.fallo = fallo
+
+    def execute(self, statement: Any, params: dict[str, Any]) -> MagicMock:
+        if len(self.consultas) == self.fallo:
+            raise RuntimeError("Fallo de escritura/lectura")
+        return super().execute(statement, params)
+
+    def commit(self) -> None:
+        if self.fallo == "commit":
+            raise RuntimeError("Fallo de commit")
+        super().commit()
+
+
+def _conn_escritura(
+    *,
+    actual: dict[str, Any] | None = None,
+    cambios: dict[str, Any] | None = None,
+    lecturas: list[list[dict[str, Any]]] | None = None,
+    fallo: int | str | None = None,
+) -> _EscrituraConn:
+    cliente = actual if actual is not None else _cliente_row()
+    cambios = cambios or {"email": "nuevo@correo.ec"}
+    return _EscrituraConn(
+        [
+            [{"id_cliente": cliente["id_cliente"], "estado": cliente["estado"]}],
+            [{**cliente, "total": 1}],
+            [_direccion_row(id_cliente=cliente["id_cliente"])],
+            *(lecturas or []),
+            [],  # UPDATE
+            *[[] for _ in cambios],  # Una auditoría por cambio.
+            [{**cliente, **cambios, "total": 1}],
+            [_direccion_row(id_cliente=cliente["id_cliente"])],
+        ],
+        fallo=fallo,
+    )
+
+
+def _auditorias(db: _RiesgoConn) -> list[dict[str, Any]]:
+    filas = [
+        params
+        for sql, params in db.consultas
+        if "INSERT INTO Clientes.ClientesHis" in sql
+    ]
+    for fila in filas:
+        assert fila["modificado_por"] == 12
+        assert fila["direccion_ip"] == "192.0.2.10"
+        assert fila["tipo_operacion"] == "U"
+        assert len(fila["observaciones"]) <= 500
+    return filas
+
+
+def _assert_sin_escrituras(db: _RiesgoConn) -> None:
+    assert not any(
+        "UPDATE Clientes.Cliente" in sql or "INSERT INTO" in sql
+        for sql, _ in db.consultas
+    )
+    assert db.commits == 0
+
+
+@pytest.mark.parametrize("juridico", [False, True])
+def test_cli05_edicion_valida_audita_solo_cambios_efectivos(juridico):
+    actual = _cliente_row()
+    cambios: dict[str, Any] = {
+        "email": "nuevo@correo.ec",
+        "nombre_comercial": "Comercial",
+    }
+    if juridico:
+        actual.update(
+            tipo_cliente="Juridico",
+            razon_social="Empresa",
+            apellidos=None,
+            genero=None,
+            estado_civil=None,
+        )
+        cambios["razon_social"] = "Nueva Empresa"
+    else:
+        cambios["nombres"] = "María Elena"
+    db = _conn_escritura(actual=actual, cambios=cambios)
+    payload = ClienteUpdate.model_validate(
+        {**cambios, "telefono_celular": actual["telefono_celular"]}
+    )
+    resultado = service.editar_cliente(
+        cast(Connection, db), 10, payload, 12, "192.0.2.10"
+    )
+    assert resultado.email == cambios["email"]
+    assert resultado.direcciones[0].estado == "Activo"
+    assert (db.commits, db.rollbacks) == (1, 0)
+    assert not db.respuestas
+    assert "WITH (UPDLOCK, HOLDLOCK)" in db.consultas[0][0]
+    auditorias = _auditorias(db)
+    assert len(auditorias) == len(cambios)
+    por_campo = {a["campo"]: a for a in auditorias}
+    for campo, valor in cambios.items():
+        auditoria = por_campo[repository.CAMPOS_EDICION_CLIENTE[campo]]
+        assert json.loads(auditoria["observaciones"]) == {
+            "v": 1,
+            "valorAnterior": actual[campo],
+            "valorNuevo": valor,
+            "motivo": "Actualización de datos",
+        }
+    sql, params = db.consultas[3]
+    assert "CASE WHEN :enviado_email = 1 THEN :email ELSE Email END" in sql
+    assert params["enviado_email"] is True
+    assert params["enviado_telefono_celular"] is False
+    assert cambios["email"] not in sql
+
+
+def test_cli05_null_explicito_se_distingue_de_omision_en_sql():
+    cambios = {"telefono_convencional": None}
+    db = _conn_escritura(cambios=cambios)
+    service.editar_cliente(
+        cast(Connection, db),
+        10,
+        ClienteUpdate.model_validate(cambios),
+        12,
+        "192.0.2.10",
+    )
+    sql, params = db.consultas[3]
+    assert "CASE WHEN :enviado_telefono_convencional = 1" in sql
+    assert params["enviado_telefono_convencional"] is True
+    assert params["telefono_convencional"] is None
+    assert params["enviado_email"] is False
+    assert json.loads(_auditorias(db)[0]["observaciones"])["valorNuevo"] is None
+
+
+def test_cli05_permite_borrar_actividad_economica_sin_consultar_catalogo():
+    db = _conn_escritura(cambios={"id_actividad_economica": None})
+    resultado = service.editar_cliente(
+        cast(Connection, db),
+        10,
+        ClienteUpdate(id_actividad_economica=None),
+        12,
+        "192.0.2.10",
+    )
+    assert resultado.id_actividad_economica is None
+    assert not any("Catalogo.ActividadEconomica" in sql for sql, _ in db.consultas)
+    assert json.loads(_auditorias(db)[0]["observaciones"])["valorNuevo"] is None
+
+
+@pytest.mark.parametrize("enviados", [{}, {"email": "maria.lopez@correo.ec"}])
+def test_cli05_sin_cambios_libera_bloqueo_y_no_escribe(enviados):
+    actual = _cliente_row(email="maria.lopez@correo.ec")
+    db = _EscrituraConn(
+        [[{"id_cliente": 10, "estado": "Activo"}], [{**actual, "total": 1}], []]
+    )
+    resultado = service.editar_cliente(
+        cast(Connection, db),
+        10,
+        ClienteUpdate.model_validate(enviados),
+        12,
+        "192.0.2.10",
+    )
+    assert resultado.email == actual["email"]
+    _assert_sin_escrituras(db)
+    assert db.rollbacks == 1
+
+
+@pytest.mark.parametrize(
+    ("cliente", "code", "status"),
+    [
+        (None, "CLIENTE_NO_ENCONTRADO", 404),
+        (_cliente_row(estado="Eliminado"), "CLIENTE_NO_EDITABLE", 409),
+    ],
+)
+def test_cli05_cliente_inexistente_o_eliminado(cliente, code, status):
+    db = _conn_escritura(actual=cliente) if cliente else _EscrituraConn([[]])
+    with pytest.raises(service.HTTPException) as exc:
+        service.editar_cliente(
+            cast(Connection, db),
+            10,
+            ClienteUpdate(email="nuevo@correo.ec"),
+            12,
+            "192.0.2.10",
+        )
+    _assert_http_error(exc, status, code)
+    _assert_sin_escrituras(db)
+    assert db.rollbacks == 1
+
+
+@pytest.mark.parametrize(
+    ("tipo", "cambios"),
+    [
+        ("Natural", {"apellidos": None}),
+        ("Natural", {"estado_civil": None}),
+        ("Natural", {"razon_social": "Empresa"}),
+        ("Juridico", {"razon_social": None}),
+        ("Juridico", {"apellidos": "Perez"}),
+        ("Juridico", {"estado_civil": "Casado"}),
+    ],
+)
+def test_cli05_valida_persona_con_estado_final(tipo, cambios):
+    actual = _cliente_row()
+    if tipo == "Juridico":
+        actual.update(
+            tipo_cliente=tipo,
+            razon_social="Empresa",
+            apellidos=None,
+            genero=None,
+            estado_civil=None,
+        )
+    db = _conn_escritura(actual=actual)
+    with pytest.raises(service.HTTPException) as exc:
+        service.editar_cliente(
+            cast(Connection, db),
+            10,
+            ClienteUpdate.model_validate(cambios),
+            12,
+            "192.0.2.10",
+        )
+    _assert_http_error(exc, 422, "TIPO_PERSONA_INVALIDO")
+    _assert_sin_escrituras(db)
+    assert db.rollbacks == 1
+
+
+@pytest.mark.parametrize("existe", [False, True])
+def test_cli05_valida_actividad_economica(existe):
+    db = _conn_escritura(
+        cambios={"id_actividad_economica": 23},
+        lecturas=[[{"existe": 1}] if existe else []],
+    )
+    payload = ClienteUpdate(id_actividad_economica=23)
+    if existe:
+        resultado = service.editar_cliente(
+            cast(Connection, db), 10, payload, 12, "192.0.2.10"
+        )
+        assert resultado.id_actividad_economica == 23
+        assert json.loads(_auditorias(db)[0]["observaciones"])["valorNuevo"] == 23
+    else:
+        with pytest.raises(service.HTTPException) as exc:
+            service.editar_cliente(cast(Connection, db), 10, payload, 12, "192.0.2.10")
+        _assert_http_error(exc, 422, "CATALOGO_INVALIDO")
+        _assert_sin_escrituras(db)
+        assert db.rollbacks == 1
+    assert db.consultas[3][1] == {"id_actividad": 23}
+
+
+@pytest.mark.parametrize("fallo", [0, 1, 2, 3, 4, 5, 6, "commit"])
+def test_cli05_rollback_en_lecturas_actualizacion_auditoria_y_commit(fallo):
+    db = _conn_escritura(fallo=fallo)
+    with pytest.raises(RuntimeError, match="Fallo"):
+        service.editar_cliente(
+            cast(Connection, db),
+            10,
+            ClienteUpdate(email="nuevo@correo.ec"),
+            12,
+            "192.0.2.10",
+        )
+    assert (db.commits, db.rollbacks) == (0, 1)
+
+
+def test_cli05_fallo_segunda_auditoria_revierte_todo():
+    cambios = {"email": "nuevo@correo.ec", "nombres": "Nuevo Nombre"}
+    db = _conn_escritura(cambios=cambios, fallo=5)
+    with pytest.raises(RuntimeError):
+        service.editar_cliente(
+            cast(Connection, db),
+            10,
+            ClienteUpdate.model_validate(cambios),
+            12,
+            "192.0.2.10",
+        )
+    assert len(_auditorias(db)) == 1
+    assert (db.commits, db.rollbacks) == (0, 1)
+
+
+def test_cli05_prevalida_todas_las_auditorias_antes_de_escribir():
+    actual = _cliente_row(nombres="x" * 250)
+    db = _conn_escritura(actual=actual)
+    with pytest.raises(service.HTTPException) as exc:
+        service.editar_cliente(
+            cast(Connection, db),
+            10,
+            ClienteUpdate(email="nuevo@correo.ec", nombres="y" * 250),
+            12,
+            "192.0.2.10",
+        )
+    _assert_http_error(exc, 422, "AUDITORIA_EXCEDE_LIMITE")
+    _assert_sin_escrituras(db)
+
+
+ESTADOS_C04 = [
+    "Pendiente",
+    "Activo",
+    "Inactivo",
+    "Suspendido",
+    "Bloqueado",
+    "Eliminado",
+]
+DESTINOS_C04 = ["Activo", "Inactivo", "Suspendido", "Bloqueado", "Eliminado"]
+TRANSICIONES_C04 = {
+    ("Activo", "Inactivo"),
+    ("Inactivo", "Activo"),
+    ("Activo", "Suspendido"),
+    ("Suspendido", "Activo"),
+    ("Activo", "Bloqueado"),
+    ("Bloqueado", "Activo"),
+    *[(estado, "Eliminado") for estado in ESTADOS_C04 if estado != "Eliminado"],
+}
+
+
+@pytest.mark.parametrize("origen", ESTADOS_C04)
+@pytest.mark.parametrize("destino", DESTINOS_C04)
+def test_cli06_matriz_de_transiciones(origen, destino):
+    lecturas = [[], []] if destino in ("Inactivo", "Eliminado") else []
+    db = _conn_escritura(
+        actual=_cliente_row(estado=origen),
+        cambios={"estado": destino},
+        lecturas=lecturas,
+    )
+    payload = ClienteEstadoUpdate.model_validate(
+        {"estado": destino, "motivo": "Revisión"}
+    )
+    if (origen, destino) in TRANSICIONES_C04:
+        resultado = service.cambiar_estado_cliente(
+            cast(Connection, db), 10, payload, 12, "192.0.2.10", ("ASESOR",)
+        )
+        assert resultado.estado == destino
+        assert resultado.direcciones[0].estado == "Activo"
+        auditoria = _auditorias(db)
+        assert len(auditoria) == 1
+        assert auditoria[0]["campo"] == "Estado"
+        assert json.loads(auditoria[0]["observaciones"]) == {
+            "v": 1,
+            "valorAnterior": origen,
+            "valorNuevo": destino,
+            "motivo": "Revisión",
+        }
+        assert (db.commits, db.rollbacks) == (1, 0)
+        assert not db.respuestas
+    else:
+        with pytest.raises(service.HTTPException) as exc:
+            service.cambiar_estado_cliente(
+                cast(Connection, db), 10, payload, 12, "192.0.2.10", ("ASESOR",)
+            )
+        _assert_http_error(exc, 409, "TRANSICION_CLIENTE_INVALIDA")
+        _assert_sin_escrituras(db)
+        assert db.rollbacks == 1
+
+
+@pytest.mark.parametrize("rol", ["ASESOR", "SUPERVISOR", "ADMIN"])
+@pytest.mark.parametrize(
+    ("origen", "destino"), [("Activo", "Bloqueado"), ("Bloqueado", "Activo")]
+)
+def test_cli06_bloqueo_desbloqueo_para_roles_confirmados(rol, origen, destino):
+    db = _conn_escritura(
+        actual=_cliente_row(estado=origen), cambios={"estado": destino}
+    )
+    payload = ClienteEstadoUpdate.model_validate(
+        {"estado": destino, "motivo": "Control"}
+    )
+    assert (
+        service.cambiar_estado_cliente(
+            cast(Connection, db), 10, payload, 12, "192.0.2.10", (rol,)
+        ).estado
+        == destino
+    )
+
+
+@pytest.mark.parametrize("roles", [(), ("AUDITOR",), ("CAJERO",)])
+def test_cli06_rechaza_roles_no_autorizados_sin_consultar(roles):
+    db = _EscrituraConn([])
+    with pytest.raises(service.HTTPException) as exc:
+        service.cambiar_estado_cliente(
+            cast(Connection, db),
+            10,
+            ClienteEstadoUpdate(estado="Bloqueado", motivo="Control"),
+            12,
+            "192.0.2.10",
+            roles,
+        )
+    _assert_http_error(exc, 403, "SIN_PERMISO")
+    assert db.consultas == []
+
+
+def test_cli06_cliente_inexistente():
+    db = _EscrituraConn([[]])
+    with pytest.raises(service.HTTPException) as exc:
+        service.cambiar_estado_cliente(
+            cast(Connection, db),
+            999,
+            ClienteEstadoUpdate(estado="Activo", motivo="Control"),
+            12,
+            "192.0.2.10",
+            ("ASESOR",),
+        )
+    _assert_http_error(exc, 404, "CLIENTE_NO_ENCONTRADO")
+    assert db.rollbacks == 1
+
+
+def test_cli06_rechaza_motivo_que_no_cabe_en_json_sin_truncarlo():
+    db = _conn_escritura(cambios={"estado": "Suspendido"})
+    payload = ClienteEstadoUpdate(estado="Suspendido", motivo="x" * 500)
+    with pytest.raises(service.HTTPException) as exc:
+        service.cambiar_estado_cliente(
+            cast(Connection, db), 10, payload, 12, "192.0.2.10", ("ASESOR",)
+        )
+    _assert_http_error(exc, 422, "AUDITORIA_EXCEDE_LIMITE")
+    _assert_sin_escrituras(db)
+    assert db.rollbacks == 1
+
+
+@pytest.mark.parametrize("destino", ["Inactivo", "Eliminado"])
+@pytest.mark.parametrize(
+    ("estado", "saldo", "retenido"),
+    [
+        ("Activa", "0", "0"),
+        ("Bloqueada", "0", "0"),
+        ("Inactiva", "1.01", "0"),
+        ("Cerrada", "0", "0.01"),
+    ],
+)
+def test_cli06_cuentas_que_impiden_baja(destino, estado, saldo, retenido):
+    cuentas = [
+        {"estado": estado, "saldo": Decimal(saldo), "saldo_retenido": Decimal(retenido)}
+    ]
+    db = _conn_escritura(cambios={"estado": destino}, lecturas=[cuentas])
+    with pytest.raises(service.HTTPException) as exc:
+        service.cambiar_estado_cliente(
+            cast(Connection, db),
+            10,
+            ClienteEstadoUpdate.model_validate({"estado": destino, "motivo": "Baja"}),
+            12,
+            "192.0.2.10",
+            ("ADMIN",),
+        )
+    _assert_http_error(exc, 409, "CLIENTE_CON_PRODUCTOS_VIGENTES")
+    _assert_sin_escrituras(db)
+    assert db.rollbacks == 1
+    assert "WITH (UPDLOCK, HOLDLOCK)" in db.consultas[3][0]
+    assert db.consultas[3][1] == {"id_cliente": 10}
+
+
+def _cuota_estado_row(**overrides: Any) -> dict[str, Any]:
+    return {
+        "id_plan_cuota": 50,
+        "id_cuota": 60,
+        "numero": 1,
+        "version": 1,
+        "estado": "PENDIENTE",
+        "capital_pendiente": Decimal(100),
+        "interes": Decimal(10),
+        "seguros": Decimal(2),
+        "impuestos": Decimal(1),
+        "capital_pagado": None,
+        "interes_pagado": None,
+        "seguros_pagados": None,
+        "impuestos_pagados": None,
+        "mora_pendiente": Decimal(0),
+        **overrides,
+    }
+
+
+def _cuota_pagada(**overrides: Any) -> dict[str, Any]:
+    return _cuota_estado_row(
+        **{
+            "estado": "PAGADA",
+            "capital_pagado": Decimal(100),
+            "interes_pagado": Decimal(10),
+            "seguros_pagados": Decimal(2),
+            "impuestos_pagados": Decimal(1),
+            **overrides,
+        },
+    )
+
+
+def _lecturas_credito(
+    cuotas: list[dict[str, Any]], resumenes: list[dict[str, Any]] | None = None
+) -> list[list[dict[str, Any]]]:
+    return [
+        [],
+        [{"id_solicitud": 30, "estado": "DESEMBOLSADO"}],
+        resumenes
+        if resumenes is not None
+        else [{"version": 1, "numero_total_cuotas": 1}],
+        cuotas,
+    ]
+
+
+@pytest.mark.parametrize(
+    "cuota",
+    [
+        _cuota_estado_row(),
+        _cuota_estado_row(estado="VENCIDA"),
+        _cuota_estado_row(capital_pendiente=Decimal(0)),
+        _cuota_pagada(mora_pendiente=Decimal("0.01")),
+    ],
+)
+def test_cli06_credito_con_deuda_real_impide_baja(cuota):
+    db = _conn_escritura(
+        cambios={"estado": "Inactivo"}, lecturas=_lecturas_credito([cuota])
+    )
+    with pytest.raises(service.HTTPException) as exc:
+        service.cambiar_estado_cliente(
+            cast(Connection, db),
+            10,
+            ClienteEstadoUpdate(estado="Inactivo", motivo="Baja"),
+            12,
+            "192.0.2.10",
+            ("ADMIN",),
+        )
+    _assert_http_error(exc, 409, "CLIENTE_CON_PRODUCTOS_VIGENTES")
+    _assert_sin_escrituras(db)
+    assert db.rollbacks == 1
+    sql = db.consultas[6][0]
+    for tabla in (
+        "CreditoPlanAmortizacion",
+        "CreditoCuota",
+        "CreditoCuotaPago",
+        "CreditoCuotaMora",
+    ):
+        assert tabla in sql
+    assert "CapitalOriginal - c.CapitalAbonado" in sql
+    assert "mora.Liquidada = 0" in sql
+    assert "WITH (UPDLOCK, HOLDLOCK)" in sql
+    assert db.consultas[6][1] == {"id_solicitud": 30}
+    assert not any("CreditoSolicitud" in sql for sql, _ in db.consultas)
+
+
+def test_cli06_credito_totalmente_pagado_no_impide_baja():
+    db = _conn_escritura(
+        cambios={"estado": "Inactivo"}, lecturas=_lecturas_credito([_cuota_pagada()])
+    )
+    resultado = service.cambiar_estado_cliente(
+        cast(Connection, db),
+        10,
+        ClienteEstadoUpdate(estado="Inactivo", motivo="Baja"),
+        12,
+        "192.0.2.10",
+        ("ADMIN",),
+    )
+    assert resultado.estado == "Inactivo"
+    assert (db.commits, db.rollbacks) == (1, 0)
+    assert not db.respuestas
+
+
+@pytest.mark.parametrize("estado_desembolso", ["PENDIENTE", "REVERSADO"])
+def test_cli06_sin_productos_vigentes_permite_baja(estado_desembolso):
+    lecturas = [
+        [{"estado": "Inactiva", "saldo": Decimal(0), "saldo_retenido": Decimal(0)}],
+        [{"id_solicitud": 30, "estado": estado_desembolso}],
+    ]
+    db = _conn_escritura(cambios={"estado": "Eliminado"}, lecturas=lecturas)
+    resultado = service.cambiar_estado_cliente(
+        cast(Connection, db),
+        10,
+        ClienteEstadoUpdate(estado="Eliminado", motivo="Baja"),
+        12,
+        "192.0.2.10",
+        ("ADMIN",),
+    )
+    assert resultado.estado == "Eliminado"
+    assert (db.commits, db.rollbacks) == (1, 0)
+    assert not db.respuestas
+
+
+@pytest.mark.parametrize(
+    ("resumenes", "cuotas"),
+    [
+        ([], []),
+        ([{"version": 1, "numero_total_cuotas": 1}], []),
+        ([{"version": 1, "numero_total_cuotas": 2}], [_cuota_pagada()]),
+        ([{"version": 2, "numero_total_cuotas": 1}], [_cuota_pagada()]),
+        ([{"version": 1, "numero_total_cuotas": 1}], [_cuota_pagada(id_cuota=None)]),
+        (
+            [{"version": 1, "numero_total_cuotas": 1}],
+            [_cuota_pagada(capital_pagado=None)],
+        ),
+        (
+            [{"version": 1, "numero_total_cuotas": 1}],
+            [_cuota_pagada(capital_pagado=Decimal(99))],
+        ),
+        (
+            [{"version": 1, "numero_total_cuotas": 1}],
+            [_cuota_estado_row(estado="DESCONOCIDO")],
+        ),
+        (
+            [{"version": 1, "numero_total_cuotas": 1}],
+            [_cuota_estado_row(capital_pendiente="desconocido")],
+        ),
+    ],
+)
+def test_cli06_deuda_incierta_se_rechaza_sin_escribir(resumenes, cuotas):
+    db = _conn_escritura(
+        cambios={"estado": "Inactivo"}, lecturas=_lecturas_credito(cuotas, resumenes)
+    )
+    with pytest.raises(service.HTTPException) as exc:
+        service.cambiar_estado_cliente(
+            cast(Connection, db),
+            10,
+            ClienteEstadoUpdate(estado="Inactivo", motivo="Baja"),
+            12,
+            "192.0.2.10",
+            ("ADMIN",),
+        )
+    _assert_http_error(exc, 503, "DEUDA_CLIENTE_NO_VERIFICABLE")
+    _assert_sin_escrituras(db)
+    assert db.rollbacks == 1
+
+
+@pytest.mark.parametrize("fallo", [0, 1, 2, 3, 4, 5, 6, "commit"])
+def test_cli06_rollback_en_todas_las_etapas_de_escritura(fallo):
+    db = _conn_escritura(cambios={"estado": "Suspendido"}, fallo=fallo)
+    with pytest.raises(RuntimeError, match="Fallo"):
+        service.cambiar_estado_cliente(
+            cast(Connection, db),
+            10,
+            ClienteEstadoUpdate(estado="Suspendido", motivo="Control"),
+            12,
+            "192.0.2.10",
+            ("ASESOR",),
+        )
+    assert (db.commits, db.rollbacks) == (0, 1)
+
+
+@pytest.mark.parametrize("fallo", [3, 4, 5, 6])
+def test_cli06_rollback_si_falla_lectura_de_productos(fallo):
+    db = _conn_escritura(
+        cambios={"estado": "Inactivo"},
+        lecturas=_lecturas_credito([_cuota_pagada()]),
+        fallo=fallo,
+    )
+    with pytest.raises(RuntimeError, match="Fallo"):
+        service.cambiar_estado_cliente(
+            cast(Connection, db),
+            10,
+            ClienteEstadoUpdate(estado="Inactivo", motivo="Baja"),
+            12,
+            "192.0.2.10",
+            ("ADMIN",),
+        )
+    _assert_sin_escrituras(db)
+    assert db.rollbacks == 1
+
+
+def test_auditoria_json_tiene_limite_exacto_y_no_trunca():
+    base = repository.observaciones_cambio(None, None, "")
+    motivo = "x" * (500 - len(base))
+    valor = repository.observaciones_cambio(None, None, motivo)
+    assert len(valor.encode("ascii")) == 500
+    assert json.loads(valor)["motivo"] == motivo
+    with pytest.raises(service.HTTPException) as exc:
+        repository.observaciones_cambio(None, None, motivo + "x")
+    _assert_http_error(exc, 422, "AUDITORIA_EXCEDE_LIMITE")
+
+
+@pytest.mark.parametrize("anterior", ["anterior@correo.ec", None, 23, "María Ñ. ' --"])
+def test_cli07_recupera_valor_anterior_de_json_versionado(anterior):
+    observaciones = repository.observaciones_cambio(anterior, "nuevo", "Motivo")
+    db = _RiesgoConn(
+        [
+            [{"id_cliente": 10, "estado": "Activo"}],
+            [
+                _historial_row(
+                    observaciones=observaciones,
+                    fecha_modificacion=datetime(2026, 11, 4, 15),
+                )
+            ],
+        ]
+    )
+    resultado = service.listar_historial_cliente(cast(Connection, db), 10)
+    assert resultado.items[0].valor_anterior == (
+        None if anterior is None else str(anterior)
+    )
+    assert resultado.items[0].fecha_modificacion.tzinfo == UTC
+    assert json.loads(resultado.items[0].observaciones)["valorNuevo"] == "nuevo"
+    _assert_solo_lectura(db)
+
+
+@pytest.mark.parametrize(
+    "observaciones",
+    [
+        "Texto legado",
+        "{json inválido",
+        "[]",
+        '{"v":2,"valorAnterior":"x"}',
+        '{"v":1,"valorAnterior":{"x":1},"valorNuevo":"x","motivo":"m"}',
+    ],
+)
+def test_cli07_no_inventa_valores_para_legado(observaciones):
+    db = _RiesgoConn(
+        [
+            [{"id_cliente": 10, "estado": "Activo"}],
+            [_historial_row(observaciones=observaciones)],
+        ]
+    )
+    assert (
+        service.listar_historial_cliente(cast(Connection, db), 10)
+        .items[0]
+        .valor_anterior
+        is None
+    )
+    _assert_solo_lectura(db)
+
+
+@pytest.mark.parametrize(
+    "mapa",
+    [
+        {"user_prueba": 0},
+        {"user_prueba": -1},
+        {"user_prueba": 2147483648},
+        {"user_prueba": True},
+        {"user_prueba": "12"},
+        {"cliente": 12},
+        {"user_a": 12, "user_b": 12},
+    ],
+)
+def test_vinculos_de_auditoria_rechazan_configuracion_invalida(mapa):
+    with pytest.raises(ValidationError):
+        Settings(workos_audit_user_ids=mapa)
+
+
+def test_vinculo_de_auditoria_viene_solo_de_configuracion(monkeypatch):
+    monkeypatch.setenv("WORKOS_AUDIT_USER_IDS", '{"user_prueba":12}')
+    settings = Settings()
+    monkeypatch.setattr(auth, "get_settings", lambda: settings)
+    assert auth.id_usuario_auditoria(_usuario_historial("ADMIN")) == 12
+
+
+def test_usuario_sin_vinculo_no_recibe_id_fijo(monkeypatch):
+    monkeypatch.setattr(
+        auth, "get_settings", lambda: Settings(workos_audit_user_ids={})
+    )
+    with pytest.raises(service.HTTPException) as exc:
+        auth.id_usuario_auditoria(_usuario_historial("ADMIN"))
+    _assert_http_error(exc, 403, "USUARIO_SIN_VINCULO_AUDITORIA")
+
+
+@pytest.mark.parametrize("estado", [False, True])
+def test_routers_edicion_propagan_identidad_roles_e_ip_confiable(monkeypatch, estado):
+    from starlette.requests import Request
+
+    conn = _fake_conn()
+    usuario = _usuario_historial("ASESOR")
+    esperado = service.Cliente(**_cliente_row(direcciones=[]))
+    metodo = MagicMock(return_value=esperado)
+    request = Request(
+        {
+            "type": "http",
+            "client": ("192.0.2.10", 1234),
+            "headers": [(b"x-forwarded-for", b"203.0.113.99")],
+        }
+    )
+    if estado:
+        monkeypatch.setattr(service, "cambiar_estado_cliente", metodo)
+        payload = ClienteEstadoUpdate(estado="Bloqueado", motivo="Control")
+        assert (
+            router.cambiar_estado_cliente(10, payload, request, usuario, 12, conn)
+            is esperado
+        )
+        metodo.assert_called_once_with(conn, 10, payload, 12, "192.0.2.10", ("ASESOR",))
+    else:
+        monkeypatch.setattr(service, "editar_cliente", metodo)
+        payload_edicion = ClienteUpdate(email="nuevo@correo.ec")
+        assert (
+            router.editar_cliente(10, payload_edicion, request, usuario, 12, conn)
+            is esperado
+        )
+        metodo.assert_called_once_with(conn, 10, payload_edicion, 12, "192.0.2.10")
+
+
+def test_cli05_cli06_openapi_sin_sockets():
+    contrato = app.openapi()
+    for sufijo, operacion, modelo, roles in [
+        ("", "CLI05", "ClienteUpdate", ["ASESOR", "ADMIN"]),
+        ("/estado", "CLI06", "ClienteEstadoUpdate", ["ASESOR", "SUPERVISOR", "ADMIN"]),
+    ]:
+        ruta = contrato["paths"][f"/api/v1/clientes/{{idCliente}}{sufijo}"]["patch"]
+        assert ruta["operationId"] == operacion
+        assert ruta["x-roles"] == roles
+        assert ruta["security"] == [{"APIKeyCookie": []}]
+        assert ruta["requestBody"]["content"]["application/json"]["schema"][
+            "$ref"
+        ].endswith("/" + modelo)
+        assert {p["name"] for p in ruta["parameters"]} == {"idCliente"}
+        for status in ("400", "401", "403", "404", "409", "422", "503"):
+            assert "application/problem+json" in ruta["responses"][status]["content"]
+    modelo = contrato["components"]["schemas"]["ClienteUpdate"]
+    assert modelo["additionalProperties"] is False
+    assert (
+        not {"estado", "identificacion", "tipoCliente", "tipoDocumento"}
+        & modelo["properties"].keys()
+    )
+    assert modelo["properties"]["nombres"]["type"] == "string"
+    assert modelo["properties"]["email"]["type"] == "string"
+    assert modelo["properties"]["telefonoCelular"]["type"] == "string"

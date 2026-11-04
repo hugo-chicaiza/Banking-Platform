@@ -33,6 +33,8 @@ Edita datos del cliente (registra auditoría por campo).
 2. Cliente `Eliminado` → `409 CLIENTE_NO_EDITABLE`.
 3. Se mantiene `CK_Cliente_TipoPersona` (Natural / Jurídico) → 422 si se rompe.
 4. Una fila de `ClientesHis` (`TipoOperacion = 'U'`) por cada campo modificado, con valor anterior, nuevo, usuario e IP.
+5. Campos desconocidos, inmutables y `estado` se rechazan. Omitir conserva el valor; null solo se admite en campos anulables y compatibles con el tipo de persona. Sin cambios efectivos: 200 sin escrituras ni auditoría.
+6. Decisión confirmada el 2026-11-04: anterior/nuevo y motivo se guardan en JSON versionado en `Observaciones` (VARCHAR(500)); no existen columnas ValorAnterior/ValorNuevo. Si el JSON completo no cabe, 422 sin truncamiento. El usuario proviene de una sesión WorkOS y del mapa `WORKOS_AUDIT_USER_IDS` del servidor.
 
 ## Flujo
 
@@ -64,7 +66,6 @@ Body `ClienteUpdate`:
 {
   "nombres": "María José",
   "apellidos": "López Pérez",
-  "razonSocial": "Comercial Andes S.A.",
   "nombreComercial": "Andes",
   "idActividadEconomica": 1,
   "estadoCivil": "Soltero",
@@ -122,7 +123,12 @@ Formato ProblemDetails (ver F-04). Además de 400/401/403:
 
 | HTTP | `code` | Cuándo |
 |---|---|---|
+| 403 | `USUARIO_SIN_VINCULO_AUDITORIA` | No hay vínculo WorkOS → ID entero en la configuración del servidor |
+| 404 | `CLIENTE_NO_ENCONTRADO` | El cliente no existe |
 | 409 | `CLIENTE_NO_EDITABLE` | El cliente está Eliminado |
+| 422 | `TIPO_PERSONA_INVALIDO` | Los datos combinados actuales/enviados no cumplen las reglas Natural/Juridico |
+| 422 | `CATALOGO_INVALIDO` | La actividad económica enviada no existe |
+| 422 | `AUDITORIA_EXCEDE_LIMITE` | El JSON del cambio no cabe en Observaciones |
 
 ## Definición de terminado
 

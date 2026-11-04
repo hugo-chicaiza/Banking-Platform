@@ -33,6 +33,8 @@ from workos.types.user_management.session import (
     RefreshWithSessionCookieSuccessResponse,
 )
 
+from app.core.api.errors import problema
+from app.core.config.settings import get_settings
 from app.integrations.workos_client import (
     get_cookie_password,
     get_frontend_url,
@@ -297,6 +299,21 @@ def usuario_actual(
 
 # Para recibir el usuario en un endpoint: def ver(usuario: UsuarioActual)
 UsuarioActual = Annotated[Usuario, Depends(usuario_actual)]
+
+
+def id_usuario_auditoria(usuario: UsuarioActual) -> int:
+    """Resuelve una identidad ya autenticada usando vínculos del servidor."""
+    id_interno = get_settings().workos_audit_user_ids.get(usuario.id_usuario)
+    if id_interno is None:
+        raise problema(
+            403,
+            "USUARIO_SIN_VINCULO_AUDITORIA",
+            "El usuario no tiene un vínculo de auditoría configurado.",
+        )
+    return id_interno
+
+
+UsuarioAuditoria = Annotated[int, Depends(id_usuario_auditoria)]
 
 
 def require_auth() -> None:

@@ -31,6 +31,10 @@ Historial de cambios del cliente.
 
 1. Orden por fecha descendente; paginado (máx. 100).
 2. `ClientesHis` es inmutable (`trg_ClientesHis_Inmutable`, error 57001).
+3. Orden predeterminado FechaModificacion DESC, IdHistorial DESC. Campos admitidos: idHistorial, fechaModificacion, tipoOperacion, campoModificado, modificadoPor; dirección asc o desc estricta. Cualquier orden agrega IdHistorial DESC como desempate. Sort inválido: `400 SORT_INVALIDO`.
+4. Cliente inexistente: `404 CLIENTE_NO_ENCONTRADO`; sin historial: items vacíos, total 0. Se conserva el total fuera de página y se incluyen clientes Eliminado.
+5. `valorAnterior` se extrae del JSON v1 aprobado en Observaciones. En registros legados sin esa información es null; no se infiere a partir de Snap_*. Observaciones conserva el JSON completo con anterior/nuevo/motivo. El alias de IP es exactamente `direccionIP`.
+6. Requiere sesión WorkOS y rol SUPERVISOR, AUDITOR o ADMIN; no requiere vínculo entero de auditoría porque no escribe.
 
 ## Request
 

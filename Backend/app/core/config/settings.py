@@ -1,8 +1,8 @@
 from functools import lru_cache
-from typing import Literal
+from typing import Annotated, Literal
 from urllib.parse import urlsplit
 
-from pydantic import SecretStr, field_validator
+from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -49,6 +49,21 @@ class Settings(BaseSettings):
     workos_redirect_uri: str = ""
     # Origen del FE (esquema://host[:puerto], sin ruta): redirecciones y control CSRF
     frontend_url: str = ""
+    # Vínculos administrados por despliegue, nunca por el navegador ni por email.
+    workos_audit_user_ids: dict[
+        str, Annotated[int, Field(strict=True, ge=1, le=2147483647)]
+    ] = Field(default_factory=dict)
+
+    @field_validator("workos_audit_user_ids")
+    @classmethod
+    def _vinculos_auditoria(cls, valor: dict[str, int]) -> dict[str, int]:
+        if any(not clave.startswith("user_") or len(clave) <= 5 for clave in valor):
+            raise ValueError("Cada vínculo debe identificar un usuario WorkOS user_…")
+        if len(set(valor.values())) != len(valor):
+            raise ValueError(
+                "Cada usuario de auditoría debe tener un único vínculo WorkOS"
+            )
+        return valor
 
     @field_validator("frontend_url")
     @classmethod
