@@ -3,7 +3,8 @@ from typing import Literal
 
 from pydantic import Field
 
-from app.core.schemas import CamelModel
+from app.core.schemas import CamelModel, Money
+from app.modules.tarjetas.schemas import Tarjeta
 
 TipoDocumento = Literal["C", "R", "P"]
 TipoCliente = Literal["Natural", "Juridico"]
@@ -179,3 +180,49 @@ class RiesgoRegistrado(Riesgo):
     """Evaluación y estado del cliente después del trigger (CLI-13)."""
 
     estado_cliente: EstadoCliente
+
+
+class PageCliente(CamelModel):
+    items: list[Cliente]
+    page: int
+    page_size: int
+    total: int
+
+
+class CuentaPerfil(CamelModel):
+    id_cuenta: int
+    numero_cuenta: str
+    id_cliente: int
+    id_agencia: str
+    id_producto: int
+    tipo_cuenta: str
+    id_moneda: int
+    saldo: Money
+    saldo_retenido: Money
+    saldo_disponible: Money
+    estado: str
+    fecha_apertura: datetime
+    fecha_ultimo_movimiento: datetime | None = None
+    fecha_cierre: datetime | None = None
+
+
+class TarjetaPerfil(Tarjeta):
+    """Datos de tarjeta con número enmascarado; nunca incluye PAN ni hash."""
+
+
+class CreditoPerfil(CamelModel):
+    id_solicitud: int
+    numero_solicitud: str
+    tipo_credito: str
+    monto_desembolsado: Money | None = None
+    saldo_capital: Money | None = None
+    proxima_cuota: date | None = None
+    estado: str
+
+
+class ClientePerfil(CamelModel):
+    cliente: Cliente
+    riesgo_vigente: Riesgo | None = None
+    cuentas: list[CuentaPerfil] = Field(default_factory=list)
+    tarjetas: list[TarjetaPerfil] = Field(default_factory=list)
+    creditos: list[CreditoPerfil] = Field(default_factory=list)

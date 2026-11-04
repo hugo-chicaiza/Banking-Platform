@@ -10,23 +10,86 @@ from app.modules.clientes import service
 from app.modules.clientes.schemas import (
     Cliente,
     ClienteCreate,
+    ClientePerfil,
     Direccion,
     DireccionNueva,
     DireccionUpdate,
+    EstadoCliente,
+    PageCliente,
     Riesgo,
     RiesgoCreate,
     RiesgoRegistrado,
+    TipoCliente,
     TipoDocumento,
     ValidacionIdentificacion,
 )
 
 router = APIRouter(
-    prefix="/clientes",
     tags=["clientes"],
     dependencies=[Depends(require_auth)],
 )
+_gestion_router = APIRouter()
 
 Db = Annotated[Connection, Depends(cooperativa)]
+
+# TODO(F-03): aplicar los roles declarados cuando require_auth valide el JWT.
+_consultas_router = APIRouter(route_class=ProblemDetailsRoute)
+_ROLES_CONSULTA = ["ASESOR", "CAJERO", "SUPERVISOR", "ADMIN"]
+
+
+@_consultas_router.get(
+    "",
+    operation_id="CLI03",
+    response_model=PageCliente,
+    responses=RESPUESTAS_ERROR,
+    openapi_extra={"x-roles": _ROLES_CONSULTA},
+)
+def listar_clientes(
+    conn: Db,
+    q: str | None = None,
+    identificacion: str | None = None,
+    tipo_cliente: Annotated[TipoCliente | None, Query(alias="tipoCliente")] = None,
+    estado: EstadoCliente | None = None,
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(alias="pageSize", ge=1, le=100)] = 20,
+    sort: str | None = None,
+) -> PageCliente:
+    """Busca clientes por filtros combinados, con paginación (CLI-03 / C-03)."""
+    return service.listar_clientes(
+        conn,
+        q=q,
+        identificacion=identificacion,
+        tipo_cliente=tipo_cliente,
+        estado=estado,
+        page=page,
+        page_size=page_size,
+        sort=sort,
+    )
+
+
+@_consultas_router.get(
+    "/{idCliente}",
+    operation_id="CLI04",
+    response_model=Cliente,
+    responses=RESPUESTAS_ERROR,
+    openapi_extra={"x-roles": _ROLES_CONSULTA},
+)
+def obtener_cliente(idCliente: int, conn: Db) -> Cliente:
+    """Detalle del cliente con sus direcciones activas (CLI-04 / C-03)."""
+    return service.obtener_cliente(conn, idCliente)
+
+
+@_consultas_router.get(
+    "/{idCliente}/perfil",
+    operation_id="CLI08",
+    response_model=ClientePerfil,
+    responses=RESPUESTAS_ERROR,
+    openapi_extra={"x-roles": ["ASESOR", "SUPERVISOR", "ADMIN"]},
+)
+def obtener_perfil_cliente(idCliente: int, conn: Db) -> ClientePerfil:
+    """Datos generales, riesgo vigente y productos financieros (CLI-08 / C-06)."""
+    return service.obtener_perfil_cliente(conn, idCliente)
+
 
 # ---------------------------------------------------------------------------
 # GET /api/v1/clientes/validar-identificacion
@@ -35,7 +98,7 @@ Db = Annotated[Connection, Depends(cooperativa)]
 # TODO(F-03): restringir por rol cuando require_auth valide el JWT.
 
 
-@router.get("/validar-identificacion", response_model=ValidacionIdentificacion)
+@_gestion_router.get("/validar-identificacion", response_model=ValidacionIdentificacion)
 def validar_identificacion(
     tipo_documento: Annotated[
         TipoDocumento,
@@ -65,7 +128,7 @@ def validar_identificacion(
 # TODO(F-03): restringir por rol y extraer creado_por del token JWT.
 
 
-@router.post("", response_model=Cliente, status_code=201)
+@_gestion_router.post("", response_model=Cliente, status_code=201)
 def registrar_cliente(
     payload: ClienteCreate,
     request: Request,
@@ -91,7 +154,7 @@ def registrar_cliente(
 # Roles: ASESOR, ADMIN
 
 
-@router.get(
+@_gestion_router.get(
     "/{idCliente}/direcciones",
     response_model=list[Direccion],
 )
@@ -109,7 +172,7 @@ def listar_direcciones(
 # Roles: ASESOR, ADMIN
 
 
-@router.post(
+@_gestion_router.post(
     "/{idCliente}/direcciones",
     response_model=Direccion,
     status_code=201,
@@ -134,7 +197,7 @@ def agregar_direccion(
 # Roles: ASESOR, ADMIN
 
 
-@router.patch(
+@_gestion_router.patch(
     "/{idCliente}/direcciones/{idDireccion}",
     response_model=Direccion,
 )
@@ -145,7 +208,7 @@ def editar_direccion(
     request: Request,
     conn: Db,
 ) -> Any:
-    """Edita una dirección o la promueve a principal (CLI-11 / C-07)."""
+    """Edita una dirección o la promueve a principal."""
     modificado_por = 1
     direccion_ip = _ip_cliente(request)
     return service.editar_direccion(
@@ -159,7 +222,7 @@ def editar_direccion(
 # Roles: ASESOR, ADMIN
 
 
-@router.delete(
+@_gestion_router.delete(
     "/{idCliente}/direcciones/{idDireccion}",
     status_code=204,
 )
@@ -222,4 +285,6 @@ def listar_evaluaciones_riesgo(idCliente: int, conn: Db) -> list[Riesgo]:
     return service.listar_evaluaciones_riesgo(conn, idCliente)
 
 
-router.include_router(_riesgo_router)
+router.include_router(_gestion_router, prefix="/clientes")
+router.include_router(_riesgo_router, prefix="/clientes")
+router.include_router(_consultas_router, prefix="/clientes")
