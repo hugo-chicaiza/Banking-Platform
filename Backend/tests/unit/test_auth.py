@@ -1,0 +1,493 @@
+"""AUT-01..04 y core/security.py (patrón BFF) sin red: WorkOS simulado."""
+
+import base64
+from types import SimpleNamespace
+from typing import Any
+from urllib.parse import parse_qs, urlsplit
+
+import httpx
+import pytest
+from cryptography.fernet import Fernet
+from fastapi import APIRouter, Depends, FastAPI
+from fastapi.testclient import TestClient
+from jwt.exceptions import PyJWKClientConnectionError
+from workos.exceptions import AuthenticationException
+from workos.types.user_management import User
+from workos.types.user_management.session import (
+    AuthenticateWithSessionCookieErrorResponse,
+    AuthenticateWithSessionCookieFailureReason,
+    AuthenticateWithSessionCookieSuccessResponse,
+    RefreshWithSessionCookieErrorResponse,
+    RefreshWithSessionCookieSuccessResponse,
+)
+
+from app.core import security
+from app.core.config import get_settings
+from app.core.errors import ProblemDetailsRoute
+from app.core.security import COOKIE_SESION, require_roles
+from app.integrations import workos_client
+from app.main import app
+from app.modules.auth import service
+from app.modules.auth.router import COOKIE_STATE
+
+BASE = "/api/v1/auth"
+FRONT = "http://localhost:5173"
+CALLBACK = f"{FRONT}/api/v1/auth/callback"
+AUTHORIZE = "https://api.workos.com/user_management/authorize"
+
+
+def _usuario(**cambios: Any) -> User:
+    datos: dict[str, Any] = {
+        "object": "user",
+        "id": "user_1",
+        "email": "maria.lopez@correo.ec",
+        "first_name": "María",
+        "last_name": "López",
+        "email_verified": True,
+        "created_at": "2026-11-01T00:00:00Z",
+        "updated_at": "2026-11-01T00:00:00Z",
+        "metadata": {"idAgencia": "001"},
+    }
+    return User(**{**datos, **cambios})
+
+
+class _Sesion:
+    """Imita workos.session.Session sobre el registro de sesiones del falso."""
+
+    def __init__(self, workos: "_UserManagement", sellada: str) -> None:
+        self._workos = workos
+        self._sellada = sellada
+
+    def _claims(self) -> dict[str, Any]:
+        return {
+            "session_id": "session_1",
+            "organization_id": "org_1",
+            "role": self._workos.roles[0] if self._workos.roles else None,
+            "roles": self._workos.roles,
+            "permissions": ["cuentas:crear"],
+            "user": self._workos.usuario,
+        }
+
+    def authenticate(self) -> Any:
+        if self._workos.error_jwks:
+            raise self._workos.error_jwks
+        estado = self._workos.sesiones.get(self._sellada)
+        if estado == "vigente":
+            return AuthenticateWithSessionCookieSuccessResponse(
+                authenticated=True, **self._claims()
+            )
+        motivo = (
+            AuthenticateWithSessionCookieFailureReason.INVALID_JWT
+            # "usada": la cookie se descifra igual y su access token sigue vencido;
+            # lo que ya no sirve es su refresh token
+            if estado in ("vencida", "usada")
+            else AuthenticateWithSessionCookieFailureReason.INVALID_SESSION_COOKIE
+        )
+        return AuthenticateWithSessionCookieErrorResponse(
+            authenticated=False, reason=motivo
+        )
+
+    def refresh(self) -> Any:
+        self._workos.renovaciones += 1
+        if self._workos.sesiones.get(self._sellada) not in ("vigente", "vencida"):
+            return RefreshWithSessionCookieErrorResponse(
+                authenticated=False, reason="invalid_grant"
+            )
+        # El refresh token es de un solo uso
+        self._workos.sesiones[self._sellada] = "usada"
+        nueva = f"sellada-renovada-{self._workos.renovaciones}"
+        self._workos.sesiones[nueva] = "vigente"
+        return RefreshWithSessionCookieSuccessResponse(
+            authenticated=True, sealed_session=nueva, **self._claims()
+        )
+
+
+class _UserManagement:
+    """Imita los métodos de workos.user_management que usa el backend."""
+
+    def __init__(self) -> None:
+        self.usuario = _usuario()
+        self.roles: list[str] = ["cajero"]
+        self.sesiones: dict[str, str] = {
+            "sellada-vigente": "vigente",
+            "sellada-vencida": "vencida",
+        }
+        self.error: Exception | None = None
+        self.error_jwks: Exception | None = None
+        self.renovaciones = 0
+        self.llamadas: list[tuple[str, dict[str, Any]]] = []
+
+    def get_authorization_url(self, **kwargs: Any) -> str:
+        self.llamadas.append(("authorize", kwargs))
+        return f"{AUTHORIZE}?state={kwargs['state']}"
+
+    def authenticate_with_code(self, **kwargs: Any) -> SimpleNamespace:
+        self.llamadas.append(("code", kwargs))
+        if self.error:
+            raise self.error
+        self.sesiones["sellada-nueva"] = "vigente"
+        return SimpleNamespace(sealed_session="sellada-nueva", user=self.usuario)
+
+    def load_sealed_session(self, *, sealed_session: str, cookie_password: str):
+        clave = get_settings().workos_cookie_password.get_secret_value()
+        assert cookie_password == clave
+        return _Sesion(self, sealed_session)
+
+    def get_logout_url(self, session_id: str, return_to: str) -> str:
+        self.llamadas.append(("logout", {"session_id": session_id}))
+        return (
+            "https://api.workos.com/logout"
+            f"?session_id={session_id}&return_to={return_to}"
+        )
+
+
+@pytest.fixture(autouse=True)
+def _configuracion(monkeypatch):
+    monkeypatch.setenv("WORKOS_COOKIE_PASSWORD", Fernet.generate_key().decode())
+    monkeypatch.setenv("WORKOS_REDIRECT_URI", CALLBACK)
+    monkeypatch.setenv("FRONTEND_URL", FRONT + "/")
+    get_settings.cache_clear()
+    workos_client.get_cookie_password.cache_clear()
+    security._renovaciones.clear()
+    yield
+    get_settings.cache_clear()
+    workos_client.get_cookie_password.cache_clear()
+
+
+@pytest.fixture()
+def workos(monkeypatch) -> _UserManagement:
+    falso = _UserManagement()
+    cliente = SimpleNamespace(user_management=falso)
+    monkeypatch.setattr(security, "get_workos", lambda: cliente)
+    monkeypatch.setattr(service, "get_workos", lambda: cliente)
+    return falso
+
+
+@pytest.fixture()
+def client() -> TestClient:
+    return TestClient(app, raise_server_exceptions=False, follow_redirects=False)
+
+
+def _ruta(destino: str) -> str:
+    """Decodifica la ruta guardada en la cookie de state (base64 sin relleno)."""
+    return base64.urlsafe_b64decode(destino + "=" * (-len(destino) % 4)).decode()
+
+
+def _cookies(response: httpx.Response) -> dict[str, str]:
+    """Set-Cookie de la respuesta, por nombre."""
+    return {
+        valor.split("=", 1)[0]: valor
+        for valor in response.headers.get_list("set-cookie")
+    }
+
+
+def _con_sesion(sellada: str = "sellada-vigente", **extra: str) -> dict[str, str]:
+    return {"Cookie": f"{COOKIE_SESION}={sellada}", **extra}
+
+
+def _iniciar(client: TestClient, return_to: str = "/clientes") -> tuple[str, str]:
+    """GET /login: devuelve el state de la URL y el valor de la cookie de state."""
+    r = client.get(f"{BASE}/login", params={"return_to": return_to})
+    state = parse_qs(urlsplit(r.headers["location"]).query)["state"][0]
+    cookie = _cookies(r)[COOKIE_STATE].split(";")[0].split("=", 1)[1]
+    return state, cookie
+
+
+def _callback(client: TestClient, cookie_state: str | None, **params: str):
+    cabeceras = {"Cookie": f"{COOKIE_STATE}={cookie_state}"} if cookie_state else {}
+    return client.get(f"{BASE}/callback", params=params, headers=cabeceras)
+
+
+# --- AUT-01 GET /auth/login --------------------------------------------------------
+
+
+def test_login_redirige_al_hosted_ui_con_state(client, workos):
+    r = client.get(f"{BASE}/login", params={"return_to": "/clientes?page=2"})
+
+    assert r.status_code == 302
+    assert r.headers["location"].startswith(AUTHORIZE)
+    assert r.headers["cache-control"] == "no-store"
+    argumentos = workos.llamadas[0][1]
+    assert argumentos["provider"] == "authkit"
+    assert argumentos["redirect_uri"] == CALLBACK
+    cookie = _cookies(r)[COOKIE_STATE]
+    for atributo in ("HttpOnly", "Secure", "SameSite=lax", "Path=/", "Max-Age=600"):
+        assert atributo in cookie
+    state, destino = cookie.split(";")[0].split("=", 1)[1].split(".", 1)
+    assert state == argumentos["state"] and len(state) >= 43
+    assert _ruta(destino) == "/clientes?page=2"
+
+
+@pytest.mark.parametrize(
+    "return_to",
+    ["//evil.com", "/\\evil.com", "https://evil.com", "clientes", "/a b", ""],
+)
+def test_login_return_to_externo_vuelve_al_inicio(client, workos, return_to):
+    _, cookie = _iniciar(client, return_to)
+
+    assert _ruta(cookie.split(".", 1)[1]) == "/"
+
+
+# --- AUT-01 GET /auth/callback -----------------------------------------------------
+
+
+def test_callback_crea_la_sesion_y_vuelve_a_return_to(
+    client, workos, eventos_auditados
+):
+    state, cookie = _iniciar(client)
+
+    r = _callback(client, cookie, code="code-1", state=state)
+
+    assert r.status_code == 302
+    assert r.headers["location"] == f"{FRONT}/clientes"
+    cookies = _cookies(r)
+    sesion = cookies[COOKIE_SESION]
+    assert sesion.startswith(f"{COOKIE_SESION}=sellada-nueva;")
+    for atributo in ("HttpOnly", "Secure", "SameSite=lax", "Path=/"):
+        assert atributo in sesion
+    assert "Domain" not in sesion
+    assert "Max-Age=0" in cookies[COOKIE_STATE]
+    argumentos = workos.llamadas[-1][1]
+    assert argumentos["code"] == "code-1"
+    assert argumentos["session"]["seal_session"] is True
+    assert eventos_auditados[-1].resultado == "Exitoso"
+
+
+@pytest.mark.parametrize("cookie_state", [None, "otro-state.Lw", "sin-punto", "x.%%"])
+def test_callback_state_invalido_no_crea_sesion(
+    client, workos, eventos_auditados, cookie_state
+):
+    state, _ = _iniciar(client)
+
+    r = _callback(client, cookie_state, code="code-1", state=state)
+
+    assert r.headers["location"] == f"{FRONT}/login?error=SOLICITUD_INVALIDA"
+    assert COOKIE_SESION not in _cookies(r)
+    assert [metodo for metodo, _ in workos.llamadas] == ["authorize"]
+    assert eventos_auditados[-1].resultado == "Fallido"
+
+
+def test_callback_usuario_cancelo(client, workos):
+    state, cookie = _iniciar(client)
+
+    r = _callback(client, cookie, state=state, error="access_denied")
+
+    assert r.headers["location"] == f"{FRONT}/login?error=LOGIN_CANCELADO"
+
+
+def test_callback_code_rechazado(client, workos):
+    cuerpo = {"code": "invalid_grant", "message": "rechazado"}
+    workos.error = AuthenticationException(httpx.Response(400, json=cuerpo), cuerpo)
+    state, cookie = _iniciar(client)
+
+    r = _callback(client, cookie, code="code-1", state=state)
+
+    assert r.headers["location"] == f"{FRONT}/login?error=CREDENCIALES_INVALIDAS"
+    assert COOKIE_SESION not in _cookies(r)
+
+
+def test_callback_workos_caido(client, workos):
+    workos.error = httpx.ConnectError("sin red")
+    state, cookie = _iniciar(client)
+
+    r = _callback(client, cookie, code="code-1", state=state)
+
+    assert r.headers["location"] == (f"{FRONT}/login?error=AUTENTICACION_NO_DISPONIBLE")
+
+
+# --- AUT-04 GET /auth/me -----------------------------------------------------------
+
+
+def test_me_usuario_con_un_rol(client, workos):
+    r = client.get(f"{BASE}/me", headers=_con_sesion())
+
+    assert r.status_code == 200
+    assert r.json() == {
+        "idUsuario": "user_1",
+        "nombre": "María López",
+        "email": "maria.lopez@correo.ec",
+        "idOrganizacion": "org_1",
+        "roles": ["CAJERO"],
+        "permisos": ["cuentas:crear"],
+        "idAgencia": "001",
+    }
+    assert "set-cookie" not in r.headers
+
+
+def test_me_usuario_con_varios_roles(client, workos):
+    workos.roles = ["asesor", "SUPERVISOR", "aprobador-credito", "member"]
+
+    r = client.get(f"{BASE}/me", headers=_con_sesion())
+
+    assert r.json()["roles"] == ["ASESOR", "SUPERVISOR", "APROBADOR_CREDITO"]
+
+
+def test_me_sin_agencia_vigente(client, workos):
+    workos.usuario = _usuario(metadata={}, first_name=None, last_name=None)
+
+    cuerpo = client.get(f"{BASE}/me", headers=_con_sesion()).json()
+
+    assert cuerpo["idAgencia"] is None
+    assert cuerpo["nombre"] == "maria.lopez@correo.ec"
+
+
+def test_me_con_token_vencido_renueva_la_cookie(client, workos):
+    r = client.get(f"{BASE}/me", headers=_con_sesion("sellada-vencida"))
+
+    assert r.status_code == 200
+    assert _cookies(r)[COOKIE_SESION].startswith(f"{COOKIE_SESION}=sellada-renovada-1;")
+
+
+def test_peticiones_paralelas_comparten_una_renovacion(workos):
+    primera = security.validar_sesion("sellada-vencida")
+    segunda = security.validar_sesion("sellada-vencida")
+
+    assert workos.renovaciones == 1
+    assert primera is not None and segunda is not None
+    assert primera.sellada_nueva == segunda.sellada_nueva
+
+
+def test_cookie_vieja_ya_renovada_no_sirve_despues_del_margen(workos):
+    assert security.validar_sesion("sellada-vencida") is not None
+    security._renovaciones.clear()  # como si hubieran pasado los 30 s
+
+    assert security.validar_sesion("sellada-vencida") is None
+
+
+def test_me_sin_cookie_401(client, workos):
+    r = client.get(f"{BASE}/me")
+
+    assert r.status_code == 401
+    assert r.json()["code"] == "NO_AUTENTICADO"
+
+
+def test_me_cookie_invalida_401_y_la_borra(client, workos):
+    r = client.get(f"{BASE}/me", headers=_con_sesion("basura"))
+
+    assert r.status_code == 401
+    assert "Max-Age=0" in _cookies(r)[COOKIE_SESION]
+
+
+def test_me_llaves_de_workos_inaccesibles_503(client, workos):
+    workos.error_jwks = PyJWKClientConnectionError("sin red")
+
+    r = client.get(f"{BASE}/me", headers=_con_sesion())
+
+    assert r.status_code == 503
+    assert r.json()["code"] == "AUTENTICACION_NO_DISPONIBLE"
+
+
+# --- AUT-02 POST /auth/refresh -----------------------------------------------------
+
+
+def test_refresh_reescribe_la_cookie(client, workos):
+    r = client.post(f"{BASE}/refresh", headers=_con_sesion(origin=FRONT))
+
+    assert r.status_code == 204
+    assert _cookies(r)[COOKIE_SESION].startswith(f"{COOKIE_SESION}=sellada-renovada-1;")
+
+
+def test_refresh_sin_sesion_401(client, workos):
+    r = client.post(f"{BASE}/refresh")
+
+    assert r.status_code == 401
+    assert r.json()["code"] == "NO_AUTENTICADO"
+
+
+def test_refresh_desde_otro_origen_403(client, workos):
+    r = client.post(
+        f"{BASE}/refresh", headers=_con_sesion(origin="https://evil.example")
+    )
+
+    assert r.status_code == 403
+    assert r.json()["code"] == "ORIGEN_NO_PERMITIDO"
+    assert workos.renovaciones == 0
+
+
+# --- AUT-03 POST /auth/logout ------------------------------------------------------
+
+
+def test_logout_devuelve_logout_url_y_borra_la_cookie(
+    client, workos, eventos_auditados
+):
+    r = client.post(f"{BASE}/logout", headers=_con_sesion(origin=FRONT))
+
+    assert r.status_code == 200
+    url = r.json()["logoutUrl"]
+    assert "session_id=session_1" in url and f"return_to={FRONT}/login" in url
+    assert "Max-Age=0" in _cookies(r)[COOKIE_SESION]
+    assert eventos_auditados[-1].accion == "LOGOUT"
+    assert eventos_auditados[-1].resultado == "Exitoso"
+
+
+def test_logout_con_token_vencido_igual_cierra_en_workos(client, workos):
+    r = client.post(f"{BASE}/logout", headers=_con_sesion("sellada-vencida"))
+
+    assert "session_id=session_1" in r.json()["logoutUrl"]
+
+
+def test_logout_sin_sesion_es_idempotente(client, workos):
+    r = client.post(f"{BASE}/logout")
+
+    assert r.status_code == 200
+    assert r.json() == {"logoutUrl": f"{FRONT}/login"}
+
+
+def test_logout_desde_otro_sitio_403(client, workos):
+    cabeceras = _con_sesion(**{"sec-fetch-site": "cross-site"})
+
+    r = client.post(f"{BASE}/logout", headers=cabeceras)
+
+    assert r.status_code == 403
+
+
+# --- core/security.py --------------------------------------------------------------
+
+
+def _app_con_roles() -> TestClient:
+    rutas = APIRouter(route_class=ProblemDetailsRoute)
+
+    @rutas.get("/solo-admin", dependencies=[Depends(require_roles("ADMIN"))])
+    def solo_admin() -> dict[str, bool]:
+        return {"ok": True}
+
+    prueba = FastAPI()
+    prueba.include_router(rutas)
+    return TestClient(prueba)
+
+
+def test_require_roles_403_sin_el_rol(workos):
+    r = _app_con_roles().get("/solo-admin", headers=_con_sesion())
+
+    assert r.status_code == 403
+    assert r.json()["code"] == "SIN_PERMISO"
+
+
+def test_require_roles_permite_con_el_rol(workos):
+    workos.roles = ["admin"]
+
+    r = _app_con_roles().get("/solo-admin", headers=_con_sesion())
+
+    assert r.status_code == 200
+
+
+def test_require_roles_rechaza_roles_desconocidos():
+    with pytest.raises(ValueError, match="GERENTE"):
+        require_roles("GERENTE")
+
+
+def test_frontend_url_con_ruta_es_invalida(monkeypatch):
+    monkeypatch.setenv("FRONTEND_URL", "http://localhost:5173/app")
+    get_settings.cache_clear()
+
+    with pytest.raises(ValueError, match="FRONTEND_URL"):
+        get_settings()
+
+
+def test_cookie_password_invalida(monkeypatch):
+    monkeypatch.setenv("WORKOS_COOKIE_PASSWORD", "no-es-fernet")
+    get_settings.cache_clear()
+    workos_client.get_cookie_password.cache_clear()
+
+    with pytest.raises(RuntimeError, match="Fernet"):
+        workos_client.get_cookie_password()
