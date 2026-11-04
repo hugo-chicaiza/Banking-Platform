@@ -1,6 +1,6 @@
 ---
 number: 110
-title: "AUT-01 | POST /api/v1/auth/login"
+title: "AUT-01 | GET /api/v1/auth/login + callback"
 type: api
 code: AUT-01
 parent: "[[F-03 Autenticación y roles]]"
@@ -19,62 +19,44 @@ assignees: []
 url: https://github.com/hugo-chicaiza/Banking-Platform/issues/110
 ---
 
-`POST /api/v1/auth/login` · **Roles:** Público · **Historia:** F-03 (#17) · **OpenAPI:** `AUT01`
+`GET /api/v1/auth/login` + `GET /api/v1/auth/callback` · **Roles:** Público · **Historia:** F-03 (#17) · **OpenAPI:** `AUT01`
 
-Valida usuario y contraseña y devuelve access token, refresh token y datos de la sesión.
+Inicia sesión con el Hosted UI de WorkOS AuthKit (authorization code, patrón BFF). El navegador solo recibe la cookie `__Host-session`, nunca tokens.
 
-| Lee | Escribe | DB |
+| Lee | Escribe | Externo |
 |---|---|---|
-| `Organizacion.Usuarios`, `Seguridad.GruposUsuarios`, `Seguridad.Grupos`, `Caja.CajerosAsignadosAgencia` | `Seguridad.Sesiones`, `Usuarios.IntentosFallidos/UltimoAcceso/UltimaSesionID`, `Seguridad.Bloqueos` | SeguridadDB |
+| — | `Auditoria.Auditoria` (LOGIN) | WorkOS AuthKit |
 
 ## Reglas de negocio
 
-1. Usuario con `Estado` distinto de `Activo` → `423 USUARIO_BLOQUEADO` (Bloqueado) o `401 CREDENCIALES_INVALIDAS` (Inactivo).
-2. La contraseña se compara contra `ClaveHash`; el error no dice si falló el usuario o la contraseña → `401 CREDENCIALES_INVALIDAS`.
-3. Cada fallo suma `IntentosFallidos`; al llegar a N el usuario pasa a `Bloqueado` y se inserta en `Seguridad.Bloqueos` → `423 USUARIO_BLOQUEADO`.
-4. Login correcto reinicia `IntentosFallidos` y actualiza `UltimoAcceso`.
-5. Access token: 15 min (`expiresIn = 900`), con `sub`, `roles[]` e `idAgencia`. Refresh token: 8 h.
-6. `idAgencia` = asignación vigente (`FechaFin IS NULL` y `Estado = 1`); si no hay, `null`.
+1. Usuarios, contraseñas, bloqueos y roles se administran en WorkOS; el backend no consulta `Organizacion.Usuarios`.
+2. `return_to` solo puede ser una ruta interna (empieza con `/`, no con `//` ni `/\`); si no, se usa `/`.
+3. `state` aleatorio en la cookie `__Host-oauth_state` (10 min); el callback lo compara con `compare_digest`.
+4. Sesión: `__Host-session` = sesión de WorkOS cifrada con `WORKOS_COOKIE_PASSWORD`. `HttpOnly; Secure; SameSite=Lax; Path=/`, sin `Domain`, 8 h.
+5. Los errores del callback no responden JSON: redirigen a `FRONTEND_URL/login?error=<code>`.
 
 ## Flujo
 
-1. Buscar usuario por `NombreUsuario` y validar estado.
-2. Verificar contraseña; si falla, aplicar regla 3.
-3. Cargar roles y agencia vigente.
-4. Crear `Seguridad.Sesiones`, generar tokens y responder 200.
+1. FE navega a `GET /auth/login?return_to=/clientes`.
+2. Backend guarda `state` + `return_to` en cookie y responde `302` al Hosted UI.
+3. AuthKit vuelve a `GET /auth/callback?code&state` (`WORKOS_REDIRECT_URI`).
+4. Backend valida `state`, canjea el `code` (`authenticate_with_code` con `seal_session`), crea la cookie, audita y responde `302` a `FRONTEND_URL + return_to`.
 
-## Request
+## Errores (redirección a `/login?error=`)
 
-```json
-{ "username": "mlopez", "password": "Cajero2026*" }
-```
+| `error` | Cuándo |
+|---|---|
+| `LOGIN_CANCELADO` | AuthKit devuelve `error` (el usuario canceló) |
+| `SOLICITUD_INVALIDA` | Falta `code`/`state` o no coincide con la cookie |
+| `CREDENCIALES_INVALIDAS` | WorkOS rechaza el `code` (vencido, usado, usuario bloqueado) |
+| `AUTENTICACION_NO_DISPONIBLE` | WorkOS no responde |
 
-## Response `200`
+## Configuración
 
-```json
-{
-  "accessToken": "<access-token-jwt>",
-  "refreshToken": "<refresh-token>",
-  "expiresIn": 900,
-  "usuario": { "idUsuario": 12, "nombre": "María López", "roles": ["CAJERO"], "idAgencia": "001" }
-}
-```
-
-## Errores
-
-Formato ProblemDetails (ver F-04). Además de 400:
-
-| HTTP | `code` | Cuándo |
-|---|---|---|
-| 401 | `CREDENCIALES_INVALIDAS` | Usuario inexistente, inactivo o contraseña incorrecta |
-| 423 | `USUARIO_BLOQUEADO` | Usuario bloqueado o recién bloqueado por intentos |
+`WORKOS_API_KEY`, `WORKOS_CLIENT_ID`, `WORKOS_COOKIE_PASSWORD`, `WORKOS_REDIRECT_URI` (registrada en WorkOS › Redirects), `FRONTEND_URL`.
 
 ## Definición de terminado
 
-- [ ] Coincide con `openapi.yaml` (request, response y errores)
-- [ ] Prueba del caso feliz y de cada error de la tabla
-- [ ] La contraseña nunca aparece en logs
-
-## Pendiente
-
-- Dónde se guarda el refresh token (no hay columna en `Seguridad.Sesiones`) y valor de N (propuesta: 3).
+- [x] Caso feliz, `return_to` externo, `state` inválido o ausente, cancelación, `code` rechazado y WorkOS caído (`tests/unit/test_auth.py`)
+- [x] Ni tokens, ni `code`, ni cookies en logs o auditoría
+- [ ] Probado contra WorkOS Staging

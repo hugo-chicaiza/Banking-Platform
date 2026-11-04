@@ -1,7 +1,8 @@
 from functools import lru_cache
 from typing import Literal
+from urllib.parse import urlsplit
 
-from pydantic import SecretStr
+from pydantic import SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -38,6 +39,30 @@ class Settings(BaseSettings):
     seguridad_db_name: str = "SeguridadDB"
     seguridad_db_user: str = ""
     seguridad_db_password: SecretStr = SecretStr("")
+
+    # WorkOS AuthKit (F-03), patrón BFF: el navegador solo recibe una cookie cifrada
+    workos_api_key: SecretStr = SecretStr("")
+    workos_client_id: str = ""
+    # Clave Fernet con la que se cifra la cookie de sesión
+    workos_cookie_password: SecretStr = SecretStr("")
+    # URL de GET /api/v1/auth/callback tal como la ve el navegador
+    workos_redirect_uri: str = ""
+    # Origen del FE (esquema://host[:puerto], sin ruta): redirecciones y control CSRF
+    frontend_url: str = ""
+
+    @field_validator("frontend_url")
+    @classmethod
+    def _solo_origen(cls, valor: str) -> str:
+        valor = valor.rstrip("/")
+        partes = urlsplit(valor)
+        if valor and (
+            partes.scheme not in ("http", "https")
+            or not partes.netloc
+            or partes.path
+            or partes.query
+        ):
+            raise ValueError("FRONTEND_URL debe ser solo esquema://host[:puerto]")
+        return valor
 
     def odbc_connection_string(self, db: Literal["cooperativa", "seguridad"]) -> str:
         server = getattr(self, f"{db}_db_server")
