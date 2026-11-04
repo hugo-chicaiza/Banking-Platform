@@ -5,8 +5,8 @@ Se omite si no hay BD configurada (por ejemplo en el CI).
 
 import pytest
 
-from app.core.config import get_settings
-from app.core.db import get_engine
+from app.core.config.settings import get_settings
+from app.core.database.db import get_engine
 from app.modules.catalogos import repository
 
 pytestmark = pytest.mark.skipif(

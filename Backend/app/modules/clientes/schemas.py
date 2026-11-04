@@ -3,7 +3,8 @@ from typing import Literal
 
 from pydantic import Field
 
-from app.core.schemas import CamelModel
+from app.core.api.schemas import CamelModel, Money
+from app.modules.tarjetas.schemas import Tarjeta
 
 TipoDocumento = Literal["C", "R", "P"]
 TipoCliente = Literal["Natural", "Juridico"]
@@ -13,6 +14,7 @@ TipoDireccion = Literal["Domicilio", "Trabajo", "Correspondencia", "Otra"]
 EstadoCliente = Literal[
     "Pendiente", "Activo", "Bloqueado", "Inactivo", "Cerrado", "Eliminado"
 ]
+EstadoDireccion = Literal["Activo", "Inactivo", "Eliminado"]
 
 # ---------------------------------------------------------------------------
 # CLI-01 · Validación de identificación
@@ -108,3 +110,119 @@ class Cliente(CamelModel):
     fecha_registro: datetime
     creado_por: int
     direcciones: list[Direccion]
+
+
+# ---------------------------------------------------------------------------
+# Administración de direcciones del cliente
+# ---------------------------------------------------------------------------
+
+
+class DireccionNueva(CamelModel):
+    """Body de POST /api/v1/clientes/{idCliente}/direcciones (CLI-10)."""
+
+    tipo_direccion: TipoDireccion = "Domicilio"
+    codigo_pais: str = Field(default="ECU", min_length=3, max_length=3)
+    id_ciudad: int
+    sector: str | None = None
+    calle_direccion: str = Field(min_length=1)
+    referencia_ubicacion: str = Field(min_length=1)
+    codigo_postal: str | None = Field(
+        default=None, min_length=6, max_length=6, pattern=r"^\d{6}$"
+    )
+    es_principal: bool = False
+
+
+class DireccionUpdate(CamelModel):
+    """Body de PATCH /api/v1/clientes/{idCliente}/direcciones/{idDireccion} (CLI-11).
+
+    Todos los campos son opcionales para soportar patch parcial.
+    """
+
+    tipo_direccion: TipoDireccion | None = None
+    codigo_pais: str | None = Field(default=None, min_length=3, max_length=3)
+    id_ciudad: int | None = None
+    sector: str | None = None
+    calle_direccion: str | None = Field(default=None, min_length=1)
+    referencia_ubicacion: str | None = Field(default=None, min_length=1)
+    codigo_postal: str | None = Field(
+        default=None, min_length=6, max_length=6, pattern=r"^\d{6}$"
+    )
+    es_principal: bool | None = None
+
+
+# CLI-13 / CLI-14 · Evaluaciones de riesgo
+NivelRiesgoLAFT = Literal["Bajo", "Medio", "Alto"]
+ResultadoEvaluacion = Literal["Aprobado", "Observado", "Rechazado"]
+
+
+class RiesgoCreate(CamelModel):
+    """Evaluación LAFT, PEP y antecedentes (CLI-13)."""
+
+    nivel_riesgo_laft: NivelRiesgoLAFT = Field(alias="nivelRiesgoLAFT")
+    es_pep: bool = Field(default=False, alias="esPEP")
+    resultado_evaluacion: ResultadoEvaluacion
+    tiene_antecedentes: bool = False
+    id_tipo_antecedente: int | None = None
+    observaciones: str | None = Field(default=None, max_length=250)
+
+
+class Riesgo(RiesgoCreate):
+    """Evaluación persistida, incluida su vigencia (CLI-14)."""
+
+    id_evaluacion: int
+    id_cliente: int
+    fecha_evaluacion: datetime
+    evaluador: int
+    es_vigente: bool
+
+
+class RiesgoRegistrado(Riesgo):
+    """Evaluación y estado del cliente después del trigger (CLI-13)."""
+
+    estado_cliente: EstadoCliente
+
+
+class PageCliente(CamelModel):
+    items: list[Cliente]
+    page: int
+    page_size: int
+    total: int
+
+
+class CuentaPerfil(CamelModel):
+    id_cuenta: int
+    numero_cuenta: str
+    id_cliente: int
+    id_agencia: str
+    id_producto: int
+    tipo_cuenta: str
+    id_moneda: int
+    saldo: Money
+    saldo_retenido: Money
+    saldo_disponible: Money
+    estado: str
+    fecha_apertura: datetime
+    fecha_ultimo_movimiento: datetime | None = None
+    fecha_cierre: datetime | None = None
+
+
+class TarjetaPerfil(Tarjeta):
+    """Datos de tarjeta con número enmascarado; nunca incluye PAN ni hash."""
+
+
+class CreditoPerfil(CamelModel):
+    id_solicitud: int
+    numero_solicitud: str
+    tipo_credito: str
+    monto_desembolsado: Money | None = None
+    saldo_capital: Money | None = None
+    proxima_cuota: date | None = None
+    estado: str
+
+
+class ClientePerfil(CamelModel):
+    cliente: Cliente
+    riesgo_vigente: Riesgo | None = None
+    cuentas: list[CuentaPerfil] = Field(default_factory=list)
+    tarjetas: list[TarjetaPerfil] = Field(default_factory=list)
+    creditos: list[CreditoPerfil] = Field(default_factory=list)

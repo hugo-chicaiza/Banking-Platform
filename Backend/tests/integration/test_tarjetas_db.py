@@ -14,10 +14,10 @@ from fastapi.testclient import TestClient
 from sqlalchemy import Connection, text
 from sqlalchemy.exc import DBAPIError
 
-from app.core import audit
-from app.core.config import get_settings
-from app.core.db import cooperativa, get_engine
-from app.core.errors import traducir_error_bd
+from app.core.api.errors import traducir_error_bd
+from app.core.config.settings import get_settings
+from app.core.database.db import cooperativa, get_engine
+from app.core.security import audit
 from app.main import app
 from app.modules.tarjetas import repository, router
 
@@ -177,7 +177,7 @@ def test_emision_con_envio_y_extension(client, bd, datos):
     assert tuple(envio) == ("PENDIENTE", "Av. de Prueba 123", 1)
 
 
-def test_emision_extension_de_otra_cuenta_422(client, datos):
+def test_emision_extension_con_titular_inexistente_422(client, datos):
     r = client.post(
         BASE,
         json={
@@ -190,7 +190,7 @@ def test_emision_extension_de_otra_cuenta_422(client, datos):
     )
 
     assert r.status_code == 422
-    assert r.json()["code"] == "EXTENSION_REQUIERE_TITULAR"
+    assert r.json()["code"] == "TARJETA_TITULAR_NO_ENCONTRADA"
 
 
 def test_emision_producto_que_no_es_tarjeta_422(client, datos):
@@ -208,7 +208,7 @@ def test_emision_producto_que_no_es_tarjeta_422(client, datos):
     assert r.json()["code"] == "PRODUCTO_NO_ES_TARJETA"
 
 
-def test_emision_cuenta_inexistente_409(client, datos):
+def test_emision_cuenta_inexistente_422(client, datos):
     r = client.post(
         BASE,
         json={
@@ -219,8 +219,8 @@ def test_emision_cuenta_inexistente_409(client, datos):
         },
     )
 
-    assert r.status_code == 409
-    assert r.json()["code"] == "CUENTA_NO_ACTIVA"
+    assert r.status_code == 422
+    assert r.json()["code"] == "CUENTA_NO_ENCONTRADA"
 
 
 def test_ciclo_completo_pin_activacion_bloqueo_e_historial(client, bd, datos):
@@ -231,7 +231,7 @@ def test_ciclo_completo_pin_activacion_bloqueo_e_historial(client, bd, datos):
     # Activar sin PIN se rechaza
     r = client.post(f"{ruta}/estado", json={"estado": "Activa", "motivo": "x"})
     assert r.status_code == 409
-    assert r.json()["code"] == "TRANSICION_TARJETA_INVALIDA"
+    assert r.json()["code"] == "PIN_NO_ASIGNADO"
 
     # PIN débil y asignación correcta
     assert client.post(f"{ruta}/pin", json={"pin": "1234"}).status_code == 422

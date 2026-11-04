@@ -1,11 +1,16 @@
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException, Path, Query
+from fastapi import APIRouter, Depends, Path, Query
 from sqlalchemy import Connection
 
-from app.core.db import cooperativa
-from app.core.errors import RESPUESTAS_ERROR, ProblemDetailsRoute, solo_parametros
-from app.core.security import require_auth
+from app.core.api.errors import (
+    RESPUESTAS_ERROR,
+    ProblemDetailsRoute,
+    problema,
+    solo_parametros,
+)
+from app.core.database.db import cooperativa
+from app.core.security.auth import require_auth
 from app.modules.catalogos import repository
 from app.modules.catalogos.schemas import (
     ActividadEconomica,
@@ -89,8 +94,5 @@ def listar_ciudades(
 ) -> Any:
     codigo_pais = codigo_pais.upper()
     if not repository.existe_pais(conn, codigo_pais):
-        raise HTTPException(
-            status_code=404,
-            detail={"code": "PAIS_NO_ENCONTRADO", "message": "El país no existe"},
-        )
+        raise problema(404, "PAIS_NO_ENCONTRADO", "El país no existe")
     return repository.listar_ciudades(conn, codigo_pais, q.strip() if q else None)

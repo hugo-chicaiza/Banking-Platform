@@ -51,9 +51,12 @@ Formato ProblemDetails (ver F-04). Solo 400/401/403.
 
 ## Definición de terminado
 
-- [ ] Coincide con `openapi.yaml`
-- [ ] Prueba: sin filtro, cada tipo, tipo inválido, sin token
+- [x] Coincide con el OpenAPI que genera FastAPI (`/openapi.json`); el repo no tiene `openapi.yaml`
+- [x] Prueba: sin filtro, cada tipo, tipo inválido
+- [ ] Prueba sin token: depende de F-03, `require_auth` todavía no valida el JWT
 
-## Pendiente
+## Implementación
 
-- El contrato tiene `marca`; la DB usa `IdRed` → `ProductosFinancieros.Red` y agrega `TipoCuenta`. Actualizar el esquema `Producto` en `openapi.yaml`.
+- Devuelve `idRed` y `tipoCuenta` en lugar de `marca`. Cuando exista `openapi.yaml`, su esquema `Producto` debe reflejarlo.
+- `MontoAperturaMinimo` es NOT NULL en la BD, pero la API solo lo devuelve en productos `Cuenta`; en los demás tipos va `null`.
+- Un `tipo` fuera de la lista responde 400 `DATOS_INVALIDOS`; si se repite `tipo` o llega otro parámetro, 400 `PARAMETRO_INVALIDO` (formato F-04).

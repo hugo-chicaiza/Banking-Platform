@@ -15,7 +15,7 @@ from argon2 import PasswordHasher
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import DBAPIError
 
-from app.core.db import cooperativa
+from app.core.database.db import cooperativa
 from app.main import app
 from app.modules.tarjetas import repository, router, service
 
@@ -154,8 +154,17 @@ def test_pan_generado_cumple_luhn_y_longitud():
     assert len(pan) == 16 and pan.startswith("500000") and total % 10 == 0
 
 
+def test_emitir_cuenta_inexistente_422(client, conns, emision, monkeypatch):
+    monkeypatch.setattr(repository, "obtener_cuenta", lambda c, i: None)
+
+    r = client.post(BASE, json=PAYLOAD)
+
+    assert r.status_code == 422 and _code(r) == "CUENTA_NO_ENCONTRADA"
+    assert conns.coop.commits == 0
+
+
 @pytest.mark.parametrize(
-    "cuenta", [None, {**CUENTA, "estado": "Bloqueada"}, {**CUENTA, "estado": "Cerrada"}]
+    "cuenta", [{**CUENTA, "estado": "Bloqueada"}, {**CUENTA, "estado": "Cerrada"}]
 )
 def test_emitir_cuenta_no_activa_409(client, conns, emision, monkeypatch, cuenta):
     monkeypatch.setattr(repository, "obtener_cuenta", lambda c, i: cuenta)
@@ -166,10 +175,17 @@ def test_emitir_cuenta_no_activa_409(client, conns, emision, monkeypatch, cuenta
     assert conns.coop.rollbacks == 1 and conns.coop.commits == 0
 
 
+def test_emitir_producto_inexistente_422(client, emision, monkeypatch):
+    monkeypatch.setattr(repository, "obtener_producto", lambda c, i: None)
+
+    r = client.post(BASE, json=PAYLOAD)
+
+    assert r.status_code == 422 and _code(r) == "PRODUCTO_NO_ENCONTRADO"
+
+
 @pytest.mark.parametrize(
     "producto",
     [
-        None,
         {"tipo_producto": "Cuenta", "estado": "A"},
         {"tipo_producto": "Tarjeta", "estado": "I"},
     ],
@@ -210,7 +226,6 @@ def test_emitir_bin_distinto_en_trigger_422(client, conns, emision, monkeypatch)
     ("extra", "titular"),
     [
         ({"esExtension": True}, None),
-        ({"esExtension": True, "idTarjetaTitular": 9}, None),
         (
             {"esExtension": True, "idTarjetaTitular": 9},
             {"id_cuenta": 99, "es_extension": False, "estado": "Activa"},
@@ -234,6 +249,14 @@ def test_emitir_extension_sin_titular_valido_422(
     r = client.post(BASE, json={**PAYLOAD, **extra})
 
     assert r.status_code == 422 and _code(r) == "EXTENSION_REQUIERE_TITULAR"
+
+
+def test_emitir_extension_con_titular_inexistente_422(client, emision, monkeypatch):
+    monkeypatch.setattr(repository, "obtener_titular", lambda c, i: None)
+
+    r = client.post(BASE, json={**PAYLOAD, "esExtension": True, "idTarjetaTitular": 9})
+
+    assert r.status_code == 422 and _code(r) == "TARJETA_TITULAR_NO_ENCONTRADA"
 
 
 def test_emitir_extension_valida_201(client, emision, monkeypatch):
@@ -454,7 +477,7 @@ def test_activar_sin_pin_409(client, monkeypatch):
 
     r = client.post(f"{BASE}/301/estado", json={"estado": "Activa", "motivo": "x"})
 
-    assert r.status_code == 409 and _code(r) == "TRANSICION_TARJETA_INVALIDA"
+    assert r.status_code == 409 and _code(r) == "PIN_NO_ASIGNADO"
     assert "estado" not in capturado
 
 

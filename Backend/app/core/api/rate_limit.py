@@ -4,7 +4,6 @@ Cuenta por proceso, así que con varias instancias o workers el límite real se
 multiplica. Con F-03 debería contar por usuario.
 """
 
-import ipaddress
 import logging
 import math
 import time
@@ -14,7 +13,8 @@ from typing import Literal
 
 from starlette.types import ASGIApp, Receive, Scope, Send
 
-from app.core.errors import respuesta_problema
+from app.core.api.errors import respuesta_problema
+from app.core.api.middleware import ip_cliente
 
 logger = logging.getLogger(__name__)
 
@@ -80,15 +80,6 @@ def _clasificar(metodo: str, ruta: str) -> Clase:
     return "sensible" if ruta.rstrip("/").endswith(_SUFIJOS_SENSIBLES) else "escritura"
 
 
-def _ip(scope: Scope) -> str:
-    """IP que entrega uvicorn. Si no es válida, no se usa como clave ni va al log."""
-    cliente = scope.get("client")
-    try:
-        return str(ipaddress.ip_address(cliente[0])) if cliente else "desconocida"
-    except ValueError:
-        return "desconocida"
-
-
 class LimitePeticionesMiddleware:
     """Responde 429 en las rutas /api/ que pasan su límite por minuto."""
 
@@ -114,7 +105,7 @@ class LimitePeticionesMiddleware:
             return
 
         clase = _clasificar(scope["method"], scope["path"])
-        ip = _ip(scope)
+        ip = ip_cliente(scope)
         espera = self._contador.registrar((ip, clase), self._limites[clase])
         if espera is None:
             await self._app(scope, receive, send)

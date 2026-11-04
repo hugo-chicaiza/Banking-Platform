@@ -55,7 +55,7 @@ Full structure and rules: [`Backend/TreeFolderStructure.md`](Backend/TreeFolderS
 - **One file per layer per module.** Add your endpoints to the existing files of the module; never create parallel files.
 - **Split by sub-domain, not by size of the endpoint list.** Only when a module has sub-topics with their own rules (e.g. `creditos/solicitudes/`, `creditos/pagos/`) or a file passes ~400-500 lines.
 - **A module calls another module's `service`, never its `repository`.**
-- **Each value in one place:** environment values in `.env` / `core/config.py`, shared values as constants in `core/`.
+- **Each value in one place:** environment values in `.env` / `core/config/settings.py`, shared values as constants in the matching `core/` folder (`config/`, `database/`, `security/`, `api/`).
 
 ### Run the CI checks locally (before pushing)
 
@@ -67,6 +67,13 @@ Backend/.venv/Scripts/ruff check Backend --fix     # lint and auto-fix
 Backend/.venv/Scripts/pyright --pythonpath Backend/.venv/Scripts/python.exe Backend
 Backend/.venv/Scripts/python -m pytest Backend/tests
 Backend/.venv/Scripts/python -m bandit -q -r Backend -x Backend/tests,Backend/.venv
+
+Win
+Backend\.venv\Scripts\ruff.exe format Backend
+Backend\.venv\Scripts\ruff.exe check Backend --fix
+Backend\.venv\Scripts\pyright.exe --pythonpath Backend\.venv\Scripts\python.exe Backend
+Backend\.venv\Scripts\python.exe -m pytest Backend/tests
+Backend\.venv\Scripts\python.exe -m bandit -q -r Backend -x Backend/tests,Backend/.venv
 ```
 
 ### Dependencies (locked with hashes)
@@ -85,6 +92,10 @@ After changing a `.in` file, regenerate both locks from `Backend/` and commit th
 ```
 .venv/Scripts/uv pip compile requirements.in --universal --generate-hashes --python-version 3.14 -o requirements.txt
 .venv/Scripts/uv pip compile requirements-dev.in --universal --generate-hashes --python-version 3.14 -o requirements-dev.txt
+
+Win
+.venv\Scripts\uv.exe pip compile requirements.in --universal --generate-hashes --python-version 3.14 -o requirements.txt
+.venv\Scripts\uv.exe pip compile requirements-dev.in --universal --generate-hashes --python-version 3.14 -o requirements-dev.txt
 ```
 
 ## Getting Started

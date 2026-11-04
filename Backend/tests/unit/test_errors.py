@@ -8,9 +8,9 @@ from fastapi.testclient import TestClient
 from pydantic import BaseModel
 from sqlalchemy.exc import DBAPIError, SQLAlchemyError
 
-from app.core.db import cooperativa
-from app.core.errors import ProblemDetailsRoute
-from app.core.middleware import TraceIdMiddleware
+from app.core.api.errors import ProblemDetailsRoute, problema
+from app.core.api.middleware import TraceIdMiddleware
+from app.core.database.db import cooperativa
 from app.main import app as app_real
 from app.modules.catalogos import repository as repo_catalogos
 
@@ -32,6 +32,11 @@ def http(estado: int) -> None:
     raise HTTPException(estado, detail={"code": f"C_{estado}", "message": "Mensaje"})
 
 
+@router.get("/problema")
+def con_problema() -> None:
+    raise problema(409, "ESTADO_NO_PERMITE", "No se puede.")
+
+
 @router.get("/texto")
 def texto() -> None:
     raise HTTPException(404, detail="No existe")
@@ -40,6 +45,25 @@ def texto() -> None:
 @router.get("/bd/{numero}")
 def bd(numero: int) -> None:
     raise _error_bd(f"[SQL Server]Mensaje interno ({numero}) (SQLExecDirectW)")
+
+
+# Mensaje con el formato real de SQL Server, incluido el valor repetido
+_DUPLICADO = (
+    "[23000] [SQL Server]Violation of UNIQUE KEY constraint 'UQ_x'. Cannot insert "
+    "duplicate key in object 'Clientes.Cliente'. The duplicate key value is (51234). "
+    "({numero}) (SQLExecDirectW); [23000] [SQL Server]The statement has been "
+    "terminated. (3621)"
+)
+
+
+@router.get("/duplicado/{numero}")
+def duplicado(numero: int) -> None:
+    raise _error_bd(_DUPLICADO.format(numero=numero))
+
+
+@router.get("/bd-con-valor")
+def bd_con_valor() -> None:
+    raise _error_bd("[SQL Server]Error con el valor (51234). (8152) (SQLExecDirectW)")
 
 
 @router.get("/bd-caida")
@@ -91,6 +115,15 @@ def test_cada_estado_sale_como_problem_details(estado):
     _es_problema(client.get(f"/http/{estado}"), estado, f"C_{estado}")
 
 
+def test_problema_comun_sale_como_problem_details_y_queda_en_el_log(caplog):
+    caplog.set_level(logging.INFO, logger="app.core.api.errors")
+
+    cuerpo = _es_problema(client.get("/problema"), 409, "ESTADO_NO_PERMITE")
+
+    assert cuerpo["detail"] == "No se puede."
+    assert "operacion rechazada status=409 code=ESTADO_NO_PERMITE" in caplog.text
+
+
 def test_detalle_de_texto_recibe_codigo_generico():
     cuerpo = _es_problema(client.get("/texto"), 404, "HTTP_404")
 
@@ -120,6 +153,7 @@ def test_json_mal_formado_es_400():
 @pytest.mark.parametrize(
     ("numero", "status", "code"),
     [
+        (51016, 500, "CALENDARIO_SIN_FECHA"),
         (52001, 409, "CLIENTE_NO_ACTIVO"),
         (52002, 409, "CUENTA_NO_ACTIVA"),
         (52003, 422, "CUPO_EXCEDE_PRODUCTO"),
@@ -135,6 +169,24 @@ def test_throw_de_bd_se_traduce_sin_exponer_sql(numero, status, code):
     _es_problema(r, status, code)
     for filtrado in ("SELECT", "SECRETO", "SQL Server", "Mensaje interno"):
         assert filtrado not in r.text
+
+
+@pytest.mark.parametrize("numero", [2627, 2601])
+def test_unique_violado_es_409_sin_mostrar_ni_registrar_el_valor(numero, caplog):
+    caplog.set_level(logging.DEBUG)
+
+    r = client.get(f"/duplicado/{numero}")
+
+    _es_problema(r, 409, "REGISTRO_DUPLICADO")
+    for texto in (r.text, caplog.text):
+        assert "51234" not in texto and "Clientes.Cliente" not in texto
+
+
+def test_valor_entre_parentesis_no_se_confunde_con_un_throw():
+    """Antes, cualquier "(5xxxx)" del texto se leía como un THROW."""
+    r = client.get("/bd-con-valor")
+
+    _es_problema(r, 500, "ERROR_INTERNO")
 
 
 @pytest.mark.parametrize("ruta", ["/bd-caida", "/sqlalchemy", "/inesperado"])

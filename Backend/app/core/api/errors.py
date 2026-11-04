@@ -17,16 +17,27 @@ from fastapi.routing import APIRoute
 from sqlalchemy.exc import DBAPIError, SQLAlchemyError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from app.core.middleware import obtener_trace_id
+from app.core.api.middleware import obtener_trace_id
 
 logger = logging.getLogger(__name__)
 
 _MEDIA_TYPE = "application/problem+json"
 
-# pyodbc deja el número entre paréntesis: "... no permitido. (52005) (SQLExecDirectW)"
-_DB_CODIGO_RE = re.compile(r"\((5\d{4})\)")
+# pyodbc cierra cada error con "(número nativo) (función ODBC)":
+#   "... no permitido. (52005) (SQLExecDirectW)"
+# Solo se lee ese número. El texto puede traer valores de la fila entre paréntesis
+# ("The duplicate key value is (51234)") que no deben confundirse con un THROW.
+_DB_NUMERO_RE = re.compile(r"\((\d+)\) \(SQL\w+\)")
+# Violación de UNIQUE KEY (2627) y de índice único (2601) en SQL Server
+_DB_DUPLICADO = frozenset({2627, 2601})
 # Tabla de F-04. 52004 no aparece allí, pero lo necesita TAR-01
 _DB_ERRORES: dict[int, tuple[int, str, str]] = {
+    # Contabilidad responde lo mismo cuando lo detecta en Python (CON-02)
+    51016: (
+        500,
+        "CALENDARIO_SIN_FECHA",
+        "El calendario contable no tiene fechas cargadas para este período",
+    ),
     52001: (409, "CLIENTE_NO_ACTIVO", "El cliente no está Activo."),
     52002: (409, "CUENTA_NO_ACTIVA", "La cuenta no está Activa."),
     52003: (422, "CUPO_EXCEDE_PRODUCTO", "El cupo excede el del producto."),
@@ -101,28 +112,42 @@ def respuesta_problema(
     )
 
 
+def problema(status: int, code: str, message: str) -> HTTPException:
+    """Error de negocio que ProblemDetailsRoute convierte en ProblemDetails.
+
+    El mensaje lo ve el usuario: que sea fijo, sin ids ni datos de la petición.
+    """
+    return HTTPException(status_code=status, detail={"code": code, "message": message})
+
+
 def traducir_error_bd(exc: DBAPIError) -> HTTPException:
     """Convierte un error de BD en HTTPException.
 
     Solo se lee exc.orig para sacar el número del THROW: str(exc) trae el SQL y sus
     parámetros, que pueden ser tokens o hashes.
     """
-    coincidencia = _DB_CODIGO_RE.search(str(exc.orig))
-    if coincidencia:
-        numero = int(coincidencia.group(1))
+    numeros = [int(n) for n in _DB_NUMERO_RE.findall(str(exc.orig))]
+
+    duplicado = next((n for n in numeros if n in _DB_DUPLICADO), None)
+    if duplicado is not None:
+        # El mensaje de SQL Server trae el valor repetido (una cédula, por ejemplo):
+        # solo se registra el número
+        logger.warning("registro duplicado db_code=%s", duplicado)
+        return problema(409, "REGISTRO_DUPLICADO", "El registro ya existe.")
+
+    numero = next((n for n in numeros if 50000 <= n <= 59999), None)
+    if numero is not None:
         status, code, mensaje = _DB_ERRORES.get(
             numero,
             (422, f"DB_{numero}", "La operación no cumple una regla de negocio."),
         )
-        logger.warning("error de negocio en BD db_code=%s", numero)
-        return HTTPException(
-            status_code=status, detail={"code": code, "message": mensaje}
-        )
+        if status >= 500:
+            logger.error("error de BD db_code=%s", numero)
+        else:
+            logger.warning("error de negocio en BD db_code=%s", numero)
+        return problema(status, code, mensaje)
     logger.error("fallo de BD tipo=%s", type(exc.orig).__name__)
-    return HTTPException(
-        status_code=500,
-        detail={"code": "ERROR_INTERNO", "message": "Error interno del servidor."},
-    )
+    return problema(500, "ERROR_INTERNO", "Error interno del servidor.")
 
 
 def solo_parametros(*permitidos: str) -> Callable[[Request], None]:
@@ -191,6 +216,15 @@ class ProblemDetailsRoute(APIRoute):
                     errors=_campos_invalidos(exc),
                 )
             except StarletteHTTPException as exc:
+                # La línea de la petición no dice por qué se rechazó; esta sí, con el
+                # mismo traceId
+                detalle: Any = exc.detail
+                if isinstance(detalle, dict):
+                    logger.info(
+                        "operacion rechazada status=%s code=%s",
+                        exc.status_code,
+                        detalle.get("code"),
+                    )
                 return _respuesta_http(request, exc)
             except DBAPIError as exc:
                 return _respuesta_http(request, traducir_error_bd(exc))

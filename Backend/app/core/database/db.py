@@ -4,7 +4,7 @@ from typing import Literal
 
 from sqlalchemy import URL, Connection, Engine, create_engine
 
-from app.core.config import get_settings
+from app.core.config.settings import get_settings
 
 DbName = Literal["cooperativa", "seguridad"]
 

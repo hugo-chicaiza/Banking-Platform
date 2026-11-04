@@ -9,7 +9,7 @@ from typing import Literal
 import pyodbc
 from fastapi import APIRouter
 
-from app.core.config import get_settings
+from app.core.config.settings import get_settings
 
 router = APIRouter(prefix="/smoke-test", tags=["smoke-test"])
 logger = logging.getLogger(__name__)

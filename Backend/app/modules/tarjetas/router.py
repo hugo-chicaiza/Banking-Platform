@@ -4,14 +4,19 @@ from collections.abc import Callable, Iterator
 from datetime import date
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request, Response
+from fastapi import APIRouter, Depends, Path, Query, Request, Response
 from pydantic import SecretStr
 from sqlalchemy import Connection
 
-from app.core.config import get_settings
-from app.core.db import cooperativa, get_engine
-from app.core.errors import RESPUESTAS_ERROR, ProblemDetailsRoute, solo_parametros
-from app.core.security import require_auth
+from app.core.api.errors import (
+    RESPUESTAS_ERROR,
+    ProblemDetailsRoute,
+    problema,
+    solo_parametros,
+)
+from app.core.config.settings import get_settings
+from app.core.database.db import cooperativa, get_engine
+from app.core.security.auth import require_auth
 from app.modules.tarjetas import service
 from app.modules.tarjetas.schemas import (
     MAX_INT,
@@ -64,12 +69,8 @@ def seguridad() -> Iterator[Connection]:
 def autorizacion_disponible() -> None:
     """Sin F-03 cualquiera podría llamar estas rutas: solo responden en development."""
     if get_settings().app_env != "development":
-        raise HTTPException(
-            status_code=503,
-            detail={
-                "code": "AUTORIZACION_NO_DISPONIBLE",
-                "message": "El servicio no está disponible.",
-            },
+        raise problema(
+            503, "AUTORIZACION_NO_DISPONIBLE", "El servicio no está disponible."
         )
 
 
@@ -90,10 +91,7 @@ def _requiere_roles(*_roles: str) -> Callable[..., None]:
 
 async def _leer_pin(request: Request) -> SecretStr:
     """Lee el body a mano: el error de Pydantic devuelve el valor recibido, aquí el PIN."""
-    error = HTTPException(
-        status_code=400,
-        detail={"code": "PIN_INVALIDO", "message": "El PIN debe tener 4 dígitos."},
-    )
+    error = problema(400, "PIN_INVALIDO", "El PIN debe tener 4 dígitos.")
     contenido = bytearray()
     async for parte in request.stream():
         contenido += parte

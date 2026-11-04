@@ -12,7 +12,7 @@ from typing import Literal
 from sqlalchemy import Connection, text
 from sqlalchemy.exc import SQLAlchemyError
 
-from app.core.db import get_engine
+from app.core.database.db import get_engine
 
 logger = logging.getLogger(__name__)
 
