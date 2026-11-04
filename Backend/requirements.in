@@ -7,6 +7,9 @@
 fastapi>=0.120,<1.0
 uvicorn[standard]>=0.38,<1.0
 
+# Worker de gunicorn para Azure trae gunicorn
+uvicorn-worker>=0.3,<1.0
+
 # Config y validación
 pydantic>=2.12,<3.0
 pydantic-settings>=2.11,<3.0

@@ -5,7 +5,8 @@ backend/
 │   ├── main.py                    # Creates FastAPI, adds middlewares, includes each module's router
 │   ├── core/                      # Shared code, no business logic. One folder per concern, no loose files
 │   │   ├── config/
-│   │   │   └── settings.py        # Settings from .env (pydantic-settings)
+│   │   │   ├── settings.py        # Settings from .env (pydantic-settings)
+│   │   │   └── logs.py            # Log format and output (stdout) for the whole app
 │   │   ├── database/
 │   │   │   ├── db.py              # 2 engines: CooperativaDB and SeguridadDB; connection per request
 │   │   │   └── uow.py             # (planned) "Unit of work": one DB transaction per money operation
@@ -15,7 +16,7 @@ backend/
 │   │   └── api/                   # HTTP layer shared by every router
 │   │       ├── schemas.py         # CamelModel (snake_case ↔ camelCase JSON), Money (Decimal → JSON number)
 │   │       ├── errors.py          # ProblemDetails + map THROW 5xxxx → HTTP/code (F-04 table)
-│   │       ├── middleware.py      # X-Request-Id → traceId
+│   │       ├── middleware.py      # X-Request-Id → traceId, one log line per request
 │   │       ├── rate_limit.py      # Requests per minute and IP → 429
 │   │       ├── idempotency.py     # (planned) registroUnico handling (Idempotent-Replay)
 │   │       └── pagination.py      # (planned) page, pageSize ≤ 100, sort → {items, page, pageSize, total}
@@ -62,6 +63,12 @@ backend/
 >
 > Rule: every router uses the F-04 error format: `APIRouter(..., route_class=ProblemDetailsRoute,
 > responses=RESPUESTAS_ERROR)` from `core/api/errors.py`.
+>
+> Rule: logs. Each module only declares `logger = logging.getLogger(__name__)`; format, level (`LOG_LEVEL`) and
+> output are set once in `core/config/logs.py`, and every line carries the request's traceId. Every request is
+> already logged by the middleware, so a module logs only what that line does not show (a rejected operation,
+> an issued card). Never use `print`, never log query strings, passwords, PIN, PAN, tokens or `str(exc)` of
+> database errors (it contains the query parameters).
 >
 > Rule: `core/` has no loose files. A new shared file goes in the folder of its concern (`config/`, `database/`,
 > `security/`, `api/`); create a new folder only for a new concern.
