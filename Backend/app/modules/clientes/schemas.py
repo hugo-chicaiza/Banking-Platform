@@ -5,6 +5,7 @@ from pydantic import ConfigDict, Field, field_validator
 from pydantic.json_schema import SkipJsonSchema
 
 from app.core.api.schemas import CamelModel, Money
+from app.modules.cuentas.schemas import MonedaUsd
 from app.modules.tarjetas.schemas import Tarjeta
 
 TipoDocumento = Literal["C", "R", "P"]
@@ -272,7 +273,7 @@ class CuentaPerfil(CamelModel):
     id_agencia: str
     id_producto: int
     tipo_cuenta: str
-    id_moneda: int
+    id_moneda: MonedaUsd
     saldo: Money
     saldo_retenido: Money
     saldo_disponible: Money

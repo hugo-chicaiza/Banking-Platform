@@ -48,17 +48,17 @@ Body `CuentaCreate`:
 | Campo | Tipo | Req. | Regla |
 |---|---|---|---|
 | idCliente | integer | Sí |  |
-| idProducto | integer | Sí | Producto tipo Cuenta |
+| idSubProducto | integer | Sí | Subproducto activo de un producto tipo Cuenta |
 | idAgencia | string(3) | Sí |  |
-| tipoCuenta | Ahorro \| Corriente | Sí |  |
+| montoInicial | decimal | Sí | Mayor o igual al mínimo del producto |
 | idMoneda | integer | No | Default 840 (USD) |
 
 ```json
 {
   "idCliente": 125,
-  "idProducto": 2,
+  "idSubProducto": 20,
   "idAgencia": "001",
-  "tipoCuenta": "Ahorro",
+  "montoInicial": 50.0,
   "idMoneda": 840
 }
 ```
@@ -70,13 +70,15 @@ Body `CuentaCreate`:
 ```json
 {
   "idCuenta": 501,
-  "numeroCuenta": "AH000501",
+  "numeroCuenta": "AH00000501",
   "idCliente": 125,
   "idProducto": 2,
+  "idAgencia": "001",
   "tipoCuenta": "Ahorro",
+  "idMoneda": 840,
   "saldo": 0.0,
   "saldoRetenido": 0.0,
-  "estado": "PENDIENTE_ACTIVACION"
+  "estado": "ACTIVA"
 }
 ```
 
@@ -89,6 +91,7 @@ Formato ProblemDetails (ver F-04). Además de 400/401/403:
 | 409 | `CLIENTE_NO_ACTIVO` | El cliente no está Activo (riesgo no aprobado) |
 | 409 | `RIESGO_RECHAZADO` | Riesgo Rechazado o antecedente que impide vinculación |
 | 422 | `PRODUCTO_NO_ES_CUENTA` | El producto no es de tipo Cuenta |
+| 422 | `MONTO_APERTURA_INSUFICIENTE` | El monto no cubre el mínimo de apertura |
 | 409 | `AGENCIA_INACTIVA` | La agencia no está activa |
 
 ## Definición de terminado

@@ -13,6 +13,7 @@ import pytest
 from app.core.config.settings import get_settings
 from app.core.database.db import get_engine
 from app.modules.cuentas import repository
+from app.modules.cuentas.schemas import ID_MONEDA_USD
 
 pytestmark = pytest.mark.skipif(
     not get_settings().cooperativa_db_server,
@@ -50,7 +51,7 @@ def test_tabla_cliente_tiene_columnas(conn):
 
 
 def test_tabla_riesgo_cliente_tiene_columnas(conn):
-    """Clientes.RiesgoCliente debe tener IdCliente, Estado y Vigente."""
+    """RiesgoCliente expone el resultado y la vigencia usados por CTA-01."""
     from sqlalchemy import text
 
     row = conn.execute(
@@ -60,7 +61,9 @@ def test_tabla_riesgo_cliente_tiene_columnas(conn):
             FROM INFORMATION_SCHEMA.COLUMNS
             WHERE TABLE_SCHEMA = 'Clientes'
               AND TABLE_NAME   = 'RiesgoCliente'
-              AND COLUMN_NAME IN ('IdCliente', 'Estado', 'Vigente')
+              AND COLUMN_NAME IN (
+                  'IdCliente', 'ResultadoEvaluacion', 'EsVigente'
+              )
             """
         )
     ).scalar_one()
@@ -68,7 +71,7 @@ def test_tabla_riesgo_cliente_tiene_columnas(conn):
 
 
 def test_tabla_producto_tiene_columnas(conn):
-    """ProductosFinancieros.Producto debe tener IdProducto, TipoProducto, Estado y MontoAperturaMinimo."""
+    """Producto aporta el tipo de cuenta usado por las lecturas de A-02."""
     from sqlalchemy import text
 
     row = conn.execute(
@@ -78,15 +81,18 @@ def test_tabla_producto_tiene_columnas(conn):
             FROM INFORMATION_SCHEMA.COLUMNS
             WHERE TABLE_SCHEMA = 'ProductosFinancieros'
               AND TABLE_NAME   = 'Producto'
-              AND COLUMN_NAME IN ('IdProducto', 'TipoProducto', 'Estado', 'MontoAperturaMinimo')
+              AND COLUMN_NAME IN (
+                  'IdProducto', 'TipoProducto', 'Estado',
+                  'MontoAperturaMinimo', 'TipoCuenta'
+              )
             """
         )
     ).scalar_one()
-    assert row == 4, "ProductosFinancieros.Producto no tiene las columnas esperadas"
+    assert row == 5, "ProductosFinancieros.Producto no tiene las columnas esperadas"
 
 
 def test_tabla_agencia_tiene_columna_estado(conn):
-    """Organizacion.Agencia debe tener Codigo y Estado."""
+    """Organizacion.Agencia debe tener la clave usada por Cuenta y su Estado."""
     from sqlalchemy import text
 
     row = conn.execute(
@@ -96,15 +102,15 @@ def test_tabla_agencia_tiene_columna_estado(conn):
             FROM INFORMATION_SCHEMA.COLUMNS
             WHERE TABLE_SCHEMA = 'Organizacion'
               AND TABLE_NAME   = 'Agencia'
-              AND COLUMN_NAME IN ('Codigo', 'Estado')
+              AND COLUMN_NAME IN ('IdAgencia', 'Estado')
             """
         )
     ).scalar_one()
-    assert row == 2, "Organizacion.Agencia no tiene Codigo o Estado"
+    assert row == 2, "Organizacion.Agencia no tiene IdAgencia o Estado"
 
 
 def test_tabla_cuenta_tiene_columnas(conn):
-    """Cuentas.Cuenta debe tener las columnas clave para CTA-01."""
+    """Cuentas.Cuenta contiene los datos persistidos; moneda y tipo se derivan."""
     from sqlalchemy import text
 
     columnas = [
@@ -112,9 +118,8 @@ def test_tabla_cuenta_tiene_columnas(conn):
         "NumeroCuenta",
         "IdCliente",
         "IdProducto",
+        "IdSubProducto",
         "IdAgencia",
-        "TipoCuenta",
-        "IdMoneda",
         "Saldo",
         "SaldoRetenido",
         "Estado",
@@ -125,15 +130,36 @@ def test_tabla_cuenta_tiene_columnas(conn):
             SELECT COUNT(*) AS cnt
             FROM INFORMATION_SCHEMA.COLUMNS
             WHERE TABLE_SCHEMA = 'Cuentas'
-              AND TABLE_NAME   = 'Cuenta'
-              AND COLUMN_NAME IN :cols
+              AND TABLE_NAME = 'Cuenta'
+              AND COLUMN_NAME IN (
+                  'IdCuenta', 'NumeroCuenta', 'IdCliente', 'IdProducto',
+                  'IdSubProducto', 'IdAgencia', 'Saldo', 'SaldoRetenido', 'Estado'
+              )
             """
-        ),
-        {"cols": tuple(columnas)},
+        )
     ).scalar_one()
     assert row == len(columnas), (
         f"Cuentas.Cuenta no tiene todas las columnas esperadas ({row}/{len(columnas)})"
     )
+
+
+def test_moneda_usd_es_regla_global_y_no_columna_de_cuenta(conn):
+    """USD 840 pertenece al contrato, no se repite en cada fila de Cuenta."""
+    from sqlalchemy import text
+
+    row = conn.execute(
+        text(
+            """
+            SELECT COUNT(*) AS cnt
+            FROM INFORMATION_SCHEMA.COLUMNS
+            WHERE TABLE_SCHEMA = 'Cuentas'
+              AND TABLE_NAME = 'Cuenta'
+              AND COLUMN_NAME = 'IdMoneda'
+            """
+        )
+    ).scalar_one()
+    assert row == 0
+    assert ID_MONEDA_USD == 840
 
 
 def test_sp_abrir_cuenta_existe(conn):
@@ -151,6 +177,31 @@ def test_sp_abrir_cuenta_existe(conn):
         )
     ).scalar_one()
     assert row == 1, "Cuentas.usp_AbrirCuenta no existe"
+
+
+def test_sp_abrir_cuenta_tiene_firma_esperada(conn):
+    """La llamada del repositorio debe coincidir con los parámetros reales."""
+    from sqlalchemy import text
+
+    rows = conn.execute(
+        text(
+            """
+            SELECT p.name
+            FROM sys.parameters AS p
+            WHERE p.object_id = OBJECT_ID('Cuentas.usp_AbrirCuenta')
+            ORDER BY p.parameter_id
+            """
+        )
+    ).scalars()
+    assert list(rows) == [
+        "@IdCliente",
+        "@IdSubProducto",
+        "@IdAgencia",
+        "@NumeroCuenta",
+        "@MontoInicial",
+        "@CreadoPor",
+        "@IdCuenta",
+    ]
 
 
 # ---------------------------------------------------------------------------
