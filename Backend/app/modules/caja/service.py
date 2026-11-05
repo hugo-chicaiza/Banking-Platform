@@ -44,9 +44,10 @@ def _caja(fila: Fila) -> CajaFisica:
 
 # --- CAJ-01 --------------------------------------------------------------------------
 
-
 def listar_cajas_fisicas(
-    conn: Connection, usuario: Usuario, id_agencia: str | None, activa: bool | None
+    conn: Connection,
+    id_agencia: str | None,
+    activa: bool | None,
 ) -> list[CajaFisica]:
-    agencia = agencia_consultable(usuario, id_agencia, frozenset({"ADMIN"}))
-    return [_caja(f) for f in repo.listar_cajas_fisicas(conn, agencia, activa)]
+    """Consulta cajas físicas. Autorización pendiente para W4."""
+    return [_caja(f) for f in repo.listar_cajas_fisicas(conn, id_agencia, activa)]
