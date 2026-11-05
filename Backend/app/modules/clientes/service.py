@@ -31,6 +31,7 @@ from app.modules.clientes.schemas import (
     TipoDocumento,
     ValidacionIdentificacion,
 )
+from app.modules.cuentas.schemas import ID_MONEDA_USD
 
 _COEFICIENTES_MOD10 = [2, 1, 2, 1, 2, 1, 2, 1, 2]
 
@@ -309,6 +310,14 @@ def _credito_tiene_deuda(conn: Connection, id_solicitud: int) -> bool:
     return deuda > 0
 
 
+def credito_tiene_deuda(conn: Connection, id_solicitud: int) -> bool:
+    """Regla de deuda compartida con CTA-05 hasta disponer del módulo créditos.
+
+    Conserva los bloqueos y el rechazo de planes incompletos de CLI-06.
+    """
+    return _credito_tiene_deuda(conn, id_solicitud)
+
+
 def _validar_productos_cliente(conn: Connection, id_cliente: int) -> None:
     cuentas = repository.cuentas_para_cambio_estado(conn, id_cliente)
     tiene_productos = any(
@@ -419,7 +428,7 @@ def obtener_perfil_cliente(conn: Connection, id_cliente: int) -> ClientePerfil:
         cliente=cliente,
         riesgo_vigente=Riesgo(**riesgos[0]) if riesgos else None,
         cuentas=[
-            CuentaPerfil(**fila)
+            CuentaPerfil(**{**fila, "id_moneda": ID_MONEDA_USD})
             for fila in repository.listar_cuentas_perfil(conn, id_cliente)
         ],
         tarjetas=[

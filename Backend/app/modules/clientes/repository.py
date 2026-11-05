@@ -692,18 +692,19 @@ def listar_cuentas_perfil(conn: Connection, id_cliente: int) -> list[dict[str, A
     return _rows(
         conn,
         """
-        SELECT IdCuenta AS id_cuenta, NumeroCuenta AS numero_cuenta,
-               IdCliente AS id_cliente, IdAgencia AS id_agencia,
-               IdProducto AS id_producto, TipoCuenta AS tipo_cuenta,
-               IdMoneda AS id_moneda, Saldo AS saldo,
-               SaldoRetenido AS saldo_retenido,
-               Saldo - SaldoRetenido AS saldo_disponible, Estado AS estado,
-               FechaApertura AS fecha_apertura,
-               FechaUltimoMovimiento AS fecha_ultimo_movimiento,
-               FechaCierre AS fecha_cierre
-        FROM Cuentas.Cuenta
-        WHERE IdCliente = :id_cliente
-        ORDER BY IdCuenta
+        SELECT c.IdCuenta AS id_cuenta, c.NumeroCuenta AS numero_cuenta,
+               c.IdCliente AS id_cliente, c.IdAgencia AS id_agencia,
+               c.IdProducto AS id_producto, p.TipoCuenta AS tipo_cuenta,
+               c.Saldo AS saldo, c.SaldoRetenido AS saldo_retenido,
+               c.Saldo - c.SaldoRetenido AS saldo_disponible,
+               c.Estado AS estado, c.FechaApertura AS fecha_apertura,
+               c.FechaUltimoMovimiento AS fecha_ultimo_movimiento,
+               c.FechaCierre AS fecha_cierre
+        FROM Cuentas.Cuenta AS c
+        INNER JOIN ProductosFinancieros.Producto AS p
+          ON p.IdProducto = c.IdProducto
+        WHERE c.IdCliente = :id_cliente
+        ORDER BY c.IdCuenta
         """,
         {"id_cliente": id_cliente},
     )

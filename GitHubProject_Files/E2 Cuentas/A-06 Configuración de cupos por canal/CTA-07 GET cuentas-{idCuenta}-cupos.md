@@ -25,29 +25,26 @@ Cupos efectivos por canal.
 
 | Lee | Escribe | DB |
 |---|---|---|
-| `Canal.CanalCupoClienteCustom`, `Canal.ProductoCanalCupo`, `Transacciones.Transaccion` | — | `Canal.fn_CupoVigente` |
+| `Cuentas.Cuenta`, `Canal.Canal`, `Canal.CanalCupoClienteCustom`, `ProductosFinancieros.ProductoCanalCupo`, `Transacciones.Transaccion`, `Transacciones.TipoTransaccion` | — | `Canal.fn_CupoVigente` |
 
 ## Reglas de negocio
 
-1. Por cada canal devuelve el cupo que rige (`fn_CupoVigente`): el personalizado si está vigente; si no, el del subproducto.
-2. Incluye lo consumido hoy y en el mes (de `Transacciones.Transaccion`) y el disponible.
+1. Verifica que la cuenta exista; si no, 404 `CUENTA_NO_ENCONTRADA`.
+2. Por cada canal con configuración devuelve el cupo que rige mediante `Canal.fn_CupoVigente`: personalizado activo con fecha nula o no vencida; en otro caso, el del subproducto.
+3. `FechaVigencia` es la fecha límite inclusiva en Ecuador. Un personalizado inactivo o vencido no bloquea el canal: se utiliza el predeterminado.
+4. Los orígenes SQL `CUENTA`/`SUBPRODUCTO` se representan como `Personalizado`/`Producto`.
+5. Incluye consumo diario y mensual de débitos normales completados, igual que el procedimiento de autorización. Los importes son Decimal/Money y la ausencia de movimientos produce cero.
+6. El contrato devuelve límites y consumo; no incluye campos de disponibilidad ni bloqueo por canal.
+7. Roles internos efectivos ASESOR, SUPERVISOR y ADMIN. Consulta sin DML ni commit.
 
 ## Flujo
 
-1. El cliente inicia sesión en la aplicación bancaria.
-2. Accede a la sección de sus cuentas.
-3. Selecciona la cuenta cuyos cupos desea consultar.
-4. El frontend obtiene el identificador `idCuenta`.
-5. Envía la solicitud `GET /api/v1/cuentas/{idCuenta}/cupos`.
-6. El backend valida la autenticación y los permisos del usuario.
-7. Verifica que el cliente tenga autorización sobre la cuenta solicitada.
-8. El sistema identifica el producto financiero asociado a la cuenta.
-9. Consulta los cupos predeterminados definidos para sus canales.
-10. Verifica si existen cupos personalizados vigentes.
-11. Determina el cupo efectivo de cada canal.
-12. Consulta las transacciones necesarias para determinar el consumo del cupo, si el contrato lo requiere.
-13. Devuelve la información de los cupos efectivos.
-14. El frontend presenta los límites de operación al cliente.
+1. El usuario interno inicia sesión y selecciona una cuenta.
+2. El frontend envía `GET /api/v1/cuentas/{idCuenta}/cupos`.
+3. El backend valida la sesión, el rol y la existencia de la cuenta.
+4. Obtiene los límites efectivos por canal mediante la función de la base, que resuelve el subproducto y la vigencia del personalizado.
+5. Calcula el consumo diario y mensual con el reloj de Ecuador y rangos sobre FechaHoraSistema.
+6. Devuelve los cupos efectivos y consumos para que el usuario interno los consulte.
 
 ## Request
 
@@ -57,7 +54,7 @@ Cupos efectivos por canal.
 
 ## Response `200`
 
-`array`
+`array<CupoEfectivo>`
 
 ```json
 [
@@ -68,7 +65,7 @@ Cupos efectivos por canal.
     "cupoMensual": 5000.0,
     "montoMaxTransaccion": 200.0,
     "maxTransaccionesDia": 10,
-    "fechaVigencia": "2026-10-27",
+    "fechaVigencia": null,
     "consumidoHoy": 100.0,
     "consumidoMes": 1200.0
   },
@@ -92,9 +89,34 @@ Formato ProblemDetails (ver F-04). Solo 400/401/403/404.
 
 ## Definición de terminado
 
-- [ ] Coincide con `openapi.yaml` (request, response y errores)
+- [ ] Coincide con el OpenAPI generado por FastAPI (request, response y errores)
 - [ ] Prueba del caso feliz y de cada error de la tabla
 
 ## Pendiente
 
-- Los campos relacionados con consumo y disponibilidad deben confirmarse con el esquema `CupoEfectivo` del OpenAPI.
+El contrato vigente se documenta en el OpenAPI generado por FastAPI con `CupoEfectivo`. Campos de disponibilidad y autoservicio quedan fuera de esta entrega; no son requisitos pendientes de los endpoints actuales.
+
+## Implementación verificada (2026-11-04)
+
+- La tabla real es `ProductosFinancieros.ProductoCanalCupo`, relacionada mediante
+  `Cuenta.IdSubProducto = ProductoCanalCupo.IdSubProducto`, junto con `IdCanal`.
+- `Canal.fn_CupoVigente(int, int)` es una función tabular: prioriza origen `CUENTA` activo
+  con fecha nula o **mayor o igual al día actual de Ecuador**; si no, usa `SUBPRODUCTO`.
+  Se traducen a `Personalizado`/`Producto`. `fechaVigencia` es la fecha límite inclusiva;
+  una fecha pasada ya está vencida. No es una fecha de inicio.
+- Se devuelve cada canal para el que la función proporciona cupo, incluidos canales inactivos
+  si tienen configuración. No se inventa un cupo para canales sin configuración.
+- Consumo igual a `Transacciones.usp_AutorizarOperacion`: solo `Estado='Completada'`,
+  `TipoOperacion='Normal'` y `TipoTransaccion.Naturaleza='D'`. Rechazadas, pendientes,
+  reversadas, reversos y créditos no consumen. Se suma `Monto`, sin agregar comisiones.
+- El reloj es SQL Server en Ecuador. Rango mensual desde el primer día hasta mañana,
+  exclusivo; rango diario desde hoy hasta mañana. No se transforma `FechaHoraSistema`
+  en el predicado. Sin movimientos los consumos son cero y se conserva Decimal/Money.
+- CTA-07 y CTA-08 usan una sola consulta y un solo constructor de `CupoEfectivo`.
+- No se encontró `openapi.yaml` ni un esquema autoritativo anterior de `CupoEfectivo` en el
+  repositorio. Se conserva el contrato de límites y consumo; no se añaden campos de disponibilidad.
+- Roles internos efectivos ASESOR/SUPERVISOR/ADMIN. No existe rol CLIENTE ni vínculo de
+  propiedad WorkOS-cliente; el flujo de autoservicio exige definir esa autorización aparte.
+- Sin DML ni commit; cuenta inexistente devuelve 404 `CUENTA_NO_ENCONTRADA`.
+- Índice existente `IX_Transaccion_Cuenta_Fecha` usa `IdCuenta, IdFechaContable`, no la marca
+  temporal. Evaluar un índice por cuenta/canal/FechaHoraSistema según planes y volumen real.

@@ -47,6 +47,15 @@ _DB_ERRORES: dict[int, tuple[int, str, str]] = {
         "TRANSICION_TARJETA_INVALIDA",
         "El cambio de estado de la tarjeta no está permitido.",
     ),
+    52101: (409, "CLIENTE_NO_ACTIVO", "El cliente no está Activo."),
+    52102: (409, "CLIENTE_NO_ACTIVO", "El cliente no está Activo."),
+    52103: (422, "PRODUCTO_NO_ES_CUENTA", "El subproducto no es válido."),
+    52104: (422, "PRODUCTO_NO_ES_CUENTA", "El subproducto no es de una cuenta."),
+    52105: (
+        422,
+        "MONTO_APERTURA_INSUFICIENTE",
+        "El monto inicial no cubre el mínimo de apertura.",
+    ),
     57001: (409, "REGISTRO_INMUTABLE", "El registro histórico no se puede modificar."),
 }
 
@@ -120,13 +129,24 @@ def problema(status: int, code: str, message: str) -> HTTPException:
     return HTTPException(status_code=status, detail={"code": code, "message": message})
 
 
-def traducir_error_bd(exc: DBAPIError) -> HTTPException:
+def traducir_error_bd(
+    exc: DBAPIError, *, operacion: str | None = None
+) -> HTTPException:
     """Convierte un error de BD en HTTPException.
 
     Solo se lee exc.orig para sacar el número del THROW: str(exc) trae el SQL y sus
     parámetros, que pueden ser tokens o hashes.
     """
     numeros = [int(n) for n in _DB_NUMERO_RE.findall(str(exc.orig))]
+
+    # CTA-08 publica otro nombre para el mismo THROW; los consumidores existentes
+    # conservan CUPO_EXCEDE_PRODUCTO. Las traducciones siguen centralizadas aquí.
+    if operacion == "CTA08" and 52003 in numeros:
+        return problema(
+            422,
+            "CUPO_SUPERA_MAXIMO_PRODUCTO",
+            "El cupo supera el máximo del subproducto en ese canal.",
+        )
 
     duplicado = next((n for n in numeros if n in _DB_DUPLICADO), None)
     if duplicado is not None:

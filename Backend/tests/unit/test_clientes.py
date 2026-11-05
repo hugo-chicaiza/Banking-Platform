@@ -1388,9 +1388,12 @@ def test_cli08_perfil_integral_con_y_sin_productos(con_productos):
         assert ":id_cliente" in sql
     assert "RTRIM(NumeroEnmascarado)" in db.consultas[4][0]
     assert "HashNumeroTarjeta" not in db.consultas[4][0]
+    assert "p.TipoCuenta AS tipo_cuenta" in db.consultas[3][0]
+    assert "IdMoneda" not in db.consultas[3][0]
     assert "LEFT JOIN Credito.CreditoResumen" in db.consultas[5][0]
     serializado = perfil.model_dump(mode="json", by_alias=True)
     if con_productos:
+        assert perfil.cuentas[0].id_moneda == 840
         assert perfil.riesgo_vigente is not None
         assert perfil.riesgo_vigente.id_evaluacion == 20
         assert serializado["riesgoVigente"]["nivelRiesgoLAFT"] == "Bajo"
