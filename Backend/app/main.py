@@ -10,6 +10,7 @@ from app.core.config.logs import configurar_logging
 from app.core.config.settings import get_settings
 from app.core.security.audit import AccesoDenegadoMiddleware
 from app.modules.auth.router import router as auth_router
+from app.modules.caja.router import router as caja_router
 from app.modules.catalogos.router import router as catalogos_router
 from app.modules.clientes.router import router as clientes_router
 from app.modules.contabilidad.router import router as contabilidad_router
@@ -53,6 +54,7 @@ app.include_router(contabilidad_router, prefix=API_V1)
 app.include_router(creditos_router, prefix=API_V1)
 app.include_router(cuentas_router, prefix=API_V1)
 app.include_router(tarjetas_router, prefix=API_V1)
+app.include_router(caja_router, prefix=API_V1)
 
 # Público a propósito: verifica el despliegue sin sesión (fuera de /api, sin require_auth)
 app.include_router(smoke_test_router)  # SMOKE-TEST: borrar
