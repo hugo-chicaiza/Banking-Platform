@@ -13,6 +13,7 @@ from app.modules.auth.router import router as auth_router
 from app.modules.catalogos.router import router as catalogos_router
 from app.modules.clientes.router import router as clientes_router
 from app.modules.contabilidad.router import router as contabilidad_router
+from app.modules.creditos.router import router as creditos_router
 from app.modules.cuentas.router import router as cuentas_router
 from app.modules.tarjetas.router import router as tarjetas_router
 from app.smoke_test import router as smoke_test_router  # SMOKE-TEST: borrar
@@ -49,6 +50,7 @@ app.include_router(auth_router, prefix=API_V1)
 app.include_router(catalogos_router, prefix=API_V1)
 app.include_router(clientes_router, prefix=API_V1)
 app.include_router(contabilidad_router, prefix=API_V1)
+app.include_router(creditos_router, prefix=API_V1)
 app.include_router(cuentas_router, prefix=API_V1)
 app.include_router(tarjetas_router, prefix=API_V1)
 
