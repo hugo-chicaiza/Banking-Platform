@@ -491,3 +491,62 @@ def test_cookie_password_invalida(monkeypatch):
 
     with pytest.raises(RuntimeError, match="Fernet"):
         workos_client.get_cookie_password()
+
+
+# --- Varios FRONTEND_URL: en local, el FE (5173) y /docs (8471) a la vez -------------
+
+DOCS = "http://localhost:8471"
+
+
+@pytest.fixture()
+def dos_origenes(monkeypatch):
+    monkeypatch.setenv("FRONTEND_URL", f"{FRONT},{DOCS}")
+    monkeypatch.setenv("WORKOS_REDIRECT_URI", "")
+    get_settings.cache_clear()
+
+
+@pytest.mark.parametrize("origen", [FRONT, DOCS])
+def test_login_y_callback_vuelven_al_origen_de_la_peticion(
+    client, workos, dos_origenes, origen
+):
+    host = {"Host": urlsplit(origen).netloc}
+    r = client.get(f"{BASE}/login", params={"return_to": "/docs"}, headers=host)
+    assert workos.llamadas[0][1]["redirect_uri"] == f"{origen}/api/v1/auth/callback"
+    state = parse_qs(urlsplit(r.headers["location"]).query)["state"][0]
+    cookie = _cookies(r)[COOKIE_STATE].split(";")[0].split("=", 1)[1]
+
+    r = client.get(
+        f"{BASE}/callback",
+        params={"code": "code-1", "state": state},
+        headers={**host, "Cookie": f"{COOKIE_STATE}={cookie}"},
+    )
+
+    assert r.headers["location"] == f"{origen}/docs"
+
+
+def test_host_fuera_de_la_lista_usa_el_primer_origen(client, workos, dos_origenes):
+    client.get(f"{BASE}/login", headers={"Host": "evil.example"})
+
+    assert workos.llamadas[0][1]["redirect_uri"] == f"{FRONT}/api/v1/auth/callback"
+
+
+@pytest.mark.parametrize("origen", [FRONT, DOCS])
+def test_escrituras_desde_cualquier_origen_de_la_lista(
+    client, workos, dos_origenes, origen
+):
+    r = client.post(f"{BASE}/logout", headers={"Origin": origen})
+
+    assert r.status_code == 200
+
+
+def test_escritura_desde_un_origen_fuera_de_la_lista_403(client, workos, dos_origenes):
+    r = client.post(f"{BASE}/logout", headers={"Origin": "http://localhost:3000"})
+
+    assert r.status_code == 403
+    assert r.json()["code"] == "ORIGEN_NO_PERMITIDO"
+
+
+def test_logout_vuelve_al_login_del_mismo_origen(client, workos, dos_origenes):
+    r = client.post(f"{BASE}/logout", headers={"Host": "localhost:8471"})
+
+    assert r.json()["logoutUrl"] == f"{DOCS}/login"

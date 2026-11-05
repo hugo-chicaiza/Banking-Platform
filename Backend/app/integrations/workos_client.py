@@ -5,6 +5,7 @@ ni tokens. Es instanciado para usarse una vez y reutilizarse.
 """
 
 from functools import lru_cache
+from urllib.parse import urlsplit
 
 from cryptography.fernet import Fernet
 from workos import WorkOSClient
@@ -40,15 +41,29 @@ def get_cookie_password() -> str:
     return clave
 
 
-def get_frontend_url() -> str:
-    url = get_settings().frontend_url
-    if not url:
+RUTA_CALLBACK = "/api/v1/auth/callback"
+
+
+def get_frontend_urls() -> tuple[str, ...]:
+    origenes = get_settings().origenes_frontend
+    if not origenes:
         raise RuntimeError("Falta FRONTEND_URL en la configuración")
-    return url
+    return origenes
 
 
-def get_redirect_uri() -> str:
-    uri = get_settings().workos_redirect_uri
-    if not uri:
-        raise RuntimeError("Falta WORKOS_REDIRECT_URI en la configuración")
-    return uri
+def get_frontend_url(host: str | None = None) -> str:
+    """Origen del FE para una petición: el de FRONTEND_URL cuyo host coincide con el
+    header Host; si ninguno coincide, el primero. Nunca devuelve un origen fuera de la
+    lista, así que un Host falsificado no sirve para redirigir a otro sitio.
+    """
+    origenes = get_frontend_urls()
+    if host:
+        for origen in origenes:
+            if urlsplit(origen).netloc.lower() == host.lower():
+                return origen
+    return origenes[0]
+
+
+def get_redirect_uri(origen: str) -> str:
+    """Callback que se envía a WorkOS; debe estar registrado en sus Redirects."""
+    return get_settings().workos_redirect_uri or f"{origen}{RUTA_CALLBACK}"

@@ -23,7 +23,6 @@ from app.core.security.auth import (
 )
 from app.integrations.workos_client import (
     get_cookie_password,
-    get_frontend_url,
     get_redirect_uri,
     get_workos,
 )
@@ -45,8 +44,8 @@ def ruta_segura(return_to: str | None) -> str:
     return _RUTA_POR_DEFECTO
 
 
-def _url_error(code: str) -> str:
-    return f"{get_frontend_url()}{_RUTA_LOGIN}?error={code}"
+def _url_error(origen: str, code: str) -> str:
+    return f"{origen}{_RUTA_LOGIN}?error={code}"
 
 
 def _auditar(
@@ -70,7 +69,7 @@ def _auditar(
 # --- AUT-01 login + callback -------------------------------------------------------
 
 
-def iniciar_login(return_to: str | None) -> tuple[str, str]:
+def iniciar_login(return_to: str | None, origen: str) -> tuple[str, str]:
     """Devuelve la URL del Hosted UI y el valor de la cookie de state.
 
     La cookie guarda el state y la ruta de regreso; el callback los compara.
@@ -80,7 +79,7 @@ def iniciar_login(return_to: str | None) -> tuple[str, str]:
     ruta = ruta_segura(return_to).encode()
     destino = base64.urlsafe_b64encode(ruta).decode().rstrip("=")
     url = get_workos().user_management.get_authorization_url(
-        provider="authkit", redirect_uri=get_redirect_uri(), state=state
+        provider="authkit", redirect_uri=get_redirect_uri(origen), state=state
     )
     return url, f"{state}.{destino}"
 
@@ -104,6 +103,7 @@ def completar_login(
     cookie_state: str | None,
     ip: str | None,
     user_agent: str | None,
+    origen: str,
 ) -> tuple[str, str | None]:
     """Canjea el code. Devuelve a dónde redirigir y la sesión sellada (None si falló)."""
     guardado = _leer_cookie_state(cookie_state)
@@ -111,7 +111,7 @@ def completar_login(
     def fallo(code_error: str, motivo: str) -> tuple[str, None]:
         logger.warning("auth: login fallido motivo=%s", motivo)
         _auditar("LOGIN", "Fallido", f"AUT-01 Inicio de sesión {code_error}", ip)
-        return _url_error(code_error), None
+        return _url_error(origen, code_error), None
 
     if error:
         # El usuario canceló en el Hosted UI o WorkOS rechazó la solicitud
@@ -133,7 +133,7 @@ def completar_login(
         )
     except (ServerException, httpx.HTTPError) as exc:
         logger.error("auth: WorkOS no disponible tipo=%s", type(exc).__name__)
-        return _url_error("AUTENTICACION_NO_DISPONIBLE"), None
+        return _url_error(origen, "AUTENTICACION_NO_DISPONIBLE"), None
     except BaseRequestException as exc:
         # code y request_id de WorkOS sirven para soporte y no son secretos
         logger.warning(
@@ -152,7 +152,7 @@ def completar_login(
         ip,
     )
     logger.info("auth: login usuario=%s", resultado.user.id)
-    return f"{get_frontend_url()}{guardado[1]}", resultado.sealed_session
+    return f"{origen}{guardado[1]}", resultado.sealed_session
 
 
 # --- AUT-02 refresh ----------------------------------------------------------------
@@ -166,9 +166,9 @@ def refrescar(sellada: str | None) -> SesionValida | None:
 # --- AUT-03 logout -----------------------------------------------------------------
 
 
-def cerrar_sesion(sellada: str | None, ip: str | None) -> str:
+def cerrar_sesion(sellada: str | None, ip: str | None, origen: str) -> str:
     """URL a la que el FE debe navegar. Idempotente: sin sesión devuelve /login."""
-    login = f"{get_frontend_url()}{_RUTA_LOGIN}"
+    login = f"{origen}{_RUTA_LOGIN}"
     if not sellada:
         return login
     # Si el access token venció hay que renovarlo para conocer el id de la sesión

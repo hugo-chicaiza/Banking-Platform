@@ -8,6 +8,14 @@ from app.core.api.middleware import HSTS, HstsMiddleware
 from app.core.config.settings import Settings
 
 
+@pytest.fixture(autouse=True)
+def _sin_env_local(monkeypatch, tmp_path):
+    """Settings lee .env de la carpeta actual: sin esto, el .env del dev cambia el resultado."""
+    monkeypatch.chdir(tmp_path)
+    for variable in ("FRONTEND_URL", "WORKOS_REDIRECT_URI"):
+        monkeypatch.delenv(variable, raising=False)
+
+
 @pytest.mark.parametrize(
     "url",
     ["https://banca.ejemplo.ec", "http://localhost:5173", "http://127.0.0.1:5173"],
@@ -55,3 +63,30 @@ def test_hsts_en_cada_respuesta_incluidos_errores():
 
     assert client.get("/ok").headers["strict-transport-security"] == HSTS
     assert client.get("/no-existe").headers["strict-transport-security"] == HSTS
+
+
+def test_frontend_url_admite_varios_origenes():
+    s = Settings(frontend_url="http://localhost:5173, http://localhost:8471/")
+
+    assert s.origenes_frontend == ("http://localhost:5173", "http://localhost:8471")
+
+
+@pytest.mark.parametrize(
+    ("valor", "mensaje"),
+    [
+        ("http://localhost:5173,http://banca.ejemplo.ec", "https://"),
+        ("http://localhost:5173,http://LOCALHOST:5173", "repite"),
+        ("http://localhost:5173,localhost:8471", "esquema"),
+    ],
+)
+def test_frontend_url_rechaza_listas_invalidas(valor, mensaje):
+    with pytest.raises(ValueError, match=mensaje):
+        Settings(frontend_url=valor)
+
+
+def test_callback_fijo_solo_con_un_origen():
+    with pytest.raises(ValueError, match="WORKOS_REDIRECT_URI vacío"):
+        Settings(
+            frontend_url="http://localhost:5173,http://localhost:8471",
+            workos_redirect_uri="http://localhost:5173/api/v1/auth/callback",
+        )

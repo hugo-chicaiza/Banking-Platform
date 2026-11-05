@@ -22,6 +22,7 @@ from app.core.security.auth import (
     no_autenticado,
     verificar_origen,
 )
+from app.integrations.workos_client import get_frontend_url
 from app.modules.auth import service
 from app.modules.auth.schemas import LogoutResponse, UsuarioSesion
 
@@ -56,6 +57,11 @@ def _ip(request: Request) -> str | None:
     return request.client.host if request.client else None
 
 
+def _origen(request: Request) -> str:
+    # Uno de los FRONTEND_URL: el de este host (5173 con el FE, 8471 con /docs)
+    return get_frontend_url(request.headers.get("host"))
+
+
 def _user_agent(request: Request) -> str | None:
     agente = request.headers.get("user-agent")
     return agente[:_MAX_USER_AGENT] if agente else None
@@ -70,12 +76,13 @@ def _redireccion(url: str) -> RedirectResponse:
 # AUT-01. Público. El FE navega aquí con window.location, no con fetch
 @router.get("/login", response_class=RedirectResponse, status_code=302)
 def login(
+    request: Request,
     return_to: Annotated[str | None, Query(max_length=512)] = None,
 ) -> RedirectResponse:
     """Redirige al Hosted UI de AuthKit. `return_to` es la ruta del FE a la que se
     vuelve después; si no es una ruta interna se usa "/".
     """
-    url, valor_state = service.iniciar_login(return_to)
+    url, valor_state = service.iniciar_login(return_to, _origen(request))
     respuesta = _redireccion(url)
     # Lax: tiene que viajar en la navegación de vuelta desde WorkOS
     respuesta.set_cookie(
@@ -103,7 +110,13 @@ def callback(
 ) -> RedirectResponse:
     """Crea la cookie de sesión y vuelve al FE, o a /login?error=CODIGO si falla."""
     destino, sellada = service.completar_login(
-        code, state, error, cookie_state, _ip(request), _user_agent(request)
+        code,
+        state,
+        error,
+        cookie_state,
+        _ip(request),
+        _user_agent(request),
+        _origen(request),
     )
     respuesta = _redireccion(destino)
     respuesta.delete_cookie(
@@ -130,7 +143,7 @@ def refresh(response: Response, sellada: CookieSesion = None) -> None:
 )
 def logout(request: Request, response: Response, sellada: CookieSesion = None) -> Any:
     """Borra la cookie y devuelve la URL que cierra la sesión en AuthKit."""
-    url = service.cerrar_sesion(sellada, _ip(request))
+    url = service.cerrar_sesion(sellada, _ip(request), _origen(request))
     borrar_cookie_sesion(response)
     return LogoutResponse(logout_url=url)
 

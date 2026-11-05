@@ -2,7 +2,7 @@ from functools import lru_cache
 from typing import Annotated, Literal
 from urllib.parse import urlsplit
 
-from pydantic import Field, SecretStr, field_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Única excepción a HTTPS: el FE y el callback locales (Vite) en la máquina del dev
@@ -57,9 +57,11 @@ class Settings(BaseSettings):
     workos_client_id: str = ""
     # Clave Fernet con la que se cifra la cookie de sesión
     workos_cookie_password: SecretStr = SecretStr("")
-    # URL de GET /api/v1/auth/callback tal como la ve el navegador
+    # Opcional. Vacío: el callback se arma con el origen de cada login
+    # (<origen>/api/v1/auth/callback). Solo se admite con un único FRONTEND_URL.
     workos_redirect_uri: str = ""
-    # Origen del FE (esquema://host[:puerto], sin ruta): redirecciones y control CSRF
+    # Orígenes del FE (esquema://host[:puerto], sin ruta), separados por coma: destino de
+    # las redirecciones y únicos orígenes aceptados en escrituras (CSRF)
     frontend_url: str = ""
     # Vínculos administrados por despliegue, nunca por el navegador ni por email.
     workos_audit_user_ids: dict[
@@ -79,19 +81,23 @@ class Settings(BaseSettings):
 
     @field_validator("frontend_url")
     @classmethod
-    def _solo_origen(cls, valor: str) -> str:
-        valor = valor.rstrip("/")
-        partes = urlsplit(valor)
-        if valor and (
-            partes.scheme not in ("http", "https")
-            or not partes.netloc
-            or partes.path
-            or partes.query
-        ):
-            raise ValueError("FRONTEND_URL debe ser solo esquema://host[:puerto]")
-        if valor:
-            _exigir_https("FRONTEND_URL", valor)
-        return valor
+    def _solo_origenes(cls, valor: str) -> str:
+        origenes = [o.strip().rstrip("/") for o in valor.split(",") if o.strip()]
+        for origen in origenes:
+            partes = urlsplit(origen)
+            if (
+                partes.scheme not in ("http", "https")
+                or not partes.netloc
+                or partes.path
+                or partes.query
+            ):
+                raise ValueError(
+                    "FRONTEND_URL debe ser solo esquema://host[:puerto], separados por coma"
+                )
+            _exigir_https("FRONTEND_URL", origen)
+        if len({urlsplit(o).netloc.lower() for o in origenes}) != len(origenes):
+            raise ValueError("FRONTEND_URL repite un host")
+        return ",".join(origenes)
 
     @field_validator("workos_redirect_uri")
     @classmethod
@@ -101,6 +107,19 @@ class Settings(BaseSettings):
                 raise ValueError("WORKOS_REDIRECT_URI debe ser una URL completa")
             _exigir_https("WORKOS_REDIRECT_URI", valor)
         return valor
+
+    @model_validator(mode="after")
+    def _callback_fijo_con_un_origen(self) -> "Settings":
+        if self.workos_redirect_uri and len(self.origenes_frontend) > 1:
+            raise ValueError(
+                "Con varios FRONTEND_URL, deje WORKOS_REDIRECT_URI vacío: el callback "
+                "se arma con el origen de cada login"
+            )
+        return self
+
+    @property
+    def origenes_frontend(self) -> tuple[str, ...]:
+        return tuple(o for o in self.frontend_url.split(",") if o)
 
     def odbc_connection_string(self, db: Literal["cooperativa", "seguridad"]) -> str:
         server = getattr(self, f"{db}_db_server")

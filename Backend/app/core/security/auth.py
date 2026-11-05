@@ -38,7 +38,7 @@ from app.core.api.errors import problema
 from app.core.config.settings import get_settings
 from app.integrations.workos_client import (
     get_cookie_password,
-    get_frontend_url,
+    get_frontend_urls,
     get_workos,
 )
 
@@ -154,7 +154,7 @@ def verificar_origen(request: Request) -> None:
     """Protección CSRF de las peticiones que modifican datos.
 
     Como la sesión va en una cookie, el navegador la manda sola. Un POST que no viene
-    de FRONTEND_URL se rechaza con 403. Sin Origin ni Sec-Fetch-Site no es un
+    de alguno de los FRONTEND_URL se rechaza con 403. Sin Origin ni Sec-Fetch-Site no es un
     navegador (Postman, curl), y ahí no hay CSRF posible.
     """
     if request.method in _METODOS_SEGUROS:
@@ -163,7 +163,7 @@ def verificar_origen(request: Request) -> None:
     sitio = request.headers.get("sec-fetch-site")
     if origen is None and (sitio is None or sitio in _SITIOS_PROPIOS):
         return
-    if origen == get_frontend_url():
+    if origen in get_frontend_urls():
         return
     logger.warning("auth: origen rechazado origin=%s sec_fetch_site=%s", origen, sitio)
     raise HTTPException(
