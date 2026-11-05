@@ -10,8 +10,9 @@ Dependencias:
   la cookie) y entrega el usuario. En POST/PUT/PATCH/DELETE además verifica el origen
   de la petición (CSRF). Responde 401 o 403.
 - `require_roles("CAJERO", ...)`: igual que la anterior y además exige un rol (403).
-- `require_auth`: la que declaran todos los routers. Por ahora NO valida nada; para
-  activar la autenticación en general para el backend basta con cambiar su cuerpo (ver abajo).
+- `require_auth`: la que declaran todos los routers. Exige una sesión válida (401).
+
+Cada 401/403 de la API queda en Auditoria.Auditoria (`AccesoDenegadoMiddleware`).
 """
 
 import hashlib
@@ -294,6 +295,8 @@ def usuario_actual(
         raise no_autenticado(borrar_cookie=True)
     if valida.sellada_nueva:
         guardar_cookie_sesion(response, valida.sellada_nueva)
+    # Para que la auditoría de un 403 posterior sepa quién lo intentó
+    request.state.usuario = valida.usuario
     return valida.usuario
 
 
@@ -316,14 +319,9 @@ def id_usuario_auditoria(usuario: UsuarioActual) -> int:
 UsuarioAuditoria = Annotated[int, Depends(id_usuario_auditoria)]
 
 
-def require_auth() -> None:
-    """Dependencia que declaran todos los routers. Por ahora no valida nada.
-
-    TODO(F-03): para exigir sesión en todo el backend, reemplazar por:
-
-        def require_auth(usuario: UsuarioActual) -> Usuario:
-            return usuario
-    """
+def require_auth(usuario: UsuarioActual) -> Usuario:
+    """Dependencia que declaran todos los routers: 401 sin sesión válida (roles AUTH)."""
+    return usuario
 
 
 def require_roles(*permitidos: str) -> Callable[..., Usuario]:

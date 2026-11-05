@@ -13,11 +13,13 @@ from sqlalchemy import Connection
 from app.core.database.db import cooperativa
 from app.main import app
 from app.modules.contabilidad import repository, service
+from tests.sesion import simular_sesion
 
 
 @pytest.fixture
 def client():
     app.dependency_overrides[cooperativa] = lambda: None
+    simular_sesion(app)
     yield TestClient(app)
     app.dependency_overrides.clear()
 

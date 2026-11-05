@@ -4,10 +4,11 @@ from fastapi import FastAPI
 # from app.core.config import get_settings
 # from app.core.middleware import TraceIdMiddleware
 # from app.core.rate_limit import LimitePeticionesMiddleware
-from app.core.api.middleware import TraceIdMiddleware
+from app.core.api.middleware import HstsMiddleware, TraceIdMiddleware
 from app.core.api.rate_limit import LimitePeticionesMiddleware
 from app.core.config.logs import configurar_logging
 from app.core.config.settings import get_settings
+from app.core.security.audit import AccesoDenegadoMiddleware
 from app.modules.auth.router import router as auth_router
 from app.modules.catalogos.router import router as catalogos_router
 from app.modules.clientes.router import router as clientes_router
@@ -28,6 +29,8 @@ app = FastAPI(
     redoc_url=None,
     openapi_url=None if is_prod else "/openapi.json",
 )
+# Primero en agregarse, último en ejecutarse: ya tiene el traceId y no audita los 429
+app.add_middleware(AccesoDenegadoMiddleware)
 if settings.limite_peticiones_activo:
     app.add_middleware(
         LimitePeticionesMiddleware,
@@ -35,6 +38,9 @@ if settings.limite_peticiones_activo:
         escritura=settings.limite_escritura_por_minuto,
         sensible=settings.limite_sensible_por_minuto,
     )
+# Fuera de development: en localhost el navegador recordaría HSTS para otros proyectos
+if settings.app_env != "development":
+    app.add_middleware(HstsMiddleware)
 # Debe ir de último: se ejecuta primero el último agregado y así el 429 lleva traceId
 app.add_middleware(TraceIdMiddleware)
 
@@ -46,4 +52,5 @@ app.include_router(contabilidad_router, prefix=API_V1)
 app.include_router(cuentas_router, prefix=API_V1)
 app.include_router(tarjetas_router, prefix=API_V1)
 
+# Público a propósito: verifica el despliegue sin sesión (fuera de /api, sin require_auth)
 app.include_router(smoke_test_router)  # SMOKE-TEST: borrar

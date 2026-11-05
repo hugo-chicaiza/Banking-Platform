@@ -6,6 +6,7 @@ from app.core.config.logs import _AgregarTraceId, _Formato, trace_id_actual
 from app.core.database.db import cooperativa
 from app.main import app
 from app.modules.catalogos import repository
+from tests.sesion import simular_sesion
 
 
 def _registro(mensaje: str) -> logging.LogRecord:
@@ -76,6 +77,7 @@ def test_logs_de_un_modulo_llevan_el_trace_id_de_su_peticion(monkeypatch):
 
     monkeypatch.setattr(repository, "listar_paises", listar_paises)
     app.dependency_overrides[cooperativa] = lambda: None
+    simular_sesion(app)
     try:
         TestClient(app).get(
             "/api/v1/catalogos/paises", headers={"X-Request-Id": "trace-cat-1"}

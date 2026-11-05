@@ -6,12 +6,14 @@ from fastapi.testclient import TestClient
 from app.core.database.db import cooperativa
 from app.main import app
 from app.modules.catalogos import repository
+from tests.sesion import simular_sesion
 
 
 @pytest.fixture
 def client():
     # Sin BD: cada prueba reemplaza la función del repositorio
     app.dependency_overrides[cooperativa] = lambda: None
+    simular_sesion(app)
     yield TestClient(app)
     app.dependency_overrides.clear()
 
@@ -95,9 +97,6 @@ def test_tipos_movimiento_caja_con_datos(client, monkeypatch):
             "naturaleza": "I",
         }
     ]
-
-
-# TODO(F-03): agregar test_sin_token_401 cuando require_auth valide el JWT
 
 
 def test_actividades_economicas_con_datos(client, monkeypatch):

@@ -1,6 +1,6 @@
 import json
 import re
-from collections.abc import Callable, Iterator
+from collections.abc import Iterator
 from datetime import date
 from typing import Annotated, Any
 
@@ -14,9 +14,8 @@ from app.core.api.errors import (
     problema,
     solo_parametros,
 )
-from app.core.config.settings import get_settings
 from app.core.database.db import cooperativa, get_engine
-from app.core.security.auth import require_auth
+from app.core.security.auth import UsuarioAuditoria, require_auth, require_roles
 from app.modules.tarjetas import service
 from app.modules.tarjetas.schemas import (
     MAX_INT,
@@ -31,9 +30,6 @@ from app.modules.tarjetas.schemas import (
     TarjetaEstadoUpdate,
 )
 
-# TODO(F-03): sacar el usuario del JWT. RealizadoPor y CreadoPor son NOT NULL, así que
-# mientras tanto se guarda 0.
-_USUARIO_SIN_IDENTIFICAR = 0
 _MAX_BODY_PIN = 1024
 
 
@@ -64,29 +60,6 @@ def seguridad() -> Iterator[Connection]:
     """Conexión a SeguridadDB, donde está el hash del PIN."""
     with get_engine("seguridad").connect() as conn:
         yield conn
-
-
-def autorizacion_disponible() -> None:
-    """Sin F-03 cualquiera podría llamar estas rutas: solo responden en development."""
-    if get_settings().app_env != "development":
-        raise problema(
-            503, "AUTORIZACION_NO_DISPONIBLE", "El servicio no está disponible."
-        )
-
-
-def _requiere_roles(*_roles: str) -> Callable[..., None]:
-    """Roles permitidos en cada ruta.
-
-    TODO(F-03): comparar _roles con los del JWT, responder 403 y registrar el intento.
-    Por ahora solo aplica autorizacion_disponible.
-    """
-
-    def verificar(
-        _disponible: Annotated[None, Depends(autorizacion_disponible)],
-    ) -> None:
-        return None
-
-    return verificar
 
 
 async def _leer_pin(request: Request) -> SecretStr:
@@ -120,11 +93,13 @@ def _ip(request: Request) -> str | None:
     "",
     response_model=Tarjeta,
     status_code=201,
-    dependencies=[Depends(_requiere_roles("ASESOR", "ADMIN"))],
+    dependencies=[Depends(require_roles("ASESOR", "ADMIN"))],
 )
-def emitir_tarjeta(payload: TarjetaCreate, request: Request, conn: Db) -> Any:
+def emitir_tarjeta(
+    payload: TarjetaCreate, request: Request, usuario: UsuarioAuditoria, conn: Db
+) -> Any:
     """Emite una tarjeta en estado Generada y sin PIN para una cuenta Activa."""
-    return service.crear_tarjeta(conn, payload, _USUARIO_SIN_IDENTIFICAR, _ip(request))
+    return service.crear_tarjeta(conn, payload, usuario, _ip(request))
 
 
 # TAR-02. Roles: ASESOR, SUPERVISOR, ADMIN
@@ -132,7 +107,7 @@ def emitir_tarjeta(payload: TarjetaCreate, request: Request, conn: Db) -> Any:
     "",
     response_model=PageTarjeta,
     dependencies=[
-        Depends(_requiere_roles("ASESOR", "SUPERVISOR", "ADMIN")),
+        Depends(require_roles("ASESOR", "SUPERVISOR", "ADMIN")),
         Depends(
             solo_parametros(
                 "idCliente", "idCuenta", "estado", "page", "pageSize", "sort"
@@ -161,7 +136,7 @@ def buscar_tarjetas(
 @router.get(
     "/{idTarjeta}",
     response_model=Tarjeta,
-    dependencies=[Depends(_requiere_roles("ASESOR", "SUPERVISOR", "ADMIN"))],
+    dependencies=[Depends(require_roles("ASESOR", "SUPERVISOR", "ADMIN"))],
 )
 def detalle_tarjeta(id_tarjeta: IdTarjetaPath, conn: Db) -> Any:
     """Detalle de una tarjeta."""
@@ -172,25 +147,24 @@ def detalle_tarjeta(id_tarjeta: IdTarjetaPath, conn: Db) -> Any:
 @router.post(
     "/{idTarjeta}/estado",
     response_model=Tarjeta,
-    dependencies=[Depends(_requiere_roles("ASESOR", "SUPERVISOR", "ADMIN"))],
+    dependencies=[Depends(require_roles("ASESOR", "SUPERVISOR", "ADMIN"))],
 )
 def cambiar_estado(
     id_tarjeta: IdTarjetaPath,
     payload: TarjetaEstadoUpdate,
     request: Request,
+    usuario: UsuarioAuditoria,
     conn: Db,
 ) -> Any:
     """Cambia el estado según Tarjeta.TransicionEstado. Para activar debe tener PIN."""
-    return service.cambiar_estado(
-        conn, id_tarjeta, payload, _USUARIO_SIN_IDENTIFICAR, _ip(request)
-    )
+    return service.cambiar_estado(conn, id_tarjeta, payload, usuario, _ip(request))
 
 
 # TAR-05. Roles: ASESOR, ADMIN
 @router.post(
     "/{idTarjeta}/pin",
     status_code=204,
-    dependencies=[Depends(_requiere_roles("ASESOR", "ADMIN"))],
+    dependencies=[Depends(require_roles("ASESOR", "ADMIN"))],
     openapi_extra={
         "requestBody": {
             "required": True,
@@ -206,13 +180,12 @@ def asignar_pin(
     id_tarjeta: IdTarjetaPath,
     pin: Annotated[SecretStr, Depends(_leer_pin)],
     request: Request,
+    usuario: UsuarioAuditoria,
     conn: Db,
     conn_seguridad: Annotated[Connection, Depends(seguridad)],
 ) -> None:
     """Asigna el PIN inicial. Solo se puede hacer una vez."""
-    service.asignar_pin(
-        conn, conn_seguridad, id_tarjeta, pin, _USUARIO_SIN_IDENTIFICAR, _ip(request)
-    )
+    service.asignar_pin(conn, conn_seguridad, id_tarjeta, pin, usuario, _ip(request))
 
 
 # TAR-06. Roles: SUPERVISOR, AUDITOR, ADMIN
@@ -221,7 +194,7 @@ def asignar_pin(
     response_model=PageTarjetaHistorial,
     response_model_exclude_none=True,
     dependencies=[
-        Depends(_requiere_roles("SUPERVISOR", "AUDITOR", "ADMIN")),
+        Depends(require_roles("SUPERVISOR", "AUDITOR", "ADMIN")),
         Depends(
             solo_parametros("fechaDesde", "fechaHasta", "page", "pageSize", "sort")
         ),

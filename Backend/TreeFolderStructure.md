@@ -59,7 +59,13 @@ backend/
 > read-only modules (e.g. `catalogos`) go router → repository.
 >
 > Rule: every router declares `dependencies=[Depends(require_auth)]`; auth is implemented once in
-> `core/security/auth.py`.
+> `core/security/auth.py`. Each route adds `require_roles(...)` with the roles of its task (AUTH = none), and
+> every write takes its author from `UsuarioAuditoria`, never a fixed number. Only HTTPS: `FRONTEND_URL` and
+> `WORKOS_REDIRECT_URI` must be `https://` (http only for localhost).
+>
+> Rule: tests. Call protected routes with `simular_sesion(app)` from `tests/sesion.py` (or
+> `usuario_con_roles(...)` to test a 403). A new route must be added to `ROLES_POR_RUTA` in
+> `tests/unit/test_autorizacion.py`, which checks 401 on every `/api/` route and the exact roles of each task.
 >
 > Rule: every router uses the F-04 error format: `APIRouter(..., route_class=ProblemDetailsRoute,
 > responses=RESPUESTAS_ERROR)` from `core/api/errors.py`.

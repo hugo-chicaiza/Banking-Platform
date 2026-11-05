@@ -59,10 +59,11 @@ def abrir_cuenta(
     return service.abrir_cuenta(conn, payload, creado_por)
 
 
-# require_auth aún no valida la sesión; estos roles son metadatos hasta activar F-03.
 _ROLES_CONSULTA = ["ASESOR", "CAJERO", "SUPERVISOR", "ADMIN"]
 _consultas_router = APIRouter(
-    route_class=ProblemDetailsRoute, responses=RESPUESTAS_ERROR
+    route_class=ProblemDetailsRoute,
+    responses=RESPUESTAS_ERROR,
+    dependencies=[Depends(require_roles(*_ROLES_CONSULTA))],
 )
 
 
@@ -84,10 +85,7 @@ def listar_cuentas(
     page_size: Annotated[int, Query(alias="pageSize", ge=1, le=100)] = 20,
     sort: str | None = None,
 ) -> PageCuenta:
-    """Busca cuentas por filtros exactos combinables (CTA-02 / A-02).
-
-    Autorización efectiva pendiente de la activación de require_auth (F-03).
-    """
+    """Busca cuentas por filtros exactos combinables (CTA-02 / A-02)."""
     return service.listar_cuentas(
         conn,
         id_cliente=id_cliente,
@@ -109,7 +107,6 @@ def listar_cuentas(
 def obtener_cuenta(idCuenta: int, conn: Db) -> Cuenta:
     """Detalle de cuenta en cualquier estado (CTA-03 / A-02).
 
-    Autorización efectiva pendiente de la activación de require_auth (F-03).
     `idMoneda` es siempre 840 porque la cooperativa opera exclusivamente en USD.
     """
     return service.obtener_cuenta(conn, idCuenta)
@@ -124,7 +121,6 @@ def obtener_cuenta(idCuenta: int, conn: Db) -> Cuenta:
 def obtener_saldo(idCuenta: int, conn: Db) -> SaldoCuenta:
     """Saldo contable, retenido y disponible de la cuenta (CTA-04 / A-02).
 
-    Autorización efectiva pendiente de la activación de require_auth (F-03).
     `idMoneda` es siempre 840 porque la cooperativa opera exclusivamente en USD.
     """
     return service.obtener_saldo(conn, idCuenta)
