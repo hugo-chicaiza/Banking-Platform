@@ -1,3 +1,6 @@
+from datetime import date, datetime
+from typing import Any
+
 from sqlalchemy import Connection
 
 from app.core.api.errors import problema
@@ -54,3 +57,47 @@ def validar_terminal(
         )
 
     return atm
+
+
+def validar_tarjeta(
+    conn: Connection,
+    id_tarjeta: int,
+) -> dict[str, Any]:
+    """Valida el estado y la vigencia de una tarjeta."""
+
+    tarjeta = repository.obtener_tarjeta(conn, id_tarjeta)
+
+    if tarjeta is None:
+        raise problema(
+            409,
+            "TARJETA_NO_DISPONIBLE",
+            "La tarjeta no está disponible.",
+        )
+
+    if tarjeta["estado_tarjeta"] != "Activa":
+        raise problema(
+            409,
+            "TARJETA_NO_DISPONIBLE",
+            "La tarjeta no está disponible.",
+        )
+
+    fecha_expiracion = tarjeta["fecha_expiracion"]
+
+    if isinstance(fecha_expiracion, datetime):
+        fecha_expiracion = fecha_expiracion.date()
+
+    if fecha_expiracion is None or fecha_expiracion < date.today():
+        raise problema(
+            409,
+            "TARJETA_NO_DISPONIBLE",
+            "La tarjeta no está disponible.",
+        )
+
+    if not tarjeta["pin_asignado"]:
+        raise problema(
+            409,
+            "PIN_NO_CONFIGURADO",
+            "La tarjeta no tiene un PIN configurado.",
+        )
+
+    return tarjeta

@@ -37,3 +37,34 @@ def obtener_atm(
     )
 
     return dict(fila) if fila is not None else None
+
+def obtener_tarjeta(
+    conn: Connection,
+    id_tarjeta: int,
+) -> dict[str, Any] | None:
+    """Obtiene los datos necesarios para validar una tarjeta."""
+
+    sql = text("""
+        SELECT
+            t.IdTarjeta AS id_tarjeta,
+            t.IdCliente AS id_cliente,
+            t.IdCuenta AS id_cuenta,
+            t.NombresTitular AS nombres_titular,
+            t.ApellidosTitular AS apellidos_titular,
+            t.PinAsignado AS pin_asignado,
+            t.FechaExpiracion AS fecha_expiracion,
+            t.Estado AS estado_tarjeta
+        FROM Tarjeta.Tarjeta AS t
+        WHERE t.IdTarjeta = :id_tarjeta
+    """)
+
+    fila = (
+        conn.execute(
+            sql,
+            {"id_tarjeta": id_tarjeta},
+        )
+        .mappings()
+        .first()
+    )
+
+    return dict(fila) if fila is not None else None
