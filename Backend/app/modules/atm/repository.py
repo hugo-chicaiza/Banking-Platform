@@ -38,6 +38,7 @@ def obtener_atm(
 
     return dict(fila) if fila is not None else None
 
+
 def obtener_tarjeta(
     conn: Connection,
     id_tarjeta: int,
