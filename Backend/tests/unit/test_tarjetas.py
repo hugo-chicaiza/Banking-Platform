@@ -16,8 +16,10 @@ from fastapi.testclient import TestClient
 from sqlalchemy.exc import DBAPIError
 
 from app.core.database.db import cooperativa
+from app.core.security.auth import ROLES
 from app.main import app
 from app.modules.tarjetas import repository, router, service
+from tests.sesion import simular_sesion, usuario_con_roles
 
 BASE = "/api/v1/tarjetas"
 PAYLOAD = {
@@ -72,7 +74,7 @@ def conns():
 def client(conns):
     app.dependency_overrides[cooperativa] = lambda: conns.coop
     app.dependency_overrides[router.seguridad] = lambda: conns.seg
-    app.dependency_overrides[router.autorizacion_disponible] = lambda: None
+    simular_sesion(app)
     yield TestClient(app, raise_server_exceptions=False)
     app.dependency_overrides.clear()
 
@@ -754,34 +756,50 @@ def test_historial_parametros_invalidos_400(client, params):
 # Transversales
 
 
-@pytest.mark.parametrize(
-    ("metodo", "ruta", "body"),
-    [
-        ("post", BASE, PAYLOAD),
-        ("get", BASE, None),
-        ("get", f"{BASE}/1", None),
-        ("post", f"{BASE}/1/estado", {"estado": "Activa", "motivo": "x"}),
-        ("post", f"{BASE}/1/pin", {"pin": "7392"}),
-        ("get", f"{BASE}/1/historial", None),
-    ],
-)
-@pytest.mark.parametrize("entorno", ["staging", "production"])
-def test_rutas_cerradas_fuera_de_desarrollo_sin_f03(
-    conns, monkeypatch, metodo, ruta, body, entorno
-):
+# Roles de cada tarea TAR (GitHubProject_Files)
+_RUTAS_Y_ROLES = [
+    ("post", BASE, PAYLOAD, ("ASESOR", "ADMIN")),
+    ("get", BASE, None, ("ASESOR", "SUPERVISOR", "ADMIN")),
+    ("get", f"{BASE}/1", None, ("ASESOR", "SUPERVISOR", "ADMIN")),
+    (
+        "post",
+        f"{BASE}/1/estado",
+        {"estado": "Activa", "motivo": "x"},
+        ("ASESOR", "SUPERVISOR", "ADMIN"),
+    ),
+    ("post", f"{BASE}/1/pin", {"pin": "7392"}, ("ASESOR", "ADMIN")),
+    ("get", f"{BASE}/1/historial", None, ("SUPERVISOR", "AUDITOR", "ADMIN")),
+]
+
+
+def _llamar(conns, metodo, ruta, body):
     app.dependency_overrides[cooperativa] = lambda: conns.coop
     app.dependency_overrides[router.seguridad] = lambda: conns.seg
-    monkeypatch.setattr(
-        router, "get_settings", lambda: SimpleNamespace(app_env=entorno)
-    )
     try:
-        r = getattr(TestClient(app), metodo)(
+        return getattr(TestClient(app), metodo)(
             ruta, **({"json": body} if body is not None else {})
         )
     finally:
         app.dependency_overrides.clear()
 
-    assert r.status_code == 503 and _code(r) == "AUTORIZACION_NO_DISPONIBLE"
+
+@pytest.mark.parametrize(("metodo", "ruta", "body", "_roles"), _RUTAS_Y_ROLES)
+def test_sin_sesion_401_y_se_audita(
+    conns, eventos_auditados, metodo, ruta, body, _roles
+):
+    r = _llamar(conns, metodo, ruta, body)
+
+    assert r.status_code == 401 and _code(r) == "NO_AUTENTICADO"
+    assert [e.accion for e in eventos_auditados] == ["ACCESO_DENEGADO"]
+
+
+@pytest.mark.parametrize(("metodo", "ruta", "body", "roles"), _RUTAS_Y_ROLES)
+def test_rol_sin_permiso_403(conns, metodo, ruta, body, roles):
+    simular_sesion(app, usuario_con_roles(*(r for r in ROLES if r not in roles)))
+
+    r = _llamar(conns, metodo, ruta, body)
+
+    assert r.status_code == 403 and _code(r) == "SIN_PERMISO"
 
 
 def test_openapi_documenta_las_seis_rutas_y_el_body_del_pin():

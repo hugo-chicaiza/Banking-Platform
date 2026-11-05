@@ -13,6 +13,7 @@ from app.core.api.middleware import TraceIdMiddleware
 from app.core.database.db import cooperativa
 from app.main import app as app_real
 from app.modules.catalogos import repository as repo_catalogos
+from tests.sesion import simular_sesion
 
 
 class _Cuerpo(BaseModel):
@@ -236,6 +237,7 @@ def test_respuesta_correcta_lleva_el_trace_id_y_no_cambia():
 @pytest.fixture
 def real():
     app_real.dependency_overrides[cooperativa] = lambda: None
+    simular_sesion(app_real)
     yield TestClient(app_real)
     app_real.dependency_overrides.clear()
 

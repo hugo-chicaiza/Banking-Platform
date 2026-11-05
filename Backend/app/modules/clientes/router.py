@@ -41,7 +41,9 @@ _gestion_router = APIRouter()
 
 Db = Annotated[Connection, Depends(cooperativa)]
 
-# TODO(F-03): aplicar los roles declarados cuando require_auth valide el JWT.
+# Roles de cada tarea (GitHubProject_Files): 403 SIN_PERMISO si no tiene ninguno
+_ASESOR_ADMIN = [Depends(require_roles("ASESOR", "ADMIN"))]
+
 _consultas_router = APIRouter(route_class=ProblemDetailsRoute)
 _ROLES_CONSULTA = ["ASESOR", "CAJERO", "SUPERVISOR", "ADMIN"]
 
@@ -51,6 +53,7 @@ _ROLES_CONSULTA = ["ASESOR", "CAJERO", "SUPERVISOR", "ADMIN"]
     operation_id="CLI03",
     response_model=PageCliente,
     responses=RESPUESTAS_ERROR,
+    dependencies=[Depends(require_roles(*_ROLES_CONSULTA))],
     openapi_extra={"x-roles": _ROLES_CONSULTA},
 )
 def listar_clientes(
@@ -81,6 +84,7 @@ def listar_clientes(
     operation_id="CLI04",
     response_model=Cliente,
     responses=RESPUESTAS_ERROR,
+    dependencies=[Depends(require_roles(*_ROLES_CONSULTA))],
     openapi_extra={"x-roles": _ROLES_CONSULTA},
 )
 def obtener_cliente(idCliente: int, conn: Db) -> Cliente:
@@ -93,6 +97,7 @@ def obtener_cliente(idCliente: int, conn: Db) -> Cliente:
     operation_id="CLI08",
     response_model=ClientePerfil,
     responses=RESPUESTAS_ERROR,
+    dependencies=[Depends(require_roles("ASESOR", "SUPERVISOR", "ADMIN"))],
     openapi_extra={"x-roles": ["ASESOR", "SUPERVISOR", "ADMIN"]},
 )
 def obtener_perfil_cliente(idCliente: int, conn: Db) -> ClientePerfil:
@@ -104,10 +109,13 @@ def obtener_perfil_cliente(idCliente: int, conn: Db) -> ClientePerfil:
 # GET /api/v1/clientes/validar-identificacion
 # ---------------------------------------------------------------------------
 # Roles: ASESOR, ADMIN
-# TODO(F-03): restringir por rol cuando require_auth valide el JWT.
 
 
-@_gestion_router.get("/validar-identificacion", response_model=ValidacionIdentificacion)
+@_gestion_router.get(
+    "/validar-identificacion",
+    response_model=ValidacionIdentificacion,
+    dependencies=_ASESOR_ADMIN,
+)
 def validar_identificacion(
     tipo_documento: Annotated[
         TipoDocumento,
@@ -134,23 +142,21 @@ def validar_identificacion(
 # POST /api/v1/clientes
 # ---------------------------------------------------------------------------
 # Roles: ASESOR, ADMIN
-# TODO(F-03): restringir por rol y extraer creado_por del token JWT.
 
 
-@_gestion_router.post("", response_model=Cliente, status_code=201)
+@_gestion_router.post(
+    "", response_model=Cliente, status_code=201, dependencies=_ASESOR_ADMIN
+)
 def registrar_cliente(
     payload: ClienteCreate,
     request: Request,
+    creado_por: UsuarioAuditoria,
     conn: Db,
 ) -> Any:
     """Registra un cliente (Natural o Jurídico) con su dirección principal (CLI-02 / C-01).
 
-    **Nota de autenticación (F-03):** `require_auth()` todavía no valida el
-    JWT de WorkOS. El `creado_por` se fija temporalmente a 1; cuando F-03
-    esté implementado se leerá del sub/id del token.
+    `creado_por` es el usuario de la sesión, vinculado en WORKOS_AUDIT_USER_IDS.
     """
-    creado_por = 1
-
     # Obtener IP del cliente para auditoría en ClientesHis
     direccion_ip = _ip_cliente(request)
 
@@ -166,6 +172,7 @@ def registrar_cliente(
 @_gestion_router.get(
     "/{idCliente}/direcciones",
     response_model=list[Direccion],
+    dependencies=_ASESOR_ADMIN,
 )
 def listar_direcciones(
     idCliente: int,
@@ -185,15 +192,16 @@ def listar_direcciones(
     "/{idCliente}/direcciones",
     response_model=Direccion,
     status_code=201,
+    dependencies=_ASESOR_ADMIN,
 )
 def agregar_direccion(
     idCliente: int,
     payload: DireccionNueva,
     request: Request,
+    modificado_por: UsuarioAuditoria,
     conn: Db,
 ) -> Any:
     """Agrega una nueva dirección al cliente (CLI-10 / C-07)."""
-    modificado_por = 1
     direccion_ip = _ip_cliente(request)
     return service.agregar_direccion(
         conn, idCliente, payload, modificado_por, direccion_ip
@@ -209,16 +217,17 @@ def agregar_direccion(
 @_gestion_router.patch(
     "/{idCliente}/direcciones/{idDireccion}",
     response_model=Direccion,
+    dependencies=_ASESOR_ADMIN,
 )
 def editar_direccion(
     idCliente: int,
     idDireccion: int,
     payload: DireccionUpdate,
     request: Request,
+    modificado_por: UsuarioAuditoria,
     conn: Db,
 ) -> Any:
     """Edita una dirección o la promueve a principal."""
-    modificado_por = 1
     direccion_ip = _ip_cliente(request)
     return service.editar_direccion(
         conn, idCliente, idDireccion, payload, modificado_por, direccion_ip
@@ -234,6 +243,7 @@ def editar_direccion(
 @_gestion_router.delete(
     "/{idCliente}/direcciones/{idDireccion}",
     status_code=204,
+    dependencies=_ASESOR_ADMIN,
 )
 def eliminar_direccion(
     idCliente: int,
@@ -260,7 +270,6 @@ def _ip_cliente(request: Request) -> str:
     return "127.0.0.1"
 
 
-# TODO(F-03): aplicar los roles declarados y extraer evaluador del JWT validado.
 _riesgo_router = APIRouter(route_class=ProblemDetailsRoute)
 
 
@@ -270,13 +279,17 @@ _riesgo_router = APIRouter(route_class=ProblemDetailsRoute)
     response_model=RiesgoRegistrado,
     status_code=201,
     responses=RESPUESTAS_ERROR,
+    dependencies=[Depends(require_roles("ASESOR", "SUPERVISOR", "ADMIN"))],
     openapi_extra={"x-roles": ["ASESOR", "SUPERVISOR", "ADMIN"]},
 )
 def registrar_evaluacion_riesgo(
-    idCliente: int, payload: RiesgoCreate, request: Request, conn: Db
+    idCliente: int,
+    payload: RiesgoCreate,
+    request: Request,
+    evaluador: UsuarioAuditoria,
+    conn: Db,
 ) -> RiesgoRegistrado:
     """Registra riesgo y devuelve el estado posterior al trigger (CLI-13 / C-08)."""
-    evaluador = 1
     return service.registrar_evaluacion_riesgo(
         conn, idCliente, payload, evaluador, _ip_cliente(request)
     )
@@ -287,6 +300,7 @@ def registrar_evaluacion_riesgo(
     operation_id="CLI14",
     response_model=list[Riesgo],
     responses=RESPUESTAS_ERROR,
+    dependencies=[Depends(require_roles("ASESOR", "SUPERVISOR", "AUDITOR", "ADMIN"))],
     openapi_extra={"x-roles": ["ASESOR", "SUPERVISOR", "AUDITOR", "ADMIN"]},
 )
 def listar_evaluaciones_riesgo(idCliente: int, conn: Db) -> list[Riesgo]:

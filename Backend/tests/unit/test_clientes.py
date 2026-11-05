@@ -1141,8 +1141,8 @@ def test_cli13_router_propaga_evaluador_e_ip(monkeypatch):
     )
     conn = _fake_conn()
     payload = _payload_riesgo_create()
-    resultado = router.registrar_evaluacion_riesgo(10, payload, request, conn)
-    registrar.assert_called_once_with(conn, 10, payload, 1, "192.0.2.10")
+    resultado = router.registrar_evaluacion_riesgo(10, payload, request, 7, conn)
+    registrar.assert_called_once_with(conn, 10, payload, 7, "192.0.2.10")
     assert resultado.es_vigente is True
 
 

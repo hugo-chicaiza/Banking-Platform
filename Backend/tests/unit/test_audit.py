@@ -9,6 +9,7 @@ from app.core.database.db import cooperativa
 from app.core.security import audit
 from app.main import app
 from app.modules.tarjetas import repository, router
+from tests.sesion import ID_AUDITORIA, simular_sesion
 from tests.unit.test_tarjetas import BASE, FILA, PAYLOAD
 
 EVENTO = audit.EventoAuditoria(
@@ -40,7 +41,7 @@ def _cliente(monkeypatch) -> TestClient:
     conn = _Conn()
     app.dependency_overrides[cooperativa] = lambda: conn
     app.dependency_overrides[router.seguridad] = lambda: conn
-    app.dependency_overrides[router.autorizacion_disponible] = lambda: None
+    simular_sesion(app)
     monkeypatch.setattr(repository, "insertar_historial", lambda *a: None)
     return TestClient(app)
 
@@ -85,7 +86,7 @@ def test_escritura_exitosa_se_audita(monkeypatch, eventos_auditados):
         "301",
         "Exitoso",
     )
-    assert evento.usuario is None and evento.ip == "testclient"
+    assert evento.usuario == ID_AUDITORIA and evento.ip == "testclient"
     assert "7392" not in str(evento)
 
 

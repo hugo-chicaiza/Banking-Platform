@@ -5,6 +5,18 @@ from urllib.parse import urlsplit
 from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+# Única excepción a HTTPS: el FE y el callback locales (Vite) en la máquina del dev
+_HOSTS_LOCALES = {"localhost", "127.0.0.1", "::1"}
+
+
+def _exigir_https(nombre: str, valor: str) -> None:
+    partes = urlsplit(valor)
+    if partes.scheme == "https" or (
+        partes.scheme == "http" and partes.hostname in _HOSTS_LOCALES
+    ):
+        return
+    raise ValueError(f"{nombre} debe usar https:// (http:// solo para localhost)")
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
@@ -77,6 +89,17 @@ class Settings(BaseSettings):
             or partes.query
         ):
             raise ValueError("FRONTEND_URL debe ser solo esquema://host[:puerto]")
+        if valor:
+            _exigir_https("FRONTEND_URL", valor)
+        return valor
+
+    @field_validator("workos_redirect_uri")
+    @classmethod
+    def _callback_https(cls, valor: str) -> str:
+        if valor:
+            if not urlsplit(valor).netloc:
+                raise ValueError("WORKOS_REDIRECT_URI debe ser una URL completa")
+            _exigir_https("WORKOS_REDIRECT_URI", valor)
         return valor
 
     def odbc_connection_string(self, db: Literal["cooperativa", "seguridad"]) -> str:

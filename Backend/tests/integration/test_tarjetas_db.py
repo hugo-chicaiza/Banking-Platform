@@ -20,6 +20,7 @@ from app.core.database.db import cooperativa, get_engine
 from app.core.security import audit
 from app.main import app
 from app.modules.tarjetas import repository, router
+from tests.sesion import ID_AUDITORIA, simular_sesion
 
 pytestmark = pytest.mark.skipif(
     not get_settings().cooperativa_db_server,
@@ -62,7 +63,7 @@ def client(bd) -> Iterator[TestClient]:
     coop, seg = bd
     app.dependency_overrides[cooperativa] = lambda: _SinCommit(coop)
     app.dependency_overrides[router.seguridad] = lambda: _SinCommit(seg)
-    app.dependency_overrides[router.autorizacion_disponible] = lambda: None
+    simular_sesion(app)
     yield TestClient(app)
     app.dependency_overrides.clear()
 
@@ -127,7 +128,7 @@ def test_auditoria_real_registra_exito_y_fallo(client, bd, datos, monkeypatch):
         ("UPDATE", "Exitoso"),
     ]
     assert filas[1][4].endswith("PIN_DEBIL")
-    assert all(f[0] is None and f[3] == "testclient" for f in filas)
+    assert all(f[0] == ID_AUDITORIA and f[3] == "testclient" for f in filas)
     assert PIN not in str(filas) and "1234" not in str(filas)
 
 

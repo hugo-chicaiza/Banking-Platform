@@ -85,3 +85,29 @@ class TraceIdMiddleware:
                 ip_cliente(scope),
             )
             trace_id_actual.reset(token)
+
+
+# 1 año: el mínimo que aceptan las listas de precarga de los navegadores
+HSTS = "max-age=31536000; includeSubDomains"
+
+
+class HstsMiddleware:
+    """Strict-Transport-Security en cada respuesta: el navegador usará solo HTTPS con la
+    API, aunque alguien escriba http://. Azure termina el TLS antes de la app, así que la
+    redirección de HTTP a HTTPS se activa en el portal (HTTPS Only), no aquí.
+    """
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        async def enviar(message: Message) -> None:
+            if message["type"] == "http.response.start":
+                MutableHeaders(scope=message)["Strict-Transport-Security"] = HSTS
+            await send(message)
+
+        await self.app(scope, receive, enviar)

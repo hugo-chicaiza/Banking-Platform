@@ -84,8 +84,7 @@ def _auditado(
                     else str(operacion.id_registro)
                 ),
                 resultado=resultado,
-                # UsuarioID tiene FK a Usuarios, así que hasta F-03 va NULL
-                usuario=usuario or None,
+                usuario=usuario,
                 ip=ip,
                 descripcion=texto,
             )
