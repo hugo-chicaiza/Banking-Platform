@@ -1,4 +1,4 @@
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
@@ -24,7 +24,7 @@ def test_atm_activo():
         "app.modules.atm.service.repository.obtener_atm",
         return_value=atm_valido(),
     ):
-        resultado = validar_terminal(None, "ATM00001")
+        resultado = validar_terminal(MagicMock(), "ATM00001")
 
     assert resultado["id_atm"] == 1
 
@@ -52,7 +52,7 @@ def test_atm_no_disponible(campo, valor):
         ),
         pytest.raises(HTTPException) as error,
     ):
-        validar_terminal(None, "ATM00001")
+        validar_terminal(MagicMock(), "ATM00001")
 
     assert error.value.status_code == 409
 
@@ -65,6 +65,6 @@ def test_atm_inexistente():
         ),
         pytest.raises(HTTPException) as error,
     ):
-        validar_terminal(None, "ATM99999")
+        validar_terminal(MagicMock(), "ATM99999")
 
     assert error.value.status_code == 409
