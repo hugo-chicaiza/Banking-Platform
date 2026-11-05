@@ -19,36 +19,45 @@ assignees: []
 url: https://github.com/hugo-chicaiza/Banking-Platform/issues/113
 ---
 
-`GET /api/v1/auth/me` · **Roles:** AUTH · **Historia:** F-03 (#17) · **OpenAPI:** `AUT04`
+`GET /api/v1/auth/me` · **Roles:** Cookie de sesión · **Historia:** F-03 (#17) · **OpenAPI:** `AUT04`
 
-Devuelve el usuario del token, sus roles y su agencia vigente. El FE lo usa para el menú y las rutas (F-05).
+Devuelve el usuario de la sesión, sus roles, permisos y agencia vigente. El FE lo usa al cargar para saber si hay sesión y para el menú y las rutas (F-05).
 
-| Lee | Escribe | DB |
+| Lee | Escribe | Externo |
 |---|---|---|
-| `Organizacion.Usuarios`, `Seguridad.GruposUsuarios`, `Seguridad.Grupos`, `Caja.CajerosAsignadosAgencia` | — | SeguridadDB |
+| Cookie `__Host-session` | Cookie si se renovó | WorkOS (JWKS; refresh si venció) |
 
 ## Reglas de negocio
 
-1. El usuario sale del token, nunca de un parámetro.
-2. `roles` es lista: un usuario puede tener varios.
-3. `idAgencia` = asignación vigente (`FechaFin IS NULL` y `Estado = 1`); si no hay, `null`.
-
-## Request
-
-Sin body ni parámetros.
+1. El usuario sale de la sesión, nunca de un parámetro.
+2. Si el access token venció, se renueva y se reescribe la cookie antes de responder.
+3. `roles`: claims `roles`/`role` de WorkOS normalizados (`aprobador-credito` → `APROBADOR_CREDITO`); se ignoran los que no son del sistema (ej. `member`). Lista: un usuario puede tener varios.
+4. `idAgencia`: metadato `idAgencia` del usuario en WorkOS (3 dígitos); si no hay, `null`.
+5. `permisos`: claim `permissions` de WorkOS tal cual.
 
 ## Response `200`
 
 ```json
-{ "idUsuario": 12, "nombre": "María López", "roles": ["CAJERO"], "idAgencia": "001" }
+{
+  "idUsuario": "user_01J...",
+  "nombre": "María López",
+  "email": "maria.lopez@correo.ec",
+  "idOrganizacion": "org_01J...",
+  "roles": ["CAJERO"],
+  "permisos": [],
+  "idAgencia": "001"
+}
 ```
 
 ## Errores
 
-Formato ProblemDetails (ver F-04). Solo 401: el FE intenta AUT-02 y, si falla, va al login.
+Formato ProblemDetails (ver F-04).
+
+| HTTP | `code` | Cuándo |
+|---|---|---|
+| 401 | `NO_AUTENTICADO` | Sin sesión o sesión que no se pudo renovar (se borra la cookie); el FE va a `/auth/login` |
+| 503 | `AUTENTICACION_NO_DISPONIBLE` | No se pudieron descargar las llaves de WorkOS |
 
 ## Definición de terminado
 
-- [ ] Coincide con `openapi.yaml`
-- [ ] Prueba: usuario con un rol, con varios roles y sin agencia vigente
-- [ ] Disponible en el mock de F-01 para F-05
+- [x] Un rol, varios roles, sin agencia, token vencido renovado, sin cookie, cookie inválida (`tests/unit/test_auth.py`)

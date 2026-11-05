@@ -82,3 +82,8 @@ graphify-out/
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# --- Notas personales de desarrollo (no se comparten) ---
+PENDIENTES.md
+CONTEXTO_CLAUDE.md
+GUIA_LECTURA.md

@@ -95,9 +95,18 @@ Formato ProblemDetails (ver F-04). Además de 400/401/403:
 
 | HTTP | `code` | Cuándo |
 |---|---|---|
-| 409 | `CUENTA_NO_ACTIVA` | La cuenta no está Activa |
-| 422 | `PRODUCTO_NO_ES_TARJETA` | El producto no es de tipo Tarjeta |
-| 422 | `EXTENSION_REQUIERE_TITULAR` | Una extensión necesita su tarjeta titular |
+| 422 | `CUENTA_NO_ENCONTRADA` | `idCuenta` no existe |
+| 409 | `CUENTA_NO_ACTIVA` | La cuenta existe pero no está Activa |
+| 422 | `PRODUCTO_NO_ENCONTRADO` | `idProducto` no existe |
+| 422 | `PRODUCTO_NO_ES_TARJETA` | El producto existe pero no es de tipo Tarjeta o está inactivo |
+| 422 | `BIN_INVALIDO` | El producto no tiene un BIN activo (también DB 52004) |
+| 422 | `TARJETA_TITULAR_NO_ENCONTRADA` | `idTarjetaTitular` no existe |
+| 422 | `EXTENSION_REQUIERE_TITULAR` | Extensión sin titular, o titular de otra cuenta, extensión o no vigente |
+| 422 | `DIRECCION_ENVIO_REQUERIDA` | `requiereEnvio` sin dirección |
+| 422 | `CIUDAD_NO_ENCONTRADA` | `idCiudadEnvio` no existe |
+
+Un id del cuerpo que no existe responde 422 con su propio `code`; el 404 se reserva para el
+recurso de la URL. "No existe" y "no está activo" nunca comparten `code`.
 
 ## Definición de terminado
 
