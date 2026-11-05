@@ -27,9 +27,13 @@ def obtener_atm(
         WHERE a.CodigoATM = :codigo_atm
     """)
 
-    fila = conn.execute(
-        sql,
-        {"codigo_atm": codigo_atm},
-    ).mappings().first()
+    fila = (
+        conn.execute(
+            sql,
+            {"codigo_atm": codigo_atm},
+        )
+        .mappings()
+        .first()
+    )
 
     return dict(fila) if fila is not None else None

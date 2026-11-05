@@ -40,11 +40,13 @@ def validar_terminal(
             "El cajero no está disponible.",
         )
 
-    if not all((
-        atm["requiere_tarjeta"],
-        atm["requiere_pin"],
-        atm["requiere_terminal"],
-    )):
+    if not all(
+        (
+            atm["requiere_tarjeta"],
+            atm["requiere_pin"],
+            atm["requiere_terminal"],
+        )
+    ):
         raise problema(
             409,
             "ATM_FUERA_DE_SERVICIO",
