@@ -1003,7 +1003,11 @@ def _historial_row(**cambios):
     }
 
 
-def _cambiar(db, estado="CERRADA", motivo="Solicitud del titular"):
+def _cambiar(
+    db: _FakeConn,
+    estado: EstadoCuenta = "CERRADA",
+    motivo: str = "Solicitud del titular",
+) -> Cuenta:
     return service.cambiar_estado_cuenta(
         cast(Connection, db),
         501,
@@ -1366,11 +1370,15 @@ def test_cta08_error_de_tope_conserva_compatibilidad_global():
     error = DBAPIError(
         "SQL SECRETO", {}, Exception("42000", "privado (52003) (SQLExecDirectW)")
     )
-    assert traducir_error_bd(error).detail["code"] == "CUPO_EXCEDE_PRODUCTO"
-    assert (
-        traducir_error_bd(error, operacion="CTA08").detail["code"]
-        == "CUPO_SUPERA_MAXIMO_PRODUCTO"
-    )
+    general = traducir_error_bd(error)
+    assert general.status_code == 422
+    assert isinstance(general.detail, dict)
+    assert general.detail.get("code") == "CUPO_EXCEDE_PRODUCTO"
+
+    especifico = traducir_error_bd(error, operacion="CTA08")
+    assert especifico.status_code == 422
+    assert isinstance(especifico.detail, dict)
+    assert especifico.detail.get("code") == "CUPO_SUPERA_MAXIMO_PRODUCTO"
 
 
 @pytest.mark.parametrize("campo", ["cupoDiario", "cupoMensual", "montoMaxTransaccion"])
