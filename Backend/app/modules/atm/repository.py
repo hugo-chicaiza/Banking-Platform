@@ -69,3 +69,32 @@ def obtener_tarjeta(
     )
 
     return dict(fila) if fila is not None else None
+
+
+def obtener_estado_pin(
+    conn: Connection,
+    id_tarjeta: int,
+) -> dict[str, Any] | None:
+    """Consulta el estado del PIN y los intentos fallidos."""
+
+    sql = text("""
+        SELECT
+            ID_Tarjeta AS id_tarjeta,
+            TienePINAsignado AS tiene_pin_asignado,
+            IntentosFallidos AS intentos_fallidos,
+            Estado AS estado_pin,
+            FechaBloqueo AS fecha_bloqueo
+        FROM Tarjetas.TarjetaPIN
+        WHERE ID_Tarjeta = :id_tarjeta
+    """)
+
+    fila = (
+        conn.execute(
+            sql,
+            {"id_tarjeta": id_tarjeta},
+        )
+        .mappings()
+        .first()
+    )
+
+    return dict(fila) if fila is not None else None

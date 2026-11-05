@@ -131,3 +131,63 @@ def test_validar_tarjeta_inexistente():
         service.validar_tarjeta(MagicMock(), 999)
 
     assert error.value.status_code == 409
+
+
+def test_validar_estado_pin_activo():
+    estado_pin = {
+        "id_tarjeta": 1,
+        "tiene_pin_asignado": True,
+        "intentos_fallidos": 0,
+        "estado_pin": "Activo",
+        "fecha_bloqueo": None,
+    }
+
+    with patch(
+        "app.modules.atm.service.repository.obtener_estado_pin",
+        return_value=estado_pin,
+    ):
+        resultado = service.validar_estado_pin(MagicMock(), 1)
+
+    assert resultado == estado_pin
+
+
+@pytest.mark.parametrize(
+    ("tiene_pin", "estado", "codigo_esperado"),
+    [
+        (False, "Activo", "PIN_NO_CONFIGURADO"),
+        (True, "Bloqueado", "PIN_BLOQUEADO"),
+        (True, "Inactivo", "PIN_BLOQUEADO"),
+    ],
+)
+def test_validar_estado_pin_rechazado(tiene_pin, estado, codigo_esperado):
+    estado_pin = {
+        "tiene_pin_asignado": tiene_pin,
+        "estado_pin": estado,
+        "intentos_fallidos": 0,
+    }
+
+    with (
+        patch(
+            "app.modules.atm.service.repository.obtener_estado_pin",
+            return_value=estado_pin,
+        ),
+        pytest.raises(HTTPException) as error,
+    ):
+        service.validar_estado_pin(MagicMock(), 1)
+
+    assert error.value.status_code == 409
+    assert codigo_esperado in str(error.value.detail)
+
+
+def test_validar_estado_pin_inexistente():
+    with (
+        patch(
+            "app.modules.atm.service.repository.obtener_estado_pin",
+            return_value=None,
+        ),
+        pytest.raises(HTTPException) as error,
+    ):
+        service.validar_estado_pin(MagicMock(), 999)
+
+    assert error.value.status_code == 409
+    assert "PIN_NO_DISPONIBLE" in str(error.value.detail)

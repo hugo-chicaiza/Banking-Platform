@@ -101,3 +101,38 @@ def validar_tarjeta(
         )
 
     return tarjeta
+
+
+def validar_estado_pin(
+    conn_seguridad: Connection,
+    id_tarjeta: int,
+) -> dict[str, Any]:
+    """Valida que el PIN esté asignado y habilitado."""
+
+    estado_pin = repository.obtener_estado_pin(
+        conn_seguridad,
+        id_tarjeta,
+    )
+
+    if estado_pin is None:
+        raise problema(
+            409,
+            "PIN_NO_DISPONIBLE",
+            "No se puede utilizar el PIN de esta tarjeta.",
+        )
+
+    if not estado_pin["tiene_pin_asignado"]:
+        raise problema(
+            409,
+            "PIN_NO_CONFIGURADO",
+            "La tarjeta no tiene un PIN configurado.",
+        )
+
+    if estado_pin["estado_pin"] != "Activo":
+        raise problema(
+            409,
+            "PIN_BLOQUEADO",
+            "El PIN no está habilitado.",
+        )
+
+    return estado_pin
