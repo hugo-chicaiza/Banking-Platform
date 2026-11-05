@@ -1,6 +1,7 @@
-from typing import Literal
+from datetime import date
+from typing import Annotated, Literal
 
-from pydantic import AwareDatetime, Field
+from pydantic import AwareDatetime, ConfigDict, Field, StringConstraints
 
 from app.core.api.schemas import CamelModel, Money
 
@@ -72,3 +73,65 @@ class SaldoCuenta(CamelModel):
     saldo_disponible: Money
     id_moneda: MonedaUsd
     fecha_consulta: AwareDatetime
+
+
+class CuentaEstadoUpdate(CamelModel):
+    model_config = ConfigDict(extra="forbid", validate_by_name=False)
+
+    estado: EstadoCuenta
+    # Auditoria.Descripcion tiene 500 caracteres; se reserva espacio para estados y traceId.
+    motivo: Annotated[
+        str,
+        StringConstraints(
+            strip_whitespace=True,
+            min_length=1,
+            max_length=300,
+            pattern=r"^[^\x00-\x1f\x7f]+$",
+        ),
+    ]
+
+
+class CupoUpdate(CamelModel):
+    """Límites positivos según CK_CanalCupoClienteCustom_Cupos de la base actual."""
+
+    model_config = ConfigDict(extra="forbid", validate_by_name=False)
+
+    cupo_diario: Money = Field(gt=0, max_digits=18, decimal_places=2)
+    cupo_mensual: Money = Field(gt=0, max_digits=18, decimal_places=2)
+    monto_max_transaccion: Money = Field(gt=0, max_digits=18, decimal_places=2)
+    max_transacciones_dia: int = Field(strict=True, gt=0, le=32767)
+    fecha_vigencia: date | None = Field(
+        default=None,
+        description="Último día de vigencia, inclusivo, en Ecuador; null no caduca.",
+    )
+
+
+class CupoEfectivo(CamelModel):
+    id_canal: int
+    origen: Literal["Personalizado", "Producto"]
+    cupo_diario: Money
+    cupo_mensual: Money
+    monto_max_transaccion: Money
+    max_transacciones_dia: int
+    fecha_vigencia: date | None
+    consumido_hoy: Money
+    consumido_mes: Money
+
+
+class CupoHistorial(CamelModel):
+    id_cupo_mod_his: int
+    cupo_diario_anterior: Money | None
+    cupo_diario_nuevo: Money | None
+    cupo_mensual_anterior: Money | None
+    cupo_mensual_nuevo: Money | None
+    monto_max_tx_anterior: Money | None
+    monto_max_tx_nuevo: Money | None
+    modificado_por: int
+    fecha_modificacion: AwareDatetime
+
+
+class PageCupoHistorial(CamelModel):
+    items: list[CupoHistorial]
+    page: int
+    page_size: int
+    total: int

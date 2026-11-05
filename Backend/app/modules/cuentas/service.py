@@ -5,14 +5,22 @@ from sqlalchemy import Connection
 from sqlalchemy.exc import DBAPIError
 
 from app.core.api.errors import problema, traducir_error_bd
+from app.core.security import audit
+from app.modules.clientes import service as clientes_service
+from app.modules.contabilidad.service import ZONA_ECUADOR
 from app.modules.cuentas import repository
 from app.modules.cuentas.schemas import (
     ID_MONEDA_USD,
     Cuenta,
     CuentaCreate,
+    CuentaEstadoUpdate,
     CuentaResumen,
+    CupoEfectivo,
+    CupoHistorial,
+    CupoUpdate,
     EstadoCuenta,
     PageCuenta,
+    PageCupoHistorial,
     SaldoCuenta,
 )
 
@@ -216,3 +224,243 @@ def abrir_cuenta(
 
     # CTA-01 conserva idMoneda en el contrato aunque la moneda no se persista por cuenta.
     return Cuenta(**{**row, "id_moneda": ID_MONEDA_USD})
+
+
+_TRANSICIONES_CUENTA = {
+    "ACTIVA": {"INACTIVA", "BLOQUEADA", "CERRADA"},
+    "INACTIVA": {"ACTIVA", "CERRADA"},
+    "BLOQUEADA": {"ACTIVA"},
+    "CERRADA": set(),
+}
+
+
+def cambiar_estado_cuenta(
+    conn: Connection,
+    id_cuenta: int,
+    payload: CuentaEstadoUpdate,
+    modificado_por: int,
+    ip: str | None,
+    trace_id: str,
+) -> Cuenta:
+    anterior: str | None = None
+
+    def auditar(resultado: audit.Resultado) -> None:
+        audit.registrar(
+            audit.EventoAuditoria(
+                accion="UPDATE",
+                tabla="Cuentas.Cuenta",
+                id_registro=str(id_cuenta),
+                resultado=resultado,
+                usuario=modificado_por,
+                ip=ip,
+                descripcion=(
+                    f"CTA05 estadoAnterior={anterior} estadoNuevo={payload.estado}; "
+                    f"traceId={trace_id[:64]}; motivo={payload.motivo}"
+                ),
+            )
+        )
+
+    try:
+        actual = repository.bloquear_cuenta(conn, id_cuenta)
+        if actual is None:
+            raise problema(404, "CUENTA_NO_ENCONTRADA", "La cuenta no existe.")
+        anterior = str(actual["estado"])
+        if payload.estado not in _TRANSICIONES_CUENTA.get(anterior, set()):
+            raise problema(
+                409, "TRANSICION_INVALIDA", "El cambio de estado no está permitido."
+            )
+        if payload.estado == "CERRADA":
+            if actual["saldo"] != 0 or actual["saldo_retenido"] != 0:
+                raise problema(
+                    409, "CUENTA_CON_SALDO", "La cuenta tiene saldo o saldo retenido."
+                )
+            desembolsos = repository.desembolsos_de_cuenta(conn, id_cuenta)
+            # PENDIENTE reserva un desembolso; DESEMBOLSADO requiere verificar deuda,
+            # no el estado APROBADA de la solicitud ni un saldo ficticio del resumen.
+            pendiente = any(d["estado"] == "PENDIENTE" for d in desembolsos)
+            solicitudes = sorted(
+                {
+                    d["id_solicitud"]
+                    for d in desembolsos
+                    if d["estado"] == "DESEMBOLSADO"
+                }
+            )
+            if pendiente or any(
+                clientes_service.credito_tiene_deuda(conn, s) for s in solicitudes
+            ):
+                raise problema(
+                    409,
+                    "CUENTA_CON_CREDITO_VIGENTE",
+                    "La cuenta respalda un crédito vigente o un desembolso pendiente.",
+                )
+        repository.actualizar_estado_cuenta(conn, id_cuenta, payload.estado)
+        resultado = obtener_cuenta(conn, id_cuenta)
+        conn.commit()
+    except DBAPIError as exc:
+        conn.rollback()
+        auditar("Fallido")
+        raise traducir_error_bd(exc) from None
+    except Exception:
+        conn.rollback()
+        auditar("Fallido")
+        raise
+    auditar("Exitoso")
+    return resultado
+
+
+def _cupos_efectivos(
+    conn: Connection, id_cuenta: int, id_canal: int | None = None
+) -> list[CupoEfectivo]:
+    return [
+        CupoEfectivo(**f)
+        for f in repository.consultar_cupos_efectivos(conn, id_cuenta, id_canal)
+    ]
+
+
+def obtener_cupos(conn: Connection, id_cuenta: int) -> list[CupoEfectivo]:
+    obtener_cuenta(conn, id_cuenta)
+    return _cupos_efectivos(conn, id_cuenta)
+
+
+def _validar_canal(conn: Connection, id_canal: int) -> None:
+    if repository.obtener_canal(conn, id_canal) is None:
+        raise problema(404, "CANAL_NO_ENCONTRADO", "El canal no existe.")
+
+
+def actualizar_cupo(
+    conn: Connection,
+    id_cuenta: int,
+    id_canal: int,
+    payload: CupoUpdate,
+    modificado_por: int,
+) -> CupoEfectivo:
+    try:
+        if repository.bloquear_cuenta(conn, id_cuenta) is None:
+            raise problema(404, "CUENTA_NO_ENCONTRADA", "La cuenta no existe.")
+        _validar_canal(conn, id_canal)
+        producto = repository.bloquear_cupo_producto(conn, id_cuenta, id_canal)
+        if producto is None:
+            raise problema(
+                422,
+                "CUPO_PRODUCTO_NO_CONFIGURADO",
+                "El subproducto no tiene cupo para este canal.",
+            )
+        if (
+            not payload.monto_max_transaccion
+            <= payload.cupo_diario
+            <= payload.cupo_mensual
+        ):
+            raise problema(
+                422,
+                "CUPOS_INCONSISTENTES",
+                "El máximo por transacción debe ser menor o igual al diario y este al mensual.",
+            )
+        if any(
+            getattr(payload, campo) > producto[campo]
+            for campo in (
+                "cupo_diario",
+                "cupo_mensual",
+                "monto_max_transaccion",
+                "max_transacciones_dia",
+            )
+        ):
+            raise problema(
+                422,
+                "CUPO_SUPERA_MAXIMO_PRODUCTO",
+                "El cupo supera el máximo del subproducto en ese canal.",
+            )
+        anterior = repository.bloquear_cupo_personalizado(conn, id_cuenta, id_canal)
+        repository.guardar_cupo_personalizado(
+            conn,
+            id_cuenta,
+            id_canal,
+            payload,
+            modificado_por,
+            existe=anterior is not None,
+        )
+        repository.insertar_historial_cupo(
+            conn,
+            id_cuenta,
+            id_canal,
+            anterior,
+            payload,
+            modificado_por,
+        )
+        efectivos = _cupos_efectivos(conn, id_cuenta, id_canal)
+        if len(efectivos) != 1:
+            raise problema(
+                503,
+                "CUPO_EFECTIVO_NO_VERIFICABLE",
+                "No se pudo comprobar el cupo efectivo del canal.",
+            )
+        resultado = efectivos[
+            0
+        ]  # Puede ser Producto si se guardó una fecha ya vencida.
+        conn.commit()
+        return resultado
+    except DBAPIError as exc:
+        conn.rollback()
+        raise traducir_error_bd(exc, operacion="CTA08") from None
+    except Exception:
+        conn.rollback()
+        raise
+
+
+def obtener_historial_cupo(
+    conn: Connection,
+    id_cuenta: int,
+    id_canal: int,
+    *,
+    page: int = 1,
+    page_size: int = 20,
+    sort: str | None = None,
+) -> PageCupoHistorial:
+    campo, direccion = "FechaModificacion", "desc"
+    if sort is not None:
+        partes = sort.split(",")
+        campos = {
+            "fechaModificacion": "FechaModificacion",
+            "idCupoModHis": "IdCupoModHis",
+        }
+        if (
+            len(partes) != 2
+            or partes[0] not in campos
+            or partes[1] not in ("asc", "desc")
+        ):
+            raise problema(
+                400,
+                "SORT_INVALIDO",
+                "Use un campo permitido y la dirección asc o desc.",
+            )
+        campo, direccion = campos[partes[0]], partes[1]
+    if page < 1 or not 1 <= page_size <= 100:
+        raise problema(400, "PAGINACION_INVALIDA", "La paginación no es válida.")
+    obtener_cuenta(conn, id_cuenta)
+    _validar_canal(conn, id_canal)
+    filas, total = repository.consultar_historial_cupo(
+        conn,
+        id_cuenta,
+        id_canal,
+        page=page,
+        page_size=page_size,
+        campo=campo,
+        direccion=direccion,
+    )
+    return PageCupoHistorial(
+        items=[
+            CupoHistorial(
+                **{
+                    **f,
+                    "fecha_modificacion": (
+                        f["fecha_modificacion"].replace(tzinfo=ZONA_ECUADOR)
+                        if f["fecha_modificacion"].tzinfo is None
+                        else f["fecha_modificacion"]
+                    ),
+                }
+            )
+            for f in filas
+        ],
+        page=page,
+        page_size=page_size,
+        total=total,
+    )

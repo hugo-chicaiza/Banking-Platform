@@ -1,9 +1,10 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Path, Query, Request
 from sqlalchemy import Connection
 
-from app.core.api.errors import RESPUESTAS_ERROR, ProblemDetailsRoute
+from app.core.api.errors import RESPUESTAS_ERROR, ProblemDetailsRoute, solo_parametros
+from app.core.api.middleware import ip_cliente, obtener_trace_id
 from app.core.database.db import cooperativa
 from app.core.security.auth import (
     Usuario,
@@ -15,8 +16,12 @@ from app.modules.cuentas import service
 from app.modules.cuentas.schemas import (
     Cuenta,
     CuentaCreate,
+    CuentaEstadoUpdate,
+    CupoEfectivo,
+    CupoUpdate,
     EstadoCuenta,
     PageCuenta,
+    PageCupoHistorial,
     SaldoCuenta,
 )
 
@@ -127,3 +132,113 @@ def obtener_saldo(idCuenta: int, conn: Db) -> SaldoCuenta:
 
 router.include_router(_apertura_router, prefix="/cuentas")
 router.include_router(_consultas_router, prefix="/cuentas")
+
+
+_ROLES_ESTADO_CUPOS = ["ASESOR", "SUPERVISOR", "ADMIN"]
+_ROLES_MODIFICAR_CUPO = ["SUPERVISOR", "ADMIN"]
+_ROLES_HISTORIAL_CUPO = ["SUPERVISOR", "AUDITOR", "ADMIN"]
+GestorEstadoCupos = Annotated[Usuario, Depends(require_roles(*_ROLES_ESTADO_CUPOS))]
+GestorCupo = Annotated[Usuario, Depends(require_roles(*_ROLES_MODIFICAR_CUPO))]
+AuditorCupo = Annotated[Usuario, Depends(require_roles(*_ROLES_HISTORIAL_CUPO))]
+IdRecurso = Annotated[int, Path(gt=0, le=2147483647)]
+_gestion_router = APIRouter(
+    route_class=ProblemDetailsRoute,
+    responses={
+        **RESPUESTAS_ERROR,
+        503: {**RESPUESTAS_ERROR[500], "description": "Service Unavailable"},
+    },
+)
+
+
+@_gestion_router.patch(
+    "/{idCuenta}/estado",
+    operation_id="CTA05",
+    response_model=Cuenta,
+    dependencies=[Depends(solo_parametros())],
+    openapi_extra={"x-roles": _ROLES_ESTADO_CUPOS},
+)
+def cambiar_estado_cuenta(
+    idCuenta: IdRecurso,
+    payload: CuentaEstadoUpdate,
+    request: Request,
+    usuario: GestorEstadoCupos,
+    modificado_por: UsuarioAuditoria,
+    conn: Db,
+) -> Cuenta:
+    """Cambia el estado con bloqueo transaccional y auditoría del usuario de sesión."""
+    return service.cambiar_estado_cuenta(
+        conn,
+        idCuenta,
+        payload,
+        modificado_por,
+        ip_cliente(request.scope),
+        obtener_trace_id(request.scope),
+    )
+
+
+@_gestion_router.get(
+    "/{idCuenta}/cupos",
+    operation_id="CTA07",
+    response_model=list[CupoEfectivo],
+    dependencies=[Depends(solo_parametros())],
+    openapi_extra={"x-roles": _ROLES_ESTADO_CUPOS},
+)
+def obtener_cupos(
+    idCuenta: IdRecurso, usuario: GestorEstadoCupos, conn: Db
+) -> list[CupoEfectivo]:
+    """Cupos vigentes y consumo en Ecuador para los roles internos publicados."""
+    return service.obtener_cupos(conn, idCuenta)
+
+
+@_gestion_router.put(
+    "/{idCuenta}/cupos/{idCanal}",
+    operation_id="CTA08",
+    response_model=CupoEfectivo,
+    dependencies=[Depends(solo_parametros())],
+    openapi_extra={"x-roles": _ROLES_MODIFICAR_CUPO},
+)
+def actualizar_cupo(
+    idCuenta: IdRecurso,
+    idCanal: IdRecurso,
+    payload: CupoUpdate,
+    usuario: GestorCupo,
+    modificado_por: UsuarioAuditoria,
+    conn: Db,
+) -> CupoEfectivo:
+    """Guarda cupo e historial en una transacción y devuelve el cupo vigente."""
+    return service.actualizar_cupo(conn, idCuenta, idCanal, payload, modificado_por)
+
+
+@_gestion_router.get(
+    "/{idCuenta}/cupos/{idCanal}/historial",
+    operation_id="CTA09",
+    response_model=PageCupoHistorial,
+    dependencies=[Depends(solo_parametros("page", "pageSize", "sort"))],
+    openapi_extra={"x-roles": _ROLES_HISTORIAL_CUPO},
+)
+def obtener_historial_cupo(
+    idCuenta: IdRecurso,
+    idCanal: IdRecurso,
+    usuario: AuditorCupo,
+    conn: Db,
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(alias="pageSize", ge=1, le=100)] = 20,
+    sort: Annotated[
+        str | None,
+        Query(
+            max_length=40,
+            description="fechaModificacion o idCupoModHis, seguido de ,asc o ,desc",
+        ),
+    ] = None,
+) -> PageCupoHistorial:
+    return service.obtener_historial_cupo(
+        conn,
+        idCuenta,
+        idCanal,
+        page=page,
+        page_size=page_size,
+        sort=sort,
+    )
+
+
+router.include_router(_gestion_router, prefix="/cuentas")

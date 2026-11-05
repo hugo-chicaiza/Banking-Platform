@@ -3,6 +3,8 @@ from typing import Any
 
 from sqlalchemy import Connection, text
 
+from app.modules.cuentas.schemas import CupoUpdate
+
 _ESTADOS_CUENTA_BD = {
     "ACTIVA": "Activa",
     "INACTIVA": "Inactiva",
@@ -251,3 +253,264 @@ def abrir_cuenta(
         raise RuntimeError("usp_AbrirCuenta no devolvió la cuenta creada")
 
     return cuenta
+
+
+# CTA-05: XLOCK protege estado/saldos y la clave referenciada por los desembolsos.
+def bloquear_cuenta(conn: Connection, id_cuenta: int) -> dict[str, Any] | None:
+    fila = _one(
+        conn,
+        """
+        SELECT IdCuenta AS id_cuenta, Estado AS estado,
+               Saldo AS saldo, SaldoRetenido AS saldo_retenido
+        FROM Cuentas.Cuenta WITH (XLOCK, HOLDLOCK)
+        WHERE IdCuenta = :id_cuenta
+        """,
+        {"id_cuenta": id_cuenta},
+    )
+    return _cuenta_desde_bd(fila) if fila is not None else None
+
+
+def desembolsos_de_cuenta(conn: Connection, id_cuenta: int) -> list[dict[str, Any]]:
+    # HOLDLOCK protege también la ausencia de filas y evita nuevos vínculos durante el cierre.
+    return _rows(
+        conn,
+        """
+        SELECT IdSolicitud AS id_solicitud, Estado AS estado
+        FROM Credito.CreditoDesembolso WITH (UPDLOCK, HOLDLOCK)
+        WHERE IdCuentaDesembolso = :id_cuenta
+        ORDER BY IdSolicitud, IdDesembolso
+        """,
+        {"id_cuenta": id_cuenta},
+    )
+
+
+def actualizar_estado_cuenta(conn: Connection, id_cuenta: int, estado: str) -> None:
+    conn.execute(
+        text("""
+        UPDATE Cuentas.Cuenta
+        SET Estado = :estado,
+            FechaCierre = CASE WHEN :estado = 'Cerrada' THEN
+                CONVERT(datetime2, SYSDATETIMEOFFSET() AT TIME ZONE 'SA Pacific Standard Time')
+                ELSE FechaCierre END
+        WHERE IdCuenta = :id_cuenta
+        """),
+        {"id_cuenta": id_cuenta, "estado": _ESTADOS_CUENTA_BD[estado]},
+    )
+
+
+# CTA-07/08: una sola proyección y una sola función de BD deciden el cupo efectivo.
+def consultar_cupos_efectivos(
+    conn: Connection, id_cuenta: int, id_canal: int | None = None
+) -> list[dict[str, Any]]:
+    return _rows(
+        conn,
+        """
+        WITH Reloj AS (
+            SELECT CONVERT(date, SYSDATETIMEOFFSET()
+                AT TIME ZONE 'SA Pacific Standard Time') AS hoy
+        ), Limites AS (
+            SELECT hoy, DATEFROMPARTS(YEAR(hoy), MONTH(hoy), 1) AS inicio_mes,
+                   DATEADD(day, 1, hoy) AS manana
+            FROM Reloj
+        ), Consumo AS (
+            SELECT t.IdCanal,
+                   SUM(CASE WHEN t.FechaHoraSistema >= l.hoy THEN t.Monto ELSE 0 END)
+                       AS consumido_hoy,
+                   SUM(t.Monto) AS consumido_mes
+            FROM Transacciones.Transaccion AS t
+            JOIN Transacciones.TipoTransaccion AS tt ON tt.CodigoTipo = t.TipoTransaccion
+            CROSS JOIN Limites AS l
+            WHERE t.IdCuenta = :id_cuenta
+              AND (:id_canal IS NULL OR t.IdCanal = :id_canal)
+              AND t.Estado = 'Completada' AND t.TipoOperacion = 'Normal'
+              AND tt.Naturaleza = 'D'
+              AND t.FechaHoraSistema >= l.inicio_mes AND t.FechaHoraSistema < l.manana
+            GROUP BY t.IdCanal
+        )
+        SELECT canal.IdCanal AS id_canal,
+               CASE WHEN v.Origen = 'CUENTA' THEN 'Personalizado' ELSE 'Producto' END AS origen,
+               v.CupoDiario AS cupo_diario, v.CupoMensual AS cupo_mensual,
+               v.MontoMaxTransaccion AS monto_max_transaccion,
+               v.MaxTransaccionesDia AS max_transacciones_dia,
+               CASE WHEN v.Origen = 'CUENTA' THEN cc.FechaVigencia END AS fecha_vigencia,
+               COALESCE(cons.consumido_hoy, 0) AS consumido_hoy,
+               COALESCE(cons.consumido_mes, 0) AS consumido_mes
+        FROM Canal.Canal AS canal
+        CROSS APPLY Canal.fn_CupoVigente(:id_cuenta, canal.IdCanal) AS v
+        LEFT JOIN Canal.CanalCupoClienteCustom AS cc
+          ON cc.IdCuenta = :id_cuenta AND cc.IdCanal = canal.IdCanal
+        LEFT JOIN Consumo AS cons ON cons.IdCanal = canal.IdCanal
+        WHERE (:id_canal IS NULL OR canal.IdCanal = :id_canal)
+        ORDER BY canal.IdCanal
+        """,
+        {"id_cuenta": id_cuenta, "id_canal": id_canal},
+    )
+
+
+def obtener_canal(conn: Connection, id_canal: int) -> dict[str, Any] | None:
+    return _one(
+        conn,
+        "SELECT IdCanal AS id_canal FROM Canal.Canal WHERE IdCanal = :id_canal",
+        {"id_canal": id_canal},
+    )
+
+
+def bloquear_cupo_producto(
+    conn: Connection, id_cuenta: int, id_canal: int
+) -> dict[str, Any] | None:
+    return _one(
+        conn,
+        """
+        SELECT p.CupoDiarioMaximo AS cupo_diario, p.CupoMensualMaximo AS cupo_mensual,
+               p.MontoMaxTransaccion AS monto_max_transaccion,
+               p.MaxTransaccionesDia AS max_transacciones_dia
+        FROM Cuentas.Cuenta AS c
+        JOIN ProductosFinancieros.ProductoCanalCupo AS p WITH (HOLDLOCK)
+          ON p.IdSubProducto = c.IdSubProducto AND p.IdCanal = :id_canal
+        WHERE c.IdCuenta = :id_cuenta
+        """,
+        {"id_cuenta": id_cuenta, "id_canal": id_canal},
+    )
+
+
+def bloquear_cupo_personalizado(
+    conn: Connection, id_cuenta: int, id_canal: int
+) -> dict[str, Any] | None:
+    return _one(
+        conn,
+        """
+        SELECT IdCanalCupo AS id_canal_cupo, CupoDiario AS cupo_diario,
+               CupoMensual AS cupo_mensual, MontoMaxTransaccion AS monto_max_transaccion
+        FROM Canal.CanalCupoClienteCustom WITH (UPDLOCK, HOLDLOCK)
+        WHERE IdCuenta = :id_cuenta AND IdCanal = :id_canal
+        """,
+        {"id_cuenta": id_cuenta, "id_canal": id_canal},
+    )
+
+
+def guardar_cupo_personalizado(
+    conn: Connection,
+    id_cuenta: int,
+    id_canal: int,
+    payload: CupoUpdate,
+    modificado_por: int,
+    *,
+    existe: bool,
+) -> None:
+    params = {
+        **payload.model_dump(),
+        "id_cuenta": id_cuenta,
+        "id_canal": id_canal,
+        "modificado_por": modificado_por,
+    }
+    if existe:
+        sql = """
+        UPDATE Canal.CanalCupoClienteCustom
+        SET CupoDiario = :cupo_diario, CupoMensual = :cupo_mensual,
+            MontoMaxTransaccion = :monto_max_transaccion,
+            MaxTransaccionesDia = :max_transacciones_dia,
+            FechaVigencia = :fecha_vigencia, Estado = 'A', ModificadoPor = :modificado_por
+        WHERE IdCuenta = :id_cuenta AND IdCanal = :id_canal
+        """
+    else:
+        sql = """
+        INSERT INTO Canal.CanalCupoClienteCustom (
+            IdCuenta, IdCanal, CupoDiario, CupoMensual, MontoMaxTransaccion,
+            MaxTransaccionesDia, FechaVigencia, Estado, ModificadoPor
+        ) VALUES (
+            :id_cuenta, :id_canal, :cupo_diario, :cupo_mensual, :monto_max_transaccion,
+            :max_transacciones_dia, :fecha_vigencia, 'A', :modificado_por
+        )
+        """
+    conn.execute(text(sql), params)
+
+
+def insertar_historial_cupo(
+    conn: Connection,
+    id_cuenta: int,
+    id_canal: int,
+    anterior: dict[str, Any] | None,
+    payload: CupoUpdate,
+    modificado_por: int,
+) -> None:
+    # El único trigger de Custom valida topes; NO inserta CuposModHis.
+    previo = anterior or {}
+    conn.execute(
+        text("""
+        INSERT INTO Canal.CuposModHis (
+            IdCanalCupoCliente, CupoDiarioAnterior, CupoDiarioNuevo,
+            CupoMensualAnterior, CupoMensualNuevo, MontoMaxTxAnterior,
+            MontoMaxTxNuevo, ModificadoPor
+        )
+        SELECT IdCanalCupo, :diario_anterior, :cupo_diario,
+               :mensual_anterior, :cupo_mensual, :max_anterior,
+               :monto_max_transaccion, :modificado_por
+        FROM Canal.CanalCupoClienteCustom
+        WHERE IdCuenta = :id_cuenta AND IdCanal = :id_canal
+        """),
+        {
+            **payload.model_dump(),
+            "id_cuenta": id_cuenta,
+            "id_canal": id_canal,
+            "diario_anterior": previo.get("cupo_diario"),
+            "mensual_anterior": previo.get("cupo_mensual"),
+            "max_anterior": previo.get("monto_max_transaccion"),
+            "modificado_por": modificado_por,
+        },
+    )
+
+
+def consultar_historial_cupo(
+    conn: Connection,
+    id_cuenta: int,
+    id_canal: int,
+    *,
+    page: int,
+    page_size: int,
+    campo: str,
+    direccion: str,
+) -> tuple[list[dict[str, Any]], int]:
+    filas = _rows(
+        conn,
+        """
+        WITH Historial AS (
+            SELECT h.IdCupoModHis AS id_cupo_mod_his,
+                   h.CupoDiarioAnterior AS cupo_diario_anterior,
+                   h.CupoDiarioNuevo AS cupo_diario_nuevo,
+                   h.CupoMensualAnterior AS cupo_mensual_anterior,
+                   h.CupoMensualNuevo AS cupo_mensual_nuevo,
+                   h.MontoMaxTxAnterior AS monto_max_tx_anterior,
+                   h.MontoMaxTxNuevo AS monto_max_tx_nuevo,
+                   h.ModificadoPor AS modificado_por,
+                   h.FechaModificacion AS fecha_modificacion,
+                   ROW_NUMBER() OVER (ORDER BY
+                     CASE WHEN :campo = 'FechaModificacion' AND :direccion = 'asc'
+                          THEN h.FechaModificacion END ASC,
+                     CASE WHEN :campo = 'FechaModificacion' AND :direccion = 'desc'
+                          THEN h.FechaModificacion END DESC,
+                     CASE WHEN :campo = 'IdCupoModHis' AND :direccion = 'asc'
+                          THEN h.IdCupoModHis END ASC,
+                     CASE WHEN :campo = 'IdCupoModHis' AND :direccion = 'desc'
+                          THEN h.IdCupoModHis END DESC,
+                     h.IdCupoModHis DESC
+                   ) AS numero_fila
+            FROM Canal.CuposModHis AS h
+            JOIN Canal.CanalCupoClienteCustom AS cc ON cc.IdCanalCupo = h.IdCanalCupoCliente
+            WHERE cc.IdCuenta = :id_cuenta AND cc.IdCanal = :id_canal
+        )
+        SELECT p.*, t.total
+        FROM (SELECT COUNT(*) AS total FROM Historial) AS t
+        LEFT JOIN Historial AS p ON p.numero_fila > :offset AND p.numero_fila <= :limite
+        ORDER BY p.numero_fila
+        """,
+        {
+            "id_cuenta": id_cuenta,
+            "id_canal": id_canal,
+            "campo": campo,
+            "direccion": direccion,
+            "offset": (page - 1) * page_size,
+            "limite": page * page_size,
+        },
+    )
+    total = int(filas[0]["total"]) if filas else 0
+    return [f for f in filas if f["id_cupo_mod_his"] is not None], total

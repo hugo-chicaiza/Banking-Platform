@@ -21,19 +21,25 @@ url: https://github.com/hugo-chicaiza/Banking-Platform/issues/62
 
 > Como **supervisor**, quiero **ver y ajustar los cupos de una cuenta por canal** para **limitar lo que el cliente puede mover en cada canal**.
 
-**Etapa:** 3 · **QA:** 0 d · **Tablas:** `Canal.CanalCupoClienteCustom`, `Canal.CuposModHis`, `Canal.ProductoCanalCupo`
+**Etapa:** 3 · **QA:** 0 d · **Tablas:** `Canal.CanalCupoClienteCustom`, `Canal.CuposModHis`, `ProductosFinancieros.ProductoCanalCupo`
 
 ## Criterios de aceptación
 
-- [ ] Ver el cupo que rige por canal, lo consumido y lo disponible (CTA-07)
-- [ ] Definir un cupo personalizado sin superar el del producto (CTA-08)
+- [ ] Ver el cupo que rige por canal, el consumo diario y mensual (CTA-07)
+- [ ] Definir un cupo personalizado con importes positivos, sin superar el del subproducto (CTA-08)
 - [ ] Ver el historial de cambios de cupo (CTA-09)
 - [ ] Pruebas: cupo del producto, cupo personalizado, tope excedido, valores incoherentes, historial
 
 ## Reglas de negocio
 
-- Cupo vigente = personalizado vigente o, si no hay, el del subproducto (`Canal.fn_CupoVigente`).
-- Los cupos los aplica `Transacciones.usp_AutorizarOperacion` en cada operación (códigos 61 y 65).
+- Cupo vigente = personalizado activo y vigente o, si no hay, el del subproducto (`Canal.fn_CupoVigente`).
+- Los importes personalizados son estrictamente positivos y cumplen `0 < montoMaxTransaccion <= cupoDiario <= cupoMensual`.
+- Los topes y la frecuencia no superan los configurados para `IdSubProducto, IdCanal`.
+- `FechaVigencia` es la fecha de caducidad inclusiva en Ecuador; null no caduca.
+- Un personalizado inactivo o vencido deja de aplicarse y se utiliza el predeterminado. No representa un bloqueo del canal.
+- Los cupos los aplica `Transacciones.usp_AutorizarOperacion` a débitos (códigos 61 y 65).
+- Consulta y administración para los roles internos publicados; no se incluye autoservicio de clientes.
+- La entrega utiliza las tablas, restricciones y función actuales. No requiere migración.
 
 ## Dependencias
 

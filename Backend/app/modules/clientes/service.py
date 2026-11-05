@@ -310,6 +310,14 @@ def _credito_tiene_deuda(conn: Connection, id_solicitud: int) -> bool:
     return deuda > 0
 
 
+def credito_tiene_deuda(conn: Connection, id_solicitud: int) -> bool:
+    """Regla de deuda compartida con CTA-05 hasta disponer del módulo créditos.
+
+    Conserva los bloqueos y el rechazo de planes incompletos de CLI-06.
+    """
+    return _credito_tiene_deuda(conn, id_solicitud)
+
+
 def _validar_productos_cliente(conn: Connection, id_cliente: int) -> None:
     cuentas = repository.cuentas_para_cambio_estado(conn, id_cliente)
     tiene_productos = any(
