@@ -45,22 +45,26 @@ def test_atm_no_disponible(campo, valor):
     datos = atm_valido()
     datos[campo] = valor
 
-    with patch(
-        "app.modules.atm.service.repository.obtener_atm",
-        return_value=datos,
+    with (
+        patch(
+            "app.modules.atm.service.repository.obtener_atm",
+            return_value=datos,
+        ),
+        pytest.raises(HTTPException) as error,
     ):
-        with pytest.raises(HTTPException) as error:
-            validar_terminal(None, "ATM00001")
+        validar_terminal(None, "ATM00001")
 
     assert error.value.status_code == 409
 
 
 def test_atm_inexistente():
-    with patch(
-        "app.modules.atm.service.repository.obtener_atm",
-        return_value=None,
+    with (
+        patch(
+            "app.modules.atm.service.repository.obtener_atm",
+            return_value=None,
+        ),
+        pytest.raises(HTTPException) as error,
     ):
-        with pytest.raises(HTTPException) as error:
-            validar_terminal(None, "ATM99999")
+        validar_terminal(None, "ATM99999")
 
     assert error.value.status_code == 409
