@@ -44,6 +44,7 @@ def _caja(fila: Fila) -> CajaFisica:
 
 # --- CAJ-01 --------------------------------------------------------------------------
 
+
 def listar_cajas_fisicas(
     conn: Connection,
     id_agencia: str | None,

@@ -113,7 +113,7 @@ ROLES_POR_RUTA: dict[tuple[str, str], tuple[str, ...]] = {
         "AUDITOR",
         "ADMIN",
     ),
-    #("GET", "/api/v1/caja/cajas-fisicas"): ("CAJERO", "SUPERVISOR", "ADMIN"),
+    # ("GET", "/api/v1/caja/cajas-fisicas"): ("CAJERO", "SUPERVISOR", "ADMIN"),
 }
 
 

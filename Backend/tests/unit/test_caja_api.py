@@ -104,6 +104,7 @@ CAJA = {
 
 # --- CAJ-01 --------------------------------------------------------------------------
 
+
 @pytest.mark.skip(reason="Autenticacion y autorizacion pendientes para W4")
 def test_caj01_sin_sesion_responde_401(ctx: Contexto) -> None:
     ctx.sin_sesion()
@@ -112,12 +113,14 @@ def test_caj01_sin_sesion_responde_401(ctx: Contexto) -> None:
     assert code(r) == "NO_AUTENTICADO"
     assert r.headers["content-type"].startswith("application/problem+json")
 
+
 @pytest.mark.skip(reason="Autenticacion y autorizacion pendientes para W4")
 def test_caj01_rol_no_permitido_403(ctx: Contexto) -> None:
     ctx.como("CONTADOR")
     r = ctx.cliente.get(f"{BASE}/cajas-fisicas")
     assert r.status_code == 403
     assert code(r) == "SIN_PERMISO"
+
 
 @pytest.mark.skip(reason="Autenticacion y autorizacion pendientes para W4")
 def test_caj01_lista_la_agencia_del_usuario(ctx: Contexto) -> None:
@@ -138,6 +141,7 @@ def test_caj01_lista_la_agencia_del_usuario(ctx: Contexto) -> None:
     assert r.headers["cache-control"] == "no-store"
     assert "x-request-id" in r.headers
 
+
 @pytest.mark.skip(reason="Autenticacion y autorizacion pendientes para W4")
 def test_caj01_supervisor_no_ve_otra_agencia(ctx: Contexto) -> None:
     ctx.como("SUPERVISOR")
@@ -152,6 +156,7 @@ def test_caj01_admin_puede_ver_todas(ctx: Contexto) -> None:
     r = ctx.cliente.get(f"{BASE}/cajas-fisicas")
     assert r.status_code == 200
     assert ctx.llamadas["listar_cajas_fisicas"] == [(None, None)]
+
 
 @pytest.mark.skip(reason="Autenticacion y autorizacion pendientes para W4")
 def test_caj01_cajero_sin_agencia_403(ctx: Contexto) -> None:
