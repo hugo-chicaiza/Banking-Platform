@@ -51,9 +51,24 @@ def listar_cajas_fisicas(
     conn: Connection,
     id_agencia: str | None,
     activa: bool | None,
+    *,
+    usuario: Usuario,
 ) -> list[CajaFisica]:
-    """Consulta cajas físicas. Autorización pendiente para W4."""
-    return [_caja(f) for f in repo.listar_cajas_fisicas(conn, id_agencia, activa)]
+    """CAJ-01: aplica permisos de consulta por agencia."""
+
+    agencia = agencia_consultable(
+        usuario,
+        id_agencia,
+        frozenset({"ADMIN"}),
+    )
+
+    filas = repo.listar_cajas_fisicas(
+        conn,
+        agencia,
+        activa,
+    )
+
+    return [_caja(fila) for fila in filas]
 
 
 # --- CAJ-02: Consulta de jornadas ------------------------------------
@@ -91,6 +106,7 @@ def _jornada(fila: Fila) -> Jornada:
 def listar_jornadas(
     conn: Connection,
     *,
+    usuario: Usuario,
     id_agencia: str | None,
     id_usuario: int | None,
     estado: str | None,
@@ -102,16 +118,14 @@ def listar_jornadas(
 ) -> PageJornada:
     """Consulta paginada de jornadas de caja."""
 
-    # TODO W4: aplicar require_roles(
-    #     "SUPERVISOR", "CONTADOR", "AUDITOR"
-    # ) en el router.
-    #
-    # TODO W4: validar el acceso a id_agencia según
-    # la identidad WorkOS y las agencias autorizadas.
-    #
-    # Hasta W4, este endpoint no debe exponerse
-    # públicamente ni tratarse como autorizado.
+    # 1. Validar qué agencia puede consultar el usuario
+    agencia = agencia_consultable(
+        usuario,
+        id_agencia,
+        frozenset({"CONTADOR", "AUDITOR"}),
+    )
 
+    # 2. Validar el rango de fechas
     if desde is not None and hasta is not None and desde > hasta:
         raise problema(
             400,
@@ -126,6 +140,7 @@ def listar_jornadas(
             "La fecha hasta está fuera del rango permitido.",
         )
 
+    # 3. Validar el ordenamiento
     partes = sort.split(",")
 
     if (
@@ -139,9 +154,10 @@ def listar_jornadas(
             "El ordenamiento solicitado no es válido.",
         )
 
+    # 4. Consultar la base de datos con la agencia autorizada
     filas, total = repo.listar_jornadas(
         conn,
-        id_agencia=id_agencia,
+        id_agencia=agencia,
         id_usuario=id_usuario,
         estado=estado,
         desde=desde,
@@ -151,6 +167,7 @@ def listar_jornadas(
         sort=sort,
     )
 
+    # 5. Construir la respuesta
     return PageJornada(
         items=[_jornada(fila) for fila in filas],
         page=page,
