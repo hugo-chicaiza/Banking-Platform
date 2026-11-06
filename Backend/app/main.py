@@ -10,9 +10,11 @@ from app.core.config.logs import configurar_logging
 from app.core.config.settings import get_settings
 from app.core.security.audit import AccesoDenegadoMiddleware
 from app.modules.auth.router import router as auth_router
+from app.modules.caja.router import router as caja_router
 from app.modules.catalogos.router import router as catalogos_router
 from app.modules.clientes.router import router as clientes_router
 from app.modules.contabilidad.router import router as contabilidad_router
+from app.modules.creditos.router import router as creditos_router
 from app.modules.cuentas.router import router as cuentas_router
 from app.modules.tarjetas.router import router as tarjetas_router
 from app.smoke_test import router as smoke_test_router  # SMOKE-TEST: borrar
@@ -25,9 +27,11 @@ configurar_logging(settings.log_level)
 app = FastAPI(
     title=settings.app_name,
     # ASVS V14: no exponer documentación de la API en producción
-    docs_url=None if is_prod else "/docs",
+    # Bajo /api para que el proxy del FE (Vite en local, Cloudflare en Azure) también la
+    # sirva: así /api/docs usa la cookie de sesión del dominio del FE
+    docs_url=None if is_prod else "/api/docs",
     redoc_url=None,
-    openapi_url=None if is_prod else "/openapi.json",
+    openapi_url=None if is_prod else "/api/openapi.json",
 )
 # Primero en agregarse, último en ejecutarse: ya tiene el traceId y no audita los 429
 app.add_middleware(AccesoDenegadoMiddleware)
@@ -49,8 +53,10 @@ app.include_router(auth_router, prefix=API_V1)
 app.include_router(catalogos_router, prefix=API_V1)
 app.include_router(clientes_router, prefix=API_V1)
 app.include_router(contabilidad_router, prefix=API_V1)
+app.include_router(creditos_router, prefix=API_V1)
 app.include_router(cuentas_router, prefix=API_V1)
 app.include_router(tarjetas_router, prefix=API_V1)
+app.include_router(caja_router, prefix=API_V1)
 
 # Público a propósito: verifica el despliegue sin sesión (fuera de /api, sin require_auth)
 app.include_router(smoke_test_router)  # SMOKE-TEST: borrar
