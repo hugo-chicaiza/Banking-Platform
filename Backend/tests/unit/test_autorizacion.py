@@ -22,7 +22,6 @@ _PUBLICAS = {
     ("GET", "/api/v1/auth/login"),
     ("GET", "/api/v1/auth/callback"),
     ("POST", "/api/v1/auth/logout"),  # AUT-03: idempotente, sin sesión responde 200
-    ("GET", "/api/v1/caja/cajas-fisicas"),  # Temporal: auth pendiente W4
 }
 _VALORES_PATH = {"codigo_pais": "ECU", "fecha": "2026-11-04"}
 
@@ -113,7 +112,7 @@ ROLES_POR_RUTA: dict[tuple[str, str], tuple[str, ...]] = {
         "AUDITOR",
         "ADMIN",
     ),
-    # ("GET", "/api/v1/caja/cajas-fisicas"): ("CAJERO", "SUPERVISOR", "ADMIN"),
+    ("GET", "/api/v1/caja/cajas-fisicas"): ("CAJERO", "SUPERVISOR", "ADMIN"),
     # CAJ-02: consulta de jornadas
     ("GET", "/api/v1/caja/jornadas"): (
         "SUPERVISOR",
