@@ -5,7 +5,13 @@ from decimal import Decimal
 from typing import Annotated, Literal
 from zoneinfo import ZoneInfo
 
-from pydantic import AfterValidator, ConfigDict, Field, StringConstraints
+from pydantic import (
+    AfterValidator,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    model_validator,
+)
 from pydantic.alias_generators import to_camel
 
 from app.core.api.schemas import CamelModel, Money
@@ -162,3 +168,42 @@ class JornadaOpen(Entrada):
     id_caja_fisica: IdInt
     dinero_inicial: MontoNoNegativo
     observacion: Texto500 | None = None
+
+
+# --- CAJ-07: dotación ----------
+
+
+class Desglose(CamelModel):
+    id_denominacion: IdInt
+    cantidad: Annotated[int, Field(gt=0, le=100_000)]
+
+
+DesgloseLista = Annotated[
+    list[Desglose],
+    Field(min_length=1, max_length=30),
+]
+
+
+def sin_denominaciones_repetidas(
+    desglose: list[Desglose] | None,
+) -> None:
+    if desglose is None:
+        return
+
+    ids = [d.id_denominacion for d in desglose]
+
+    if len(ids) != len(set(ids)):
+        raise ValueError("El desglose repite una denominación")
+
+
+class DotacionRequest(Entrada):
+    id_boveda: IdInt
+    autorizado_por: IdInt
+    tipo_dotacion: Literal["INICIAL", "ADICIONAL"]
+    desglose: DesgloseLista
+    observacion: Texto500 | None = None
+
+    @model_validator(mode="after")
+    def _desglose_unico(self) -> "DotacionRequest":
+        sin_denominaciones_repetidas(self.desglose)
+        return self

@@ -57,6 +57,15 @@ _DB_ERRORES: dict[int, tuple[int, str, str]] = {
         "El monto inicial no cubre el mínimo de apertura.",
     ),
     57001: (409, "REGISTRO_INMUTABLE", "El registro histórico no se puede modificar."),
+    # CAJ-07: errores del procedimiento de dotaciones.
+    51005: (404, "DB_51005", "La jornada no existe."),
+    51006: (409, "DB_51006", "La jornada no está ABIERTA."),
+    51007: (409, "DB_51007", "Quien autoriza debe ser distinto del cajero."),
+    51008: (409, "DB_51008", "La jornada ya tiene dotación INICIAL."),
+    51009: (409, "DB_51009", "Falta la dotación INICIAL."),
+    51011: (404, "DB_51011", "La bóveda no existe."),
+    51012: (409, "DB_51012", "La bóveda no está activa."),
+    51013: (409, "DB_51013", "La bóveda es de otra agencia."),
 }
 
 _ESQUEMA_PROBLEMA: dict[str, Any] = {
