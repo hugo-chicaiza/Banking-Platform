@@ -163,6 +163,27 @@ def consultar_jornadas(
     )
 
 
+# --- CAJ-04: jornada actual del cajero ----------
+
+
+# CAJ-04. Roles: CAJERO.
+# Ruta literal antes de /jornadas/{idJornada}
+@router.get(
+    "/jornadas/actual",
+    response_model=Jornada,
+    operation_id="CAJ04",
+    dependencies=[Depends(require_roles("CAJERO"))],
+)
+def jornada_actual(
+    usuario: UsuarioActual,
+    _parametros: Annotated[None, Depends(solo_parametros())],
+    id_interno: IdInterno,
+    conn: Conexion,
+) -> Jornada:
+    del usuario
+    return service.jornada_actual(conn, id_interno)
+
+
 # --- CAJ-05: detalle de jornada ---
 
 IdJornada = Annotated[int, Path(alias="idJornada", gt=0, le=INT32_MAX)]
