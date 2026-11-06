@@ -28,6 +28,7 @@ from app.modules.caja.schemas import (
     Dotacion,
     Jornada,
     PageJornada,
+    PageMovimientoCaja,
 )
 
 
@@ -197,3 +198,43 @@ def listar_dotaciones(
     conn: Conexion,
 ) -> list[Dotacion]:
     return service.listar_dotaciones(conn, usuario, id_interno, id_jornada)
+
+
+# --- CAJ-12: movimientos de caja ----------
+
+
+Pagina = Annotated[int, Query(ge=1, le=1_000_000)]
+
+TamanoPagina = Annotated[int, Query(alias="pageSize", ge=1, le=100)]
+
+Orden = Annotated[str | None, Query(max_length=40)]
+
+
+@router.get(
+    "/jornadas/{idJornada}/movimientos",
+    response_model=PageMovimientoCaja,
+    operation_id="CAJ12",
+    dependencies=[Depends(require_roles("CAJERO", "SUPERVISOR", "CONTADOR"))],
+)
+def listar_movimientos(
+    usuario: UsuarioActual,
+    _parametros: Annotated[
+        None,
+        Depends(solo_parametros("page", "pageSize", "sort")),
+    ],
+    id_interno: IdInterno,
+    id_jornada: IdJornada,
+    conn: Conexion,
+    page: Pagina = 1,
+    page_size: TamanoPagina = 20,
+    sort: Orden = None,
+) -> PageMovimientoCaja:
+    return service.listar_movimientos(
+        conn,
+        usuario,
+        id_interno,
+        id_jornada,
+        page,
+        page_size,
+        sort,
+    )

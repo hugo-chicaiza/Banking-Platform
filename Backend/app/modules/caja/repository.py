@@ -211,3 +211,62 @@ def listar_dotaciones(conn: Connection, id_jornada: int) -> list[Fila]:
         """,
         {"id": id_jornada},
     )
+
+
+# --- CAJ-12: movimientos de caja ----------
+
+
+_MOVIMIENTOS = """
+SELECT mc.IdMovimientoCaja, mc.IdTransaccion, mc.IdJornadaCaja,
+       mc.IdTipoMovimiento, tm.Codigo AS CodigoTipoMovimiento,
+       tm.Naturaleza, mc.Monto, mc.FechaHora, mc.Observacion,
+       mc.IdAsientoContable
+FROM Caja.MovimientosCaja mc
+JOIN Caja.TipoMovimientoCaja tm
+  ON tm.IdTipoMovimientoCaja = mc.IdTipoMovimiento
+WHERE mc.IdJornadaCaja = :id
+"""
+
+
+ORDEN_MOVIMIENTOS = {
+    "fechaHora": "mc.FechaHora",
+    "monto": "mc.Monto",
+    "idMovimientoCaja": "mc.IdMovimientoCaja",
+}
+
+
+def listar_movimientos(
+    conn: Connection,
+    id_jornada: int,
+    orden: tuple[str, str],
+    offset: int,
+    limite: int,
+) -> tuple[list[Fila], int]:
+    columna = ORDEN_MOVIMIENTOS[orden[0]]
+    direccion = "DESC" if orden[1] == "desc" else "ASC"
+
+    total = conn.execute(
+        text(
+            """
+            SELECT COUNT_BIG(*)
+            FROM Caja.MovimientosCaja
+            WHERE IdJornadaCaja = :id
+            """
+        ),
+        {"id": id_jornada},
+    ).scalar_one()
+
+    # Columna y direccion proceden de valores permitidos.
+    orden_sql = f" ORDER BY {columna} {direccion}, mc.IdMovimientoCaja {direccion}"
+
+    # La consulta solo incorpora identificadores validados.
+    consulta = (
+        _MOVIMIENTOS + orden_sql + " OFFSET :offset ROWS FETCH NEXT :limite ROWS ONLY"
+    )
+
+    filas = _filas(
+        conn,
+        consulta,
+        {"id": id_jornada, "offset": offset, "limite": limite},
+    )
+    return filas, int(total)

@@ -4,7 +4,8 @@ Las consultas respetan los permisos de WorkOS y el aislamiento por agencia.
 Las operaciones de escritura deben ejecutarse en transacciones de BD.
 """
 
-from datetime import date
+from collections.abc import Mapping
+from datetime import date, datetime, time, timedelta
 
 from sqlalchemy import Connection
 
@@ -13,7 +14,14 @@ from app.core.security.auth import Usuario
 from app.core.security.operador import exigir_agencia, exigir_id_interno
 from app.modules.caja import repository as repo
 from app.modules.caja.repository import Fila
-from app.modules.caja.schemas import CajaFisica, Dotacion, Jornada, PageJornada
+from app.modules.caja.schemas import (
+    CajaFisica,
+    Dotacion,
+    Jornada,
+    MovimientoCaja,
+    PageJornada,
+    PageMovimientoCaja,
+)
 
 ROLES_GLOBALES = frozenset({"CONTADOR", "AUDITOR", "ADMIN"})
 
@@ -291,3 +299,98 @@ def listar_dotaciones(
 ) -> list[Dotacion]:
     jornada_visible(conn, usuario, id_interno, id_jornada)
     return [_dotacion(fila) for fila in repo.listar_dotaciones(conn, id_jornada)]
+
+
+# --- CAJ-12: movimientos de caja ----------
+
+
+def orden_desde_texto(
+    sort: str | None,
+    permitidos: Mapping[str, str],
+    defecto: tuple[str, str],
+) -> tuple[str, str]:
+    """Valida el orden solicitado mediante una lista blanca."""
+    if sort is None:
+        return defecto
+
+    campo, _, direccion = sort.partition(",")
+    direccion = direccion or "asc"
+
+    if campo not in permitidos or direccion not in ("asc", "desc"):
+        raise problema(
+            400,
+            "ORDEN_INVALIDO",
+            "El orden solicitado no es válido.",
+        )
+
+    return campo, direccion
+
+
+def rango_fechas(
+    desde: date | None,
+    hasta: date | None,
+) -> tuple[datetime | None, datetime | None]:
+    """Convierte fechas a intervalos de días completos."""
+    if desde is not None and hasta is not None and desde > hasta:
+        raise problema(
+            400,
+            "RANGO_FECHAS_INVALIDO",
+            "La fecha desde es posterior a hasta.",
+        )
+
+    inicio = datetime.combine(desde, time.min) if desde is not None else None
+
+    fin = (
+        datetime.combine(hasta + timedelta(days=1), time.min)
+        if hasta is not None
+        else None
+    )
+
+    return inicio, fin
+
+
+def listar_movimientos(
+    conn: Connection,
+    usuario: Usuario,
+    id_interno: int | None,
+    id_jornada: int,
+    page: int,
+    page_size: int,
+    sort: str | None,
+) -> PageMovimientoCaja:
+    jornada_visible(conn, usuario, id_interno, id_jornada)
+
+    orden = orden_desde_texto(
+        sort,
+        repo.ORDEN_MOVIMIENTOS,
+        ("fechaHora", "asc"),
+    )
+
+    filas, total = repo.listar_movimientos(
+        conn,
+        id_jornada,
+        orden,
+        (page - 1) * page_size,
+        page_size,
+    )
+
+    return PageMovimientoCaja(
+        items=[
+            MovimientoCaja(
+                id_movimiento_caja=f["IdMovimientoCaja"],
+                id_transaccion=f["IdTransaccion"],
+                id_jornada_caja=f["IdJornadaCaja"],
+                id_tipo_movimiento=f["IdTipoMovimiento"],
+                codigo_tipo_movimiento=f["CodigoTipoMovimiento"],
+                naturaleza=f["Naturaleza"],
+                monto=f["Monto"],
+                fecha_hora=f["FechaHora"],
+                observacion=f["Observacion"],
+                id_asiento_contable=f["IdAsientoContable"],
+            )
+            for f in filas
+        ],
+        page=page,
+        page_size=page_size,
+        total=total,
+    )
