@@ -98,3 +98,26 @@ class Dotacion(CamelModel):
     id_movimiento_boveda: int | None = None
     boveda_bajo_minimo: bool | None = None
     estado: str | None = None
+
+
+# --- CAJ-12: movimientos de caja ----------
+
+
+class MovimientoCaja(CamelModel):
+    id_movimiento_caja: int
+    id_transaccion: int | None = None
+    id_jornada_caja: int | None = None
+    id_tipo_movimiento: int | None = None
+    codigo_tipo_movimiento: str | None = None
+    naturaleza: str | None = None
+    monto: Money | None = None
+    fecha_hora: FechaHoraEc | None = None
+    observacion: str | None = None
+    id_asiento_contable: int | None = None
+
+
+class PageMovimientoCaja(CamelModel):
+    items: list[MovimientoCaja]
+    page: int
+    page_size: int
+    total: int
