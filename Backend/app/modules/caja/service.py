@@ -13,7 +13,7 @@ from sqlalchemy import Connection
 
 from app.core.api.errors import problema
 from app.core.security.auth import Usuario
-from app.core.security.operador import exigir_agencia, exigir_id_interno
+from app.core.security.operador import auditar, exigir_agencia, exigir_id_interno
 from app.modules.caja import repository as repo
 from app.modules.caja.repository import Fila
 from app.modules.caja.schemas import (
@@ -472,3 +472,98 @@ def obtener_cuadre(
         raise cuadre_no_encontrado()
 
     return _cuadre(fila)
+
+
+# --- CAJ-06: cancelación de jornada ----------
+
+
+def jornada_bloqueada(
+    conn: Connection,
+    id_jornada: int,
+) -> Fila:
+    jornada = repo.obtener_jornada(
+        conn,
+        id_jornada,
+        bloquear=True,
+    )
+
+    if jornada is None:
+        raise jornada_no_encontrada()
+
+    return jornada
+
+
+def _recargar_jornada(
+    conn: Connection,
+    id_jornada: int,
+) -> Jornada:
+    fila = repo.obtener_jornada(conn, id_jornada)
+
+    if fila is None:
+        raise RuntimeError("La jornada desapareció dentro de la transacción")
+
+    return _jornada(fila)
+
+
+def cancelar_jornada(
+    conn: Connection,
+    usuario: Usuario,
+    id_jornada: int,
+    motivo: str,
+    ip: str,
+) -> Jornada:
+    with (
+        auditar(
+            "CANCELAR_JORNADA",
+            "Caja.JornadasCaja",
+            usuario,
+            ip,
+            f"jornada={id_jornada}",
+            str(id_jornada),
+        ),
+        conn.begin(),
+    ):
+        jornada = jornada_bloqueada(
+            conn,
+            id_jornada,
+        )
+
+        verificar_alcance(
+            usuario,
+            None,
+            jornada,
+            ("SUPERVISOR",),
+        )
+
+        if jornada["Estado"] != "ABIERTA":
+            raise problema(
+                409,
+                "JORNADA_NO_ABIERTA",
+                "La jornada no está ABIERTA.",
+            )
+
+        if repo.jornada_tiene_actividad(
+            conn,
+            id_jornada,
+        ):
+            raise problema(
+                409,
+                "JORNADA_CON_MOVIMIENTOS",
+                "La jornada ya tiene movimientos.",
+            )
+
+        if not repo.cancelar_jornada(
+            conn,
+            id_jornada,
+            motivo,
+        ):
+            raise problema(
+                409,
+                "JORNADA_NO_ABIERTA",
+                "La jornada no está ABIERTA.",
+            )
+
+        return _recargar_jornada(
+            conn,
+            id_jornada,
+        )
