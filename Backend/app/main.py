@@ -27,9 +27,11 @@ configurar_logging(settings.log_level)
 app = FastAPI(
     title=settings.app_name,
     # ASVS V14: no exponer documentación de la API en producción
-    docs_url=None if is_prod else "/docs",
+    # Bajo /api para que el proxy del FE (Vite en local, Cloudflare en Azure) también la
+    # sirva: así /api/docs usa la cookie de sesión del dominio del FE
+    docs_url=None if is_prod else "/api/docs",
     redoc_url=None,
-    openapi_url=None if is_prod else "/openapi.json",
+    openapi_url=None if is_prod else "/api/openapi.json",
 )
 # Primero en agregarse, último en ejecutarse: ya tiene el traceId y no audita los 429
 app.add_middleware(AccesoDenegadoMiddleware)

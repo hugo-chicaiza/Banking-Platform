@@ -81,7 +81,7 @@ _ESQUEMA_PROBLEMA: dict[str, Any] = {
         },
     },
 }
-# Para que /docs muestre el formato real de los errores
+# Para que /api/docs muestre el formato real de los errores
 RESPUESTAS_ERROR: dict[int | str, dict[str, Any]] = {
     estado: {
         "description": HTTPStatus(estado).phrase,
