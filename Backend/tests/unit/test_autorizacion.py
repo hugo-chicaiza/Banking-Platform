@@ -248,12 +248,10 @@ def test_roles_de_la_tarea_pasan_el_control(client, ruta):
 
     r = _llamar(client, *ruta)
 
-    if ruta == ("GET", "/api/v1/caja/jornadas/actual"):
-        # D-01: el rol CAJERO es válido, pero todavía no
-        # existe vinculación con un usuario interno.
-        if r.status_code == 403:
-            assert r.json().get("code") == "USUARIO_INTERNO_NO_VINCULADO"
-            return
+    # D-01: CAJ-04 requiere vinculación con un usuario interno.
+    if ruta == ("GET", "/api/v1/caja/jornadas/actual") and r.status_code == 403:
+        assert r.json().get("code") == "USUARIO_INTERNO_NO_VINCULADO"
+        return
 
     assert r.status_code not in {401, 403}
 
