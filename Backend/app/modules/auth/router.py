@@ -16,7 +16,7 @@ from fastapi.responses import RedirectResponse
 from app.core.api.errors import RESPUESTAS_ERROR, ProblemDetailsRoute
 from app.core.security.auth import (
     COOKIE_SESION,
-    UsuarioActual,
+    SesionWorkOS,
     borrar_cookie_sesion,
     guardar_cookie_sesion,
     no_autenticado,
@@ -41,7 +41,7 @@ def _sin_cache(response: Response) -> None:
 
 
 # Sin require_auth a nivel de router: login y callback son públicos. Las demás
-# rutas validan la sesión con UsuarioActual o leen la cookie directamente.
+# rutas validan la sesión con SesionWorkOS (sin importar AUTH_APIS_ACTIVA) o leen la cookie.
 router = APIRouter(
     prefix="/auth",
     route_class=ProblemDetailsRoute,
@@ -137,6 +137,6 @@ def logout(request: Request, response: Response, sellada: CookieSesion = None) -
 
 # AUT-04. Roles: AUTH
 @router.get("/me", response_model=UsuarioSesion)
-def me(usuario: UsuarioActual) -> Any:
+def me(usuario: SesionWorkOS) -> Any:
     """Usuario de la sesión, sus roles, permisos y agencia vigente."""
     return service.perfil(usuario)

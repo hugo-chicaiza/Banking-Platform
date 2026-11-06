@@ -13,6 +13,7 @@ from app.core.security.auth import (
     Usuario,
     id_usuario_auditoria,
     usuario_actual,
+    usuario_de_sesion,
 )
 
 ID_AUDITORIA = 1
@@ -35,4 +36,6 @@ def usuario_con_roles(*roles: str) -> Usuario:
 
 def simular_sesion(app: FastAPI, usuario: Usuario = USUARIO) -> None:
     app.dependency_overrides[usuario_actual] = lambda: usuario
+    # /auth/me usa la sesión real de WorkOS, no la de las APIs
+    app.dependency_overrides[usuario_de_sesion] = lambda: usuario
     app.dependency_overrides[id_usuario_auditoria] = lambda: ID_AUDITORIA

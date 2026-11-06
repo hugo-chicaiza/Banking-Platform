@@ -63,6 +63,10 @@ backend/
 > every write takes its author from `UsuarioAuditoria`, never a fixed number. Only HTTPS: `FRONTEND_URL` and
 > `WORKOS_REDIRECT_URI` must be `https://` (http only for localhost).
 >
+> TEMPORARY: `AUTH_APIS_ACTIVA=false` (default) lets every API respond without a session; login (`/auth/*`)
+> still uses WorkOS. Keep declaring `require_auth`, `require_roles` and `UsuarioAuditoria` exactly as above: they
+> start enforcing again when the switch is set to `true`, with no module changes. Tests run with it on.
+>
 > Rule: tests. Call protected routes with `simular_sesion(app)` from `tests/sesion.py` (or
 > `usuario_con_roles(...)` to test a 403). A new route must be added to `ROLES_POR_RUTA` in
 > `tests/unit/test_autorizacion.py`, which checks 401 on every `/api/` route and the exact roles of each task.

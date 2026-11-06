@@ -13,6 +13,12 @@ Dependencias:
 - `require_auth`: la que declaran todos los routers. Exige una sesión válida (401).
 
 Cada 401/403 de la API queda en Auditoria.Auditoria (`AccesoDenegadoMiddleware`).
+
+INTERRUPTOR TEMPORAL `AUTH_APIS_ACTIVA` (por defecto False): mientras esté apagado,
+`usuario_actual` entrega `USUARIO_SIN_SESION` sin pedir cookie, así que require_auth,
+require_roles y UsuarioAuditoria dejan pasar todas las APIs. El login (/auth/*) usa
+`usuario_de_sesion` y no se ve afectado. Los módulos no saben del interruptor: siguen
+declarando require_auth, require_roles y UsuarioAuditoria como siempre.
 """
 
 import hashlib
@@ -280,13 +286,28 @@ def validar_sesion(sellada: str) -> SesionValida | None:
 
 # --- Dependencias ----------------------------------------------------------------
 
+# Usuario de las APIs con AUTH_APIS_ACTIVA=false: todos los roles, ninguna sesión
+USUARIO_SIN_SESION = Usuario(
+    id_usuario="sin-sesion",
+    id_sesion="",
+    id_organizacion=None,
+    nombre="Sin sesión (auth de APIs desactivado)",
+    email="",
+    roles=ROLES,
+    permisos=(),
+    id_agencia=None,
+)
 
-def usuario_actual(
+
+def usuario_de_sesion(
     request: Request,
     response: Response,
     sellada: Annotated[str | None, Depends(_cookie)],
 ) -> Usuario:
-    """401 sin sesión válida; 403 si un POST/PUT/PATCH/DELETE viene de otro origen."""
+    """401 sin sesión válida; 403 si un POST/PUT/PATCH/DELETE viene de otro origen.
+
+    Siempre valida contra WorkOS, sin importar el interruptor: la usa /auth/me.
+    """
     verificar_origen(request)
     if not sellada:
         raise no_autenticado()
@@ -300,12 +321,29 @@ def usuario_actual(
     return valida.usuario
 
 
+# Sesión real de WorkOS, siempre validada (login y /auth/me)
+SesionWorkOS = Annotated[Usuario, Depends(usuario_de_sesion)]
+
+
+def usuario_actual(
+    request: Request,
+    response: Response,
+    sellada: Annotated[str | None, Depends(_cookie)],
+) -> Usuario:
+    """Usuario de las APIs. Con AUTH_APIS_ACTIVA=false no pide sesión."""
+    if not get_settings().auth_apis_activa:
+        return USUARIO_SIN_SESION
+    return usuario_de_sesion(request, response, sellada)
+
+
 # Para recibir el usuario en un endpoint: def ver(usuario: UsuarioActual)
 UsuarioActual = Annotated[Usuario, Depends(usuario_actual)]
 
 
 def id_usuario_auditoria(usuario: UsuarioActual) -> int:
     """Resuelve una identidad ya autenticada usando vínculos del servidor."""
+    if not get_settings().auth_apis_activa:
+        return get_settings().id_usuario_sin_sesion
     id_interno = get_settings().workos_audit_user_ids.get(usuario.id_usuario)
     if id_interno is None:
         raise problema(

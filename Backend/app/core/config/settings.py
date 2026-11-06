@@ -61,6 +61,12 @@ class Settings(BaseSettings):
     workos_redirect_uri: str = ""
     # Origen del FE (esquema://host[:puerto], sin ruta): redirecciones y control CSRF
     frontend_url: str = ""
+    # TEMPORAL (ver PENDIENTES): False = las APIs responden sin sesión; el login de /auth
+    # sigue igual. True = sesión y roles obligatorios en todas las APIs.
+    auth_apis_activa: bool = False
+    # UsuarioID (Organizacion.Usuarios) que figura como autor de las escrituras mientras
+    # auth_apis_activa es False
+    id_usuario_sin_sesion: int = Field(default=8, ge=1, le=2147483647)
     # Vínculos administrados por despliegue, nunca por el navegador ni por email.
     workos_audit_user_ids: dict[
         str, Annotated[int, Field(strict=True, ge=1, le=2147483647)]
