@@ -1,9 +1,12 @@
 """Apoyo de pruebas de Caja y Transacciones (sin BD).
 
-La sesión se simula sobrescribiendo `usuario_actual`, la dependencia real de la que
-cuelgan `UsuarioActual` y `require_roles`. El vínculo interno se simula
-sobrescribiendo `resolver_id_interno`. Solo en pruebas: la app real exige sesión
-WorkOS y, mientras no exista el vínculo (D-01), responde 403 donde haga falta.
+La sesión se simula sobrescribiendo `usuario_actual`, la dependencia real
+de la que cuelgan `UsuarioActual` y `require_roles`.
+
+El vínculo interno se simula sobrescribiendo `resolver_id_interno`.
+
+Solo en pruebas: la aplicación real exige sesión WorkOS y, mientras no
+exista el vínculo D-01, responde 403 donde corresponda.
 """
 
 from datetime import datetime
@@ -24,11 +27,16 @@ from app.core.security.operador import resolver_id_interno
 from app.modules.caja import repository as caja_repo
 
 BASE = "/api/v1/caja"
+
 ID_CAJERO = 7
 ID_SUPERVISOR = 9
 
 
-def usuario(*roles: str, agencia: str | None = "001") -> Usuario:
+def usuario(
+    *roles: str,
+    agencia: str | None = "001",
+) -> Usuario:
+    """Crea un usuario simulado con los roles indicados."""
     return Usuario(
         id_usuario="user_01PRUEBA",
         id_sesion="session_01",
@@ -42,6 +50,8 @@ def usuario(*roles: str, agencia: str | None = "001") -> Usuario:
 
 
 class Contexto:
+    """Contexto compartido para pruebas unitarias de Caja."""
+
     def __init__(
         self,
         app: FastAPI,
@@ -52,39 +62,79 @@ class Contexto:
         self.app = app
         self.cliente = TestClient(app)
         self.monkeypatch = monkeypatch
+
         self.usuario = usuario("CAJERO")
         self.id_interno: int | None = ID_CAJERO
+
         self.conn = MagicMock()
+
         self.eventos: list[audit.EventoAuditoria] = []
         self.llamadas: dict[str, list[tuple[Any, ...]]] = {}
+
         app.dependency_overrides[cooperativa] = lambda: self.conn
         app.dependency_overrides[usuario_actual] = lambda: self.usuario
         app.dependency_overrides[resolver_id_interno] = lambda: self.id_interno
-        monkeypatch.setattr(audit, "registrar", self.eventos.append)
 
-    def como(self, *roles: str, id_interno: int | None = None, agencia: str = "001"):
-        self.usuario = usuario(*roles, agencia=agencia)
+        monkeypatch.setattr(
+            audit,
+            "registrar",
+            self.eventos.append,
+        )
+
+    def como(
+        self,
+        *roles: str,
+        id_interno: int | None = None,
+        agencia: str = "001",
+    ):
+        """Cambia el usuario y su identificador interno."""
+        self.usuario = usuario(
+            *roles,
+            agencia=agencia,
+        )
         self.id_interno = id_interno
         return self
 
     def sin_sesion(self) -> None:
+        """Elimina las simulaciones de autenticación."""
         del self.app.dependency_overrides[usuario_actual]
         del self.app.dependency_overrides[resolver_id_interno]
 
-    def fake(self, nombre: str, resultado: Any = None, modulo: Any = None) -> None:
-        """Reemplaza una función del repository y registra sus argumentos."""
+    def fake(
+        self,
+        nombre: str,
+        resultado: Any = None,
+        modulo: Any = None,
+    ) -> None:
+        """Reemplaza una función del repositorio y registra sus argumentos."""
         llamadas = self.llamadas.setdefault(nombre, [])
 
-        def falso(*args: Any, **kwargs: Any) -> Any:
-            llamadas.append(args[1:])  # sin la conexión
+        def falso(
+            *args: Any,
+            **kwargs: Any,
+        ) -> Any:
+            llamadas.append(args[1:])
+
             if isinstance(resultado, BaseException):
                 raise resultado
-            return resultado(*args) if callable(resultado) else resultado
 
-        self.monkeypatch.setattr(modulo or self.modulo, nombre, falso)
+            if callable(resultado):
+                return resultado(*args)
+
+            return resultado
+
+        self.monkeypatch.setattr(
+            modulo or self.modulo,
+            nombre,
+            falso,
+        )
 
     def resultado_auditoria(self) -> str | None:
-        return self.eventos[-1].resultado if self.eventos else None
+        """Devuelve el resultado del último evento de auditoría."""
+        if not self.eventos:
+            return None
+
+        return self.eventos[-1].resultado
 
 
 def crear_contexto(
@@ -94,24 +144,40 @@ def crear_contexto(
     roles: tuple[str, ...] = ("CAJERO",),
     id_interno: int | None = ID_CAJERO,
 ) -> Contexto:
+    """Construye una aplicación FastAPI aislada para pruebas."""
     app = FastAPI()
     app.include_router(router, prefix="/api/v1")
     app.add_middleware(TraceIdMiddleware)
-    ctx = Contexto(app, monkeypatch, modulo)
+
+    ctx = Contexto(
+        app,
+        monkeypatch,
+        modulo,
+    )
+
     ctx.usuario = usuario(*roles)
     ctx.id_interno = id_interno
+
     return ctx
 
 
 def code(respuesta: Any) -> str:
+    """Obtiene el código de error de una respuesta."""
     return respuesta.json()["code"]
 
 
 def error_bd(numero: int) -> DBAPIError:
+    """Simula un error de SQL Server."""
     return DBAPIError(
-        "EXEC ...", None, Exception(f"[SQL Server]Regla. ({numero}) (SQLExecDirectW)")
+        "EXEC ...",
+        None,
+        Exception(f"[SQL Server]Regla. ({numero}) (SQLExecDirectW)"),
     )
 
+
+# ============================================================
+# Datos simulados
+# ============================================================
 
 CAJA = {
     "IdCajaFisica": 3,
@@ -134,10 +200,6 @@ JORNADA = {
     "Estado": "ABIERTA",
     "Observacion": None,
 }
-
-
-def jornada(**cambios: Any) -> dict[str, Any]:
-    return {**JORNADA, **cambios}
 
 
 DOTACION = {
@@ -191,10 +253,6 @@ CUADRE = {
 }
 
 
-def cuadre(**cambios: Any) -> dict[str, Any]:
-    return {**CUADRE, **cambios}
-
-
 TRANSACCION = {
     "IdTransaccion": 5001,
     "NumeroComprobante": "COMP-000123",
@@ -221,3 +279,26 @@ TRANSACCION = {
     "NumeroAutorizacion": "123456",
     "AgenciaOperacion": "001",
 }
+
+
+# ============================================================
+# Funciones reutilizables para datos de prueba
+# ============================================================
+
+
+def crear_registro(
+    base: dict[str, Any],
+    **cambios: Any,
+) -> dict[str, Any]:
+    """Crea una copia de un registro con los campos modificados."""
+    return {**base, **cambios}
+
+
+def jornada(**cambios: Any) -> dict[str, Any]:
+    """Genera una jornada de prueba."""
+    return crear_registro(JORNADA, **cambios)
+
+
+def cuadre(**cambios: Any) -> dict[str, Any]:
+    """Genera un cuadre de prueba."""
+    return crear_registro(CUADRE, **cambios)
