@@ -9,8 +9,10 @@ from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
 from app.core.database.db import cooperativa
+from app.core.security.auth import usuario_actual
 from app.modules.caja import repository, service
 from app.modules.caja.router import router as caja_router
+from tests.sesion import usuario_con_roles
 
 FILA_JORNADA = {
     "IdJornadaCaja": 10,
@@ -30,6 +32,10 @@ def client(monkeypatch):
     app = FastAPI()
     app.include_router(caja_router, prefix="/api/v1")
 
+    # Simular una sesión válida con un rol autorizado para CAJ-02
+    app.dependency_overrides[usuario_actual] = lambda: usuario_con_roles("SUPERVISOR")
+
+    # Evitar conexión real con Azure SQL
     app.dependency_overrides[cooperativa] = lambda: Mock()
 
     def consulta_falsa(conn, **kwargs):

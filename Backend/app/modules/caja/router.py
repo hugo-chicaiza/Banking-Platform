@@ -15,6 +15,7 @@ from sqlalchemy import Connection
 
 from app.core.api.errors import RESPUESTAS_ERROR, ProblemDetailsRoute, solo_parametros
 from app.core.database.db import cooperativa
+from app.core.security.auth import require_roles
 
 # from app.core.security.auth import Usuario, require_roles
 from app.modules.caja import service
@@ -64,6 +65,7 @@ def listar_cajas_fisicas(
     "/jornadas",
     response_model=PageJornada,
     operation_id="CAJ02",
+    dependencies=[Depends(require_roles("SUPERVISOR", "CONTADOR", "AUDITOR"))],
 )
 def consultar_jornadas(
     _parametros: Annotated[
