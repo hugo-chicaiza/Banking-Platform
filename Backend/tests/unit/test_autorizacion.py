@@ -124,6 +124,12 @@ ROLES_POR_RUTA: dict[tuple[str, str], tuple[str, ...]] = {
         "CONTADOR",
         "AUDITOR",
     ),
+    # CAJ-05:
+    ("GET", "/api/v1/caja/jornadas/{idJornada}"): (
+        "CAJERO",
+        "SUPERVISOR",
+        "CONTADOR",
+    ),
 }
 
 
