@@ -21,6 +21,7 @@ from app.modules.caja.schemas import (
     CuadreCaja,
     Dotacion,
     Jornada,
+    JornadaOpen,
     MovimientoCaja,
     PageJornada,
     PageMovimientoCaja,
@@ -567,3 +568,96 @@ def cancelar_jornada(
             conn,
             id_jornada,
         )
+
+
+# --- CAJ-03: apertura de jornada ----------
+
+
+def abrir_jornada(
+    conn: Connection,
+    usuario: Usuario,
+    id_interno: int | None,
+    datos: JornadaOpen,
+    ip: str,
+) -> Jornada:
+    with auditar(
+        "ABRIR_JORNADA",
+        "Caja.JornadasCaja",
+        usuario,
+        ip,
+        f"caja={datos.id_caja_fisica}",
+    ) as registro:
+        id_cajero = exigir_id_interno(id_interno)
+
+        with conn.begin():
+            caja = repo.obtener_caja_fisica(
+                conn,
+                datos.id_caja_fisica,
+            )
+
+            if caja is None:
+                raise problema(
+                    422,
+                    "CAJA_FISICA_NO_ENCONTRADA",
+                    "La caja física no existe.",
+                )
+
+            if not repo.cajero_asignado(
+                conn,
+                id_cajero,
+                caja["IdAgencia"],
+            ):
+                raise problema(
+                    409,
+                    "CAJERO_NO_ASIGNADO_A_AGENCIA",
+                    "No tiene asignación vigente en la agencia de la caja.",
+                )
+
+            if (
+                repo.jornada_abierta_de_usuario(
+                    conn,
+                    id_cajero,
+                )
+                is not None
+            ):
+                raise problema(
+                    409,
+                    "CAJERO_YA_TIENE_JORNADA_ABIERTA",
+                    "Ya tiene una jornada abierta.",
+                )
+
+            if (
+                repo.jornada_abierta_de_caja(
+                    conn,
+                    datos.id_caja_fisica,
+                )
+                is not None
+            ):
+                raise problema(
+                    409,
+                    "CAJA_EN_USO",
+                    "La caja física ya tiene una jornada abierta.",
+                )
+
+            if not caja["Estado"]:
+                raise problema(
+                    409,
+                    "CAJA_INACTIVA",
+                    "La caja física no está activa.",
+                )
+
+            id_jornada = repo.insertar_jornada(
+                conn,
+                id_cajero,
+                datos.id_caja_fisica,
+                caja["IdAgencia"],
+                datos.dinero_inicial,
+                datos.observacion,
+            )
+
+            registro.id_registro = str(id_jornada)
+
+            return _recargar_jornada(
+                conn,
+                id_jornada,
+            )
