@@ -136,3 +136,15 @@ def validar_estado_pin(
         )
 
     return estado_pin
+
+def validar_precondiciones_atm(
+    conn: Connection,
+    conn_seguridad: Connection,
+    codigo_atm: str,
+    id_tarjeta: int,
+) -> None:
+    """Valida las condiciones previas a la autenticación ATM."""
+
+    validar_terminal(conn, codigo_atm)
+    validar_tarjeta(conn, id_tarjeta)
+    validar_estado_pin(conn_seguridad, id_tarjeta)
