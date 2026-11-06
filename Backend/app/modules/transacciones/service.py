@@ -4,7 +4,9 @@ from datetime import date
 
 from sqlalchemy import Connection
 
+from app.core.api.errors import problema
 from app.core.security.auth import Usuario
+from app.core.security.operador import exigir_agencia
 from app.modules.caja.service import (
     agencia_consultable,
     orden_desde_texto,
@@ -90,3 +92,38 @@ def listar_transacciones(
         page_size=page_size,
         total=total,
     )
+
+
+# --- TRX-02: detalle de transacción ----------
+
+
+def transaccion_no_encontrada() -> Exception:
+    return problema(
+        404,
+        "TRANSACCION_NO_ENCONTRADA",
+        "La transacción no existe.",
+    )
+
+
+def verificar_alcance(usuario: Usuario, fila: Fila) -> None:
+    """Oculta las transacciones fuera de la agencia del supervisor."""
+    if set(usuario.roles) & ROLES_GLOBALES:
+        return
+
+    if fila["AgenciaOperacion"] != exigir_agencia(usuario):
+        raise transaccion_no_encontrada()
+
+
+def obtener_transaccion(
+    conn: Connection,
+    usuario: Usuario,
+    id_transaccion: int,
+) -> Transaccion:
+    fila = repo.obtener_transaccion(conn, id_transaccion)
+
+    if fila is None:
+        raise transaccion_no_encontrada()
+
+    verificar_alcance(usuario, fila)
+
+    return _transaccion(fila)
