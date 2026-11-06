@@ -167,29 +167,23 @@ def obtener_jornada(
     id_jornada: int,
     bloquear: bool = False,
 ) -> Fila | None:
-    if bloquear:
-        return _fila(
-            conn,
-            """
-            SELECT
-                IdJornadaCaja, IdUsuario, IdCajaFisica, IdAgencia,
-                FechaHoraApertura, FechaHoraCierre, DineroInicial,
-                Estado, Observacion
-            FROM Caja.JornadasCaja WITH (UPDLOCK, HOLDLOCK)
-            WHERE IdJornadaCaja = :id
-            """,
-            {"id": id_jornada},
-        )
-
-    return _fila(
-        conn,
-        """
+    consulta_normal = """
         SELECT
             IdJornadaCaja, IdUsuario, IdCajaFisica, IdAgencia,
             FechaHoraApertura, FechaHoraCierre, DineroInicial,
             Estado, Observacion
         FROM Caja.JornadasCaja
         WHERE IdJornadaCaja = :id
-        """,
-        {"id": id_jornada},
-    )
+    """
+
+    consulta_bloqueada = """
+        SELECT
+            IdJornadaCaja, IdUsuario, IdCajaFisica, IdAgencia,
+            FechaHoraApertura, FechaHoraCierre, DineroInicial,
+            Estado, Observacion
+        FROM Caja.JornadasCaja WITH (UPDLOCK, HOLDLOCK)
+        WHERE IdJornadaCaja = :id
+    """
+
+    consulta = consulta_bloqueada if bloquear else consulta_normal
+    return _fila(conn, consulta, {"id": id_jornada})
