@@ -112,6 +112,7 @@ ROLES_POR_RUTA: dict[tuple[str, str], tuple[str, ...]] = {
         "AUDITOR",
         "ADMIN",
     ),
+    # CAJ-01: listado de cajas físicas
     ("GET", "/api/v1/caja/cajas-fisicas"): (
         "CAJERO",
         "SUPERVISOR",

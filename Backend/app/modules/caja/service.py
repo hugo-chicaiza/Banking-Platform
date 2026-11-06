@@ -1,5 +1,8 @@
-"""Reglas de negocio de Caja. Cada operación que escribe es una sola transacción de
-BD (`with conn.begin()`): si algo falla, se revierte todo."""
+"""Reglas de negocio de Caja.
+
+Las consultas respetan los permisos de WorkOS y el aislamiento por agencia.
+Las operaciones de escritura deben ejecutarse en transacciones de BD.
+"""
 
 from datetime import date
 
@@ -12,28 +15,38 @@ from app.modules.caja import repository as repo
 from app.modules.caja.repository import Fila
 from app.modules.caja.schemas import CajaFisica, Jornada, PageJornada
 
-# Roles que ven datos de cualquier agencia (solo lectura, según la matriz de roles)
 ROLES_GLOBALES = frozenset({"CONTADOR", "AUDITOR", "ADMIN"})
 
 
 def agencia_consultable(
-    usuario: Usuario, pedida: str | None, roles_globales: frozenset[str]
+    usuario: Usuario,
+    pedida: str | None,
+    roles_globales: frozenset[str],
 ) -> str | None:
-    """Agencia que puede consultar el usuario.
+    """Determina qué agencia puede consultar un usuario.
 
-    Con rol global: la pedida (None = todas). Sin él: la propia; pedir otra es 403.
+    Los roles globales pueden consultar cualquier agencia.
+    Los demás usuarios solamente pueden consultar su agencia asignada.
     """
+
     if set(usuario.roles) & roles_globales:
         return pedida
+
     propia = exigir_agencia(usuario)
+
     if pedida is not None and pedida != propia:
         raise problema(
-            403, "SIN_ACCESO_AGENCIA", "No tiene acceso a los datos de esa agencia."
+            403,
+            "SIN_ACCESO_AGENCIA",
+            "No tiene acceso a los datos de esa agencia.",
         )
+
     return propia
 
 
 def _caja(fila: Fila) -> CajaFisica:
+    """Convierte una fila SQL al modelo CajaFisica."""
+
     return CajaFisica(
         id_caja_fisica=fila["IdCajaFisica"],
         id_agencia=fila["IdAgencia"],
@@ -44,17 +57,18 @@ def _caja(fila: Fila) -> CajaFisica:
     )
 
 
-# --- CAJ-01 --------------------------------------------------------------------------
+# ---------------------------------------------------------------------
+# CAJ-01: Listado de cajas físicas
+# ---------------------------------------------------------------------
 
 
 def listar_cajas_fisicas(
     conn: Connection,
+    usuario: Usuario,
     id_agencia: str | None,
     activa: bool | None,
-    *,
-    usuario: Usuario,
 ) -> list[CajaFisica]:
-    """CAJ-01: aplica permisos de consulta por agencia."""
+    """Lista cajas físicas según los permisos de agencia."""
 
     agencia = agencia_consultable(
         usuario,
@@ -71,7 +85,10 @@ def listar_cajas_fisicas(
     return [_caja(fila) for fila in filas]
 
 
-# --- CAJ-02: Consulta de jornadas ------------------------------------
+# ---------------------------------------------------------------------
+# CAJ-02: Consulta de jornadas
+# ---------------------------------------------------------------------
+
 
 SORT_JORNADAS = frozenset(
     {
@@ -88,7 +105,7 @@ SORT_JORNADAS = frozenset(
 
 
 def _jornada(fila: Fila) -> Jornada:
-    """Transforma una fila SQL en el modelo de respuesta."""
+    """Convierte una fila SQL al modelo Jornada."""
 
     return Jornada(
         id_jornada_caja=fila["IdJornadaCaja"],
@@ -116,16 +133,16 @@ def listar_jornadas(
     page_size: int,
     sort: str,
 ) -> PageJornada:
-    """Consulta paginada de jornadas de caja."""
+    """Consulta paginada de jornadas con restricciones por agencia."""
 
-    # 1. Validar qué agencia puede consultar el usuario
+    # Validar agencia autorizada.
     agencia = agencia_consultable(
         usuario,
         id_agencia,
         frozenset({"CONTADOR", "AUDITOR"}),
     )
 
-    # 2. Validar el rango de fechas
+    # Validar rango de fechas.
     if desde is not None and hasta is not None and desde > hasta:
         raise problema(
             400,
@@ -140,7 +157,7 @@ def listar_jornadas(
             "La fecha hasta está fuera del rango permitido.",
         )
 
-    # 3. Validar el ordenamiento
+    # Validar ordenamiento permitido.
     partes = sort.split(",")
 
     if (
@@ -154,7 +171,7 @@ def listar_jornadas(
             "El ordenamiento solicitado no es válido.",
         )
 
-    # 4. Consultar la base de datos con la agencia autorizada
+    # Consultar únicamente la agencia autorizada.
     filas, total = repo.listar_jornadas(
         conn,
         id_agencia=agencia,
@@ -167,7 +184,6 @@ def listar_jornadas(
         sort=sort,
     )
 
-    # 5. Construir la respuesta
     return PageJornada(
         items=[_jornada(fila) for fila in filas],
         page=page,
