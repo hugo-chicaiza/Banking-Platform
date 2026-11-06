@@ -270,3 +270,39 @@ def listar_movimientos(
         {"id": id_jornada, "offset": offset, "limite": limite},
     )
     return filas, int(total)
+
+
+# --- CAJ-14: consultar cuadre ----------
+
+
+def obtener_cuadre_de_jornada(
+    conn: Connection,
+    id_jornada: int,
+    bloquear: bool = False,
+) -> Fila | None:
+    consulta_normal = """
+        SELECT TOP (1)
+            IdCuadreCaja, IdJornadaCaja, IdUsuario, FechaHoraCuadre,
+            SaldoInicial, TotalDotaciones, TotalDepositos, TotalRetiros,
+            TotalPagos, TotalDevolucionesBoveda, SaldoFinalFisico,
+            DiferenciaDinero, EstadoCuadre, IdAutorizadoPor,
+            IdFechaContable, Observaciones
+        FROM Caja.CuadreCaja
+        WHERE IdJornadaCaja = :id
+        ORDER BY IdCuadreCaja
+    """
+
+    consulta_bloqueada = """
+        SELECT TOP (1)
+            IdCuadreCaja, IdJornadaCaja, IdUsuario, FechaHoraCuadre,
+            SaldoInicial, TotalDotaciones, TotalDepositos, TotalRetiros,
+            TotalPagos, TotalDevolucionesBoveda, SaldoFinalFisico,
+            DiferenciaDinero, EstadoCuadre, IdAutorizadoPor,
+            IdFechaContable, Observaciones
+        FROM Caja.CuadreCaja WITH (UPDLOCK, HOLDLOCK)
+        WHERE IdJornadaCaja = :id
+        ORDER BY IdCuadreCaja
+    """
+
+    consulta = consulta_bloqueada if bloquear else consulta_normal
+    return _fila(conn, consulta, {"id": id_jornada})
