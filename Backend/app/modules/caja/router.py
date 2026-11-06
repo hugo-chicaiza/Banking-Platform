@@ -22,7 +22,13 @@ from app.core.security.auth import (
 )
 from app.core.security.operador import IdInterno
 from app.modules.caja import service
-from app.modules.caja.schemas import INT32_MAX, CajaFisica, Jornada, PageJornada
+from app.modules.caja.schemas import (
+    INT32_MAX,
+    CajaFisica,
+    Dotacion,
+    Jornada,
+    PageJornada,
+)
 
 
 def _sin_cache(response: Response) -> None:
@@ -172,3 +178,22 @@ def obtener_jornada(
 ) -> Jornada:
     """Consulta el detalle de una jornada autorizada."""
     return service.obtener_jornada(conn, usuario, id_interno, id_jornada)
+
+
+# --- CAJ-08: dotaciones de la jornada ----------
+
+
+@router.get(
+    "/jornadas/{idJornada}/dotaciones",
+    response_model=list[Dotacion],
+    operation_id="CAJ08",
+    dependencies=[Depends(require_roles("CAJERO", "SUPERVISOR", "CONTADOR"))],
+)
+def listar_dotaciones(
+    usuario: UsuarioActual,
+    _parametros: Annotated[None, Depends(solo_parametros())],
+    id_interno: IdInterno,
+    id_jornada: IdJornada,
+    conn: Conexion,
+) -> list[Dotacion]:
+    return service.listar_dotaciones(conn, usuario, id_interno, id_jornada)

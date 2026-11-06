@@ -187,3 +187,27 @@ def obtener_jornada(
 
     consulta = consulta_bloqueada if bloquear else consulta_normal
     return _fila(conn, consulta, {"id": id_jornada})
+
+
+# --- CAJ-08: dotaciones de la jornada ----------
+
+
+def listar_dotaciones(conn: Connection, id_jornada: int) -> list[Fila]:
+    return _filas(
+        conn,
+        """
+        SELECT
+            IdDotacionCaja,
+            IdJornadaCaja,
+            IdBoveda,
+            TipoDotacion,
+            Monto,
+            IdMovimientoBoveda,
+            Estado,
+            AutorizadoPor
+        FROM Caja.DotacionesCaja
+        WHERE IdJornadaCaja = :id
+        ORDER BY IdDotacionCaja
+        """,
+        {"id": id_jornada},
+    )
