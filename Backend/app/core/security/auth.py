@@ -70,7 +70,7 @@ _VIGENCIA_RENOVACION = 30.0
 _renovaciones: dict[str, tuple[float, RefreshWithSessionCookieSuccessResponse]] = {}
 _candado_renovacion = threading.Lock()
 
-# Solo documenta la cookie en /docs; el valor se lee igual que con request.cookies
+# Solo documenta la cookie en /api/docs; el valor se lee igual que con request.cookies
 _cookie = APIKeyCookie(
     name=COOKIE_SESION, auto_error=False, description="Sesión de WorkOS AuthKit"
 )
