@@ -164,6 +164,8 @@ ROLES_POR_RUTA: dict[tuple[str, str], tuple[str, ...]] = {
     ),
     # CAJ-06
     ("POST", "/api/v1/caja/jornadas/{idJornada}/cancelacion"): ("SUPERVISOR",),
+    # CAJ-03
+    ("POST", "/api/v1/caja/jornadas"): ("CAJERO",),
 }
 
 

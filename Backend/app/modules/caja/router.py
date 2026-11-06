@@ -29,6 +29,7 @@ from app.modules.caja.schemas import (
     CuadreCaja,
     Dotacion,
     Jornada,
+    JornadaOpen,
     PageJornada,
     PageMovimientoCaja,
     ReversoRequest,
@@ -284,5 +285,34 @@ def cancelar_jornada(
         usuario,
         id_jornada,
         datos.motivo,
+        ip_cliente(request.scope),
+    )
+
+
+# --- CAJ-03: apertura de jornada ----------
+
+
+@router.post(
+    "/jornadas",
+    response_model=Jornada,
+    status_code=201,
+    operation_id="CAJ03",
+    dependencies=[
+        Depends(require_roles("CAJERO")),
+    ],
+)
+def abrir_jornada(
+    request: Request,
+    usuario: UsuarioActual,
+    id_interno: IdInterno,
+    datos: JornadaOpen,
+    conn: Conexion,
+) -> Jornada:
+    """Abre una jornada para el cajero autenticado."""
+    return service.abrir_jornada(
+        conn,
+        usuario,
+        id_interno,
+        datos,
         ip_cliente(request.scope),
     )

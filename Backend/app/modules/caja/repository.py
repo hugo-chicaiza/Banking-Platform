@@ -382,3 +382,160 @@ def cancelar_jornada(
     )
 
     return resultado.rowcount == 1
+
+
+# --- CAJ-03: apertura de jornada ----------
+
+
+def obtener_caja_fisica(
+    conn: Connection,
+    id_caja: int,
+) -> Fila | None:
+    return _fila(
+        conn,
+        """
+        SELECT IdCajaFisica, IdAgencia, CodigoCaja, Estado
+        FROM Caja.CajaFisica WITH (UPDLOCK, HOLDLOCK)
+        WHERE IdCajaFisica = :id
+        """,
+        {"id": id_caja},
+    )
+
+
+def cajero_asignado(
+    conn: Connection,
+    id_usuario: int,
+    id_agencia: str,
+) -> bool:
+    fila = _fila(
+        conn,
+        """
+        SELECT TOP (1) 1 AS Asignado
+        FROM Caja.CajerosAsignadosAgencia
+        WHERE IdUsuario = :id_usuario
+          AND IdAgencia = :id_agencia
+          AND Estado = 1
+          AND FechaInicio <= CAST(
+              SYSDATETIMEOFFSET()
+              AT TIME ZONE 'SA Pacific Standard Time'
+              AS datetime2
+          )
+          AND (
+              FechaFin IS NULL
+              OR FechaFin >= CAST(
+                  SYSDATETIMEOFFSET()
+                  AT TIME ZONE 'SA Pacific Standard Time'
+                  AS datetime2
+              )
+          )
+        """,
+        {
+            "id_usuario": id_usuario,
+            "id_agencia": id_agencia,
+        },
+    )
+
+    return fila is not None
+
+
+def jornada_abierta_de_usuario(
+    conn: Connection,
+    id_usuario: int,
+    bloquear: bool = True,
+) -> Fila | None:
+    if bloquear:
+        consulta = """
+            SELECT TOP (1) *
+            FROM Caja.JornadasCaja WITH (UPDLOCK, HOLDLOCK)
+            WHERE IdUsuario = :id_usuario
+              AND Estado = 'ABIERTA'
+            ORDER BY IdJornadaCaja DESC
+        """
+    else:
+        consulta = """
+            SELECT TOP (1) *
+            FROM Caja.JornadasCaja
+            WHERE IdUsuario = :id_usuario
+              AND Estado = 'ABIERTA'
+            ORDER BY IdJornadaCaja DESC
+        """
+
+    return _fila(
+        conn,
+        consulta,
+        {"id_usuario": id_usuario},
+    )
+
+
+def jornada_abierta_de_caja(
+    conn: Connection,
+    id_caja: int,
+) -> Fila | None:
+    return _fila(
+        conn,
+        """
+        SELECT TOP (1) *
+        FROM Caja.JornadasCaja WITH (UPDLOCK, HOLDLOCK)
+        WHERE IdCajaFisica = :id_caja
+          AND Estado = 'ABIERTA'
+        ORDER BY IdJornadaCaja DESC
+        """,
+        {"id_caja": id_caja},
+    )
+
+
+def insertar_jornada(
+    conn: Connection,
+    id_usuario: int,
+    id_caja: int,
+    id_agencia: str,
+    dinero_inicial: Any,
+    observacion: str | None,
+) -> int:
+    resultado = conn.execute(
+        text(
+            """
+            SET NOCOUNT ON;
+
+            DECLARE @ids TABLE (Id int);
+
+            INSERT INTO Caja.JornadasCaja (
+                IdUsuario,
+                IdCajaFisica,
+                IdAgencia,
+                FechaHoraApertura,
+                DineroInicial,
+                Estado,
+                Observacion
+            )
+            OUTPUT INSERTED.IdJornadaCaja INTO @ids
+            VALUES (
+                :id_usuario,
+                :id_caja,
+                :id_agencia,
+                CAST(
+                    SYSDATETIMEOFFSET()
+                    AT TIME ZONE 'SA Pacific Standard Time'
+                    AS datetime2
+                ),
+                :dinero_inicial,
+                'ABIERTA',
+                :observacion
+            );
+
+            SELECT Id FROM @ids;
+            """
+        ),
+        {
+            "id_usuario": id_usuario,
+            "id_caja": id_caja,
+            "id_agencia": id_agencia,
+            "dinero_inicial": dinero_inicial,
+            "observacion": observacion,
+        },
+    ).first()
+
+    if resultado is None:
+        raise RuntimeError("La BD no devolvió el id de la jornada")
+
+    return int(resultado[0])

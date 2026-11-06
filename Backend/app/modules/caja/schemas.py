@@ -153,3 +153,12 @@ class ReversoRequest(Entrada):
     """Motivo de cancelación de jornada o reverso."""
 
     motivo: Texto500
+
+
+# --- CAJ-03: apertura de jornada ----------
+
+
+class JornadaOpen(Entrada):
+    id_caja_fisica: IdInt
+    dinero_inicial: MontoNoNegativo
+    observacion: Texto500 | None = None
