@@ -6,6 +6,8 @@ Las operaciones de escritura deben ejecutarse en transacciones de BD.
 
 from collections.abc import Mapping
 from datetime import date, datetime, time, timedelta
+from decimal import ROUND_HALF_UP, Decimal
+from typing import Any
 
 from sqlalchemy import Connection
 
@@ -16,6 +18,7 @@ from app.modules.caja import repository as repo
 from app.modules.caja.repository import Fila
 from app.modules.caja.schemas import (
     CajaFisica,
+    CuadreCaja,
     Dotacion,
     Jornada,
     MovimientoCaja,
@@ -394,3 +397,78 @@ def listar_movimientos(
         page_size=page_size,
         total=total,
     )
+
+
+# --- CAJ-14: consultar cuadre ----------
+
+
+def decimal(valor: Any) -> Decimal:
+    return valor if isinstance(valor, Decimal) else Decimal(str(valor))
+
+
+CENTAVO = Decimal("0.01")
+
+
+def saldo_esperado(totales: Mapping[str, Any]) -> Decimal:
+    """Inicial + dotaciones + depósitos + pagos - retiros - devoluciones."""
+    esperado = (
+        decimal(totales["SaldoInicial"])
+        + decimal(totales["TotalDotaciones"])
+        + decimal(totales["TotalDepositos"])
+        + decimal(totales["TotalPagos"])
+        - decimal(totales["TotalRetiros"])
+        - decimal(totales["TotalDevolucionesBoveda"])
+    )
+    return esperado.quantize(CENTAVO, rounding=ROUND_HALF_UP)
+
+
+def estado_por_diferencia(diferencia: Decimal) -> str:
+    if diferencia == 0:
+        return "CUADRADO"
+    return "SOBRANTE" if diferencia > 0 else "FALTANTE"
+
+
+def _cuadre(fila: Fila) -> CuadreCaja:
+    return CuadreCaja(
+        id_cuadre_caja=fila["IdCuadreCaja"],
+        id_jornada_caja=fila["IdJornadaCaja"],
+        id_usuario=fila["IdUsuario"],
+        fecha_hora_cuadre=fila["FechaHoraCuadre"],
+        saldo_inicial=fila["SaldoInicial"],
+        total_dotaciones=fila["TotalDotaciones"],
+        total_depositos=fila["TotalDepositos"],
+        total_retiros=fila["TotalRetiros"],
+        total_pagos=fila["TotalPagos"],
+        total_devoluciones_boveda=fila["TotalDevolucionesBoveda"],
+        saldo_esperado=saldo_esperado(fila),
+        saldo_final_fisico=fila["SaldoFinalFisico"],
+        diferencia_dinero=fila["DiferenciaDinero"],
+        estado_cuadre=fila["EstadoCuadre"],
+        id_autorizado_por=fila["IdAutorizadoPor"],
+        id_fecha_contable=fila["IdFechaContable"],
+        observaciones=fila["Observaciones"],
+    )
+
+
+def cuadre_no_encontrado() -> Exception:
+    return problema(
+        404,
+        "CUADRE_NO_ENCONTRADO",
+        "La jornada no tiene cuadre.",
+    )
+
+
+def obtener_cuadre(
+    conn: Connection,
+    usuario: Usuario,
+    id_interno: int | None,
+    id_jornada: int,
+) -> CuadreCaja:
+    jornada_visible(conn, usuario, id_interno, id_jornada)
+
+    fila = repo.obtener_cuadre_de_jornada(conn, id_jornada)
+
+    if fila is None:
+        raise cuadre_no_encontrado()
+
+    return _cuadre(fila)

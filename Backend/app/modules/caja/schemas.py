@@ -121,3 +121,26 @@ class PageMovimientoCaja(CamelModel):
     page: int
     page_size: int
     total: int
+
+
+# --- CAJ-14: consultar cuadre ----------
+
+
+class CuadreCaja(CamelModel):
+    id_cuadre_caja: int
+    id_jornada_caja: int | None = None
+    id_usuario: int | None = None
+    fecha_hora_cuadre: FechaHoraEc | None = None
+    saldo_inicial: Money | None = None
+    total_dotaciones: Money | None = None
+    total_depositos: Money | None = None
+    total_retiros: Money | None = None
+    total_pagos: Money | None = None
+    total_devoluciones_boveda: Money | None = None
+    saldo_esperado: Money | None = None
+    saldo_final_fisico: Money | None = None
+    diferencia_dinero: Money | None = None
+    estado_cuadre: str
+    id_autorizado_por: int | None = None
+    id_fecha_contable: int | None = None
+    observaciones: str | None = None

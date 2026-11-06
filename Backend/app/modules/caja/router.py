@@ -25,6 +25,7 @@ from app.modules.caja import service
 from app.modules.caja.schemas import (
     INT32_MAX,
     CajaFisica,
+    CuadreCaja,
     Dotacion,
     Jornada,
     PageJornada,
@@ -238,3 +239,22 @@ def listar_movimientos(
         page_size,
         sort,
     )
+
+
+# --- CAJ-14: consultar cuadre ----------
+
+
+@router.get(
+    "/jornadas/{idJornada}/cuadre",
+    response_model=CuadreCaja,
+    operation_id="CAJ14",
+    dependencies=[Depends(require_roles("CAJERO", "SUPERVISOR", "CONTADOR"))],
+)
+def obtener_cuadre(
+    usuario: UsuarioActual,
+    _parametros: Annotated[None, Depends(solo_parametros())],
+    id_interno: IdInterno,
+    id_jornada: IdJornada,
+    conn: Conexion,
+) -> CuadreCaja:
+    return service.obtener_cuadre(conn, usuario, id_interno, id_jornada)
