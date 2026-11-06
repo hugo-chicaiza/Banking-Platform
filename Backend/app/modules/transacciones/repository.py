@@ -66,3 +66,39 @@ def listar_transacciones(
         {**parametros, "offset": offset, "limite": limite},
     ).mappings()
     return [dict(fila) for fila in filas], int(total)
+
+
+# --- TRX-02: detalle de transacción ----------
+
+
+def obtener_transaccion(
+    conn: Connection,
+    id_transaccion: int,
+    bloquear: bool = False,
+) -> Fila | None:
+    origen = (
+        """
+        FROM Transacciones.Transaccion t WITH (UPDLOCK, HOLDLOCK)
+        JOIN Cuentas.Cuenta c ON c.IdCuenta = t.IdCuenta
+        WHERE t.IdTransaccion = :id
+        """
+        if bloquear
+        else """
+        FROM Transacciones.Transaccion t
+        JOIN Cuentas.Cuenta c ON c.IdCuenta = t.IdCuenta
+        WHERE t.IdTransaccion = :id
+        """
+    )
+
+    consulta = "SELECT" + _COLUMNAS + origen
+
+    fila = (
+        conn.execute(
+            text(consulta),
+            {"id": id_transaccion},
+        )
+        .mappings()
+        .first()
+    )
+
+    return dict(fila) if fila is not None else None

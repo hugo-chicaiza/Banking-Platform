@@ -3,7 +3,7 @@
 from datetime import date
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Query, Response
+from fastapi import APIRouter, Depends, Path, Query, Response
 from sqlalchemy import Connection
 
 from app.core.api.errors import RESPUESTAS_ERROR, ProblemDetailsRoute, solo_parametros
@@ -11,7 +11,7 @@ from app.core.database.db import cooperativa
 from app.core.security.auth import Usuario, require_roles
 from app.modules.caja.schemas import INT32_MAX
 from app.modules.transacciones import service
-from app.modules.transacciones.schemas import PageTransaccion
+from app.modules.transacciones.schemas import PageTransaccion, Transaccion
 
 
 def _sin_cache(response: Response) -> None:
@@ -28,6 +28,11 @@ router = APIRouter(
 )
 
 Conexion = Annotated[Connection, Depends(cooperativa)]
+
+IdTransaccion = Annotated[
+    int,
+    Path(alias="idTransaccion", gt=0, le=9_223_372_036_854_775_807),
+]
 
 
 # TRX-01. Roles: SUPERVISOR (su agencia), AUDITOR, CONTADOR, ADMIN
@@ -86,4 +91,28 @@ def listar_transacciones(
         page,
         page_size,
         sort,
+    )
+
+
+# --- TRX-02: detalle de transacción ----------
+
+
+@router.get(
+    "/{idTransaccion}",
+    response_model=Transaccion,
+    operation_id="TRX02",
+)
+def obtener_transaccion(
+    usuario: Annotated[
+        Usuario,
+        Depends(require_roles("SUPERVISOR", "AUDITOR", "CONTADOR", "ADMIN")),
+    ],
+    _parametros: Annotated[None, Depends(solo_parametros())],
+    id_transaccion: IdTransaccion,
+    conn: Conexion,
+) -> Transaccion:
+    return service.obtener_transaccion(
+        conn,
+        usuario,
+        id_transaccion,
     )
