@@ -137,6 +137,7 @@ def validar_estado_pin(
 
     return estado_pin
 
+
 def validar_precondiciones_atm(
     conn: Connection,
     conn_seguridad: Connection,

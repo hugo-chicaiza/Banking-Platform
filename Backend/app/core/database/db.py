@@ -23,6 +23,7 @@ def cooperativa() -> Iterator[Connection]:
     with get_engine("cooperativa").connect() as conn:
         yield conn
 
+
 def seguridad() -> Iterator[Connection]:
     """Dependencia FastAPI: una conexión a SeguridadDB por request."""
     with get_engine("seguridad").connect() as conn:
