@@ -51,12 +51,12 @@ def listar_transacciones(
     columna = ORDEN[orden[0]]
     direccion = "DESC" if orden[1] == "desc" else "ASC"
     total = conn.execute(
-        text("SELECT COUNT_BIG(*)" + _ORIGEN + where),  # fijo  
+        text("SELECT COUNT_BIG(*)" + _ORIGEN + where),  # fijo
         parametros,
     ).scalar_one()
     filas = conn.execute(
         text(
-            "SELECT"  # fragmentos fijos de este módulo  
+            "SELECT"  # fragmentos fijos de este módulo
             + _COLUMNAS
             + _ORIGEN
             + where
