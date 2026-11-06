@@ -241,7 +241,6 @@ def test_rol_fuera_de_la_tarea_recibe_403(client, ruta, roles):
     assert _code(r) == "SIN_PERMISO"
 
 
-
 @pytest.mark.parametrize("ruta", list(ROLES_POR_RUTA), ids=" ".join)
 def test_roles_de_la_tarea_pasan_el_control(client, ruta):
     roles = ROLES_POR_RUTA[ruta]
@@ -257,7 +256,6 @@ def test_roles_de_la_tarea_pasan_el_control(client, ruta):
             return
 
     assert r.status_code not in {401, 403}
-
 
 
 def test_require_auth_entrega_el_usuario_de_la_sesion():
