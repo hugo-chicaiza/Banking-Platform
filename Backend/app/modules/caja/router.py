@@ -28,6 +28,7 @@ from app.modules.caja.schemas import (
     CajaFisica,
     CuadreCaja,
     Dotacion,
+    DotacionRequest,
     Jornada,
     JornadaOpen,
     PageJornada,
@@ -334,6 +335,34 @@ def abrir_jornada(
         conn,
         usuario,
         id_interno,
+        datos,
+        ip_cliente(request.scope),
+    )
+
+
+# --- CAJ-07: dotación ----------
+
+
+@router.post(
+    "/jornadas/{idJornada}/dotaciones",
+    response_model=Dotacion,
+    status_code=201,
+    operation_id="CAJ07",
+    dependencies=[Depends(require_roles("CAJERO", "SUPERVISOR"))],
+)
+def registrar_dotacion(
+    request: Request,
+    usuario: UsuarioActual,
+    id_interno: IdInterno,
+    id_jornada: IdJornada,
+    datos: DotacionRequest,
+    conn: Conexion,
+) -> Dotacion:
+    return service.registrar_dotacion(
+        conn,
+        usuario,
+        id_interno,
+        id_jornada,
         datos,
         ip_cliente(request.scope),
     )

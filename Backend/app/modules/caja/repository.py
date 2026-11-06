@@ -3,6 +3,8 @@ from typing import Any
 
 from sqlalchemy import Connection, text
 
+from app.core.database.procedimientos import ejecutar_con_salidas
+
 Fila = dict[str, Any]
 
 
@@ -539,3 +541,78 @@ def insertar_jornada(
         raise RuntimeError("La BD no devolvió el id de la jornada")
 
     return int(resultado[0])
+
+
+# --- CAJ-07: dotación ----------
+
+
+def id_fecha_contable(conn: Connection) -> int | None:
+    """Obtiene el identificador de la fecha contable vigente."""
+    valor = conn.execute(
+        text("SELECT Contabilidad.fn_IdFechaContable(GETDATE())")
+    ).scalar()
+
+    return int(valor) if valor is not None else None
+
+
+def registrar_dotacion(
+    conn: Connection,
+    id_jornada: int,
+    id_boveda: int,
+    autorizado_por: int,
+    tipo: str,
+    desglose_json: str,
+    observacion: str | None,
+    id_fecha_contable: int,
+) -> Fila:
+    return ejecutar_con_salidas(
+        conn,
+        """
+        SET NOCOUNT ON;
+
+        DECLARE @IdDotacionCaja int,
+                @IdMovimientoBoveda bigint,
+                @BovedaBajoMinimo bit;
+
+        EXEC Caja.usp_RegistrarDotacionCaja
+            @IdJornadaCaja = ?,
+            @IdBoveda = ?,
+            @AutorizadoPor = ?,
+            @TipoDotacion = ?,
+            @DesgloseJson = ?,
+            @Observacion = ?,
+            @IdFechaContable = ?,
+            @IdDotacionCaja = @IdDotacionCaja OUTPUT,
+            @IdMovimientoBoveda = @IdMovimientoBoveda OUTPUT,
+            @BovedaBajoMinimo = @BovedaBajoMinimo OUTPUT;
+
+        SELECT
+            @IdDotacionCaja AS IdDotacionCaja,
+            @IdMovimientoBoveda AS IdMovimientoBoveda,
+            @BovedaBajoMinimo AS BovedaBajoMinimo;
+        """,
+        (
+            id_jornada,
+            id_boveda,
+            autorizado_por,
+            tipo,
+            desglose_json,
+            observacion,
+            id_fecha_contable,
+        ),
+    )
+
+
+def obtener_dotacion(
+    conn: Connection,
+    id_dotacion: int,
+) -> Fila | None:
+    return _fila(
+        conn,
+        """
+        SELECT *
+        FROM Caja.DotacionesCaja
+        WHERE IdDotacionCaja = :id
+        """,
+        {"id": id_dotacion},
+    )

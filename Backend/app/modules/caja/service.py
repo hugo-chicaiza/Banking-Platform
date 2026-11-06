@@ -4,6 +4,7 @@ Las consultas respetan los permisos de WorkOS y el aislamiento por agencia.
 Las operaciones de escritura deben ejecutarse en transacciones de BD.
 """
 
+import json
 from collections.abc import Mapping
 from datetime import date, datetime, time, timedelta
 from decimal import ROUND_HALF_UP, Decimal
@@ -19,7 +20,9 @@ from app.modules.caja.repository import Fila
 from app.modules.caja.schemas import (
     CajaFisica,
     CuadreCaja,
+    Desglose,
     Dotacion,
+    DotacionRequest,
     Jornada,
     JornadaOpen,
     MovimientoCaja,
@@ -684,3 +687,118 @@ def jornada_actual(
         )
 
     return _jornada(fila)
+
+
+# --- CAJ-07: dotación ----------
+
+
+def desglose_json(desglose: list[Desglose]) -> str:
+    return json.dumps(
+        [
+            {
+                "IdDenominacion": d.id_denominacion,
+                "Cantidad": d.cantidad,
+            }
+            for d in desglose
+        ]
+    )
+
+
+def fecha_contable(conn: Connection) -> int:
+    id_fecha = repo.id_fecha_contable(conn)
+
+    if id_fecha is None:
+        raise problema(
+            500,
+            "CALENDARIO_SIN_FECHA",
+            "El calendario contable no tiene fechas cargadas para este período",
+        )
+
+    return id_fecha
+
+
+def validar_custodia(
+    modo: str,
+    actor: int,
+    autorizado_por: int,
+    id_cajero: int,
+) -> None:
+    if autorizado_por == id_cajero:
+        raise problema(
+            409,
+            "DOBLE_CUSTODIA_VIOLADA",
+            "Quien autoriza debe ser distinto del cajero.",
+        )
+
+    if modo == "SUPERVISOR" and autorizado_por != actor:
+        raise problema(
+            422,
+            "AUTORIZADOR_NO_COINCIDE",
+            "autorizadoPor debe ser el usuario que autoriza.",
+        )
+
+
+def registrar_dotacion(
+    conn: Connection,
+    usuario: Usuario,
+    id_interno: int | None,
+    id_jornada: int,
+    datos: DotacionRequest,
+    ip: str,
+) -> Dotacion:
+    with auditar(
+        "REGISTRAR_DOTACION",
+        "Caja.DotacionesCaja",
+        usuario,
+        ip,
+        f"jornada={id_jornada} tipo={datos.tipo_dotacion} boveda={datos.id_boveda}",
+    ) as registro:
+        actor = exigir_id_interno(id_interno)
+
+        with conn.begin():
+            jornada = jornada_bloqueada(conn, id_jornada)
+
+            modo = verificar_alcance(
+                usuario,
+                actor,
+                jornada,
+                ("CAJERO", "SUPERVISOR"),
+            )
+
+            if jornada["Estado"] != "ABIERTA":
+                raise problema(
+                    409,
+                    "JORNADA_NO_ABIERTA",
+                    "La jornada no está ABIERTA.",
+                )
+
+            validar_custodia(
+                modo,
+                actor,
+                datos.autorizado_por,
+                jornada["IdUsuario"],
+            )
+
+            salida = repo.registrar_dotacion(
+                conn,
+                id_jornada,
+                datos.id_boveda,
+                datos.autorizado_por,
+                datos.tipo_dotacion,
+                desglose_json(datos.desglose),
+                datos.observacion,
+                fecha_contable(conn),
+            )
+
+            id_dotacion = int(salida["IdDotacionCaja"])
+            registro.id_registro = str(id_dotacion)
+
+            fila = repo.obtener_dotacion(conn, id_dotacion)
+
+            if fila is None:
+                raise RuntimeError("La dotación no se encontró tras registrarla")
+
+            return _dotacion(
+                fila,
+                bool(salida["BovedaBajoMinimo"]),
+            )
