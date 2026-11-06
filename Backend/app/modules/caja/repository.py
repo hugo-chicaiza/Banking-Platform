@@ -306,3 +306,79 @@ def obtener_cuadre_de_jornada(
 
     consulta = consulta_bloqueada if bloquear else consulta_normal
     return _fila(conn, consulta, {"id": id_jornada})
+
+
+# --- CAJ-06: cancelación de jornada ----------
+
+
+def jornada_tiene_actividad(
+    conn: Connection,
+    id_jornada: int,
+) -> bool:
+    """Comprueba dotaciones, movimientos, transacciones y cuadre."""
+    fila = _fila(
+        conn,
+        """
+        SELECT CASE WHEN
+            EXISTS (
+                SELECT 1
+                FROM Caja.DotacionesCaja
+                WHERE IdJornadaCaja = :id
+            )
+            OR EXISTS (
+                SELECT 1
+                FROM Caja.MovimientosCaja
+                WHERE IdJornadaCaja = :id
+            )
+            OR EXISTS (
+                SELECT 1
+                FROM Caja.CuadreCaja
+                WHERE IdJornadaCaja = :id
+            )
+            OR EXISTS (
+                SELECT 1
+                FROM Caja.DevolucionesCaja
+                WHERE IdJornadaCaja = :id
+            )
+            OR EXISTS (
+                SELECT 1
+                FROM Transacciones.Transaccion
+                WHERE IdJornadaCaja = :id
+            )
+        THEN 1 ELSE 0 END AS Actividad
+        """,
+        {"id": id_jornada},
+    )
+
+    return bool(fila and fila["Actividad"])
+
+
+def cancelar_jornada(
+    conn: Connection,
+    id_jornada: int,
+    motivo: str,
+) -> bool:
+    resultado = conn.execute(
+        text(
+            """
+            UPDATE Caja.JornadasCaja
+            SET
+                Estado = 'CANCELADA',
+                FechaHoraCierre = CAST(
+                    SYSDATETIMEOFFSET()
+                    AT TIME ZONE 'SA Pacific Standard Time'
+                    AS datetime2
+                ),
+                Observacion = :motivo
+            WHERE
+                IdJornadaCaja = :id
+                AND Estado = 'ABIERTA'
+            """
+        ),
+        {
+            "id": id_jornada,
+            "motivo": motivo,
+        },
+    )
+
+    return resultado.rowcount == 1

@@ -144,3 +144,12 @@ class CuadreCaja(CamelModel):
     id_autorizado_por: int | None = None
     id_fecha_contable: int | None = None
     observaciones: str | None = None
+
+
+# --- CAJ-06: cancelación de jornada ----------
+
+
+class ReversoRequest(Entrada):
+    """Motivo de cancelación de jornada o reverso."""
+
+    motivo: Texto500

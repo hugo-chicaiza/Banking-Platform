@@ -9,10 +9,11 @@ si el usuario de WorkOS todavía no está vinculado.
 from datetime import date
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, Path, Query, Response
+from fastapi import APIRouter, Depends, Path, Query, Request, Response
 from sqlalchemy import Connection
 
 from app.core.api.errors import RESPUESTAS_ERROR, ProblemDetailsRoute, solo_parametros
+from app.core.api.middleware import ip_cliente
 from app.core.database.db import cooperativa
 from app.core.security.auth import (
     Usuario,
@@ -30,6 +31,7 @@ from app.modules.caja.schemas import (
     Jornada,
     PageJornada,
     PageMovimientoCaja,
+    ReversoRequest,
 )
 
 
@@ -258,3 +260,29 @@ def obtener_cuadre(
     conn: Conexion,
 ) -> CuadreCaja:
     return service.obtener_cuadre(conn, usuario, id_interno, id_jornada)
+
+
+# --- CAJ-06: cancelación de jornada ----------
+
+
+@router.post(
+    "/jornadas/{idJornada}/cancelacion",
+    response_model=Jornada,
+    operation_id="CAJ06",
+    dependencies=[Depends(require_roles("SUPERVISOR"))],
+)
+def cancelar_jornada(
+    request: Request,
+    usuario: UsuarioActual,
+    id_jornada: IdJornada,
+    datos: ReversoRequest,
+    conn: Conexion,
+) -> Jornada:
+    """Cancela una jornada abierta y sin actividad."""
+    return service.cancelar_jornada(
+        conn,
+        usuario,
+        id_jornada,
+        datos.motivo,
+        ip_cliente(request.scope),
+    )
