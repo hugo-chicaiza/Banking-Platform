@@ -7,17 +7,19 @@ no valida nada). Las rutas que escriben pasan además por el control CSRF de
 app/core/security/operador.py).
 """
 
-from typing import Annotated
+from datetime import date
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, Query, Response
 from sqlalchemy import Connection
 
 from app.core.api.errors import RESPUESTAS_ERROR, ProblemDetailsRoute, solo_parametros
 from app.core.database.db import cooperativa
+from app.core.security.auth import require_roles
 
 # from app.core.security.auth import Usuario, require_roles
 from app.modules.caja import service
-from app.modules.caja.schemas import CajaFisica
+from app.modules.caja.schemas import CajaFisica, PageJornada
 
 
 def _sin_cache(response: Response) -> None:
@@ -54,3 +56,59 @@ def listar_cajas_fisicas(
 ) -> list[CajaFisica]:
     """Lista las cajas físicas con filtros opcionales."""
     return service.listar_cajas_fisicas(conn, id_agencia, activa)
+
+
+# --- CAJ-02: GET /api/v1/caja/jornadas -------------------------------
+
+
+@router.get(
+    "/jornadas",
+    response_model=PageJornada,
+    operation_id="CAJ02",
+    dependencies=[Depends(require_roles("SUPERVISOR", "CONTADOR", "AUDITOR"))],
+)
+def consultar_jornadas(
+    _parametros: Annotated[
+        None,
+        Depends(
+            solo_parametros(
+                "idAgencia",
+                "idUsuario",
+                "estado",
+                "desde",
+                "hasta",
+                "page",
+                "pageSize",
+                "sort",
+            )
+        ),
+    ],
+    conn: Conexion,
+    id_agencia: CodigoAgencia = None,
+    id_usuario: Annotated[int | None, Query(alias="idUsuario", ge=1)] = None,
+    estado: Literal["ABIERTA", "CERRADA", "CANCELADA"] | None = None,
+    desde: date | None = None,
+    hasta: date | None = None,
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(alias="pageSize", ge=1, le=100)] = 20,
+    sort: str = "fechaHoraApertura,desc",
+) -> PageJornada:
+    """Consulta jornadas con filtros y paginación.
+
+    TODO W4:
+    - Incorporar require_roles(SUPERVISOR, CONTADOR, AUDITOR).
+    - Validar acceso a la agencia solicitada.
+    - Activar pruebas de autenticación y autorización.
+    """
+
+    return service.listar_jornadas(
+        conn,
+        id_agencia=id_agencia,
+        id_usuario=id_usuario,
+        estado=estado,
+        desde=desde,
+        hasta=hasta,
+        page=page,
+        page_size=page_size,
+        sort=sort,
+    )
