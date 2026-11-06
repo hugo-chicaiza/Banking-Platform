@@ -152,3 +152,44 @@ def listar_jornadas(
     filas = _filas(conn, sql, parametros_pagina)
 
     return filas, int(total)
+
+
+# --- CAJ-05: detalle de jornada ---
+
+_COLUMNAS_JORNADA = """
+IdJornadaCaja, IdUsuario, IdCajaFisica, IdAgencia, FechaHoraApertura,
+FechaHoraCierre, DineroInicial, Estado, Observacion
+"""
+
+
+def obtener_jornada(
+    conn: Connection,
+    id_jornada: int,
+    bloquear: bool = False,
+) -> Fila | None:
+    if bloquear:
+        return _fila(
+            conn,
+            """
+            SELECT
+                IdJornadaCaja, IdUsuario, IdCajaFisica, IdAgencia,
+                FechaHoraApertura, FechaHoraCierre, DineroInicial,
+                Estado, Observacion
+            FROM Caja.JornadasCaja WITH (UPDLOCK, HOLDLOCK)
+            WHERE IdJornadaCaja = :id
+            """,
+            {"id": id_jornada},
+        )
+
+    return _fila(
+        conn,
+        """
+        SELECT
+            IdJornadaCaja, IdUsuario, IdCajaFisica, IdAgencia,
+            FechaHoraApertura, FechaHoraCierre, DineroInicial,
+            Estado, Observacion
+        FROM Caja.JornadasCaja
+        WHERE IdJornadaCaja = :id
+        """,
+        {"id": id_jornada},
+    )

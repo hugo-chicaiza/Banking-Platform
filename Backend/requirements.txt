@@ -1133,3 +1133,5 @@ workos==5.46.0 \
     --hash=sha256:b83704d4d6fcafa57439e232f62944b619aabc1c632b0ced9f71501298be0c78 \
     --hash=sha256:db6ce0fa6924bfd7a790c2bdae97cf7be8a970eaaef04156ae554157d24376f2
     # via -r requirements.in
+
+tzdata==2026.6 --hash=sha256:0a10eec6e13ef16b627fabed9a5f2ba61a62b1c67f327305f4e7e412a70b4aec

@@ -9,14 +9,20 @@ si el usuario de WorkOS todavía no está vinculado.
 from datetime import date
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, Query, Response
+from fastapi import APIRouter, Depends, Path, Query, Response
 from sqlalchemy import Connection
 
 from app.core.api.errors import RESPUESTAS_ERROR, ProblemDetailsRoute, solo_parametros
 from app.core.database.db import cooperativa
-from app.core.security.auth import Usuario, require_auth, require_roles
+from app.core.security.auth import (
+    Usuario,
+    UsuarioActual,
+    require_auth,
+    require_roles,
+)
+from app.core.security.operador import IdInterno
 from app.modules.caja import service
-from app.modules.caja.schemas import CajaFisica, PageJornada
+from app.modules.caja.schemas import INT32_MAX, CajaFisica, Jornada, PageJornada
 
 
 def _sin_cache(response: Response) -> None:
@@ -144,3 +150,25 @@ def consultar_jornadas(
         page_size=page_size,
         sort=sort,
     )
+
+
+# --- CAJ-05: detalle de jornada ---
+
+IdJornada = Annotated[int, Path(alias="idJornada", gt=0, le=INT32_MAX)]
+
+
+@router.get(
+    "/jornadas/{idJornada}",
+    response_model=Jornada,
+    operation_id="CAJ05",
+    dependencies=[Depends(require_roles("CAJERO", "SUPERVISOR", "CONTADOR"))],
+)
+def obtener_jornada(
+    usuario: UsuarioActual,
+    _parametros: Annotated[None, Depends(solo_parametros())],
+    id_interno: IdInterno,
+    id_jornada: IdJornada,
+    conn: Conexion,
+) -> Jornada:
+    """Consulta el detalle de una jornada autorizada."""
+    return service.obtener_jornada(conn, usuario, id_interno, id_jornada)

@@ -10,7 +10,7 @@ from sqlalchemy import Connection
 
 from app.core.api.errors import problema
 from app.core.security.auth import Usuario
-from app.core.security.operador import exigir_agencia
+from app.core.security.operador import exigir_agencia, exigir_id_interno
 from app.modules.caja import repository as repo
 from app.modules.caja.repository import Fila
 from app.modules.caja.schemas import CajaFisica, Jornada, PageJornada
@@ -190,3 +190,78 @@ def listar_jornadas(
         page_size=page_size,
         total=total,
     )
+
+
+# --- CAJ-05: detalle de jornada ---
+
+
+def jornada_no_encontrada() -> Exception:
+    return problema(
+        404,
+        "JORNADA_NO_ENCONTRADA",
+        "La jornada no existe.",
+    )
+
+
+def verificar_alcance(
+    usuario: Usuario,
+    id_interno: int | None,
+    jornada: Fila,
+    permitidos: tuple[str, ...],
+) -> str:
+    """Comprueba acceso global, por agencia o por propiedad de jornada."""
+
+    roles = set(usuario.roles) & set(permitidos)
+
+    if roles & ROLES_GLOBALES:
+        return "GLOBAL"
+
+    if "SUPERVISOR" in roles:
+        if jornada["IdAgencia"] == exigir_agencia(usuario):
+            return "SUPERVISOR"
+        raise jornada_no_encontrada()
+
+    if "CAJERO" in roles:
+        if jornada["IdUsuario"] == exigir_id_interno(id_interno):
+            return "CAJERO"
+        raise jornada_no_encontrada()
+
+    raise problema(
+        403,
+        "SIN_PERMISO",
+        "No tiene permiso para esta operación.",
+    )
+
+
+ROLES_CONSULTA_JORNADA = ("CAJERO", "SUPERVISOR", "CONTADOR")
+
+
+def jornada_visible(
+    conn: Connection,
+    usuario: Usuario,
+    id_interno: int | None,
+    id_jornada: int,
+    permitidos: tuple[str, ...] = ROLES_CONSULTA_JORNADA,
+) -> Fila:
+    fila = repo.obtener_jornada(conn, id_jornada)
+
+    if fila is None:
+        raise jornada_no_encontrada()
+
+    verificar_alcance(
+        usuario,
+        id_interno,
+        fila,
+        permitidos,
+    )
+
+    return fila
+
+
+def obtener_jornada(
+    conn: Connection,
+    usuario: Usuario,
+    id_interno: int | None,
+    id_jornada: int,
+) -> Jornada:
+    return _jornada(jornada_visible(conn, usuario, id_interno, id_jornada))
