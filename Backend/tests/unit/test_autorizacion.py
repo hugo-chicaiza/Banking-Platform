@@ -166,6 +166,8 @@ ROLES_POR_RUTA: dict[tuple[str, str], tuple[str, ...]] = {
     ("POST", "/api/v1/caja/jornadas/{idJornada}/cancelacion"): ("SUPERVISOR",),
     # CAJ-03
     ("POST", "/api/v1/caja/jornadas"): ("CAJERO",),
+    # CAJ - 04
+    ("GET", "/api/v1/caja/jornadas/actual"): ("CAJERO",),
 }
 
 
@@ -242,10 +244,14 @@ def test_rol_fuera_de_la_tarea_recibe_403(client, ruta, roles):
 @pytest.mark.parametrize("ruta", list(ROLES_POR_RUTA), ids=" ".join)
 def test_roles_de_la_tarea_pasan_el_control(client, ruta):
     roles = ROLES_POR_RUTA[ruta]
-    # AUTH: un usuario sin ningún rol del sistema también entra
     simular_sesion(app, usuario_con_roles(*roles))
 
     r = _llamar(client, *ruta)
+
+    # D-01: CAJ-04 requiere vinculación con un usuario interno.
+    if ruta == ("GET", "/api/v1/caja/jornadas/actual") and r.status_code == 403:
+        assert r.json().get("code") == "USUARIO_INTERNO_NO_VINCULADO"
+        return
 
     assert r.status_code not in {401, 403}
 

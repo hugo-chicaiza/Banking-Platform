@@ -661,3 +661,26 @@ def abrir_jornada(
                 conn,
                 id_jornada,
             )
+
+
+# --- CAJ-04: jornada actual del cajero ----------
+
+
+def jornada_actual(
+    conn: Connection,
+    id_interno: int | None,
+) -> Jornada:
+    fila = repo.jornada_abierta_de_usuario(
+        conn,
+        exigir_id_interno(id_interno),
+        bloquear=False,
+    )
+
+    if fila is None:
+        raise problema(
+            404,
+            "SIN_JORNADA_ABIERTA",
+            "No tiene una jornada abierta.",
+        )
+
+    return _jornada(fila)
