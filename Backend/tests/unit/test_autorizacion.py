@@ -148,6 +148,13 @@ ROLES_POR_RUTA: dict[tuple[str, str], tuple[str, ...]] = {
         "SUPERVISOR",
         "CONTADOR",
     ),
+    # TRX - 01
+    ("GET", "/api/v1/transacciones"): (
+        "SUPERVISOR",
+        "AUDITOR",
+        "CONTADOR",
+        "ADMIN",
+    ),
 }
 
 
