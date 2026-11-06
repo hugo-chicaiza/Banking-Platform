@@ -84,3 +84,17 @@ class Entrada(CamelModel):
         validate_by_name=True,
         extra="forbid",
     )
+
+
+# --- CAJ-08: dotaciones de la jornada ----------
+
+
+class Dotacion(CamelModel):
+    id_dotacion_caja: int
+    id_jornada_caja: int | None = None
+    id_boveda: int | None = None
+    tipo_dotacion: str | None = None
+    monto: Money | None = None
+    id_movimiento_boveda: int | None = None
+    boveda_bajo_minimo: bool | None = None
+    estado: str | None = None

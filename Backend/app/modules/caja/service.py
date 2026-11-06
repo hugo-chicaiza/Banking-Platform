@@ -13,7 +13,7 @@ from app.core.security.auth import Usuario
 from app.core.security.operador import exigir_agencia, exigir_id_interno
 from app.modules.caja import repository as repo
 from app.modules.caja.repository import Fila
-from app.modules.caja.schemas import CajaFisica, Jornada, PageJornada
+from app.modules.caja.schemas import CajaFisica, Dotacion, Jornada, PageJornada
 
 ROLES_GLOBALES = frozenset({"CONTADOR", "AUDITOR", "ADMIN"})
 
@@ -265,3 +265,29 @@ def obtener_jornada(
     id_jornada: int,
 ) -> Jornada:
     return _jornada(jornada_visible(conn, usuario, id_interno, id_jornada))
+
+
+# --- CAJ-08: dotaciones de la jornada ----------
+
+
+def _dotacion(fila: Fila, bajo_minimo: bool | None = None) -> Dotacion:
+    return Dotacion(
+        id_dotacion_caja=fila["IdDotacionCaja"],
+        id_jornada_caja=fila["IdJornadaCaja"],
+        id_boveda=fila["IdBoveda"],
+        tipo_dotacion=fila["TipoDotacion"],
+        monto=fila["Monto"],
+        id_movimiento_boveda=fila["IdMovimientoBoveda"],
+        boveda_bajo_minimo=bajo_minimo,
+        estado=fila["Estado"],
+    )
+
+
+def listar_dotaciones(
+    conn: Connection,
+    usuario: Usuario,
+    id_interno: int | None,
+    id_jornada: int,
+) -> list[Dotacion]:
+    jornada_visible(conn, usuario, id_interno, id_jornada)
+    return [_dotacion(fila) for fila in repo.listar_dotaciones(conn, id_jornada)]
