@@ -23,6 +23,8 @@ from app.modules.caja.schemas import (
     CuadreCaja,
     CuadreCajaCreate,
     Desglose,
+    Devolucion,
+    DevolucionRequest,
     Dotacion,
     DotacionRequest,
     Jornada,
@@ -980,4 +982,116 @@ def registrar_conteo(
             return _recargar_cuadre(
                 conn,
                 cuadre["IdCuadreCaja"],
+            )
+
+
+# --- CAJ-15: devolución a bóveda ----------
+
+
+def registrar_devolucion(
+    conn: Connection,
+    usuario: Usuario,
+    id_interno: int | None,
+    id_jornada: int,
+    datos: DevolucionRequest,
+    ip: str,
+) -> Devolucion:
+    """Registra una devolución de efectivo a bóveda."""
+    with auditar(
+        "REGISTRAR_DEVOLUCION",
+        "Caja.DevolucionesCaja",
+        usuario,
+        ip,
+        f"jornada={id_jornada} cuadre={datos.id_cuadre_caja}"
+        f" boveda={datos.id_boveda_destino}",
+    ) as registro:
+        actor = exigir_id_interno(id_interno)
+
+        with conn.begin():
+            jornada = jornada_bloqueada(conn, id_jornada)
+
+            modo = verificar_alcance(
+                usuario,
+                actor,
+                jornada,
+                ("CAJERO", "SUPERVISOR"),
+            )
+
+            if jornada["Estado"] == "CANCELADA":
+                raise problema(
+                    409,
+                    "JORNADA_CANCELADA",
+                    "La jornada está CANCELADA.",
+                )
+
+            if jornada["Estado"] != "ABIERTA":
+                raise problema(
+                    409,
+                    "JORNADA_NO_ABIERTA",
+                    "La jornada no está ABIERTA.",
+                )
+
+            cuadre = repo.obtener_cuadre_de_jornada(
+                conn,
+                id_jornada,
+                bloquear=True,
+            )
+
+            if cuadre is None:
+                raise problema(
+                    409,
+                    "CUADRE_NO_GENERADO",
+                    "La jornada aún no tiene cuadre.",
+                )
+
+            if cuadre["IdCuadreCaja"] != datos.id_cuadre_caja:
+                raise problema(
+                    422,
+                    "CUADRE_NO_CORRESPONDE",
+                    "El cuadre no pertenece a la jornada.",
+                )
+
+            if cuadre["IdAutorizadoPor"] is not None:
+                raise problema(
+                    409,
+                    "CUADRE_YA_CERRADO",
+                    "El cuadre ya fue cerrado.",
+                )
+
+            validar_custodia(
+                modo,
+                actor,
+                datos.autorizado_por,
+                jornada["IdUsuario"],
+            )
+
+            salida = repo.registrar_devolucion(
+                conn,
+                id_jornada,
+                datos.id_cuadre_caja,
+                datos.id_boveda_destino,
+                datos.autorizado_por,
+                desglose_json(datos.desglose),
+                datos.observacion,
+            )
+
+            id_devolucion = int(salida["IdDevolucionCaja"])
+            registro.id_registro = str(id_devolucion)
+
+            fila = repo.obtener_devolucion(
+                conn,
+                id_devolucion,
+            )
+
+            if fila is None:
+                raise RuntimeError("La devolución no se encontró tras registrarla")
+
+            return Devolucion(
+                id_devolucion_caja=fila["IdDevolucionCaja"],
+                id_jornada_caja=fila["IdJornadaCaja"],
+                id_cuadre_caja=fila["IdCuadreCaja"],
+                id_boveda_destino=fila["IdBovedaDestino"],
+                monto=fila["Monto"],
+                id_movimiento_boveda=fila["IdMovimientoBoveda"],
+                supera_limite_maximo=bool(salida["SuperaLimiteMaximo"]),
             )

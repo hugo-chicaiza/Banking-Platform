@@ -66,6 +66,16 @@ _DB_ERRORES: dict[int, tuple[int, str, str]] = {
     51011: (404, "DB_51011", "La bóveda no existe."),
     51012: (409, "DB_51012", "La bóveda no está activa."),
     51013: (409, "DB_51013", "La bóveda es de otra agencia."),
+    # CAJ-15: Caja.usp_RegistrarDevolucionCaja
+    51104: (404, "DB_51104", "La jornada no existe."),
+    51105: (409, "DB_51105", "La jornada está CANCELADA."),
+    51106: (409, "DB_51106", "Quien recibe debe ser distinto del cajero."),
+    51107: (409, "DB_51107", "El cuadre no pertenece a la jornada."),
+    51108: (409, "DB_51108", "La bóveda de destino no es válida."),
+    51109: (409, "DB_51109", "La bóveda de destino no está activa."),
+    51110: (409, "DB_51110", "La bóveda de destino es de otra agencia."),
+    51111: (409, "DB_51111", "El cuadre no tiene conteo físico."),
+    51113: (409, "DB_51113", "El cuadre ya tiene devolución."),
 }
 
 _ESQUEMA_PROBLEMA: dict[str, Any] = {

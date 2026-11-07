@@ -835,3 +835,76 @@ def registrar_conteo(
     )
 
     return resultado.rowcount == 1
+
+
+# --- CAJ-15: devolución a bóveda ----------
+
+
+def registrar_devolucion(
+    conn: Connection,
+    id_jornada: int,
+    id_cuadre: int,
+    id_boveda: int,
+    autorizado_por: int,
+    desglose_json: str,
+    observacion: str | None,
+) -> Fila:
+    """Ejecuta Caja.usp_RegistrarDevolucionCaja con parámetros de salida."""
+    return ejecutar_con_salidas(
+        conn,
+        """
+        SET NOCOUNT ON;
+
+        DECLARE
+            @IdDevolucionCaja int,
+            @IdMovimientoBoveda bigint,
+            @SuperaLimiteMaximo bit;
+
+        EXEC Caja.usp_RegistrarDevolucionCaja
+            @IdJornadaCaja = ?,
+            @IdCuadreCaja = ?,
+            @IdBovedaDestino = ?,
+            @AutorizadoPor = ?,
+            @DesgloseJson = ?,
+            @Observacion = ?,
+            @IdDevolucionCaja = @IdDevolucionCaja OUTPUT,
+            @IdMovimientoBoveda = @IdMovimientoBoveda OUTPUT,
+            @SuperaLimiteMaximo = @SuperaLimiteMaximo OUTPUT;
+
+        SELECT
+            @IdDevolucionCaja AS IdDevolucionCaja,
+            @IdMovimientoBoveda AS IdMovimientoBoveda,
+            @SuperaLimiteMaximo AS SuperaLimiteMaximo;
+        """,
+        (
+            id_jornada,
+            id_cuadre,
+            id_boveda,
+            autorizado_por,
+            desglose_json,
+            observacion,
+        ),
+    )
+
+
+def obtener_devolucion(
+    conn: Connection,
+    id_devolucion: int,
+) -> Fila | None:
+    """Consulta una devolución registrada."""
+    return _fila(
+        conn,
+        """
+        SELECT
+            IdDevolucionCaja,
+            IdJornadaCaja,
+            IdCuadreCaja,
+            IdBovedaDestino,
+            Monto,
+            IdMovimientoBoveda,
+            Estado
+        FROM Caja.DevolucionesCaja
+        WHERE IdDevolucionCaja = :id
+        """,
+        {"id": id_devolucion},
+    )
