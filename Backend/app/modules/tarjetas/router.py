@@ -14,6 +14,7 @@ from app.core.api.errors import (
     problema,
     solo_parametros,
 )
+from app.core.config.settings import get_settings
 from app.core.database.db import cooperativa, get_engine
 from app.core.security.auth import UsuarioAuditoria, require_auth, require_roles
 from app.modules.tarjetas import service
@@ -21,10 +22,14 @@ from app.modules.tarjetas.schemas import (
     MAX_INT,
     MAX_PAGE_SIZE,
     MAX_PAGINA,
+    PATRON_PIN_BLOCK,
+    PATRON_REFERENCIA_CLAVE,
     EstadoTarjeta,
     PageTarjeta,
     PageTarjetaHistorial,
     PinAsignar,
+    PinBlockPrueba,
+    PinBlockPruebaEntrada,
     Tarjeta,
     TarjetaCreate,
     TarjetaEstadoUpdate,
@@ -57,14 +62,13 @@ Sort = Annotated[
 
 
 def seguridad() -> Iterator[Connection]:
-    """Conexión a SeguridadDB, donde está el hash del PIN."""
+    """Conexión a SeguridadDB: PIN Offset y repositorio de PAN ficticios."""
     with get_engine("seguridad").connect() as conn:
         yield conn
 
 
-async def _leer_pin(request: Request) -> SecretStr:
-    """Lee el body a mano: el error de Pydantic devuelve el valor recibido, aquí el PIN."""
-    error = problema(400, "PIN_INVALIDO", "El PIN debe tener 4 dígitos.")
+async def _leer_json(request: Request, error: Exception) -> dict[str, Any]:
+    """Lee el body a mano, con tope de tamaño. Nunca repite lo recibido."""
     contenido = bytearray()
     async for parte in request.stream():
         contenido += parte
@@ -74,12 +78,56 @@ async def _leer_pin(request: Request) -> SecretStr:
         datos = json.loads(contenido)
     except ValueError:
         raise error from None
-    if not isinstance(datos, dict) or set(datos) != {"pin"}:
+    if not isinstance(datos, dict):
         raise error
-    pin = datos["pin"]
-    if not isinstance(pin, str) or not re.fullmatch(r"[0-9]{4}", pin):
+    return datos
+
+
+async def _leer_pin_block(request: Request) -> tuple[SecretStr, str]:
+    """TAR-05. El PIN Block no va a logs ni errores: un error de Pydantic lo
+    devolvería en `input`, por eso no se valida con PinAsignar.
+    """
+    datos = await _leer_json(
+        request,
+        problema(
+            400,
+            "DATOS_INVALIDOS",
+            "El body debe tener encryptedPinBlock y keyReference.",
+        ),
+    )
+    if set(datos) != {"encryptedPinBlock", "keyReference"}:
+        raise problema(
+            400,
+            "DATOS_INVALIDOS",
+            "El body debe tener encryptedPinBlock y keyReference.",
+        )
+    bloque, referencia = datos["encryptedPinBlock"], datos["keyReference"]
+    if not isinstance(bloque, str) or not re.fullmatch(PATRON_PIN_BLOCK, bloque):
+        raise problema(422, "PIN_BLOCK_INVALIDO", "El PIN Block no es válido.")
+    if not isinstance(referencia, str) or not re.fullmatch(
+        PATRON_REFERENCIA_CLAVE, referencia
+    ):
+        raise problema(
+            422, "CLAVE_NO_AUTORIZADA", "La referencia de clave no está autorizada."
+        )
+    return SecretStr(bloque.upper()), referencia
+
+
+async def _leer_pin_prueba(request: Request) -> tuple[int, SecretStr]:
+    """PIN pad simulado: lee {idTarjeta, pin} sin repetir el PIN en los errores."""
+    error = problema(400, "PIN_INVALIDO", "Envíe idTarjeta y un PIN de 4 dígitos.")
+    datos = await _leer_json(request, error)
+    if set(datos) != {"idTarjeta", "pin"}:
         raise error
-    return SecretStr(pin)
+    id_tarjeta, pin = datos["idTarjeta"], datos["pin"]
+    if (
+        type(id_tarjeta) is not int
+        or not 0 < id_tarjeta <= MAX_INT
+        or not isinstance(pin, str)
+        or not re.fullmatch(r"[0-9]{4}", pin)
+    ):
+        raise error
+    return id_tarjeta, SecretStr(pin)
 
 
 def _ip(request: Request) -> str | None:
@@ -96,10 +144,17 @@ def _ip(request: Request) -> str | None:
     dependencies=[Depends(require_roles("ASESOR", "ADMIN"))],
 )
 def emitir_tarjeta(
-    payload: TarjetaCreate, request: Request, usuario: UsuarioAuditoria, conn: Db
+    payload: TarjetaCreate,
+    request: Request,
+    usuario: UsuarioAuditoria,
+    conn: Db,
+    conn_seguridad: Annotated[Connection, Depends(seguridad)],
 ) -> Any:
-    """Emite una tarjeta en estado Generada y sin PIN para una cuenta Activa."""
-    return service.crear_tarjeta(conn, payload, usuario, _ip(request))
+    """Emite una tarjeta en estado Generada y sin PIN para una cuenta Activa.
+
+    El PAN ficticio queda cifrado en el repositorio aislado de pruebas.
+    """
+    return service.crear_tarjeta(conn, conn_seguridad, payload, usuario, _ip(request))
 
 
 # TAR-02. Roles: ASESOR, SUPERVISOR, ADMIN
@@ -178,14 +233,19 @@ def cambiar_estado(
 )
 def asignar_pin(
     id_tarjeta: IdTarjetaPath,
-    pin: Annotated[SecretStr, Depends(_leer_pin)],
+    entrada: Annotated[tuple[SecretStr, str], Depends(_leer_pin_block)],
     request: Request,
     usuario: UsuarioAuditoria,
     conn: Db,
     conn_seguridad: Annotated[Connection, Depends(seguridad)],
 ) -> None:
-    """Asigna el PIN inicial. Solo se puede hacer una vez."""
-    service.asignar_pin(conn, conn_seguridad, id_tarjeta, pin, usuario, _ip(request))
+    """Asigna el PIN inicial con un PIN Block ISO-4 (AES-256) y genera su PIN Offset
+    IBM 3624 en el HSM. Solo se puede hacer una vez.
+    """
+    pin_block, referencia = entrada
+    service.asignar_pin(
+        conn, conn_seguridad, id_tarjeta, pin_block, referencia, usuario, _ip(request)
+    )
 
 
 # TAR-06. Roles: SUPERVISOR, AUDITOR, ADMIN
@@ -216,3 +276,50 @@ def historial_tarjeta(
     return service.obtener_historial(
         conn, id_tarjeta, page, page_size, sort, fecha_desde, fecha_hasta
     )
+
+
+def _solo_fuera_de_produccion() -> None:
+    """El PIN pad simulado no existe en producción: allí responde 404."""
+    if get_settings().app_env == "production":
+        raise problema(404, "NO_ENCONTRADO", "El recurso no existe.")
+
+
+# PIN pad simulado (componente seguro de captura). Solo desarrollo y pruebas.
+router_pruebas = APIRouter(
+    prefix="/pruebas",
+    route_class=ProblemDetailsRoute,
+    responses=RESPUESTAS_ERROR,
+    tags=["pruebas"],
+    dependencies=[
+        Depends(_solo_fuera_de_produccion),
+        Depends(require_auth),
+        Depends(_sin_cache),
+    ],
+)
+
+
+@router_pruebas.post(
+    "/pin-block",
+    response_model=PinBlockPrueba,
+    dependencies=[Depends(require_roles("ADMIN"))],
+    openapi_extra={
+        "requestBody": {
+            "required": True,
+            "content": {
+                "application/json": {
+                    "schema": PinBlockPruebaEntrada.model_json_schema(by_alias=True)
+                }
+            },
+        }
+    },
+)
+def pin_block_prueba(
+    entrada: Annotated[tuple[int, SecretStr], Depends(_leer_pin_prueba)],
+    conn: Db,
+    conn_seguridad: Annotated[Connection, Depends(seguridad)],
+) -> Any:
+    """Arma el PIN Block ISO-4 cifrado de una tarjeta, como lo haría el PIN pad, para
+    usarlo en TAR-05 (o ATM-01). Solo fuera de producción.
+    """
+    id_tarjeta, pin = entrada
+    return service.construir_pin_block_prueba(conn, conn_seguridad, id_tarjeta, pin)

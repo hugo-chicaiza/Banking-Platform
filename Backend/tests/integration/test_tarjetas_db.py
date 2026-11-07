@@ -31,6 +31,15 @@ BASE = "/api/v1/tarjetas"
 PIN = "7392"
 
 
+def _pin(client: TestClient, id_tarjeta: int, pin: str) -> dict[str, Any]:
+    """Body de TAR-05 armado por el PIN pad simulado (HSM con las claves del .env)."""
+    r = client.post(
+        "/api/v1/pruebas/pin-block", json={"idTarjeta": id_tarjeta, "pin": pin}
+    )
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
 class _SinCommit:
     """Conexión real con commit y rollback anulados; el fixture bd revierte al final."""
 
@@ -107,8 +116,8 @@ def test_auditoria_real_registra_exito_y_fallo(client, bd, datos, monkeypatch):
 
     id_tarjeta = _emitir(client, datos)["idTarjeta"]
     ruta = f"{BASE}/{id_tarjeta}"
-    assert client.post(f"{ruta}/pin", json={"pin": "1234"}).status_code == 422
-    assert client.post(f"{ruta}/pin", json={"pin": PIN}).status_code == 204
+    assert client.post(f"{ruta}/pin", json=_pin(client, id_tarjeta, "1234")).status_code == 422
+    assert client.post(f"{ruta}/pin", json=_pin(client, id_tarjeta, PIN)).status_code == 204
 
     filas = seg.execute(
         text(
@@ -235,23 +244,32 @@ def test_ciclo_completo_pin_activacion_bloqueo_e_historial(client, bd, datos):
     assert r.json()["code"] == "PIN_NO_ASIGNADO"
 
     # PIN débil y asignación correcta
-    assert client.post(f"{ruta}/pin", json={"pin": "1234"}).status_code == 422
-    assert client.post(f"{ruta}/pin", json={"pin": PIN}).status_code == 204
+    assert client.post(f"{ruta}/pin", json=_pin(client, id_tarjeta, "1234")).status_code == 422
+    assert client.post(f"{ruta}/pin", json=_pin(client, id_tarjeta, PIN)).status_code == 204
 
     guardado = seg.execute(
         text(
             """
-            SELECT HashPIN, TienePINAsignado, Estado FROM Tarjetas.TarjetaPIN
+            SELECT PINOffset, ReferenciaClavePVK, TienePINAsignado, Estado
+            FROM Tarjetas.TarjetaPIN
             WHERE ID_Tarjeta = :i
             """
         ),
         {"i": id_tarjeta},
     ).one()
-    assert guardado[0].startswith("$argon2id$") and PIN not in guardado[0]
-    assert guardado[1] is True and guardado[2] == "Activo"
+    # IBM 3624: solo el Offset de 4 dígitos y la referencia de la PVK, nunca el PIN
+    assert len(guardado[0]) == 4 and guardado[0].isdigit() and guardado[0] != PIN
+    assert guardado[1] == "SIM-PVK-01"
+    assert guardado[2] is True and guardado[3] == "Activo"
+    # El PAN ficticio quedó custodiado cifrado en el repositorio de pruebas
+    custodia = seg.execute(
+        text("SELECT ReferenciaClave FROM Pruebas.PanFicticio WHERE IdTarjeta = :i"),
+        {"i": id_tarjeta},
+    ).one()
+    assert custodia[0] == "SIM-PAN-01"
 
     # El PIN se asigna una sola vez
-    r = client.post(f"{ruta}/pin", json={"pin": "2580"})
+    r = client.post(f"{ruta}/pin", json=_pin(client, id_tarjeta, "2580"))
     assert r.status_code == 409 and r.json()["code"] == "PIN_YA_ASIGNADO"
 
     # Transiciones válidas, inválida y desbloqueo
@@ -391,7 +409,7 @@ def test_throw_real_52005_se_traduce(client, bd, datos):
     traducido = traducir_error_bd(error.value)
     assert traducido.status_code == 409
     detalle: Any = traducido.detail
-    assert detalle["code"] == "TRANSICION_TARJETA_INVALIDA"
+    assert detalle["code"] == "TRANSICION_INVALIDA"
 
 
 def test_respuesta_de_error_real_es_problem_details(client):

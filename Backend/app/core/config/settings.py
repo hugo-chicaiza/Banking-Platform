@@ -62,6 +62,16 @@ class Settings(BaseSettings):
     # Origen del FE (esquema://host[:puerto], sin ruta): redirecciones y control CSRF
     frontend_url: str = ""
 
+    # HSM simulado de tarjetas (app/core/security/hsm.py): claves ficticias en hex.
+    # Vacías = HSM no disponible (503). En producción nunca se usan. Deben ser las
+    # mismas en local y Azure: comparten la base donde está el PAN cifrado.
+    hsm_sim_clave_pan: SecretStr = SecretStr("")  # AES-256: 64 hex
+    hsm_sim_clave_pvk: SecretStr = SecretStr("")  # 3DES IBM 3624: 32 o 48 hex
+    # keyReference -> clave AES-256 del PIN Block ISO-4 (64 hex), en JSON
+    hsm_sim_claves_pin_block: dict[str, SecretStr] = {}
+    # La que usa el endpoint de pruebas que simula el PIN pad
+    hsm_sim_referencia_pin_block: str = "TEST-KEY-01"
+
     @field_validator("frontend_url")
     @classmethod
     def _solo_origen(cls, valor: str) -> str:
