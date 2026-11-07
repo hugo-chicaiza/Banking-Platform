@@ -321,7 +321,7 @@ def test_403_auditado_con_el_usuario_vinculado(client, eventos_auditados, monkey
 
 
 def test_403_de_usuario_sin_vinculo_registra_su_id_de_workos(client, eventos_auditados):
-    usuario = usuario_con_roles("CAJERO")
+    usuario = replace(usuario_con_roles("CAJERO"), id_interno=None)
 
     def sesion(request: Request) -> Usuario:
         request.state.usuario = usuario
@@ -336,6 +336,8 @@ def test_403_de_usuario_sin_vinculo_registra_su_id_de_workos(client, eventos_aud
     evento = eventos_auditados[-1]
     assert evento.usuario is None
     assert evento.descripcion.endswith(f"usuario={usuario.id_usuario}")
+    # Los roles de WorkOS con que se negó quedan en la auditoría
+    assert evento.roles == "CAJERO"
 
 
 def test_respuestas_que_no_son_401_ni_403_no_se_auditan(client, eventos_auditados):

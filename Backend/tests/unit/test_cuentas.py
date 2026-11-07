@@ -1623,7 +1623,8 @@ def test_cta_escrituras_exigen_usuario_auditoria_real(
     respuesta = asyncio.run(_http_cuentas(method, path, body))
     assert (
         respuesta.status_code == 403
-        and respuesta.json()["code"] == "USUARIO_SIN_VINCULO_AUDITORIA"
+        # require_auth lo rechaza antes de la ruta
+        and respuesta.json()["code"] == "USUARIO_NO_REGISTRADO"
     )
 
 

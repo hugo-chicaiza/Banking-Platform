@@ -46,4 +46,9 @@ url: https://github.com/hugo-chicaiza/Banking-Platform/issues/108
 ## Pendiente
 
 - Decidir G-06, G-07, G-12 y G-16.
+- Vínculo con WorkOS (aplicado a mano el 2026-11-07, falta en esta migración):
+  - `SeguridadDB.Organizacion.Usuarios.KeyUsuario varchar(64) NULL` con índice único filtrado `UX_Usuarios_KeyUsuario` (`WHERE KeyUsuario IS NOT NULL`): id del usuario en WorkOS.
+  - `CooperativaDB.Organizacion.Agencia.KeyAgencia varchar(64) NULL` con índice único filtrado `UX_Agencia_KeyAgencia`: id de la organización en WorkOS.
+  - `UsuarioID` e `IdAgencia` no cambian; los ids de WorkOS son los del entorno de producción.
+  - `SeguridadDB.Organizacion.Usuarios.RolesWorkOS varchar(200) NULL` y `SeguridadDB.Auditoria.Auditoria.RolesWorkOS varchar(200) NULL`: roles que dio WorkOS, para comparar con `Seguridad.GruposUsuarios` (no se validan).
 - G-02: se aplica en `SeguridadDB.Tarjetas.TarjetaPIN`, que ya tiene intentos (`IntentosFallidos`), bloqueo y el hash en `HashPIN` (`varchar(255)`, Argon2id con la salt incluida). La columna se agregó a mano; falta incluirla en esta migración.

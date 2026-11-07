@@ -35,6 +35,10 @@ class EventoAuditoria:
     usuario: int | None
     ip: str | None
     descripcion: str
+    # Roles de WorkOS con que se permitió o negó la operación. Si va None y hay
+    # UsuarioID, se toman de Organizacion.Usuarios.RolesWorkOS (actualizado en la
+    # misma petición, antes de ejecutar la ruta)
+    roles: str | None = None
 
 
 def _insertar(conn: Connection, evento: EventoAuditoria) -> None:
@@ -43,14 +47,21 @@ def _insertar(conn: Connection, evento: EventoAuditoria) -> None:
             """
             INSERT INTO Auditoria.Auditoria (
                 UsuarioID, NombreAccion, TablaAfectada, IDRegistro, FechaHora,
-                DireccionIP, Descripcion, Resultado
+                DireccionIP, Descripcion, Resultado, RolesWorkOS
             )
             VALUES (
                 :usuario, :accion, :tabla, :id_registro,
                 CONVERT(
                     datetime, SYSDATETIMEOFFSET() AT TIME ZONE 'SA Pacific Standard Time'
                 ),
-                :ip, :descripcion, :resultado
+                :ip, :descripcion, :resultado,
+                COALESCE(
+                    :roles,
+                    (
+                        SELECT u.RolesWorkOS FROM Organizacion.Usuarios AS u
+                        WHERE u.UsuarioID = :usuario
+                    )
+                )
             )
             """
         ),
@@ -62,6 +73,7 @@ def _insertar(conn: Connection, evento: EventoAuditoria) -> None:
             "ip": evento.ip,
             "descripcion": evento.descripcion[:_MAX_DESCRIPCION],
             "resultado": evento.resultado,
+            "roles": evento.roles,
         },
     )
 
@@ -94,7 +106,9 @@ def evento_acceso_denegado(scope: Scope, status: int) -> EventoAuditoria:
     """
     usuario = (scope.get("state") or {}).get("usuario")
     id_workos = getattr(usuario, "id_usuario", None)
-    id_interno = getattr(usuario, "id_interno", None)
+    # Sin consultar la base: solo el id si la petición ya lo había leído
+    id_interno = usuario.interno(solo_si_leido=True) if usuario else None
+    roles = usuario.roles_texto() if usuario else None
     descripcion = (
         f"{status} {scope['method']} {scope['path']} trace={trace_id_actual.get()}"
     )
@@ -108,6 +122,7 @@ def evento_acceso_denegado(scope: Scope, status: int) -> EventoAuditoria:
         usuario=id_interno,
         ip=ip_cliente(scope),
         descripcion=descripcion,
+        roles=roles,
     )
 
 

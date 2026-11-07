@@ -56,6 +56,17 @@ def test_insertar_recorta_la_descripcion_a_la_columna():
     assert conn.parametros["resultado"] == "Exitoso"
 
 
+def test_insertar_guarda_los_roles_de_workos():
+    from dataclasses import replace
+
+    conn = _Conn()
+
+    audit._insertar(conn, replace(EVENTO, roles="ADMIN"))  # type: ignore[arg-type]
+
+    assert conn.parametros is not None
+    assert conn.parametros["roles"] == "ADMIN"
+
+
 def test_fallo_de_auditoria_no_rompe_ni_filtra_parametros(monkeypatch, caplog):
     def falla(_evento):
         raise SQLAlchemyError("INSERT parametros SECRETO")
