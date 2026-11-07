@@ -222,3 +222,29 @@ class CuadreCajaCreate(Entrada):
 class ConteoFisico(Entrada):
     saldo_final_fisico: MontoNoNegativo
     observaciones: Texto500 | None = None
+
+
+# --- CAJ-15: devolución a bóveda ----------
+
+
+class DevolucionRequest(Entrada):
+    id_cuadre_caja: IdInt
+    id_boveda_destino: IdInt
+    autorizado_por: IdInt
+    desglose: DesgloseLista
+    observacion: Texto500 | None = None
+
+    @model_validator(mode="after")
+    def _desglose_unico(self) -> "DevolucionRequest":
+        sin_denominaciones_repetidas(self.desglose)
+        return self
+
+
+class Devolucion(CamelModel):
+    id_devolucion_caja: int
+    id_jornada_caja: int | None = None
+    id_cuadre_caja: int | None = None
+    id_boveda_destino: int | None = None
+    monto: Money | None = None
+    id_movimiento_boveda: int | None = None
+    supera_limite_maximo: bool | None = None

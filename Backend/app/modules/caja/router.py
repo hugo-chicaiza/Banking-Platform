@@ -29,6 +29,8 @@ from app.modules.caja.schemas import (
     ConteoFisico,
     CuadreCaja,
     CuadreCajaCreate,
+    Devolucion,
+    DevolucionRequest,
     Dotacion,
     DotacionRequest,
     Jornada,
@@ -418,6 +420,35 @@ def registrar_conteo(
 ) -> CuadreCaja:
     """Registra el conteo físico y recalcula la diferencia."""
     return service.registrar_conteo(
+        conn,
+        usuario,
+        id_interno,
+        id_jornada,
+        datos,
+        ip_cliente(request.scope),
+    )
+
+
+# --- CAJ-15: devolución a bóveda ----------
+
+
+@router.post(
+    "/jornadas/{idJornada}/devoluciones",
+    response_model=Devolucion,
+    status_code=201,
+    operation_id="CAJ15",
+    dependencies=[Depends(require_roles("CAJERO", "SUPERVISOR"))],
+)
+def registrar_devolucion(
+    request: Request,
+    usuario: UsuarioActual,
+    id_interno: IdInterno,
+    id_jornada: IdJornada,
+    datos: DevolucionRequest,
+    conn: Conexion,
+) -> Devolucion:
+    """Registra una devolución de caja a bóveda."""
+    return service.registrar_devolucion(
         conn,
         usuario,
         id_interno,
