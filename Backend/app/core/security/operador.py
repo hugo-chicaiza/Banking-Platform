@@ -4,11 +4,9 @@ Caja.JornadasCaja.IdUsuario, CajerosAsignadosAgencia.IdUsuario, CuadreCaja.IdAut
 y Transaccion.CreadoPor son `int`. WorkOS entrega `user_01...`: ese texto no se convierte
 a número ni se adivina.
 
-ESTADO DEL VÍNCULO: BLOQUEADO. Ningún archivo entregado demuestra un vínculo validado
-entre el id de WorkOS y Organizacion.Usuarios.UsuarioID (la tabla no tiene una columna
-con el id de WorkOS). Mientras `resolver_id_interno` devuelva None, las rutas que
-necesitan el id interno responden 403 USUARIO_INTERNO_NO_VINCULADO: fallan cerradas.
-Para desbloquear basta implementar esa única función (ver la guía de entrega).
+El vínculo es el metadato "idUsuario" del usuario en WorkOS (Usuario.id_interno): se
+administra solo en WorkOS, igual que los roles y "idAgencia". Sin ese metadato, las rutas
+que necesitan el id interno responden 403 USUARIO_INTERNO_NO_VINCULADO: fallan cerradas.
 """
 
 from collections.abc import Iterator
@@ -25,14 +23,8 @@ from app.core.security.auth import Usuario, UsuarioActual
 
 
 def resolver_id_interno(usuario: UsuarioActual) -> int | None:
-    """Id interno (int) del usuario autenticado, o None si no hay vínculo validado.
-
-    TODO(CAJ/TRX): implementar con la fuente que apruebe el equipo (por ejemplo una
-    columna con el id de WorkOS en Organizacion.Usuarios o un metadato firmado de
-    WorkOS), validando que el usuario esté Activo. No usar el email sin aprobación.
-    """
-    del usuario
-    return None
+    """Id interno (int) del usuario autenticado: su metadato "idUsuario" de WorkOS."""
+    return usuario.id_interno
 
 
 IdInterno = Annotated[int | None, Depends(resolver_id_interno)]

@@ -1,3 +1,5 @@
+from dataclasses import replace
+
 """Pruebas unitarias de:
 
 - CLI-01 · GET /api/v1/clientes/validar-identificacion
@@ -22,7 +24,6 @@ import pytest
 from pydantic import ValidationError
 from sqlalchemy import Connection
 
-from app.core.config.settings import Settings
 from app.core.security import auth
 from app.core.security.auth import Usuario, require_roles
 from app.main import app
@@ -2466,33 +2467,34 @@ def test_cli07_no_inventa_valores_para_legado(observaciones):
 
 
 @pytest.mark.parametrize(
-    "mapa",
+    "metadatos",
     [
-        {"user_prueba": 0},
-        {"user_prueba": -1},
-        {"user_prueba": 2147483648},
-        {"user_prueba": True},
-        {"user_prueba": "12"},
-        {"cliente": 12},
-        {"user_a": 12, "user_b": 12},
+        None,
+        {},
+        {"idUsuario": "0"},
+        {"idUsuario": "-1"},
+        {"idUsuario": "2147483648"},
+        {"idUsuario": "12a"},
+        {"idUsuario": " 12"},
+        {"idUsuario": "١٢"},
+        {"idusuario": "12"},
     ],
 )
-def test_vinculos_de_auditoria_rechazan_configuracion_invalida(mapa):
-    with pytest.raises(ValidationError):
-        Settings(workos_audit_user_ids=mapa)
+def test_metadato_id_usuario_invalido_no_vincula(metadatos):
+    assert auth._id_interno(metadatos) is None
 
 
-def test_vinculo_de_auditoria_viene_solo_de_configuracion(monkeypatch):
-    monkeypatch.setenv("WORKOS_AUDIT_USER_IDS", '{"user_prueba":12}')
-    settings = Settings()
-    monkeypatch.setattr(auth, "get_settings", lambda: settings)
-    assert auth.id_usuario_auditoria(_usuario_historial("ADMIN")) == 12
+def test_metadato_id_usuario_valido_vincula():
+    assert auth._id_interno({"idUsuario": "12", "idAgencia": "001"}) == 12
+    assert auth._id_interno({"idUsuario": "2147483647"}) == 2147483647
 
 
-def test_usuario_sin_vinculo_no_recibe_id_fijo(monkeypatch):
-    monkeypatch.setattr(
-        auth, "get_settings", lambda: Settings(workos_audit_user_ids={})
-    )
+def test_vinculo_de_auditoria_viene_del_metadato_de_workos():
+    usuario = replace(_usuario_historial("ADMIN"), id_interno=12)
+    assert auth.id_usuario_auditoria(usuario) == 12
+
+
+def test_usuario_sin_metadato_no_recibe_id_fijo():
     with pytest.raises(service.HTTPException) as exc:
         auth.id_usuario_auditoria(_usuario_historial("ADMIN"))
     _assert_http_error(exc, 403, "USUARIO_SIN_VINCULO_AUDITORIA")
