@@ -121,3 +121,12 @@ def test_canales_solo_activos(conn):
     ).scalar_one()
 
     assert len(filas) == total_activos
+
+
+def test_agencias_matriz_primero_y_luego_por_codigo(conn):
+    # CAT-06: devuelve todas (sin filtrar Estado); Matriz primero, luego por código
+    filas = repository.listar_agencias(conn)
+
+    assert len(filas) == _contar(conn, "SELECT COUNT(*) FROM Organizacion.Agencia")
+    claves = [(f["tipo_agencia"] != "Matriz", f["codigo"]) for f in filas]
+    assert claves == sorted(claves)

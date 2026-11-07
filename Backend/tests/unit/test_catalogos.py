@@ -269,3 +269,25 @@ def test_canales_sin_datos(client, monkeypatch):
 
     assert r.status_code == 200
     assert r.json() == []
+
+
+def test_agencias_sql_ordena_matriz_primero():
+    # CAT-06: el orden no depende del código; una sucursal "AMB-..." no pasa a la Matriz
+    capturado: dict[str, str] = {}
+
+    class _Conn:
+        def execute(self, sql, params):
+            capturado["sql"] = " ".join(str(sql).split())
+
+            class _R:
+                def mappings(self):
+                    return []
+
+            return _R()
+
+    repository.listar_agencias(_Conn())  # type: ignore[arg-type]
+
+    assert (
+        "ORDER BY CASE a.TipoAgencia WHEN 'Matriz' THEN 0 ELSE 1 END, a.Codigo"
+        in capturado["sql"]
+    )
