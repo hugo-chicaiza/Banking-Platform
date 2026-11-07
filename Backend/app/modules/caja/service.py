@@ -18,6 +18,7 @@ from app.core.security.operador import auditar, exigir_agencia, exigir_id_intern
 from app.modules.caja import repository as repo
 from app.modules.caja.repository import Fila
 from app.modules.caja.schemas import (
+    AutorizacionCuadre,
     CajaFisica,
     ConteoFisico,
     CuadreCaja,
@@ -1094,4 +1095,102 @@ def registrar_devolucion(
                 monto=fila["Monto"],
                 id_movimiento_boveda=fila["IdMovimientoBoveda"],
                 supera_limite_maximo=bool(salida["SuperaLimiteMaximo"]),
+            )
+
+
+# --- CAJ-17: autorización del cuadre ----------
+
+
+def autorizar_cuadre(
+    conn: Connection,
+    usuario: Usuario,
+    id_interno: int | None,
+    id_jornada: int,
+    datos: AutorizacionCuadre,
+    ip: str,
+) -> CuadreCaja:
+    """Autoriza un cuadre mediante IdAutorizadoPor."""
+    with auditar(
+        "AUTORIZAR_CUADRE",
+        "Caja.CuadreCaja",
+        usuario,
+        ip,
+        f"jornada={id_jornada}",
+    ) as registro:
+        actor = exigir_id_interno(id_interno)
+
+        with conn.begin():
+            jornada = jornada_bloqueada(conn, id_jornada)
+
+            verificar_alcance(
+                usuario,
+                actor,
+                jornada,
+                ("SUPERVISOR",),
+            )
+
+            if jornada["Estado"] != "ABIERTA":
+                raise problema(
+                    409,
+                    "JORNADA_NO_ABIERTA",
+                    "La jornada no está ABIERTA.",
+                )
+
+            cuadre = repo.obtener_cuadre_de_jornada(
+                conn,
+                id_jornada,
+                bloquear=True,
+            )
+
+            if cuadre is None:
+                raise cuadre_no_encontrado()
+
+            registro.id_registro = str(cuadre["IdCuadreCaja"])
+
+            validar_custodia(
+                "SUPERVISOR",
+                actor,
+                datos.autorizado_por,
+                cuadre["IdUsuario"],
+            )
+
+            if cuadre["SaldoFinalFisico"] is None:
+                raise problema(
+                    409,
+                    "CUADRE_PENDIENTE_DE_CONTEO",
+                    "El cuadre no tiene conteo físico.",
+                )
+
+            if cuadre["IdAutorizadoPor"] is not None:
+                raise problema(
+                    409,
+                    "CUADRE_YA_AUTORIZADO",
+                    "El cuadre ya fue autorizado.",
+                )
+
+            if (
+                cuadre["EstadoCuadre"] in ("SOBRANTE", "FALTANTE")
+                and not datos.observaciones
+            ):
+                raise problema(
+                    422,
+                    "OBSERVACION_REQUERIDA",
+                    "Un cuadre con sobrante o faltante exige observaciones.",
+                )
+
+            if not repo.autorizar_cuadre(
+                conn,
+                cuadre["IdCuadreCaja"],
+                actor,
+                datos.observaciones,
+            ):
+                raise problema(
+                    409,
+                    "CUADRE_YA_AUTORIZADO",
+                    "El cuadre ya fue autorizado.",
+                )
+
+            return _recargar_cuadre(
+                conn,
+                cuadre["IdCuadreCaja"],
             )
