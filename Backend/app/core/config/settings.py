@@ -52,6 +52,10 @@ class Settings(BaseSettings):
     seguridad_db_user: str = ""
     seguridad_db_password: SecretStr = SecretStr("")
 
+    atm_hsm_aes_key_hex: str = ""
+    atm_hsm_pin_generation_key_hex: str = ""
+    atm_hsm_key_reference: str = "TEST-KEY-01"
+
     # WorkOS AuthKit (F-03), patrón BFF: el navegador solo recibe una cookie cifrada
     workos_api_key: SecretStr = SecretStr("")
     workos_client_id: str = ""

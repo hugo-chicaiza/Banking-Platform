@@ -54,7 +54,8 @@ def obtener_tarjeta(
             t.ApellidosTitular AS apellidos_titular,
             t.PinAsignado AS pin_asignado,
             t.FechaExpiracion AS fecha_expiracion,
-            t.Estado AS estado_tarjeta
+            t.Estado AS estado_tarjeta,
+            t.HashNumeroTarjeta AS hash_numero_tarjeta
         FROM Tarjeta.Tarjeta AS t
         WHERE t.IdTarjeta = :id_tarjeta
     """)
@@ -75,7 +76,7 @@ def obtener_estado_pin(
     conn: Connection,
     id_tarjeta: int,
 ) -> dict[str, Any] | None:
-    """Consulta el estado del PIN y los intentos fallidos."""
+    """Consulta el estado del PIN, los intentos fallidos y el Offset."""
 
     sql = text("""
         SELECT
@@ -83,8 +84,149 @@ def obtener_estado_pin(
             TienePINAsignado AS tiene_pin_asignado,
             IntentosFallidos AS intentos_fallidos,
             Estado AS estado_pin,
-            FechaBloqueo AS fecha_bloqueo
+            FechaBloqueo AS fecha_bloqueo,
+            PINOffset AS pin_offset
         FROM Tarjetas.TarjetaPIN
+        WHERE ID_Tarjeta = :id_tarjeta
+    """)
+
+    fila = (
+        conn.execute(
+            sql,
+            {"id_tarjeta": id_tarjeta},
+        )
+        .mappings()
+        .first()
+    )
+
+    return dict(fila) if fila is not None else None
+
+
+def registrar_intento_fallido(
+    conn: Connection,
+    id_tarjeta: int,
+) -> dict[str, Any] | None:
+    """Incrementa los intentos y bloquea el PIN al tercero."""
+
+    sql = text("""
+        UPDATE Tarjetas.TarjetaPIN
+        SET
+            IntentosFallidos = IntentosFallidos + 1,
+            Estado = CASE
+                WHEN IntentosFallidos + 1 >= 3
+                    THEN 'Bloqueado'
+                ELSE Estado
+            END,
+            FechaBloqueo = CASE
+                WHEN IntentosFallidos + 1 >= 3
+                    THEN SYSUTCDATETIME()
+                ELSE FechaBloqueo
+            END
+        OUTPUT
+            INSERTED.IntentosFallidos AS intentos_fallidos,
+            INSERTED.Estado AS estado_pin
+        WHERE ID_Tarjeta = :id_tarjeta
+          AND Estado = 'Activo'
+          AND TienePINAsignado = 1
+          AND IntentosFallidos < 3
+    """)
+
+    fila = (
+        conn.execute(
+            sql,
+            {"id_tarjeta": id_tarjeta},
+        )
+        .mappings()
+        .first()
+    )
+
+    return dict(fila) if fila is not None else None
+
+
+def reiniciar_intentos_pin(
+    conn: Connection,
+    id_tarjeta: int,
+) -> None:
+    """Reinicia los intentos después de una verificación correcta."""
+
+    sql = text("""
+        UPDATE Tarjetas.TarjetaPIN
+        SET IntentosFallidos = 0
+        WHERE ID_Tarjeta = :id_tarjeta
+          AND Estado = 'Activo'
+          AND TienePINAsignado = 1
+    """)
+
+    conn.execute(sql, {"id_tarjeta": id_tarjeta})
+
+
+def guardar_resultado_pin(
+    conn: Connection,
+    id_tarjeta: int,
+    pin_correcto: bool,
+) -> dict[str, Any] | None:
+
+    if pin_correcto:
+        sql = text("""
+            UPDATE Tarjetas.TarjetaPIN
+            SET IntentosFallidos = 0
+            OUTPUT
+                INSERTED.IntentosFallidos AS intentos_fallidos,
+                INSERTED.Estado AS estado_pin
+            WHERE ID_Tarjeta = :id_tarjeta
+              AND Estado = 'Activo'
+              AND TienePINAsignado = 1
+        """)
+    else:
+        sql = text("""
+            UPDATE Tarjetas.TarjetaPIN
+            SET
+                IntentosFallidos = IntentosFallidos + 1,
+                Estado = CASE
+                    WHEN IntentosFallidos + 1 >= 3
+                        THEN 'Bloqueado'
+                    ELSE Estado
+                END,
+                FechaBloqueo = CASE
+                    WHEN IntentosFallidos + 1 >= 3
+                        THEN SYSUTCDATETIME()
+                    ELSE FechaBloqueo
+                END
+            OUTPUT
+                INSERTED.IntentosFallidos AS intentos_fallidos,
+                INSERTED.Estado AS estado_pin
+            WHERE ID_Tarjeta = :id_tarjeta
+              AND Estado = 'Activo'
+              AND TienePINAsignado = 1
+              AND IntentosFallidos < 3
+        """)
+
+    fila = (
+        conn.execute(
+            sql,
+            {"id_tarjeta": id_tarjeta},
+        )
+        .mappings()
+        .first()
+    )
+
+    return dict(fila) if fila is not None else None
+
+
+def obtener_pin_para_verificacion(
+    conn: Connection,
+    id_tarjeta: int,
+) -> dict[str, Any] | None:
+    """Bloquea la fila del PIN durante la verificación."""
+
+    sql = text("""
+        SELECT
+            ID_Tarjeta AS id_tarjeta,
+            TienePINAsignado AS tiene_pin_asignado,
+            IntentosFallidos AS intentos_fallidos,
+            Estado AS estado_pin,
+            PINOffset AS pin_offset
+        FROM Tarjetas.TarjetaPIN WITH (UPDLOCK, ROWLOCK)
         WHERE ID_Tarjeta = :id_tarjeta
     """)
 

@@ -31,3 +31,16 @@ class ATMAuthResponse(CamelModel):
     expires_in: Literal[300] = 300
     titular: str
     cuentas: list[CuentaATM]
+
+
+class ATMAuthRequest(CamelModel):
+    """Solicitud de autenticación ATM-01."""
+
+    codigo_atm: CodigoATM
+    id_tarjeta: int = Field(gt=0)
+    encrypted_pin_block: str = Field(
+        min_length=32,
+        max_length=32,
+        pattern=r"^[0-9a-fA-F]{32}$",
+    )
+    key_reference: str = Field(min_length=1, max_length=100)
