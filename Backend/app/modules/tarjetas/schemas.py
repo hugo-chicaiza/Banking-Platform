@@ -97,12 +97,43 @@ class TarjetaEstadoUpdate(_Entrada):
     ]
 
 
+PATRON_PIN_BLOCK = r"^[0-9A-Fa-f]{32}$"
+PATRON_REFERENCIA_CLAVE = r"^[A-Za-z0-9_-]{1,32}$"
+
+
 class PinAsignar(_Entrada):
-    """Solo documenta TAR-05 en OpenAPI. El router no valida con este modelo: ver
-    _leer_pin.
+    """Solo documenta TAR-05 en OpenAPI. El router no valida con este modelo (un error
+    de Pydantic devolvería el valor recibido): ver _leer_pin_block.
     """
 
+    encrypted_pin_block: Annotated[
+        str,
+        Field(
+            pattern=PATRON_PIN_BLOCK,
+            description="PIN Block ISO 9564-1 formato 4 (AES-256), 16 bytes en hex",
+        ),
+    ]
+    key_reference: Annotated[
+        str,
+        Field(
+            pattern=PATRON_REFERENCIA_CLAVE,
+            description="Referencia de la clave AES-256 autorizada en el servidor",
+        ),
+    ]
+
+
+class PinBlockPruebaEntrada(_Entrada):
+    """Solo documenta el PIN pad simulado en OpenAPI (ver _leer_pin_prueba)."""
+
+    id_tarjeta: IdEntero
     pin: Annotated[str, Field(min_length=4, max_length=4, pattern=r"^[0-9]{4}$")]
+
+
+class PinBlockPrueba(CamelModel):
+    """Lo que el PIN pad simulado entrega para TAR-05 o ATM-01."""
+
+    encrypted_pin_block: str
+    key_reference: str
 
 
 class TarjetaResumen(CamelModel):
