@@ -266,7 +266,6 @@ def test_roles_de_la_tarea_pasan_el_control(client, ruta):
 
     r = _llamar(client, *ruta)
 
-    
     # D-01: estos endpoints requieren vinculación
     # WorkOS -> IdUsuario interno.
     rutas_con_vinculacion = {
@@ -279,7 +278,6 @@ def test_roles_de_la_tarea_pasan_el_control(client, ruta):
         return
 
     assert r.status_code not in {401, 403}
-
 
 
 def test_require_auth_entrega_el_usuario_de_la_sesion():
