@@ -406,3 +406,17 @@ def listar_historial(
         {**params, "saltar": (page - 1) * page_size, "tomar": page_size},
     )
     return items, total
+
+
+def obtener_pan_ficticio(
+    conn_seguridad: Connection, id_tarjeta: int
+) -> tuple[bytes, str] | None:
+    fila = _one(
+        conn_seguridad,
+        """
+        SELECT PanCifrado AS cifrado, ReferenciaClave AS referencia
+        FROM Pruebas.PanFicticio WHERE IdTarjeta = :id_tarjeta
+        """,
+        {"id_tarjeta": id_tarjeta},
+    )
+    return None if fila is None else (bytes(fila["cifrado"]), fila["referencia"])

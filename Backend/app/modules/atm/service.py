@@ -5,14 +5,17 @@ from sqlalchemy import Connection
 
 from app.core.api.errors import problema
 from app.core.database.db import get_engine
-from app.modules.atm import repository
-from app.modules.atm.hsm.interface import (
-    HsmInterface,
-    PinVerificationRequest,
+from app.core.security.hsm import (
+    LONGITUD_PIN,
+    ClaveNoAutorizada,
+    ErrorHsm,
+    Hsm,
+    PinBlockInvalido,
+    obtener_hsm,
 )
+from app.modules.atm import repository
 from app.modules.atm.hsm.pan_validation import validar_hash_pan
-from app.modules.atm.hsm.test_pan_repository import PanFicticioRepository
-from app.modules.atm.hsm.validation import derivar_validation_data
+from app.modules.tarjetas.service import pan_de_prueba
 
 
 def validar_terminal(
@@ -124,16 +127,24 @@ def validar_estado_pin(
 ) -> dict[str, Any]:
     """Valida que el PIN esté asignado y habilitado."""
 
-    estado_pin = repository.obtener_estado_pin(
-        conn_seguridad,
-        id_tarjeta,
+    return _validar_estado_pin(
+        repository.obtener_estado_pin(conn_seguridad, id_tarjeta)
     )
 
+
+def _validar_estado_pin(estado_pin: dict[str, Any] | None) -> dict[str, Any]:
     if estado_pin is None:
         raise problema(
             409,
             "PIN_NO_DISPONIBLE",
             "No se puede utilizar el PIN de esta tarjeta.",
+        )
+
+    if estado_pin["estado_pin"] == "Bloqueado" or estado_pin["intentos_fallidos"] >= 3:
+        raise problema(
+            423,
+            "PIN_BLOQUEADO",
+            "El PIN está bloqueado.",
         )
 
     if not estado_pin["tiene_pin_asignado"]:
@@ -143,13 +154,6 @@ def validar_estado_pin(
             "La tarjeta no tiene un PIN configurado.",
         )
 
-    if estado_pin["estado_pin"] == "Bloqueado":
-        raise problema(
-            423,
-            "PIN_BLOQUEADO",
-            "El PIN está bloqueado.",
-        )
-
     if estado_pin["estado_pin"] != "Activo":
         raise problema(
             409,
@@ -157,11 +161,18 @@ def validar_estado_pin(
             "No se puede utilizar el PIN de esta tarjeta.",
         )
 
-    if not estado_pin.get("pin_offset"):
+    offset = estado_pin.get("pin_offset")
+    if (
+        not isinstance(offset, str)
+        or len(offset) != LONGITUD_PIN
+        or not offset.isascii()
+        or not offset.isdigit()
+        or not estado_pin.get("referencia_clave_pvk")
+    ):
         raise problema(
             409,
             "PIN_NO_DISPONIBLE",
-            "La tarjeta no tiene un PIN Offset registrado.",
+            "No se puede utilizar el PIN de esta tarjeta.",
         )
     return estado_pin
 
@@ -179,172 +190,83 @@ def validar_precondiciones_atm(
     validar_estado_pin(conn_seguridad, id_tarjeta)
 
 
-async def verificar_pin_atm(
-    hsm: HsmInterface,
-    encrypted_pin_block: bytes,
+def verificar_pin_atm(
+    hsm: Hsm,
+    encrypted_pin_block: str,
     pan: str,
     key_reference: str,
-    validation_data: str,
     pin_offset: str,
+    referencia_pvk: str,
 ) -> bool:
-    """Verifica el PIN mediante el HSM simulado."""
-
-    solicitud = PinVerificationRequest(
-        encrypted_pin_block=encrypted_pin_block,
-        pan=pan,
-        key_reference=key_reference,
-        validation_data=validation_data,
-        pin_offset=pin_offset,
-    )
-
-    return await hsm.verify_pin(solicitud)
-
-
-async def autenticar_pin_atm(
-    conn_seguridad: Connection,
-    hsm: HsmInterface,
-    id_tarjeta: int,
-    encrypted_pin_block: bytes,
-    pan: str,
-    key_reference: str,
-    validation_data: str,
-) -> bool:
-    """Verifica el PIN de una tarjeta ficticia mediante el HSM simulado."""
-
-    # 1. Consultar el estado y Offset en SeguridadDB.
-    estado_pin = validar_estado_pin(
-        conn_seguridad,
-        id_tarjeta,
-    )
-
-    # 2. Recuperar el Offset almacenado.
-    pin_offset = estado_pin["pin_offset"]
-
-    # 3. Solicitar la verificación al HSM.
-    return await verificar_pin_atm(
-        hsm=hsm,
-        encrypted_pin_block=encrypted_pin_block,
-        pan=pan,
-        key_reference=key_reference,
-        validation_data=validation_data,
-        pin_offset=pin_offset,
-    )
+    """Delega ISO-4 e IBM 3624 exclusivamente al HSM compartido de TAR-05."""
+    try:
+        return hsm.verificar_pin(
+            encrypted_pin_block, key_reference, pan, pin_offset, referencia_pvk
+        )
+    except ClaveNoAutorizada:
+        raise problema(
+            422, "CLAVE_NO_AUTORIZADA", "La referencia de clave no está autorizada."
+        ) from None
+    except PinBlockInvalido:
+        raise problema(
+            422, "PIN_BLOCK_INVALIDO", "El PIN Block no es válido."
+        ) from None
+    except ErrorHsm:
+        raise problema(
+            503, "HSM_NO_DISPONIBLE", "No se pudo verificar el PIN."
+        ) from None
 
 
 async def autenticar_pin_ficticio_atm(
     conn: Connection,
-    conn_seguridad: Connection,
-    hsm: HsmInterface,
-    repositorio_pan: PanFicticioRepository,
     id_tarjeta: int,
-    encrypted_pin_block: bytes,
+    encrypted_pin_block: str,
     key_reference: str,
 ) -> bool:
-    """Verifica el PIN ficticio y actualiza los intentos de forma transaccional."""
+    """Verifica con el HSM compartido y confirma intentos antes del error HTTP.
 
-    pan = repositorio_pan.obtener(id_tarjeta)
-
-    if pan is None:
-        raise problema(
-            409,
-            "TARJETA_NO_DISPONIBLE",
-            "No se puede verificar esta tarjeta.",
-        )
-
+    La conexión de SeguridadDB se abre aquí para que lectura bloqueante,
+    recuperación del PAN y actualización usen una única transacción.
+    """
     tarjeta = validar_tarjeta(conn, id_tarjeta)
-
-    if not validar_hash_pan(
-        pan,
-        tarjeta["hash_numero_tarjeta"],
-    ):
+    try:
+        hsm = obtener_hsm()
+    except ErrorHsm:
         raise problema(
-            409,
-            "TARJETA_NO_DISPONIBLE",
-            "No se puede verificar esta tarjeta.",
-        )
+            503, "HSM_NO_DISPONIBLE", "No se pudo verificar el PIN."
+        ) from None
 
-    validation_data = derivar_validation_data(pan)
-
-    # La conexión de SeguridadDB debe permanecer dentro
-    # de esta transacción durante toda la verificación.
     with get_engine("seguridad").begin() as conn_pin:
-        estado_pin = repository.obtener_pin_para_verificacion(
-            conn_pin,
-            id_tarjeta,
+        estado_pin = _validar_estado_pin(
+            repository.obtener_pin_para_verificacion(conn_pin, id_tarjeta)
         )
-
-        if estado_pin is None:
-            raise problema(
-                409,
-                "PIN_NO_DISPONIBLE",
-                "No se puede utilizar el PIN de esta tarjeta.",
+        pan = pan_de_prueba(conn_pin, id_tarjeta, hsm)
+        try:
+            if not validar_hash_pan(pan, tarjeta["hash_numero_tarjeta"]):
+                raise problema(
+                    409, "TARJETA_NO_DISPONIBLE", "No se puede verificar esta tarjeta."
+                )
+            pin_correcto = verificar_pin_atm(
+                hsm,
+                encrypted_pin_block,
+                pan,
+                key_reference,
+                estado_pin["pin_offset"],
+                estado_pin["referencia_clave_pvk"],
             )
-
-        if not estado_pin["tiene_pin_asignado"]:
-            raise problema(
-                409,
-                "PIN_NO_CONFIGURADO",
-                "La tarjeta no tiene un PIN configurado.",
-            )
-
-        if estado_pin["estado_pin"] == "Bloqueado":
-            raise problema(
-                423,
-                "PIN_BLOQUEADO",
-                "El PIN está bloqueado.",
-            )
-
-        if estado_pin["estado_pin"] != "Activo":
-            raise problema(
-                409,
-                "PIN_NO_DISPONIBLE",
-                "No se puede utilizar el PIN de esta tarjeta.",
-            )
-
-        if not estado_pin["pin_offset"]:
-            raise problema(
-                409,
-                "PIN_NO_DISPONIBLE",
-                "La tarjeta no tiene un PIN Offset registrado.",
-            )
-
-        pin_correcto = await verificar_pin_atm(
-            hsm=hsm,
-            encrypted_pin_block=encrypted_pin_block,
-            pan=pan,
-            key_reference=key_reference,
-            validation_data=validation_data,
-            pin_offset=estado_pin["pin_offset"],
-        )
-
+        finally:
+            del pan
         resultado = repository.guardar_resultado_pin(
-            conn=conn_pin,
-            id_tarjeta=id_tarjeta,
-            pin_correcto=pin_correcto,
+            conn=conn_pin, id_tarjeta=id_tarjeta, pin_correcto=pin_correcto
         )
-
         if resultado is None:
             raise problema(
-                423,
-                "PIN_BLOQUEADO",
-                "El PIN no está disponible para autenticación.",
+                423, "PIN_BLOQUEADO", "El PIN no está disponible para autenticación."
             )
 
-    # Al salir del bloque sin excepción, SQLAlchemy confirma el COMMIT.
-    # Los errores HTTP se generan después para no revertir los intentos.
-
+    # El commit sucede antes de lanzar estos errores: no revertir los intentos.
     if not pin_correcto:
         if resultado["estado_pin"] == "Bloqueado":
-            raise problema(
-                423,
-                "PIN_BLOQUEADO",
-                "El PIN está bloqueado.",
-            )
-
-        raise problema(
-            401,
-            "PIN_INCORRECTO",
-            "El PIN ingresado es incorrecto.",
-        )
-
+            raise problema(423, "PIN_BLOQUEADO", "El PIN está bloqueado.")
+        raise problema(401, "PIN_INCORRECTO", "El PIN ingresado es incorrecto.")
     return True

@@ -56,6 +56,11 @@ class Settings(BaseSettings):
     atm_hsm_pin_generation_key_hex: str = ""
     atm_hsm_key_reference: str = "TEST-KEY-01"
 
+    hsm_sim_clave_pan: SecretStr = SecretStr("")
+    hsm_sim_clave_pvk: SecretStr = SecretStr("")
+    hsm_sim_claves_pin_block: dict[str, SecretStr] = {}
+    hsm_sim_referencia_pin_block: str = "TEST-KEY-01"
+
     # WorkOS AuthKit (F-03), patrón BFF: el navegador solo recibe una cookie cifrada
     workos_api_key: SecretStr = SecretStr("")
     workos_client_id: str = ""

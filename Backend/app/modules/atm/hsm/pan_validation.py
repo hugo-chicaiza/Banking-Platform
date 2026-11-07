@@ -4,7 +4,7 @@ import hmac
 
 def validar_hash_pan(
     pan: str,
-    hash_almacenado: str,
+    hash_almacenado: bytes | bytearray | memoryview | str,
 ) -> bool:
     """Compara el SHA-256 del PAN ficticio con el hash almacenado."""
 
@@ -13,6 +13,11 @@ def validar_hash_pan(
 
     if not pan.isascii() or not pan.isdigit():
         return False
+
+    if isinstance(hash_almacenado, (bytes, bytearray, memoryview)):
+        return hmac.compare_digest(
+            hashlib.sha256(pan.encode("ascii")).digest(), bytes(hash_almacenado)
+        )
 
     if not isinstance(hash_almacenado, str):
         return False

@@ -85,7 +85,8 @@ def obtener_estado_pin(
             IntentosFallidos AS intentos_fallidos,
             Estado AS estado_pin,
             FechaBloqueo AS fecha_bloqueo,
-            PINOffset AS pin_offset
+            PINOffset AS pin_offset,
+            ReferenciaClavePVK AS referencia_clave_pvk
         FROM Tarjetas.TarjetaPIN
         WHERE ID_Tarjeta = :id_tarjeta
     """)
@@ -100,64 +101,6 @@ def obtener_estado_pin(
     )
 
     return dict(fila) if fila is not None else None
-
-
-def registrar_intento_fallido(
-    conn: Connection,
-    id_tarjeta: int,
-) -> dict[str, Any] | None:
-    """Incrementa los intentos y bloquea el PIN al tercero."""
-
-    sql = text("""
-        UPDATE Tarjetas.TarjetaPIN
-        SET
-            IntentosFallidos = IntentosFallidos + 1,
-            Estado = CASE
-                WHEN IntentosFallidos + 1 >= 3
-                    THEN 'Bloqueado'
-                ELSE Estado
-            END,
-            FechaBloqueo = CASE
-                WHEN IntentosFallidos + 1 >= 3
-                    THEN SYSUTCDATETIME()
-                ELSE FechaBloqueo
-            END
-        OUTPUT
-            INSERTED.IntentosFallidos AS intentos_fallidos,
-            INSERTED.Estado AS estado_pin
-        WHERE ID_Tarjeta = :id_tarjeta
-          AND Estado = 'Activo'
-          AND TienePINAsignado = 1
-          AND IntentosFallidos < 3
-    """)
-
-    fila = (
-        conn.execute(
-            sql,
-            {"id_tarjeta": id_tarjeta},
-        )
-        .mappings()
-        .first()
-    )
-
-    return dict(fila) if fila is not None else None
-
-
-def reiniciar_intentos_pin(
-    conn: Connection,
-    id_tarjeta: int,
-) -> None:
-    """Reinicia los intentos después de una verificación correcta."""
-
-    sql = text("""
-        UPDATE Tarjetas.TarjetaPIN
-        SET IntentosFallidos = 0
-        WHERE ID_Tarjeta = :id_tarjeta
-          AND Estado = 'Activo'
-          AND TienePINAsignado = 1
-    """)
-
-    conn.execute(sql, {"id_tarjeta": id_tarjeta})
 
 
 def guardar_resultado_pin(
@@ -176,6 +119,7 @@ def guardar_resultado_pin(
             WHERE ID_Tarjeta = :id_tarjeta
               AND Estado = 'Activo'
               AND TienePINAsignado = 1
+              AND IntentosFallidos < 3
         """)
     else:
         sql = text("""
@@ -225,7 +169,8 @@ def obtener_pin_para_verificacion(
             TienePINAsignado AS tiene_pin_asignado,
             IntentosFallidos AS intentos_fallidos,
             Estado AS estado_pin,
-            PINOffset AS pin_offset
+            PINOffset AS pin_offset,
+            ReferenciaClavePVK AS referencia_clave_pvk
         FROM Tarjetas.TarjetaPIN WITH (UPDLOCK, ROWLOCK)
         WHERE ID_Tarjeta = :id_tarjeta
     """)

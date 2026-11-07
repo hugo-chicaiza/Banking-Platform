@@ -153,6 +153,7 @@ def test_validar_estado_pin_activo():
         "estado_pin": "Activo",
         "fecha_bloqueo": None,
         "pin_offset": "1234",
+        "referencia_clave_pvk": "SIM-PVK-01",
     }
 
     with patch(
@@ -188,6 +189,7 @@ def test_validar_estado_pin_rechazado(
         "estado_pin": estado,
         "intentos_fallidos": 0,
         "pin_offset": "1234",
+        "referencia_clave_pvk": "SIM-PVK-01",
     }
 
     with (

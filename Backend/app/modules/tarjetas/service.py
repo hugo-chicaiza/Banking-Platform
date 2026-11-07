@@ -16,6 +16,7 @@ from sqlalchemy.exc import DBAPIError
 
 from app.core.api.errors import problema, traducir_error_bd
 from app.core.security import audit
+from app.core.security.hsm import ErrorHsm, Hsm
 from app.modules.tarjetas import repository
 from app.modules.tarjetas.schemas import (
     PageTarjeta,
@@ -494,3 +495,21 @@ def obtener_historial(
         page_size=page_size,
         total=total,
     )
+
+
+def pan_de_prueba(conn_seguridad: Connection, id_tarjeta: int, hsm: Hsm) -> str:
+    """Interfaz controlada del PAN ficticio (TAR-05, PIN pad simulado y ATM-01).
+
+    Solo existe fuera de producción. Nunca se registra ni se devuelve en la API.
+    """
+    guardado = repository.obtener_pan_ficticio(conn_seguridad, id_tarjeta)
+    if guardado is None:
+        raise problema(
+            503, "PAN_NO_DISPONIBLE", "La tarjeta no tiene un PAN ficticio custodiado."
+        )
+    try:
+        return hsm.descifrar_pan(guardado[0], guardado[1], id_tarjeta)
+    except ErrorHsm:
+        raise problema(
+            503, "PAN_NO_DISPONIBLE", "No se pudo recuperar el PAN ficticio."
+        ) from None
