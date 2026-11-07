@@ -115,16 +115,23 @@ REVERSO = {
 
 
 def preparar_reverso(
-    ctx: Contexto, original: dict[str, Any] | None = None
+    ctx: Contexto,
+    original: dict[str, Any] | None = None,
 ) -> DependenciasFalsas:
     deps = DependenciasFalsas()
+
     ctx.app.dependency_overrides[dependencias_operacion] = lambda: deps
-    filas = iter([original or FILA, REVERSO])
-    ctx.fake("obtener_transaccion", lambda *a: next(filas))
-    ctx.fake("existe_reverso", False)
-    ctx.fake(
-        "movimientos_de_transaccion",
+
+    filas = iter(
         [
+            FILA if original is None else original,
+            REVERSO,
+        ]
+    )
+
+    valores = {
+        "existe_reverso": False,
+        "movimientos_de_transaccion": [
             {
                 "IdMovimiento": 1,
                 "IdCuenta": 501,
@@ -133,25 +140,29 @@ def preparar_reverso(
                 "Monto": Decimal("40.00"),
             }
         ],
-    )
-    ctx.fake("id_fecha_contable", 20261104, caja_repo)
-    ctx.fake("obtener_jornada", {"Estado": "ABIERTA"}, caja_repo)
-    ctx.fake("obtener_cuadre_de_jornada", None, caja_repo)
-    ctx.fake("insertar_transaccion", 2002)
-    ctx.fake("aplicar_movimiento_cuenta", 10)
-    ctx.fake(
-        "movimiento_caja_de_transaccion",
-        {
+        "insertar_transaccion": 2002,
+        "aplicar_movimiento_cuenta": 10,
+        "movimiento_caja_de_transaccion": {
             "IdJornadaCaja": 55,
             "IdAgencia": "001",
             "Monto": Decimal("40.00"),
             "Codigo": "RET_E",
             "Naturaleza": "E",
         },
-    )
-    ctx.fake("id_tipo_movimiento_caja", 3)
-    ctx.fake("insertar_movimiento_caja", None)
-    ctx.fake("marcar_reversada", True)
+        "id_tipo_movimiento_caja": 3,
+        "insertar_movimiento_caja": None,
+        "marcar_reversada": True,
+    }
+
+    ctx.fake("obtener_transaccion", lambda *args: next(filas))
+
+    for nombre, valor in valores.items():
+        ctx.fake(nombre, valor)
+
+    ctx.fake("id_fecha_contable", 20261104, caja_repo)
+    ctx.fake("obtener_jornada", {"Estado": "ABIERTA"}, caja_repo)
+    ctx.fake("obtener_cuadre_de_jornada", None, caja_repo)
+
     return deps
 
 
