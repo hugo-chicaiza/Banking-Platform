@@ -37,7 +37,7 @@ Abrir y administrar las cuentas de los clientes y emitir sus tarjetas de débito
 
 ## Decisiones pendientes
 
-- Dónde se guarda el hash del PIN (G-02, `SeguridadDB.TarjetaPIN`).
+- Hash del PIN (G-02): resuelto en `SeguridadDB.Tarjetas.TarjetaPIN.HashPIN`; falta incluir la columna en la migración F-08.
 - Formato de `NumeroCuenta`.
 
 ## Criterios de finalización

@@ -46,4 +46,10 @@ url: https://github.com/hugo-chicaiza/Banking-Platform/issues/108
 ## Pendiente
 
 - Decidir G-06, G-07, G-12 y G-16.
-- G-02: `SeguridadDB` ya tiene `TarjetaPIN` con intentos y bloqueo, pero sin hash ni salt. Confirmar si la brecha se aplica ahí.
+- Vínculo con WorkOS (aplicado a mano el 2026-11-07, falta en esta migración):
+  - `SeguridadDB.Organizacion.Usuarios.KeyUsuario varchar(64) NULL` con índice único filtrado `UX_Usuarios_KeyUsuario` (`WHERE KeyUsuario IS NOT NULL`): id del usuario en WorkOS.
+  - `CooperativaDB.Organizacion.Agencia.KeyAgencia varchar(64) NULL` con índice único filtrado `UX_Agencia_KeyAgencia`: id de la organización en WorkOS.
+  - `UsuarioID` e `IdAgencia` no cambian; los ids de WorkOS son los del entorno de producción.
+  - `SeguridadDB.Organizacion.Usuarios.RolesWorkOS varchar(200) NULL` y `SeguridadDB.Auditoria.Auditoria.RolesWorkOS varchar(200) NULL`: roles que dio WorkOS, para comparar con `Seguridad.GruposUsuarios` (no se validan).
+- G-02 (rediseñado 2026-11-07, TAR-05 con IBM 3624 PIN Offset): `SeguridadDB.Tarjetas.TarjetaPIN` guarda el Offset en `PINOffset varchar(4)` (ya existía) y la referencia de la PVK en `ReferenciaClavePVK varchar(32) NULL` (agregada a mano). Una asignación pendiente queda con `TienePINAsignado = 0` y `Estado = 'Inactivo'`; confirmada, `1` y `'Activo'`. `HashPIN` (Argon2id) deja de usarse y se elimina tras desplegar el código nuevo.
+- Repositorio aislado de PAN ficticios (TAR-01, solo desarrollo y pruebas, agregado a mano 2026-11-07): esquema `SeguridadDB.Pruebas` y tabla `Pruebas.PanFicticio (IdTarjeta int PK, PanCifrado varbinary(64), ReferenciaClave varchar(32), FechaRegistro datetime2 DEFAULT SYSDATETIME())`. No debe crearse en producción. Ver `Backend/docs/HSM-Thales.md`.

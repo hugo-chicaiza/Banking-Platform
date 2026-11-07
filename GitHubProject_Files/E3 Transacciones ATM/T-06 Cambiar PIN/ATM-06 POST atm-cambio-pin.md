@@ -76,4 +76,4 @@ Formato ProblemDetails (ver F-04). Además de 400/401/403:
 
 ## Pendiente
 
-- Depende de G-02 (hash y salt en `TarjetaPIN`).
+- G-02 resuelto en la base: el PIN actual se verifica y el nuevo se guarda en `SeguridadDB.Tarjetas.TarjetaPIN.HashPIN` con Argon2id, igual que TAR-05.

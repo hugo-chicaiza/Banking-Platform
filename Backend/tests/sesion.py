@@ -26,6 +26,8 @@ USUARIO = Usuario(
     roles=ROLES,
     permisos=(),
     id_agencia="001",
+    # Registrado (KeyUsuario): require_auth deja pasar
+    id_interno=ID_AUDITORIA,
 )
 
 

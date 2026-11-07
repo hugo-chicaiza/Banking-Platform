@@ -56,11 +56,6 @@ class Settings(BaseSettings):
     atm_hsm_pin_generation_key_hex: str = ""
     atm_hsm_key_reference: str = "TEST-KEY-01"
 
-    hsm_sim_clave_pan: SecretStr = SecretStr("")
-    hsm_sim_clave_pvk: SecretStr = SecretStr("")
-    hsm_sim_claves_pin_block: dict[str, SecretStr] = {}
-    hsm_sim_referencia_pin_block: str = "TEST-KEY-01"
-
     # JWT ATM: clave RSA exclusiva, inyectada por configuración segura. Sin valores
     # predeterminados de despliegue: si falta la clave, iss o aud, no se emite sesión.
     atm_jwt_private_key_pem: SecretStr = SecretStr("")
@@ -80,6 +75,17 @@ class Settings(BaseSettings):
     workos_redirect_uri: str = ""
     # Origen del FE (esquema://host[:puerto], sin ruta): redirecciones y control CSRF
     frontend_url: str = ""
+
+    # HSM simulado de tarjetas (app/core/security/hsm.py): claves ficticias en hex.
+    # Vacías = HSM no disponible (503). En producción nunca se usan. Deben ser las
+    # mismas en local y Azure: comparten la base donde está el PAN cifrado.
+    hsm_sim_clave_pan: SecretStr = SecretStr("")  # AES-256: 64 hex
+    hsm_sim_clave_pvk: SecretStr = SecretStr("")  # 3DES IBM 3624: 32 o 48 hex
+    # keyReference -> clave AES-256 del PIN Block ISO-4 (64 hex), en JSON
+    hsm_sim_claves_pin_block: dict[str, SecretStr] = {}
+    # La que usa el endpoint de pruebas que simula el PIN pad
+    hsm_sim_referencia_pin_block: str = "TEST-KEY-01"
+
     # Vínculos administrados por despliegue, nunca por el navegador ni por email.
     workos_audit_user_ids: dict[
         str, Annotated[int, Field(strict=True, ge=1, le=2147483647)]

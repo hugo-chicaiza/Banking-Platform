@@ -203,5 +203,5 @@ def perfil(usuario: Usuario) -> UsuarioSesion:
         id_organizacion=usuario.id_organizacion,
         roles=list(usuario.roles),
         permisos=list(usuario.permisos),
-        id_agencia=usuario.id_agencia,
+        id_agencia=usuario.agencia(),
     )

@@ -1386,11 +1386,9 @@ def test_cta08_error_de_tope_conserva_compatibilidad_global():
 def test_cta08_rechaza_cupos_no_positivos_antes_del_servicio(
     sesion_cuentas, monkeypatch, campo, valor
 ):
-    from app.core.config.settings import get_settings
 
     usuario, dependencia = sesion_cuentas
     app.dependency_overrides[dependencia] = lambda: usuario
-    monkeypatch.setattr(get_settings(), "workos_audit_user_ids", {"user_cta": 12})
 
     def no_ejecutar(*args, **kwargs):
         raise AssertionError("Un cupo no positivo debe rechazarse antes del servicio")
@@ -1535,6 +1533,7 @@ def sesion_cuentas(monkeypatch):
         roles=("ADMIN",),
         permisos=(),
         id_agencia="001",
+        id_interno=12,
     )
     monkeypatch.setattr(
         service,
@@ -1595,10 +1594,7 @@ def test_cta_roles_efectivos_http(
 ):
     from dataclasses import replace
 
-    from app.core.config.settings import get_settings
-
     usuario, dependencia = sesion_cuentas
-    monkeypatch.setattr(get_settings(), "workos_audit_user_ids", {"user_cta": 12})
     app.dependency_overrides[dependencia] = lambda: replace(usuario, roles=(rol,))
     respuesta = asyncio.run(_http_cuentas(method, path, body))
     assert respuesta.status_code == (200 if rol in permitidos else 403)
@@ -1618,25 +1614,24 @@ def test_cta_sin_sesion_401(sesion_cuentas, method, path, body, permitidos):
 def test_cta_escrituras_exigen_usuario_auditoria_real(
     sesion_cuentas, monkeypatch, index
 ):
-    from app.core.config.settings import get_settings
 
     usuario, dependencia = sesion_cuentas
-    app.dependency_overrides[dependencia] = lambda: usuario
-    monkeypatch.setattr(get_settings(), "workos_audit_user_ids", {})
+    from dataclasses import replace
+
+    app.dependency_overrides[dependencia] = lambda: replace(usuario, id_interno=None)
     method, path, body, _ = _RUTAS_NUEVAS[index]
     respuesta = asyncio.run(_http_cuentas(method, path, body))
     assert (
         respuesta.status_code == 403
-        and respuesta.json()["code"] == "USUARIO_SIN_VINCULO_AUDITORIA"
+        # require_auth lo rechaza antes de la ruta
+        and respuesta.json()["code"] == "USUARIO_NO_REGISTRADO"
     )
 
 
 def test_cta05_router_propaga_identidad_ip_y_traza(sesion_cuentas, monkeypatch):
-    from app.core.config.settings import get_settings
 
     usuario, dependencia = sesion_cuentas
     app.dependency_overrides[dependencia] = lambda: usuario
-    monkeypatch.setattr(get_settings(), "workos_audit_user_ids", {"user_cta": 12})
     llamadas = []
 
     def cambiar(*args):
@@ -1698,11 +1693,9 @@ def test_cta_nuevos_contratos_openapi():
 
 @pytest.mark.parametrize("index", [0, 2])
 def test_cta_escrituras_rechazan_body_extra_http(sesion_cuentas, monkeypatch, index):
-    from app.core.config.settings import get_settings
 
     usuario, dependencia = sesion_cuentas
     app.dependency_overrides[dependencia] = lambda: usuario
-    monkeypatch.setattr(get_settings(), "workos_audit_user_ids", {"user_cta": 12})
     method, path, body, _ = _RUTAS_NUEVAS[index]
     respuesta = asyncio.run(_http_cuentas(method, path, body | {"modificadoPor": 999}))
     assert respuesta.status_code == 400
@@ -1747,11 +1740,9 @@ def test_cta09_convierte_datetime2_local_sin_inventar_columnas():
 def test_cta08_trigger_rollback_y_error_http_sanitizado(
     sesion_cuentas, monkeypatch, etapa
 ):
-    from app.core.config.settings import get_settings
 
     usuario, dependencia = sesion_cuentas
     app.dependency_overrides[dependencia] = lambda: usuario
-    monkeypatch.setattr(get_settings(), "workos_audit_user_ids", {"user_cta": 12})
     # Restaurar solo el servicio: se conservan los dobles de auditoría y autenticación.
     monkeypatch.setattr(service, "actualizar_cupo", _actualizar_cupo_servicio)
     db = _db_actualizar_cupo()

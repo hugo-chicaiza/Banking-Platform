@@ -39,4 +39,4 @@ url: https://github.com/hugo-chicaiza/Banking-Platform/issues/5
 
 ## Pendiente
 
-- G-02 (aplicar): hash, salt e intentos del PIN. Definir N, ventana de conteo y desbloqueo.
+- G-02 (resuelto en la base, falta F-08): hash (`HashPIN`, Argon2id con salt) e intentos (`IntentosFallidos`) en `SeguridadDB.Tarjetas.TarjetaPIN`. Por definir: N, ventana de conteo y desbloqueo.

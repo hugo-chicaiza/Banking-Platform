@@ -70,7 +70,7 @@ Errores de la DB (`THROW 5xxxx`). Regla general: no existe → 404; estado, dobl
 | 51401-51403 | Contabilizar asiento (`usp_ContabilizarAsiento`) | 404 / 409 / 422 | 51403 `ASIENTO_DESCUADRADO` |
 | 51501-51504 | Cierre de período (`usp_CerrarPeriodo`) | 404 / 409 | 51502 `PERIODO_CERRADO` |
 | 51601 | Cierre diario (`usp_ValidarCierreDiario`) | 409 | `CIERRE_DIARIO_BLOQUEADO` |
-| 52001-52005 | Cuentas y tarjetas (triggers) | 409 / 422 | 52001 `CLIENTE_NO_ACTIVO`, 52002 `CUENTA_NO_ACTIVA`, 52003 `CUPO_EXCEDE_PRODUCTO`, 52005 `TRANSICION_TARJETA_INVALIDA` |
+| 52001-52005 | Cuentas y tarjetas (triggers) | 409 / 422 | 52001 `CLIENTE_NO_ACTIVO`, 52002 `CUENTA_NO_ACTIVA`, 52003 `CUPO_EXCEDE_PRODUCTO`, 52005 `TRANSICION_INVALIDA` |
 | 52101-52105 | Apertura de cuenta (`usp_AbrirCuenta`) | 404 / 409 / 422 | 52102 `CLIENTE_NO_ACTIVO`, 52105 `MONTO_APERTURA_INSUFICIENTE` |
 | 52201-52203 | Movimiento de cuenta (`usp_AplicarMovimientoCuenta`) | 404 / 422 | 52203 `FONDOS_INSUFICIENTES` |
 | 53001-53003 | Transacciones (trigger) | 409 / 422 | 53001 `CANAL_NO_CUMPLE`, 53002 `REVERSO_NO_PERMITIDO` |
