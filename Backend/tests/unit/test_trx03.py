@@ -20,33 +20,70 @@ from tests.caja_contexto import ID_SUPERVISOR, Contexto, code, crear_contexto, u
 BASE = "/api/v1/transacciones"
 
 
-FILA = {
-    "IdTransaccion": 2001,
-    "NumeroComprobante": "COMP-001",
-    "RegistroUnico": "ATM000000002",
-    "MTI": "0200",
-    "STAN": "000001",
-    "RRN": "000000000001",
-    "TipoOperacion": "Normal",
-    "TipoTransaccion": "Retiro",
-    "IdCuenta": 501,
-    "IdCuentaDestino": None,
-    "IdTarjeta": None,
-    "IdCanal": 4,
-    "IdTerminal": None,
-    "IdAgencia": "001",
-    "IdJornadaCaja": None,
-    "IdTransaccionRelacionada": None,
-    "Monto": Decimal("40.00"),
-    "CodigoRespuesta": "00",
-    "Estado": "Completada",
-    "IdFechaContable": 20261104,
-    "FechaHoraSistema": datetime(2026, 11, 4, 10, 15),
-    "CreadoPor": 7,
-    "NumeroAutorizacion": None,
-    "AgenciaOperacion": "001",
-}
+def crear_fila_original(**cambios: Any) -> dict[str, Any]:
+    """Construye una transacción de prueba para los escenarios de reverso."""
+    fila = dict(
+        zip(
+            (
+                "IdTransaccion",
+                "NumeroComprobante",
+                "RegistroUnico",
+                "MTI",
+                "STAN",
+                "RRN",
+                "TipoOperacion",
+                "TipoTransaccion",
+                "IdCuenta",
+                "IdCuentaDestino",
+                "IdTarjeta",
+                "IdCanal",
+                "IdTerminal",
+                "IdAgencia",
+                "IdJornadaCaja",
+                "IdTransaccionRelacionada",
+                "Monto",
+                "CodigoRespuesta",
+                "Estado",
+                "IdFechaContable",
+                "FechaHoraSistema",
+                "CreadoPor",
+                "NumeroAutorizacion",
+                "AgenciaOperacion",
+            ),
+            (
+                2001,
+                "COMP-001",
+                "ATM000000002",
+                "0200",
+                "000001",
+                "000000000001",
+                "Normal",
+                "Retiro",
+                501,
+                None,
+                None,
+                4,
+                None,
+                "001",
+                None,
+                None,
+                Decimal("40.00"),
+                "00",
+                "Completada",
+                20261104,
+                datetime(2026, 11, 4, 10, 15),
+                7,
+                None,
+                "001",
+            ),
+            strict=True,
+        )
+    )
+    fila.update(cambios)
+    return fila
 
+
+FILA = crear_fila_original()
 
 @pytest.fixture
 def ctx(monkeypatch: pytest.MonkeyPatch) -> Iterator[Contexto]:
