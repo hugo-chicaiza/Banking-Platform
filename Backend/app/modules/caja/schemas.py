@@ -256,3 +256,56 @@ class Devolucion(CamelModel):
 class AutorizacionCuadre(Entrada):
     autorizado_por: IdInt
     observaciones: Texto500 | None = None
+
+
+# --- CAJ-09: depósito en ventanilla ----------
+
+
+RegistroUnico = Annotated[
+    str,
+    StringConstraints(
+        min_length=12,
+        max_length=12,
+        pattern=r"^[A-Za-z0-9]{12}$",
+    ),
+]
+
+
+class OperacionVentanilla(Entrada):
+    """Depósito CAJ-09 y retiro CAJ-11."""
+
+    id_cuenta: IdInt
+    monto: MontoPositivo
+    registro_unico: RegistroUnico
+    desglose: DesgloseLista | None = None
+    observacion: (
+        Annotated[
+            str,
+            StringConstraints(
+                strip_whitespace=True,
+                min_length=1,
+                max_length=300,
+            ),
+        ]
+        | None
+    ) = None
+
+    @model_validator(mode="after")
+    def _desglose_unico(self) -> "OperacionVentanilla":
+        sin_denominaciones_repetidas(self.desglose)
+        return self
+
+
+class Comprobante(CamelModel):
+    id_transaccion: int
+    numero_comprobante: str
+    tipo_transaccion: str | None = None
+    estado: str
+    codigo_respuesta: str
+    descripcion_respuesta: str | None = None
+    monto: Money | None = None
+    comision: Money | None = None
+    saldo_disponible: Money | None = None
+    denominaciones: list[Desglose] | None = None
+    fecha_hora_sistema: FechaHoraEc | None = None
+    numero_autorizacion: str | None = None

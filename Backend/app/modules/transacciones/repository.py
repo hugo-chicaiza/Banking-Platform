@@ -4,6 +4,8 @@ from typing import Any
 
 from sqlalchemy import Connection, text
 
+from app.core.database.procedimientos import ejecutar_con_salidas
+
 Fila = dict[str, Any]
 
 _COLUMNAS = """
@@ -102,3 +104,351 @@ def obtener_transaccion(
     )
 
     return dict(fila) if fila is not None else None
+
+
+# --- CAJ-09/11 y TRX-03: escritura -----------------------------
+
+
+def buscar_por_registro_unico(
+    conn: Connection,
+    registro_unico: str,
+) -> Fila | None:
+    """Busca una transacción previa y bloquea el registro."""
+
+    fila = (
+        conn.execute(
+            text(
+                """
+                SELECT
+                    t.IdTransaccion,
+                    t.NumeroComprobante,
+                    t.TipoTransaccion,
+                    t.Estado,
+                    t.CodigoRespuesta,
+                    t.Monto,
+                    t.IdCuenta,
+                    t.IdJornadaCaja,
+                    t.CreadoPor,
+                    t.FechaHoraSistema,
+                    t.NumeroAutorizacion
+                FROM Transacciones.Transaccion AS t
+                    WITH (UPDLOCK, HOLDLOCK)
+                WHERE t.RegistroUnico = :registro_unico
+                """
+            ),
+            {"registro_unico": registro_unico},
+        )
+        .mappings()
+        .first()
+    )
+
+    return dict(fila) if fila is not None else None
+
+
+def obtener_cuenta(
+    conn: Connection,
+    id_cuenta: int,
+) -> Fila | None:
+    """Obtiene y bloquea la cuenta durante la operación."""
+
+    fila = (
+        conn.execute(
+            text(
+                """
+                SELECT
+                    IdCuenta,
+                    IdAgencia,
+                    Saldo,
+                    SaldoRetenido,
+                    Estado
+                FROM Cuentas.Cuenta WITH (UPDLOCK, HOLDLOCK)
+                WHERE IdCuenta = :id
+                """
+            ),
+            {"id": id_cuenta},
+        )
+        .mappings()
+        .first()
+    )
+
+    return dict(fila) if fila is not None else None
+
+
+def saldo_disponible(
+    conn: Connection,
+    id_cuenta: int,
+) -> Any:
+    """Calcula el saldo disponible de la cuenta."""
+
+    return conn.execute(
+        text(
+            """
+            SELECT Saldo - SaldoRetenido
+            FROM Cuentas.Cuenta
+            WHERE IdCuenta = :id
+            """
+        ),
+        {"id": id_cuenta},
+    ).scalar_one()
+
+
+def autorizar_operacion(
+    conn: Connection,
+    id_cuenta: int,
+    id_canal: int,
+    tipo: str,
+    monto: Any,
+) -> Fila:
+    """Ejecuta Transacciones.usp_AutorizarOperacion."""
+
+    return ejecutar_con_salidas(
+        conn,
+        """
+        SET NOCOUNT ON;
+
+        DECLARE
+            @CodigoRespuesta char(2),
+            @Mensaje nvarchar(400),
+            @Comision decimal(18, 2),
+            @Ahora datetime2 = GETDATE();
+
+        EXEC Transacciones.usp_AutorizarOperacion
+            @IdCuenta = ?,
+            @IdCanal = ?,
+            @TipoTransaccion = ?,
+            @Monto = ?,
+            @FechaHora = @Ahora,
+            @CodigoRespuesta = @CodigoRespuesta OUTPUT,
+            @Mensaje = @Mensaje OUTPUT,
+            @Comision = @Comision OUTPUT;
+
+        SELECT
+            @CodigoRespuesta AS CodigoRespuesta,
+            @Mensaje AS Mensaje,
+            @Comision AS Comision;
+        """,
+        (id_cuenta, id_canal, tipo, monto),
+    )
+
+
+def insertar_transaccion(
+    conn: Connection,
+    datos: dict[str, Any],
+) -> int:
+    """Inserta una transacción y devuelve su identificador."""
+
+    fila = conn.execute(
+        text(
+            """
+            SET NOCOUNT ON;
+
+            DECLARE @ids TABLE (Id bigint);
+            DECLARE @Ahora datetime2 = GETDATE();
+
+            INSERT INTO Transacciones.Transaccion (
+                NumeroComprobante,
+                Secuencial,
+                RegistroUnico,
+                NumeroAutorizacion,
+                MTI,
+                CodigoProcesamiento,
+                STAN,
+                RRN,
+                TipoOperacion,
+                TipoTransaccion,
+                IdCuenta,
+                IdCuentaDestino,
+                IdCanal,
+                IdAgencia,
+                IdJornadaCaja,
+                IdTransaccionRelacionada,
+                Monto,
+                CodigoPaisOrigen,
+                FechaHoraSistema,
+                FechaRegistro,
+                CodigoRespuesta,
+                DireccionIP,
+                Estado,
+                CreadoPor,
+                IdFechaContable,
+                FechaSistema,
+                HoraSistema,
+                FechaDispositivo,
+                HoraDispositivo
+            )
+            OUTPUT INSERTED.IdTransaccion INTO @ids
+            VALUES (
+                :numero_comprobante,
+                :secuencial,
+                :registro_unico,
+                :numero_autorizacion,
+                :mti,
+                :codigo_procesamiento,
+                :stan,
+                :rrn,
+                :tipo_operacion,
+                :tipo_transaccion,
+                :id_cuenta,
+                :id_cuenta_destino,
+                :id_canal,
+                :id_agencia,
+                :id_jornada,
+                :id_relacionada,
+                :monto,
+                :codigo_pais,
+                @Ahora,
+                @Ahora,
+                :codigo_respuesta,
+                :ip,
+                :estado,
+                :creado_por,
+                :id_fecha_contable,
+                CAST(@Ahora AS date),
+                CAST(@Ahora AS time),
+                CAST(@Ahora AS date),
+                CAST(@Ahora AS time)
+            );
+
+            SELECT Id FROM @ids;
+            """
+        ),
+        datos,
+    ).first()
+
+    if fila is None:
+        raise RuntimeError("La BD no devolvió el id de la transacción")
+
+    return int(fila[0])
+
+
+def aplicar_movimiento_cuenta(
+    conn: Connection,
+    id_transaccion: int,
+    id_cuenta: int,
+    tipo: str,
+    rol: str | None,
+    monto: Any,
+    id_fecha_contable: int,
+) -> int:
+    """Aplica el movimiento de crédito o débito a la cuenta."""
+
+    salida = ejecutar_con_salidas(
+        conn,
+        """
+        SET NOCOUNT ON;
+
+        DECLARE @IdMovimiento bigint;
+
+        EXEC Cuentas.usp_AplicarMovimientoCuenta
+            @IdTransaccion = ?,
+            @IdCuenta = ?,
+            @TipoMovimiento = ?,
+            @RolCuenta = ?,
+            @Monto = ?,
+            @IdFechaContable = ?,
+            @IdMovimiento = @IdMovimiento OUTPUT;
+
+        SELECT @IdMovimiento AS IdMovimiento;
+        """,
+        (
+            id_transaccion,
+            id_cuenta,
+            tipo,
+            rol,
+            monto,
+            id_fecha_contable,
+        ),
+    )
+
+    return int(salida["IdMovimiento"])
+
+
+def id_tipo_movimiento_caja(
+    conn: Connection,
+    codigo: str,
+) -> int | None:
+    """Obtiene el identificador del tipo de movimiento de caja."""
+
+    valor = conn.execute(
+        text(
+            """
+            SELECT IdTipoMovimientoCaja
+            FROM Caja.TipoMovimientoCaja
+            WHERE Codigo = :codigo
+            """
+        ),
+        {"codigo": codigo},
+    ).scalar()
+
+    return int(valor) if valor is not None else None
+
+
+def insertar_movimiento_caja(
+    conn: Connection,
+    id_transaccion: int,
+    id_jornada: int,
+    id_agencia: str,
+    id_tipo: int,
+    monto: Any,
+    observacion: str | None,
+    id_asiento: int | None,
+    id_fecha_contable: int,
+) -> None:
+    """Registra el movimiento físico de caja."""
+
+    conn.execute(
+        text(
+            """
+            INSERT INTO Caja.MovimientosCaja (
+                IdTransaccion,
+                IdJornadaCaja,
+                IdAgencia,
+                IdTipoMovimiento,
+                Monto,
+                FechaHora,
+                Observacion,
+                IdAsientoContable,
+                IdFechaContable
+            )
+            VALUES (
+                :id_transaccion,
+                :id_jornada,
+                :id_agencia,
+                :id_tipo,
+                :monto,
+                GETDATE(),
+                :observacion,
+                :id_asiento,
+                :id_fecha_contable
+            )
+            """
+        ),
+        {
+            "id_transaccion": id_transaccion,
+            "id_jornada": id_jornada,
+            "id_agencia": id_agencia,
+            "id_tipo": id_tipo,
+            "monto": monto,
+            "observacion": observacion,
+            "id_asiento": id_asiento,
+            "id_fecha_contable": id_fecha_contable,
+        },
+    )
+
+
+def comision_de(
+    conn: Connection,
+    id_transaccion: int,
+) -> Any:
+    """Obtiene la comisión total de una transacción."""
+
+    return conn.execute(
+        text(
+            """
+            SELECT COALESCE(SUM(MontoAplicado), 0)
+            FROM Transacciones.TransaccionComision
+            WHERE IdTransaccion = :id
+            """
+        ),
+        {"id": id_transaccion},
+    ).scalar_one()

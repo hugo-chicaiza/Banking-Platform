@@ -1,7 +1,7 @@
 from datetime import date, timedelta
 from typing import Any
 
-from sqlalchemy import Connection, text
+from sqlalchemy import Connection, bindparam, text
 
 from app.core.database.procedimientos import ejecutar_con_salidas
 
@@ -958,3 +958,39 @@ def cerrar_jornada(conn: Connection, id_jornada: int) -> bool:
         {"id": id_jornada},
     )
     return resultado.rowcount == 1
+
+
+# --- CAJ-09: depósito en ventanilla ----------
+
+
+def dotacion_inicial_registrada(conn: Connection, id_jornada: int) -> bool:
+    fila = _fila(
+        conn,
+        """
+        SELECT TOP (1) 1 AS Existe
+        FROM Caja.DotacionesCaja
+        WHERE IdJornadaCaja = :id
+          AND TipoDotacion = 'INICIAL'
+        """,
+        {"id": id_jornada},
+    )
+    return fila is not None
+
+
+def valores_denominaciones(conn: Connection, ids: list[int]) -> dict[int, Any]:
+    """Obtiene el valor facial de las denominaciones."""
+    if not ids:
+        return {}
+
+    sentencia = text(
+        """
+        SELECT IdDenominacion, Valor
+        FROM Catalogo.Denominacion
+        WHERE IdDenominacion IN :ids
+        """
+    ).bindparams(bindparam("ids", expanding=True))
+
+    return {
+        int(fila["IdDenominacion"]): fila["Valor"]
+        for fila in conn.execute(sentencia, {"ids": ids}).mappings()
+    }
