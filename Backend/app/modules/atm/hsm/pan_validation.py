@@ -1,5 +1,6 @@
-import hashlib
 import hmac
+
+from app.modules.tarjetas.identificacion import hash_pan
 
 
 def validar_hash_pan(
@@ -15,14 +16,12 @@ def validar_hash_pan(
         return False
 
     if isinstance(hash_almacenado, (bytes, bytearray, memoryview)):
-        return hmac.compare_digest(
-            hashlib.sha256(pan.encode("ascii")).digest(), bytes(hash_almacenado)
-        )
+        return hmac.compare_digest(hash_pan(pan), bytes(hash_almacenado))
 
     if not isinstance(hash_almacenado, str):
         return False
 
-    hash_calculado = hashlib.sha256(pan.encode("ascii")).hexdigest()
+    hash_calculado = hash_pan(pan).hex()
 
     return hmac.compare_digest(
         hash_calculado.lower(),

@@ -23,6 +23,8 @@ _PUBLICAS = {
     ("GET", "/api/v1/auth/callback"),
     ("POST", "/api/v1/auth/logout"),  # AUT-03: idempotente, sin sesión responde 200
 }
+# ATM autentica un terminal por HTTPS y credencial propia, sin sesión WorkOS.
+_TERMINALES = {("POST", "/api/v1/atm/auth")}
 _VALORES_PATH = {"codigo_pais": "ECU", "fecha": "2026-11-04"}
 
 # Roles de cada tarea (GitHubProject_Files)
@@ -107,6 +109,7 @@ ROLES_POR_RUTA: dict[tuple[str, str], tuple[str, ...]] = {
     ("GET", "/api/v1/tarjetas/{idTarjeta}"): ("ASESOR", "SUPERVISOR", "ADMIN"),
     ("POST", "/api/v1/tarjetas/{idTarjeta}/estado"): ("ASESOR", "SUPERVISOR", "ADMIN"),
     ("POST", "/api/v1/tarjetas/{idTarjeta}/pin"): ("ASESOR", "ADMIN"),
+    ("POST", "/api/v1/pruebas/pin-block"): ("ADMIN",),
     ("GET", "/api/v1/tarjetas/{idTarjeta}/historial"): (
         "SUPERVISOR",
         "AUDITOR",
@@ -127,6 +130,16 @@ def _rutas_api() -> list[tuple[str, str]]:
 
 def _concreta(ruta: str) -> str:
     return re.sub(r"\{(\w+)\}", lambda m: _VALORES_PATH.get(m.group(1), "1"), ruta)
+
+
+@pytest.fixture(autouse=True)
+def _pin_pad_simulado_habilitado(monkeypatch):
+    """Prueba permisos del PIN pad sin habilitarlo en producción real."""
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(
+        tarjetas_router, "get_settings", lambda: SimpleNamespace(app_env="development")
+    )
 
 
 @pytest.fixture
@@ -150,11 +163,13 @@ def _code(respuesta) -> str:
 
 
 def test_tabla_de_roles_cubre_todas_las_rutas_protegidas():
-    protegidas = set(_rutas_api()) - _PUBLICAS - {("POST", "/api/v1/auth/refresh")}
+    protegidas = (
+        set(_rutas_api()) - _PUBLICAS - _TERMINALES - {("POST", "/api/v1/auth/refresh")}
+    )
     assert protegidas == set(ROLES_POR_RUTA)
 
 
-@pytest.mark.parametrize("ruta", sorted(set(_rutas_api()) - _PUBLICAS))
+@pytest.mark.parametrize("ruta", sorted(set(_rutas_api()) - _PUBLICAS - _TERMINALES))
 def test_toda_ruta_de_la_api_exige_sesion(client, eventos_auditados, ruta):
     metodo, path = ruta
 
@@ -169,6 +184,17 @@ def test_toda_ruta_de_la_api_exige_sesion(client, eventos_auditados, ruta):
         None,
     )
     assert evento.descripcion.startswith(f"401 {metodo} {_concreta(path)} trace=")
+
+
+def test_atm_registrado_exige_credencial_aun_con_sesion_workos(
+    client, eventos_auditados
+):
+    simular_sesion(app, USUARIO)
+    respuesta = client.post("https://testserver/api/v1/atm/auth")
+    assert respuesta.status_code == 401
+    assert _code(respuesta) == "TERMINAL_NO_AUTORIZADO"
+    assert eventos_auditados[-1].accion == "ACCESO_DENEGADO"
+    assert "/api/v1/atm/auth" in app.openapi()["paths"]
 
 
 @pytest.mark.parametrize(

@@ -1,7 +1,10 @@
+from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Any
 
+from fastapi import HTTPException
 from sqlalchemy import Connection
+from sqlalchemy.exc import SQLAlchemyError
 
 from app.core.api.errors import problema
 from app.core.database.db import get_engine
@@ -15,7 +18,90 @@ from app.core.security.hsm import (
 )
 from app.modules.atm import repository
 from app.modules.atm.hsm.pan_validation import validar_hash_pan
+from app.modules.atm.schemas import ATMAuthRequest, CuentaATM
+from app.modules.tarjetas import repository as tarjetas_repository
+from app.modules.tarjetas.identificacion import hash_pan
 from app.modules.tarjetas.service import pan_de_prueba
+
+
+@dataclass(frozen=True)
+class AccesoATMValidado:
+    """Contexto interno sin PAN, PIN Block ni token; no es una sesión emitida."""
+
+    id_atm: int
+    id_tarjeta: int
+    titular: str
+    cuentas: list[CuentaATM]
+
+
+def identificar_tarjeta(conn: Connection, numero_tarjeta: str) -> int:
+    """Reutiliza el hash binario de TAR-01 y consulta sin enviar el PAN a SQL."""
+    id_tarjeta = tarjetas_repository.obtener_id_tarjeta_por_hash(
+        conn, hash_pan(numero_tarjeta)
+    )
+    if id_tarjeta is None:
+        raise problema(409, "TARJETA_NO_ACTIVA", "La tarjeta no está activa.")
+    return id_tarjeta
+
+
+async def validar_acceso_atm(
+    conn: Connection,
+    entrada: ATMAuthRequest,
+    *,
+    usuario_bloqueo: int | None = None,
+    ip: str | None = None,
+) -> AccesoATMValidado:
+    """Preparación interna: llamar solo después de autenticar la identidad del terminal.
+
+    Valida terminal, tarjeta, PIN y cuenta. No publica rutas ni emite JWT.
+    """
+    atm = validar_terminal(conn, entrada.codigo_atm)
+    id_tarjeta = identificar_tarjeta(conn, entrada.numero_tarjeta.get_secret_value())
+    tarjeta = validar_tarjeta(conn, id_tarjeta)
+    try:
+        await autenticar_pin_ficticio_atm(
+            conn,
+            id_tarjeta,
+            entrada.encrypted_pin_block.get_secret_value(),
+            entrada.key_reference,
+        )
+    except HTTPException as exc:
+        detalle = exc.detail if isinstance(exc.detail, dict) else {}
+        if detalle.get("code") == "PIN_BLOQUEADO" and usuario_bloqueo is not None:
+            # El contador en SeguridadDB ya quedó confirmado. La tarjeta y su
+            # historial se confirman juntos en CooperativaDB, sin revertir intentos.
+            # Si falla, el PIN sigue bloqueado y el siguiente acceso reintenta.
+            try:
+                with get_engine("cooperativa").begin() as conn_bloqueo:
+                    repository.bloquear_tarjeta_por_pin(
+                        conn_bloqueo, id_tarjeta, atm["id_canal"], usuario_bloqueo, ip
+                    )
+            except SQLAlchemyError:
+                raise problema(
+                    503,
+                    "BLOQUEO_NO_CONFIRMADO",
+                    "No se pudo completar el bloqueo de la tarjeta.",
+                ) from None
+        raise
+    cuentas = [
+        CuentaATM(
+            id_cuenta=fila["id_cuenta"],
+            numero_cuenta_enmascarado="*" * max(len(fila["numero_cuenta"]) - 4, 4)
+            + fila["numero_cuenta"][-4:],
+            tipo_cuenta=fila["tipo_cuenta"],
+        )
+        for fila in repository.obtener_cuentas_autorizadas(conn, id_tarjeta)
+    ]
+    if not cuentas:
+        raise problema(
+            409, "CUENTA_NO_ACTIVA", "No hay cuentas habilitadas para operar."
+        )
+    titular = " ".join(
+        parte
+        for parte in (tarjeta["nombres_titular"], tarjeta["apellidos_titular"])
+        if parte
+    )
+    return AccesoATMValidado(atm["id_atm"], id_tarjeta, titular, cuentas)
 
 
 def validar_terminal(

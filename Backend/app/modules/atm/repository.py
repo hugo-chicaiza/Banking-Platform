@@ -72,6 +72,27 @@ def obtener_tarjeta(
     return dict(fila) if fila is not None else None
 
 
+def obtener_cuentas_autorizadas(
+    conn: Connection, id_tarjeta: int
+) -> list[dict[str, Any]]:
+    """Solo la cuenta activa vinculada a la tarjeta, incluidas las extensiones."""
+    filas = conn.execute(
+        text(
+            """
+            SELECT c.IdCuenta AS id_cuenta, c.NumeroCuenta AS numero_cuenta,
+                   p.TipoCuenta AS tipo_cuenta
+            FROM Tarjeta.Tarjeta AS t
+            INNER JOIN Cuentas.Cuenta AS c ON c.IdCuenta = t.IdCuenta
+            INNER JOIN ProductosFinancieros.Producto AS p ON p.IdProducto = c.IdProducto
+            WHERE t.IdTarjeta = :id_tarjeta AND t.Estado = 'Activa'
+              AND c.Estado = 'Activa' AND p.TipoCuenta IN ('Ahorro', 'Corriente')
+            """
+        ),
+        {"id_tarjeta": id_tarjeta},
+    ).mappings()
+    return [dict(fila) for fila in filas]
+
+
 def obtener_estado_pin(
     conn: Connection,
     id_tarjeta: int,
@@ -101,6 +122,43 @@ def obtener_estado_pin(
     )
 
     return dict(fila) if fila is not None else None
+
+
+def bloquear_tarjeta_por_pin(
+    conn: Connection,
+    id_tarjeta: int,
+    id_canal: int,
+    usuario: int,
+    ip: str | None,
+) -> None:
+    """Bloqueo idempotente y TarjetaHis en la transacción del llamador; canal ATM."""
+    estado = conn.execute(
+        text(
+            "SELECT Estado FROM Tarjeta.Tarjeta WITH (UPDLOCK, ROWLOCK) WHERE IdTarjeta = :id"
+        ),
+        {"id": id_tarjeta},
+    ).scalar_one_or_none()
+    if estado != "Activa":
+        # No sobrescribir cancelaciones/vencimientos ni duplicar historial.
+        return
+    conn.execute(
+        text(
+            "UPDATE Tarjeta.Tarjeta SET Estado = 'Bloqueada' WHERE IdTarjeta = :id AND Estado = 'Activa'"
+        ),
+        {"id": id_tarjeta},
+    )
+    conn.execute(
+        text("""
+            INSERT INTO Tarjeta.TarjetaHis (
+                IdTarjeta, TipoEvento, EstadoAnterior, EstadoActual, Descripcion,
+                IdCanal, RealizadoPor, DireccionIP
+            ) VALUES (
+                :id, 'Bloqueo', 'Activa', 'Bloqueada',
+                'Bloqueo por intentos de PIN en ATM', :canal, :usuario, :ip
+            )
+        """),
+        {"id": id_tarjeta, "canal": id_canal, "usuario": usuario, "ip": ip},
+    )
 
 
 def guardar_resultado_pin(

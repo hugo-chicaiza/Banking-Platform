@@ -1,14 +1,11 @@
-import hashlib
 import logging
 import secrets
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import date, timedelta, timezone
-from itertools import pairwise
 from typing import Any
 
-from argon2 import PasswordHasher
 from fastapi import HTTPException
 from pydantic import SecretStr
 from sqlalchemy import Connection
@@ -16,11 +13,20 @@ from sqlalchemy.exc import DBAPIError
 
 from app.core.api.errors import problema, traducir_error_bd
 from app.core.security import audit
-from app.core.security.hsm import ErrorHsm, Hsm
+from app.core.security.hsm import (
+    ClaveNoAutorizada,
+    ErrorHsm,
+    Hsm,
+    PinBlockInvalido,
+    PinDebil,
+    obtener_hsm,
+)
 from app.modules.tarjetas import repository
+from app.modules.tarjetas.identificacion import hash_pan
 from app.modules.tarjetas.schemas import (
     PageTarjeta,
     PageTarjetaHistorial,
+    PinBlockPrueba,
     Tarjeta,
     TarjetaCreate,
     TarjetaEstadoUpdate,
@@ -29,9 +35,6 @@ from app.modules.tarjetas.schemas import (
 )
 
 logger = logging.getLogger(__name__)
-
-# Parámetros por defecto de argon2-cffi. La salt queda dentro del hash
-_hasher = PasswordHasher()
 
 _LONGITUD_PAN = 16
 _ESTADOS_TERMINALES = {"Cancelada", "Anulada", "Vencida", "Cerrada"}
@@ -115,6 +118,54 @@ def _ordenamiento(
     return campo, direccion
 
 
+# HSM y PAN ficticio (TAR-01, TAR-05, ATM-01)
+
+
+def _error_hsm(exc: ErrorHsm, code_no_disponible: str) -> HTTPException:
+    """Traduce el error del HSM sin detalles criptográficos."""
+    if isinstance(exc, ClaveNoAutorizada):
+        return problema(
+            422, "CLAVE_NO_AUTORIZADA", "La referencia de clave no está autorizada."
+        )
+    if isinstance(exc, PinBlockInvalido):
+        return problema(422, "PIN_BLOCK_INVALIDO", "El PIN Block no es válido.")
+    if isinstance(exc, PinDebil):
+        return problema(422, "PIN_DEBIL", "El PIN es demasiado simple.")
+    return problema(
+        503, code_no_disponible, "No se pudo completar el procesamiento criptográfico."
+    )
+
+
+def _hsm(code_no_disponible: str) -> Hsm:
+    try:
+        return obtener_hsm()
+    except ErrorHsm as exc:
+        raise _error_hsm(exc, code_no_disponible) from None
+
+
+def pan_de_prueba(conn_seguridad: Connection, id_tarjeta: int, hsm: Hsm) -> str:
+    """Interfaz controlada del PAN ficticio (TAR-05, PIN pad simulado y ATM-01).
+
+    Solo existe fuera de producción. Nunca se registra ni se devuelve en la API.
+    """
+    guardado = repository.obtener_pan_ficticio(conn_seguridad, id_tarjeta)
+    if guardado is None:
+        raise problema(
+            503, "PAN_NO_DISPONIBLE", "La tarjeta no tiene un PAN ficticio custodiado."
+        )
+    try:
+        return hsm.descifrar_pan(guardado[0], guardado[1], id_tarjeta)
+    except ErrorHsm:
+        raise problema(
+            503, "PAN_NO_DISPONIBLE", "No se pudo recuperar el PAN ficticio."
+        ) from None
+
+
+def _rollback(*conexiones: Connection) -> None:
+    for conn in conexiones:
+        conn.rollback()
+
+
 # TAR-01
 
 
@@ -190,13 +241,56 @@ def _validar_envio(conn: Connection, payload: TarjetaCreate) -> None:
 
 
 def crear_tarjeta(
-    conn: Connection, payload: TarjetaCreate, usuario: int, ip: str | None
+    conn: Connection,
+    conn_seguridad: Connection,
+    payload: TarjetaCreate,
+    usuario: int,
+    ip: str | None,
+) -> Tarjeta:
+    """Emite la tarjeta y custodia su PAN ficticio cifrado (repositorio de pruebas).
+
+    _transaccion confirma primero SeguridadDB (PAN) y luego CooperativaDB (tarjeta):
+    nunca queda una tarjeta sin PAN recuperable. Si falla la confirmación de
+    CooperativaDB, _compensar_pan borra el PAN ya guardado.
+    """
+    hsm = _hsm("PAN_NO_DISPONIBLE")
+    custodiado: list[int] = []
+    try:
+        return _emitir(conn, conn_seguridad, payload, usuario, ip, hsm, custodiado)
+    except BaseException:
+        if custodiado:
+            _compensar_pan(conn_seguridad, custodiado[0])
+        raise
+
+
+def _compensar_pan(conn_seguridad: Connection, id_tarjeta: int) -> None:
+    """Si SeguridadDB ya confirmó el PAN y la tarjeta no, borra el PAN. Si también
+    falla, queda un PAN de un IdTarjeta que no existe (los IDENTITY no se reutilizan).
+    """
+    try:
+        repository.borrar_pan_ficticio(conn_seguridad, id_tarjeta)
+        conn_seguridad.commit()
+    except DBAPIError:
+        conn_seguridad.rollback()
+        logger.error(
+            "tarjetas: PAN ficticio huérfano por limpiar id_tarjeta=%s", id_tarjeta
+        )
+
+
+def _emitir(
+    conn: Connection,
+    conn_seguridad: Connection,
+    payload: TarjetaCreate,
+    usuario: int,
+    ip: str | None,
+    hsm: Hsm,
+    custodiado: list[int],
 ) -> Tarjeta:
     with (
         _auditado(
             "INSERT", "Tarjeta.Tarjeta", "TAR-01 Emisión de tarjeta", None, usuario, ip
         ) as operacion,
-        _transaccion(conn),
+        _transaccion(conn_seguridad, conn),
     ):
         # Un id del cuerpo que no existe es 422 con su propio code; el 404 queda para
         # el recurso de la URL. "No existe" y "no está activa" nunca comparten code.
@@ -223,14 +317,14 @@ def crear_tarjeta(
         _validar_extension(conn, payload)
         _validar_envio(conn, payload)
 
-        # El PAN solo se usa en esta función: no se guarda ni va a los logs
+        # El PAN en claro solo vive aquí: se custodia cifrado por el HSM
         pan = _generar_pan(subproducto["codigo_bin"])
         id_tarjeta = repository.insertar_tarjeta(
             conn,
             {
                 "token": f"tok_{secrets.token_urlsafe(32)}",
                 "mascara": _enmascarar(pan),
-                "hash_pan": hashlib.sha256(pan.encode()).digest(),
+                "hash_pan": hash_pan(pan),
                 "nombre_tarjeta": payload.nombre_tarjeta,
                 "tipo_tarjeta": payload.tipo_tarjeta,
                 "nombres": cuenta["nombres"],
@@ -246,7 +340,15 @@ def crear_tarjeta(
                 "id_sub_producto": subproducto["id_sub_producto"],
             },
         )
-        del pan
+        try:
+            cifrado, referencia = hsm.cifrar_pan(pan, id_tarjeta)
+        except ErrorHsm as exc:
+            raise _error_hsm(exc, "PAN_NO_DISPONIBLE") from None
+        finally:
+            del pan
+        repository.guardar_pan_ficticio(conn_seguridad, id_tarjeta, cifrado, referencia)
+        # Si algo falla desde aquí, crear_tarjeta borra el PAN (no-op si no llegó al commit)
+        custodiado.append(id_tarjeta)
         operacion.id_registro = id_tarjeta
 
         if payload.requiere_envio and payload.direccion_envio is not None:
@@ -351,7 +453,7 @@ def cambiar_estado(
         if not repository.existe_transicion(conn, anterior, payload.estado):
             raise problema(
                 409,
-                "TRANSICION_TARJETA_INVALIDA",
+                "TRANSICION_INVALIDA",
                 "El cambio de estado no está permitido.",
             )
         if payload.estado == "Activa" and not actual["pin_asignado"]:
@@ -385,58 +487,149 @@ def cambiar_estado(
 # TAR-05
 
 
-def es_pin_debil(pin: str) -> bool:
-    """True para repetidos (0000) y secuencias (1234, 4321)."""
-    saltos = {int(b) - int(a) for a, b in pairwise(pin)}
-    return saltos in ({0}, {1}, {-1})
+def _recuperar_asignacion(conn_seguridad: Connection, id_tarjeta: int) -> HTTPException:
+    """CooperativaDB ya marcó el PIN: habilita en SeguridadDB el Offset pendiente."""
+    try:
+        if repository.confirmar_pin(conn_seguridad, id_tarjeta):
+            conn_seguridad.commit()
+            logger.info("tarjetas: pin recuperado id_tarjeta=%s", id_tarjeta)
+            return problema(409, "PIN_YA_ASIGNADO", "La tarjeta ya tiene PIN.")
+    except DBAPIError:
+        conn_seguridad.rollback()
+    return problema(
+        409,
+        "PIN_ASIGNACION_EN_PROCESO",
+        "Hay una asignación de PIN pendiente que aún no se puede completar.",
+    )
+
+
+def _no_confirmada() -> HTTPException:
+    return problema(
+        503,
+        "PIN_ASIGNACION_NO_CONFIRMADA",
+        "No se pudo confirmar la asignación del PIN.",
+    )
 
 
 def asignar_pin(
     conn: Connection,
     conn_seguridad: Connection,
     id_tarjeta: int,
-    pin: SecretStr,
+    pin_block: SecretStr,
+    referencia: str,
     usuario: int,
     ip: str | None,
 ) -> None:
-    # SeguridadDB hace commit primero. Si luego falla CooperativaDB queda un hash con
-    # PinAsignado = 0: la tarjeta no se puede activar y el reintento sobrescribe el hash.
-    with (
-        _auditado(
-            "UPDATE",
-            "Tarjeta.Tarjeta",
-            "TAR-05 Asignación de PIN inicial",
-            id_tarjeta,
-            usuario,
-            ip,
-        ),
-        _transaccion(conn_seguridad, conn),
-    ):
-        actual = repository.obtener_tarjeta(conn, id_tarjeta)
-        if actual is None:
-            raise _tarjeta_no_encontrada()
-        if actual["pin_asignado"]:
-            raise problema(409, "PIN_YA_ASIGNADO", "La tarjeta ya tiene PIN.")
-        if es_pin_debil(pin.get_secret_value()):
-            raise problema(422, "PIN_DEBIL", "El PIN es demasiado simple.")
+    """PIN inicial con PIN Block ISO-4 e IBM 3624 PIN Offset, en tres pasos:
 
-        # Antes de bloquear la fila, porque Argon2id es lento
-        hash_pin = _hasher.hash(pin.get_secret_value())
-        if not repository.marcar_pin_asignado(conn, id_tarjeta):
-            raise problema(409, "PIN_YA_ASIGNADO", "La tarjeta ya tiene PIN.")
-        repository.insertar_historial(
-            conn,
-            id_tarjeta,
-            "CambioPin",
-            None,
-            None,
-            "Asignación de PIN inicial",
-            usuario,
-            ip,
-        )
-        repository.guardar_hash_pin(conn_seguridad, id_tarjeta, hash_pin)
+    1. SeguridadDB: Offset pendiente (Estado Inactivo, TienePINAsignado = 0).
+    2. CooperativaDB: PinAsignado = 1 y TarjetaHis (CambioPin).
+    3. SeguridadDB: habilita el PIN (Estado Activo, TienePINAsignado = 1).
+
+    Una asignación incompleta nunca habilita el PIN. Si falla el paso 2, el reintento
+    sobrescribe el Offset pendiente; si falla el paso 3, el siguiente intento lo
+    completa (_recuperar_asignacion).
+    """
+    with _auditado(
+        "UPDATE",
+        "Tarjeta.Tarjeta",
+        "TAR-05 Asignación de PIN inicial",
+        id_tarjeta,
+        usuario,
+        ip,
+    ):
+        hsm = _hsm("HSM_NO_DISPONIBLE")
+        try:
+            _offset_pendiente(
+                conn, conn_seguridad, id_tarjeta, pin_block, referencia, hsm
+            )
+        except DBAPIError as exc:
+            _rollback(conn_seguridad, conn)
+            raise traducir_error_bd(exc) from None
+        except BaseException:
+            _rollback(conn_seguridad, conn)
+            raise
+
+        try:
+            if not repository.marcar_pin_asignado(conn, id_tarjeta):
+                raise problema(409, "PIN_YA_ASIGNADO", "La tarjeta ya tiene PIN.")
+            repository.insertar_historial(
+                conn,
+                id_tarjeta,
+                "CambioPin",
+                None,
+                None,
+                "Asignación de PIN inicial",
+                usuario,
+                ip,
+            )
+            conn.commit()
+        except HTTPException:
+            conn.rollback()
+            raise
+        except DBAPIError:
+            conn.rollback()
+            raise _no_confirmada() from None
+
+        try:
+            if not repository.confirmar_pin(conn_seguridad, id_tarjeta):
+                raise RuntimeError("Sin Offset pendiente")
+            conn_seguridad.commit()
+        except (DBAPIError, RuntimeError):
+            conn_seguridad.rollback()
+            raise _no_confirmada() from None
 
     logger.info("tarjetas: pin asignado id_tarjeta=%s usuario=%s", id_tarjeta, usuario)
+
+
+def _offset_pendiente(
+    conn: Connection,
+    conn_seguridad: Connection,
+    id_tarjeta: int,
+    pin_block: SecretStr,
+    referencia: str,
+    hsm: Hsm,
+) -> None:
+    """Paso 1 de TAR-05. Deja bloqueada la tarjeta en CooperativaDB hasta el paso 2."""
+    actual = repository.obtener_tarjeta(conn, id_tarjeta, bloquear=True)
+    if actual is None:
+        raise _tarjeta_no_encontrada()
+    estado_pin = repository.obtener_estado_pin(conn_seguridad, id_tarjeta)
+    if actual["pin_asignado"]:
+        if estado_pin is None or estado_pin["confirmado"]:
+            raise problema(409, "PIN_YA_ASIGNADO", "La tarjeta ya tiene PIN.")
+        raise _recuperar_asignacion(conn_seguridad, id_tarjeta)
+
+    pan = pan_de_prueba(conn_seguridad, id_tarjeta, hsm)
+    try:
+        offset, referencia_pvk = hsm.generar_offset(
+            pin_block.get_secret_value(), referencia, pan
+        )
+    except ErrorHsm as exc:
+        raise _error_hsm(exc, "HSM_NO_DISPONIBLE") from None
+    finally:
+        del pan
+    repository.guardar_offset_pendiente(
+        conn_seguridad, id_tarjeta, offset, referencia_pvk
+    )
+    conn_seguridad.commit()
+
+
+def construir_pin_block_prueba(
+    conn: Connection, conn_seguridad: Connection, id_tarjeta: int, pin: SecretStr
+) -> PinBlockPrueba:
+    """Simula el PIN pad (componente seguro de captura) para probar TAR-05 y ATM-01."""
+    if not repository.existe_tarjeta(conn, id_tarjeta):
+        raise _tarjeta_no_encontrada()
+    hsm = _hsm("HSM_NO_DISPONIBLE")
+    pan = pan_de_prueba(conn_seguridad, id_tarjeta, hsm)
+    try:
+        bloque, referencia = hsm.construir_pin_block(pin.get_secret_value(), pan)
+    except ErrorHsm as exc:
+        raise _error_hsm(exc, "HSM_NO_DISPONIBLE") from None
+    finally:
+        del pan
+    return PinBlockPrueba(encrypted_pin_block=bloque, key_reference=referencia)
 
 
 # TAR-06
@@ -495,21 +688,3 @@ def obtener_historial(
         page_size=page_size,
         total=total,
     )
-
-
-def pan_de_prueba(conn_seguridad: Connection, id_tarjeta: int, hsm: Hsm) -> str:
-    """Interfaz controlada del PAN ficticio (TAR-05, PIN pad simulado y ATM-01).
-
-    Solo existe fuera de producción. Nunca se registra ni se devuelve en la API.
-    """
-    guardado = repository.obtener_pan_ficticio(conn_seguridad, id_tarjeta)
-    if guardado is None:
-        raise problema(
-            503, "PAN_NO_DISPONIBLE", "La tarjeta no tiene un PAN ficticio custodiado."
-        )
-    try:
-        return hsm.descifrar_pan(guardado[0], guardado[1], id_tarjeta)
-    except ErrorHsm:
-        raise problema(
-            503, "PAN_NO_DISPONIBLE", "No se pudo recuperar el PAN ficticio."
-        ) from None

@@ -61,6 +61,16 @@ class Settings(BaseSettings):
     hsm_sim_claves_pin_block: dict[str, SecretStr] = {}
     hsm_sim_referencia_pin_block: str = "TEST-KEY-01"
 
+    # JWT ATM: clave RSA exclusiva, inyectada por configuración segura. Sin valores
+    # predeterminados de despliegue: si falta la clave, iss o aud, no se emite sesión.
+    atm_jwt_private_key_pem: SecretStr = SecretStr("")
+    atm_jwt_issuer: str = ""
+    atm_jwt_audience: str = ""
+
+    # Archivo externo con hashes/metadatos; se relee en cada autenticación para
+    # aplicar revocaciones sin depender de la caché de Settings o del proceso.
+    atm_terminal_credentials_file: str = ""
+
     # WorkOS AuthKit (F-03), patrón BFF: el navegador solo recibe una cookie cifrada
     workos_api_key: SecretStr = SecretStr("")
     workos_client_id: str = ""

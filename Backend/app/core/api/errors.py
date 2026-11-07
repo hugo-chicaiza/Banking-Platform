@@ -44,7 +44,7 @@ _DB_ERRORES: dict[int, tuple[int, str, str]] = {
     52004: (422, "BIN_INVALIDO", "El BIN no corresponde al subproducto."),
     52005: (
         409,
-        "TRANSICION_TARJETA_INVALIDA",
+        "TRANSICION_INVALIDA",
         "El cambio de estado de la tarjeta no está permitido.",
     ),
     52101: (409, "CLIENTE_NO_ACTIVO", "El cliente no está Activo."),

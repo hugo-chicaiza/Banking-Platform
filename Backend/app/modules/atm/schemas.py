@@ -1,13 +1,20 @@
+import re
 from typing import Annotated, Literal
 
-from pydantic import Field, StringConstraints
+from pydantic import (
+    ConfigDict,
+    Field,
+    SecretStr,
+    StringConstraints,
+    ValidationInfo,
+    field_validator,
+)
 
 from app.core.api.schemas import CamelModel
 
 CodigoATM = Annotated[
     str,
     StringConstraints(
-        strip_whitespace=True,
         min_length=8,
         max_length=8,
     ),
@@ -34,13 +41,27 @@ class ATMAuthResponse(CamelModel):
 
 
 class ATMAuthRequest(CamelModel):
-    """Solicitud de autenticación ATM-01."""
+    """Contrato ATM-01. El router lee el body sin devolver errores con su contenido."""
 
-    codigo_atm: CodigoATM
-    id_tarjeta: int = Field(gt=0)
-    encrypted_pin_block: str = Field(
-        min_length=32,
-        max_length=32,
-        pattern=r"^[0-9a-fA-F]{32}$",
+    model_config = ConfigDict(extra="forbid", strict=True, validate_by_name=False)
+
+    codigo_atm: CodigoATM = Field(alias="codigoATM")
+    numero_tarjeta: SecretStr = Field(
+        repr=False, json_schema_extra={"pattern": r"^[0-9]{12,19}$"}
     )
-    key_reference: str = Field(min_length=1, max_length=100)
+    encrypted_pin_block: SecretStr = Field(
+        repr=False, json_schema_extra={"pattern": r"^[0-9a-fA-F]{32}$"}
+    )
+    key_reference: str = Field(pattern=r"^[A-Za-z0-9_-]{1,32}$")
+
+    @field_validator("numero_tarjeta", "encrypted_pin_block", mode="before")
+    @classmethod
+    def _validar_secreto(cls, valor: object, info: ValidationInfo) -> str:
+        patron = (
+            r"[0-9]{12,19}"
+            if info.field_name == "numero_tarjeta"
+            else r"[0-9a-fA-F]{32}"
+        )
+        if not isinstance(valor, str) or re.fullmatch(patron, valor) is None:
+            raise ValueError("Campo sensible inválido")
+        return valor

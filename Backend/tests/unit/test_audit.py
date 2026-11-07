@@ -10,6 +10,7 @@ from app.core.security import audit
 from app.main import app
 from app.modules.tarjetas import repository, router
 from tests.sesion import ID_AUDITORIA, simular_sesion
+from tests.tarjetas_hsm import body_pin, instalar
 from tests.unit.test_tarjetas import BASE, FILA, PAYLOAD
 
 EVENTO = audit.EventoAuditoria(
@@ -43,6 +44,8 @@ def _cliente(monkeypatch) -> TestClient:
     app.dependency_overrides[router.seguridad] = lambda: conn
     simular_sesion(app)
     monkeypatch.setattr(repository, "insertar_historial", lambda *a: None)
+    # HSM simulado y SeguridadDB en memoria, con el PAN de la tarjeta 301 custodiado
+    instalar(monkeypatch).custodiar()
     return TestClient(app)
 
 
@@ -73,9 +76,8 @@ def test_escritura_exitosa_se_audita(monkeypatch, eventos_auditados):
     c = _cliente(monkeypatch)
     monkeypatch.setattr(repository, "obtener_tarjeta", lambda _c, _i, **_k: FILA)
     monkeypatch.setattr(repository, "marcar_pin_asignado", lambda _c, _i: True)
-    monkeypatch.setattr(repository, "guardar_hash_pin", lambda _c, _i, _h: None)
     try:
-        r = c.post(f"{BASE}/301/pin", json={"pin": "7392"})
+        r = c.post(f"{BASE}/301/pin", json=body_pin("7392"))
     finally:
         app.dependency_overrides.clear()
 
@@ -94,7 +96,7 @@ def test_intento_fallido_se_audita_con_su_codigo(monkeypatch, eventos_auditados)
     c = _cliente(monkeypatch)
     monkeypatch.setattr(repository, "obtener_tarjeta", lambda _c, _i, **_k: FILA)
     try:
-        r = c.post(f"{BASE}/301/pin", json={"pin": "1234"})
+        r = c.post(f"{BASE}/301/pin", json=body_pin("1234"))
     finally:
         app.dependency_overrides.clear()
 
