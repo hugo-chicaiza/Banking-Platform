@@ -159,7 +159,7 @@ def test_json_mal_formado_es_400():
         (52002, 409, "CUENTA_NO_ACTIVA"),
         (52003, 422, "CUPO_EXCEDE_PRODUCTO"),
         (52004, 422, "BIN_INVALIDO"),
-        (52005, 409, "TRANSICION_TARJETA_INVALIDA"),
+        (52005, 409, "TRANSICION_INVALIDA"),
         (52101, 409, "CLIENTE_NO_ACTIVO"),
         (52102, 409, "CLIENTE_NO_ACTIVO"),
         (52103, 422, "PRODUCTO_NO_ES_CUENTA"),

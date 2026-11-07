@@ -326,18 +326,78 @@ def marcar_pin_asignado(conn: Connection, id_tarjeta: int) -> bool:
     return resultado.rowcount == 1
 
 
-def guardar_hash_pin(
-    conn_seguridad: Connection, id_tarjeta: int, hash_pin: str
+# Repositorio aislado de PAN ficticios (SeguridadDB, solo desarrollo y pruebas)
+
+
+def guardar_pan_ficticio(
+    conn_seguridad: Connection, id_tarjeta: int, cifrado: bytes, referencia: str
 ) -> None:
-    """Guarda el hash en SeguridadDB. Argon2id ya incluye la salt dentro del hash."""
-    params = {"id_tarjeta": id_tarjeta, "hash_pin": hash_pin}
+    """El PAN llega cifrado por el HSM; nunca se guarda en claro."""
+    conn_seguridad.execute(
+        text(
+            """
+            INSERT INTO Pruebas.PanFicticio (IdTarjeta, PanCifrado, ReferenciaClave)
+            VALUES (:id_tarjeta, :cifrado, :referencia)
+            """
+        ),
+        {"id_tarjeta": id_tarjeta, "cifrado": cifrado, "referencia": referencia},
+    )
+
+
+def borrar_pan_ficticio(conn_seguridad: Connection, id_tarjeta: int) -> None:
+    """Compensación de TAR-01 si la tarjeta no llegó a confirmarse."""
+    conn_seguridad.execute(
+        text("DELETE FROM Pruebas.PanFicticio WHERE IdTarjeta = :id_tarjeta"),
+        {"id_tarjeta": id_tarjeta},
+    )
+
+
+def obtener_pan_ficticio(
+    conn_seguridad: Connection, id_tarjeta: int
+) -> tuple[bytes, str] | None:
+    fila = _one(
+        conn_seguridad,
+        """
+        SELECT PanCifrado AS cifrado, ReferenciaClave AS referencia
+        FROM Pruebas.PanFicticio WHERE IdTarjeta = :id_tarjeta
+        """,
+        {"id_tarjeta": id_tarjeta},
+    )
+    return None if fila is None else (bytes(fila["cifrado"]), fila["referencia"])
+
+
+# TAR-05: PIN Offset IBM 3624 en SeguridadDB
+
+
+def obtener_estado_pin(
+    conn_seguridad: Connection, id_tarjeta: int
+) -> dict[str, Any] | None:
+    """Bloquea la fila hasta el commit: dos asignaciones no se cruzan."""
+    return _one(
+        conn_seguridad,
+        """
+        SELECT TienePINAsignado AS confirmado, Estado AS estado,
+               CASE WHEN PINOffset IS NULL THEN 0 ELSE 1 END AS tiene_offset
+        FROM Tarjetas.TarjetaPIN WITH (UPDLOCK, HOLDLOCK)
+        WHERE ID_Tarjeta = :id_tarjeta
+        """,
+        {"id_tarjeta": id_tarjeta},
+    )
+
+
+def guardar_offset_pendiente(
+    conn_seguridad: Connection, id_tarjeta: int, offset: str, referencia_pvk: str
+) -> None:
+    """Paso 1 de TAR-05: el Offset queda guardado pero el PIN aún no se puede usar."""
+    params = {"id_tarjeta": id_tarjeta, "offset": offset, "pvk": referencia_pvk}
     actualizada = conn_seguridad.execute(
         text(
             """
             UPDATE Tarjetas.TarjetaPIN
-            SET HashPIN = :hash_pin, TienePINAsignado = 1, IntentosFallidos = 0,
+            SET PINOffset = :offset, ReferenciaClavePVK = :pvk, TienePINAsignado = 0,
+                Estado = 'Inactivo', IntentosFallidos = 0,
                 FechaAsignacion = CONVERT(
-                    datetime2, SYSDATETIMEOFFSET() AT TIME ZONE 'SA Pacific Standard Time'
+                    datetime, SYSDATETIMEOFFSET() AT TIME ZONE 'SA Pacific Standard Time'
                 )
             WHERE ID_Tarjeta = :id_tarjeta
             """
@@ -350,20 +410,35 @@ def guardar_hash_pin(
                 """
                 INSERT INTO Tarjetas.TarjetaPIN (
                     ID_Tarjeta, TienePINAsignado, FechaAsignacion, IntentosFallidos,
-                    Estado, HashPIN
+                    Estado, PINOffset, ReferenciaClavePVK
                 )
                 VALUES (
-                    :id_tarjeta, 1,
+                    :id_tarjeta, 0,
                     CONVERT(
-                        datetime2,
+                        datetime,
                         SYSDATETIMEOFFSET() AT TIME ZONE 'SA Pacific Standard Time'
                     ),
-                    0, 'Activo', :hash_pin
+                    0, 'Inactivo', :offset, :pvk
                 )
                 """
             ),
             params,
         )
+
+
+def confirmar_pin(conn_seguridad: Connection, id_tarjeta: int) -> bool:
+    """Paso 3 de TAR-05: habilita el PIN. False si no había un Offset pendiente."""
+    resultado = conn_seguridad.execute(
+        text(
+            """
+            UPDATE Tarjetas.TarjetaPIN SET TienePINAsignado = 1, Estado = 'Activo'
+            WHERE ID_Tarjeta = :id_tarjeta AND PINOffset IS NOT NULL
+              AND TienePINAsignado = 0
+            """
+        ),
+        {"id_tarjeta": id_tarjeta},
+    )
+    return resultado.rowcount == 1
 
 
 # TAR-06

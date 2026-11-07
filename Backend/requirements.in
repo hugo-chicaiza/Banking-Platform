@@ -23,8 +23,8 @@ pyodbc>=5.3,<6.0
 workos>=5.0,<6.0
 PyJWT[crypto]>=2.10,<3.0
 
-# Seguridad · hash de PIN/secretos (ASVS V11 · Argon2id)
-argon2-cffi>=25.1,<26.0
+# Seguridad · HSM simulado de tarjetas: AES-256 (PAN, PIN Block ISO-4) y 3DES (IBM 3624)
+cryptography>=50.0,<51.0
 
 # Cliente HTTP (integraciones: buró simulado, WorkOS)
 httpx>=0.28,<1.0

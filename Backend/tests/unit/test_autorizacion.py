@@ -108,6 +108,7 @@ ROLES_POR_RUTA: dict[tuple[str, str], tuple[str, ...]] = {
     ("GET", "/api/v1/tarjetas/{idTarjeta}"): ("ASESOR", "SUPERVISOR", "ADMIN"),
     ("POST", "/api/v1/tarjetas/{idTarjeta}/estado"): ("ASESOR", "SUPERVISOR", "ADMIN"),
     ("POST", "/api/v1/tarjetas/{idTarjeta}/pin"): ("ASESOR", "ADMIN"),
+    ("POST", "/api/v1/pruebas/pin-block"): ("ADMIN",),
     ("GET", "/api/v1/tarjetas/{idTarjeta}/historial"): (
         "SUPERVISOR",
         "AUDITOR",
@@ -210,6 +211,18 @@ def _rutas_api() -> list[tuple[str, str]]:
 
 def _concreta(ruta: str) -> str:
     return re.sub(r"\{(\w+)\}", lambda m: _VALORES_PATH.get(m.group(1), "1"), ruta)
+
+
+@pytest.fixture(autouse=True)
+def _pin_pad_simulado_habilitado(monkeypatch):
+    """El CI corre como production, donde /pruebas/pin-block responde 404: aquí se
+    prueba su control de acceso como en development.
+    """
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(
+        tarjetas_router, "get_settings", lambda: SimpleNamespace(app_env="development")
+    )
 
 
 @pytest.fixture

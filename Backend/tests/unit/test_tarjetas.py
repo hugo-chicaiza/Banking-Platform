@@ -11,15 +11,16 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from argon2 import PasswordHasher
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import DBAPIError
 
 from app.core.database.db import cooperativa
 from app.core.security.auth import ROLES
+from app.core.security.hsm import HsmNoDisponible, es_pin_debil
 from app.main import app
 from app.modules.tarjetas import repository, router, service
 from tests.sesion import simular_sesion, usuario_con_roles
+from tests.tarjetas_hsm import HSM, PAN, body_pin, instalar, pin_valido
 
 BASE = "/api/v1/tarjetas"
 PAYLOAD = {
@@ -57,8 +58,11 @@ class _Conn:
     def __init__(self) -> None:
         self.commits = 0
         self.rollbacks = 0
+        self.falla_commit: Exception | None = None
 
     def commit(self) -> None:
+        if self.falla_commit is not None:
+            raise self.falla_commit
         self.commits += 1
 
     def rollback(self) -> None:
@@ -68,6 +72,22 @@ class _Conn:
 @pytest.fixture()
 def conns():
     return SimpleNamespace(coop=_Conn(), seg=_Conn())
+
+
+@pytest.fixture(autouse=True)
+def fuera_de_produccion(monkeypatch):
+    """El CI corre sin .env (APP_ENV=production por defecto): el PIN pad simulado se
+    prueba como en development.
+    """
+    monkeypatch.setattr(
+        router, "get_settings", lambda: SimpleNamespace(app_env="development")
+    )
+
+
+@pytest.fixture(autouse=True)
+def seg(monkeypatch):
+    """HSM simulado con claves fijas y SeguridadDB (PAN ficticio, TarjetaPIN) en memoria."""
+    return instalar(monkeypatch)
 
 
 @pytest.fixture()
@@ -145,6 +165,71 @@ def test_emitir_guarda_mascara_y_hash_que_corresponden_a_un_pan_luhn(client, emi
     assert not any(
         isinstance(v, str) and v.isdigit() and len(v) >= 13 for v in datos.values()
     )
+
+
+def test_emitir_custodia_el_pan_cifrado_y_coincide_con_hash_y_mascara(
+    client, conns, emision, seg
+):
+    r = client.post(BASE, json=PAYLOAD)
+
+    assert r.status_code == 201
+    cifrado, referencia = seg.pans[301]
+    pan = HSM.descifrar_pan(cifrado, referencia, 301)
+    datos = emision["tarjeta"]
+    assert hashlib.sha256(pan.encode()).digest() == datos["hash_pan"]
+    assert service._enmascarar(pan) == datos["mascara"]
+    assert pan.encode() not in cifrado
+    # SeguridadDB (PAN) se confirma antes que CooperativaDB (tarjeta)
+    assert conns.seg.commits == 1 and conns.coop.commits == 1
+
+
+def test_emitir_no_expone_el_pan_en_respuesta_ni_logs(client, emision, seg, caplog):
+    caplog.set_level(logging.DEBUG)
+
+    r = client.post(BASE, json=PAYLOAD)
+
+    cifrado, referencia = seg.pans[301]
+    pan = HSM.descifrar_pan(cifrado, referencia, 301)
+    assert pan not in r.text and pan not in caplog.text
+
+
+def test_emitir_sin_hsm_503_sin_crear_nada(client, conns, emision, seg, monkeypatch):
+    def sin_hsm():
+        raise HsmNoDisponible("x")
+
+    monkeypatch.setattr(service, "obtener_hsm", sin_hsm)
+
+    r = client.post(BASE, json=PAYLOAD)
+
+    assert r.status_code == 503 and _code(r) == "PAN_NO_DISPONIBLE"
+    assert "tarjeta" not in emision and seg.pans == {}
+    assert conns.coop.commits == 0
+
+
+def test_emitir_fallo_al_custodiar_revierte_la_tarjeta(
+    client, conns, emision, seg, monkeypatch
+):
+    def falla(*_a):
+        raise DBAPIError("INSERT x", {}, Exception("caida"))
+
+    monkeypatch.setattr(repository, "guardar_pan_ficticio", falla)
+
+    r = client.post(BASE, json=PAYLOAD)
+
+    assert r.status_code == 500
+    assert conns.coop.commits == 0 and conns.coop.rollbacks >= 1
+
+
+def test_emitir_si_falla_cooperativa_se_borra_el_pan_custodiado(
+    client, conns, emision, seg
+):
+    conns.coop.falla_commit = DBAPIError("COMMIT", {}, Exception("caida"))
+
+    r = client.post(BASE, json=PAYLOAD)
+
+    assert r.status_code == 500
+    # Sin tarjeta confirmada no queda PAN huérfano
+    assert seg.pans == {}
 
 
 def test_pan_generado_cumple_luhn_y_longitud():
@@ -470,7 +555,7 @@ def test_estado_transicion_invalida_409(client, conns, monkeypatch):
 
     r = client.post(f"{BASE}/301/estado", json={"estado": "Bloqueada", "motivo": "x"})
 
-    assert r.status_code == 409 and _code(r) == "TRANSICION_TARJETA_INVALIDA"
+    assert r.status_code == 409 and _code(r) == "TRANSICION_INVALIDA"
     assert "estado" not in capturado and conns.coop.commits == 0
 
 
@@ -501,7 +586,7 @@ def test_estado_trigger_52005_409_sin_filtrar_sql(client, conns, monkeypatch):
 
     r = client.post(f"{BASE}/301/estado", json={"estado": "Activa", "motivo": "x"})
 
-    assert r.status_code == 409 and _code(r) == "TRANSICION_TARJETA_INVALIDA"
+    assert r.status_code == 409 and _code(r) == "TRANSICION_INVALIDA"
     assert "SQL" not in r.text and "SECRETO" not in r.text
     assert conns.coop.rollbacks == 1
 
@@ -523,7 +608,7 @@ def test_estado_body_invalido_400(client, body):
 # TAR-05
 
 
-def _pin(monkeypatch, fila=FILA, marcado=True):
+def _pin(monkeypatch, seg, fila=FILA, marcado=True, custodiar=True):
     capturado: dict[str, Any] = {}
     monkeypatch.setattr(repository, "obtener_tarjeta", lambda c, i, **k: fila)
     monkeypatch.setattr(repository, "marcar_pin_asignado", lambda c, i: marcado)
@@ -532,88 +617,172 @@ def _pin(monkeypatch, fila=FILA, marcado=True):
         "insertar_historial",
         lambda *a: capturado.__setitem__("historial", a),
     )
-    monkeypatch.setattr(
-        repository,
-        "guardar_hash_pin",
-        lambda c, i, h: capturado.__setitem__("hash", h),
-    )
+    if custodiar:
+        seg.custodiar()
     return capturado
 
 
-def test_pin_204_guarda_argon2id_y_confirma_en_ambas_bd(client, conns, monkeypatch):
-    capturado = _pin(monkeypatch)
+def test_pin_204_genera_offset_ibm3624_y_confirma_en_tres_pasos(
+    client, conns, monkeypatch, seg
+):
+    capturado = _pin(monkeypatch, seg)
+    body = body_pin("7392")
 
-    r = client.post(f"{BASE}/301/pin", json={"pin": "7392"})
+    r = client.post(f"{BASE}/301/pin", json=body)
 
     assert r.status_code == 204 and r.content == b""
-    assert capturado["hash"].startswith("$argon2id$")
-    assert "7392" not in capturado["hash"]
-    assert PasswordHasher().verify(capturado["hash"], "7392")
+    fila = seg.pin()
+    assert fila["confirmado"] and fila["estado"] == "Activo"
+    assert len(fila["offset"]) == 4 and fila["offset"].isdigit()
+    # El Offset verifica el PIN como lo hará ATM-01, y solo ese PIN
+    assert pin_valido(seg, "7392") and not pin_valido(seg, "7393")
     assert capturado["historial"][2] == "CambioPin"
-    assert "7392" not in str(capturado["historial"])
-    assert conns.coop.commits == 1 and conns.seg.commits == 1
+    for secreto in ("7392", body["encryptedPinBlock"], fila["offset"]):
+        assert secreto not in str(capturado["historial"])
+    # SeguridadDB: Offset pendiente y luego habilitado; CooperativaDB: PinAsignado
+    assert conns.seg.commits == 2 and conns.coop.commits == 1
 
 
-def test_pin_ya_asignado_409(client, monkeypatch):
-    capturado = _pin(monkeypatch, {**FILA, "pin_asignado": True})
+def test_pin_ya_asignado_409(client, monkeypatch, seg):
+    _pin(monkeypatch, seg, {**FILA, "pin_asignado": True})
+    seg.pines[301] = {
+        "offset": "1111",
+        "pvk": "x",
+        "confirmado": True,
+        "estado": "Activo",
+    }
 
-    r = client.post(f"{BASE}/301/pin", json={"pin": "7392"})
+    r = client.post(f"{BASE}/301/pin", json=body_pin("7392"))
 
     assert r.status_code == 409 and _code(r) == "PIN_YA_ASIGNADO"
-    assert "hash" not in capturado
+    assert seg.pin()["offset"] == "1111"
 
 
-def test_pin_carrera_concurrente_409(client, conns, monkeypatch):
-    capturado = _pin(monkeypatch, marcado=False)
+def test_pin_recupera_asignacion_que_no_se_habilito(client, monkeypatch, seg):
+    # CooperativaDB ya tiene PinAsignado = 1 pero SeguridadDB quedó pendiente
+    _pin(monkeypatch, seg, {**FILA, "pin_asignado": True})
+    seg.pines[301] = {
+        "offset": "1111",
+        "pvk": "x",
+        "confirmado": False,
+        "estado": "Inactivo",
+    }
 
-    r = client.post(f"{BASE}/301/pin", json={"pin": "7392"})
+    r = client.post(f"{BASE}/301/pin", json=body_pin("7392"))
 
     assert r.status_code == 409 and _code(r) == "PIN_YA_ASIGNADO"
-    assert "hash" not in capturado and conns.seg.commits == 0
+    assert seg.pin()["confirmado"] and seg.pin()["offset"] == "1111"
 
 
-def test_pin_tarjeta_inexistente_404(client, monkeypatch):
-    _pin(monkeypatch, None)
+def test_pin_recuperacion_fallida_409_en_proceso(client, monkeypatch, seg):
+    _pin(monkeypatch, seg, {**FILA, "pin_asignado": True})
+    seg.pines[301] = {
+        "offset": "1111",
+        "pvk": "x",
+        "confirmado": False,
+        "estado": "Inactivo",
+    }
 
-    assert client.post(f"{BASE}/9/pin", json={"pin": "7392"}).status_code == 404
+    def falla(*_a):
+        raise DBAPIError("UPDATE", {}, Exception("caida"))
+
+    monkeypatch.setattr(repository, "confirmar_pin", falla)
+
+    r = client.post(f"{BASE}/301/pin", json=body_pin("7392"))
+
+    assert r.status_code == 409 and _code(r) == "PIN_ASIGNACION_EN_PROCESO"
+    assert not seg.pin()["confirmado"]
+
+
+def test_pin_carrera_concurrente_409_no_habilita(client, conns, monkeypatch, seg):
+    _pin(monkeypatch, seg, marcado=False)
+
+    r = client.post(f"{BASE}/301/pin", json=body_pin("7392"))
+
+    assert r.status_code == 409 and _code(r) == "PIN_YA_ASIGNADO"
+    # Una asignación incompleta nunca habilita el PIN
+    assert not seg.pin()["confirmado"] and conns.coop.commits == 0
+
+
+def test_pin_tarjeta_inexistente_404(client, monkeypatch, seg):
+    _pin(monkeypatch, seg, None)
+
+    assert client.post(f"{BASE}/9/pin", json=body_pin("7392")).status_code == 404
 
 
 @pytest.mark.parametrize("pin", ["0000", "1111", "1234", "4321", "6789", "9876"])
-def test_pin_debil_422_sin_guardar(client, monkeypatch, pin):
-    capturado = _pin(monkeypatch)
+def test_pin_debil_422_sin_guardar(client, monkeypatch, seg, pin):
+    _pin(monkeypatch, seg)
 
-    r = client.post(f"{BASE}/301/pin", json={"pin": pin})
+    r = client.post(f"{BASE}/301/pin", json=body_pin(pin))
 
     assert r.status_code == 422 and _code(r) == "PIN_DEBIL"
-    assert "hash" not in capturado
+    assert seg.pines == {}
     assert pin not in r.text
 
 
 @pytest.mark.parametrize("pin", ["1235", "2580", "1212", "7392", "0001"])
 def test_pin_no_trivial_es_aceptado(pin):
-    assert service.es_pin_debil(pin) is False
+    assert es_pin_debil(pin) is False
+
+
+def test_pin_clave_no_autorizada_422(client, monkeypatch, seg):
+    _pin(monkeypatch, seg)
+    body = {**body_pin("7392"), "keyReference": "OTRA-CLAVE"}
+
+    r = client.post(f"{BASE}/301/pin", json=body)
+
+    assert r.status_code == 422 and _code(r) == "CLAVE_NO_AUTORIZADA"
+    assert seg.pines == {}
+
+
+@pytest.mark.parametrize(
+    "bloque",
+    [
+        "00112233445566778899AABBCCDDEEFF",  # hex válido pero no es un PIN Block ISO-4
+        "0011",
+        "ZZ112233445566778899AABBCCDDEEFF",
+        7392,
+        None,
+    ],
+)
+def test_pin_block_invalido_422(client, monkeypatch, seg, bloque):
+    _pin(monkeypatch, seg)
+
+    r = client.post(
+        f"{BASE}/301/pin",
+        json={"encryptedPinBlock": bloque, "keyReference": "TEST-KEY-01"},
+    )
+
+    assert r.status_code == 422 and _code(r) == "PIN_BLOCK_INVALIDO"
+    assert seg.pines == {}
+
+
+def test_pin_block_de_otra_tarjeta_es_invalido(client, monkeypatch, seg):
+    # ISO-4 liga el PIN Block al PAN: no sirve para otra tarjeta
+    _pin(monkeypatch, seg)
+
+    r = client.post(f"{BASE}/301/pin", json=body_pin("7392", pan="5000001111111116"))
+
+    assert r.status_code == 422 and _code(r) == "PIN_BLOCK_INVALIDO"
 
 
 @pytest.mark.parametrize(
     "contenido",
     [
-        b'{"pin": "73"}',
-        b'{"pin": "739256"}',
-        b'{"pin": "abcd"}',
-        b'{"pin": 7392}',
-        b'{"pin": null}',
-        b'{"pin": "\xd9\xa1\xd9\xa2\xd9\xa3\xd9\xa4"}',  # dígitos arábigos
-        b'{"pinn": "7392"}',
-        b'{"pin": "7392", "x": "7392"}',
+        b'{"pin": "7392"}',
+        b'{"encryptedPinBlock": "00112233445566778899AABBCCDDEEFF"}',
+        b'{"encryptedPinBlock": "x", "keyReference": "y", "pin": "7392"}',
         b'"7392"',
-        b"7392",
         b"{no json 7392",
         b"",
-        b'{"pin": "7392", "relleno": "' + b"x" * 2000 + b'"}',
+        b'{"encryptedPinBlock": "' + b"A" * 2000 + b'", "keyReference": "k"}',
     ],
 )
-def test_pin_invalido_400_nunca_repite_el_valor(client, monkeypatch, contenido):
-    capturado = _pin(monkeypatch)
+def test_pin_body_invalido_400_nunca_repite_el_valor(
+    client, monkeypatch, seg, contenido
+):
+    _pin(monkeypatch, seg)
 
     r = client.post(
         f"{BASE}/301/pin",
@@ -621,40 +790,169 @@ def test_pin_invalido_400_nunca_repite_el_valor(client, monkeypatch, contenido):
         headers={"content-type": "application/json"},
     )
 
-    assert r.status_code == 400 and _code(r) == "PIN_INVALIDO"
-    assert "7392" not in r.text
-    assert "hash" not in capturado
+    assert r.status_code == 400 and _code(r) == "DATOS_INVALIDOS"
+    assert "7392" not in r.text and "0011223344" not in r.text
+    assert seg.pines == {}
 
 
-def test_pin_no_aparece_en_logs(client, monkeypatch, caplog):
-    _pin(monkeypatch)
+def test_pin_sin_pan_custodiado_503(client, monkeypatch, seg):
+    _pin(monkeypatch, seg, custodiar=False)
+
+    r = client.post(f"{BASE}/301/pin", json=body_pin("7392"))
+
+    assert r.status_code == 503 and _code(r) == "PAN_NO_DISPONIBLE"
+
+
+def test_pin_sin_hsm_503(client, monkeypatch, seg):
+    _pin(monkeypatch, seg)
+
+    def sin_hsm():
+        raise HsmNoDisponible("x")
+
+    monkeypatch.setattr(service, "obtener_hsm", sin_hsm)
+
+    r = client.post(f"{BASE}/301/pin", json=body_pin("7392"))
+
+    assert r.status_code == 503 and _code(r) == "HSM_NO_DISPONIBLE"
+
+
+def test_pin_falla_cooperativa_queda_pendiente_y_el_reintento_completa(
+    client, conns, monkeypatch, seg
+):
+    _pin(monkeypatch, seg)
+    conns.coop.falla_commit = DBAPIError("COMMIT", {}, Exception("caida"))
+
+    r = client.post(f"{BASE}/301/pin", json=body_pin("7392"))
+
+    assert r.status_code == 503 and _code(r) == "PIN_ASIGNACION_NO_CONFIRMADA"
+    assert not seg.pin()["confirmado"]
+
+    conns.coop.falla_commit = None
+    r = client.post(f"{BASE}/301/pin", json=body_pin("2580"))
+
+    assert r.status_code == 204
+    assert seg.pin()["confirmado"] and pin_valido(seg, "2580")
+
+
+def test_pin_falla_al_habilitar_503_sin_habilitar(client, monkeypatch, seg):
+    _pin(monkeypatch, seg)
+    monkeypatch.setattr(repository, "confirmar_pin", lambda _c, _i: False)
+
+    r = client.post(f"{BASE}/301/pin", json=body_pin("7392"))
+
+    assert r.status_code == 503 and _code(r) == "PIN_ASIGNACION_NO_CONFIRMADA"
+    assert not seg.pin()["confirmado"]
+
+
+def test_pin_ni_pin_block_ni_offset_aparecen_en_logs(client, monkeypatch, seg, caplog):
+    _pin(monkeypatch, seg)
     caplog.set_level(logging.DEBUG)
+    body = body_pin("7392")
 
-    client.post(f"{BASE}/301/pin", json={"pin": "7392"})
-    client.post(f"{BASE}/301/pin", json={"pin": "1234"})
+    r = client.post(f"{BASE}/301/pin", json=body)
+    client.post(f"{BASE}/301/pin", json=body_pin("1234"))
 
-    assert "7392" not in caplog.text
-    assert "1234" not in caplog.text
+    for secreto in (
+        "7392",
+        "1234",
+        body["encryptedPinBlock"],
+        seg.pin()["offset"],
+        PAN,
+    ):
+        assert secreto not in caplog.text
+    assert r.status_code == 204
 
 
 def test_pin_fallo_de_bd_revierte_ambas_y_no_filtra_nada(
-    client, conns, monkeypatch, caplog
+    client, conns, monkeypatch, seg, caplog
 ):
-    _pin(monkeypatch)
+    _pin(monkeypatch, seg)
     caplog.set_level(logging.DEBUG)
 
     def falla(*_a):
-        raise DBAPIError("UPDATE x", {"hash_pin": "SECRETO"}, Exception("caida"))
+        raise DBAPIError("UPDATE x", {"offset": "SECRETO"}, Exception("caida"))
 
-    monkeypatch.setattr(repository, "guardar_hash_pin", falla)
+    monkeypatch.setattr(repository, "guardar_offset_pendiente", falla)
 
-    r = client.post(f"{BASE}/301/pin", json={"pin": "7392"})
+    r = client.post(f"{BASE}/301/pin", json=body_pin("7392"))
 
     assert r.status_code == 500 and _code(r) == "ERROR_INTERNO"
-    assert conns.coop.rollbacks == 1 and conns.seg.rollbacks == 1
+    assert conns.coop.rollbacks >= 1 and conns.seg.rollbacks >= 1
     assert conns.coop.commits == 0 and conns.seg.commits == 0
     for texto in (r.text, caplog.text):
         assert "SECRETO" not in texto and "UPDATE" not in texto
+
+
+# PIN pad simulado (solo fuera de producción)
+
+PIN_BLOCK = "/api/v1/pruebas/pin-block"
+
+
+def test_pin_block_prueba_sirve_para_tar05(client, monkeypatch, seg):
+    _pin(monkeypatch, seg)
+    monkeypatch.setattr(repository, "existe_tarjeta", lambda c, i: True)
+
+    r = client.post(PIN_BLOCK, json={"idTarjeta": 301, "pin": "7392"})
+
+    assert r.status_code == 200
+    cuerpo = r.json()
+    assert set(cuerpo) == {"encryptedPinBlock", "keyReference"}
+    assert "7392" not in r.text and PAN not in r.text
+    assert client.post(f"{BASE}/301/pin", json=cuerpo).status_code == 204
+    assert pin_valido(seg, "7392")
+
+
+def test_pin_block_prueba_tarjeta_inexistente_404(client, monkeypatch, seg):
+    monkeypatch.setattr(repository, "existe_tarjeta", lambda c, i: False)
+
+    r = client.post(PIN_BLOCK, json={"idTarjeta": 9, "pin": "7392"})
+
+    assert r.status_code == 404
+
+
+def test_pin_block_prueba_sin_pan_503(client, monkeypatch, seg):
+    monkeypatch.setattr(repository, "existe_tarjeta", lambda c, i: True)
+
+    r = client.post(PIN_BLOCK, json={"idTarjeta": 301, "pin": "7392"})
+
+    assert r.status_code == 503 and _code(r) == "PAN_NO_DISPONIBLE"
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"idTarjeta": 301, "pin": "73"},
+        {"idTarjeta": 301, "pin": 7392},
+        {"idTarjeta": "301", "pin": "7392"},
+        {"idTarjeta": 0, "pin": "7392"},
+        {"idTarjeta": True, "pin": "7392"},
+        {"pin": "7392"},
+        {"idTarjeta": 301, "pin": "7392", "x": 1},
+    ],
+)
+def test_pin_block_prueba_body_invalido_400_sin_repetir_el_pin(client, seg, body):
+    r = client.post(PIN_BLOCK, json=body)
+
+    assert r.status_code == 400 and _code(r) == "PIN_INVALIDO"
+    assert "7392" not in r.text
+
+
+def test_pin_block_prueba_no_existe_en_produccion(client, monkeypatch, seg):
+    monkeypatch.setattr(
+        router, "get_settings", lambda: SimpleNamespace(app_env="production")
+    )
+
+    r = client.post(PIN_BLOCK, json={"idTarjeta": 301, "pin": "7392"})
+
+    assert r.status_code == 404 and "7392" not in r.text
+
+
+def test_pin_block_prueba_solo_admin(conns, seg):
+    simular_sesion(app, usuario_con_roles("ASESOR", "SUPERVISOR"))
+
+    r = _llamar(conns, "post", PIN_BLOCK, {"idTarjeta": 301, "pin": "7392"})
+
+    assert r.status_code == 403 and _code(r) == "SIN_PERMISO"
 
 
 # TAR-06
@@ -767,7 +1065,7 @@ _RUTAS_Y_ROLES = [
         {"estado": "Activa", "motivo": "x"},
         ("ASESOR", "SUPERVISOR", "ADMIN"),
     ),
-    ("post", f"{BASE}/1/pin", {"pin": "7392"}, ("ASESOR", "ADMIN")),
+    ("post", f"{BASE}/1/pin", body_pin("7392"), ("ASESOR", "ADMIN")),
     ("get", f"{BASE}/1/historial", None, ("SUPERVISOR", "AUDITOR", "ADMIN")),
 ]
 
@@ -810,4 +1108,8 @@ def test_openapi_documenta_las_seis_rutas_y_el_body_del_pin():
     assert "post" in rutas[f"{BASE}/{{idTarjeta}}/estado"]
     assert "get" in rutas[f"{BASE}/{{idTarjeta}}/historial"]
     esquema = rutas[f"{BASE}/{{idTarjeta}}/pin"]["post"]["requestBody"]["content"]
-    assert esquema["application/json"]["schema"]["required"] == ["pin"]
+    assert set(esquema["application/json"]["schema"]["required"]) == {
+        "encryptedPinBlock",
+        "keyReference",
+    }
+    assert "post" in rutas["/api/v1/pruebas/pin-block"]

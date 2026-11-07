@@ -29,7 +29,7 @@ Cambia el estado (activar, bloquear, cancelar…).
 
 ## Reglas de negocio
 
-1. Solo transiciones de `Tarjeta.TransicionEstado` → si no, `409 TRANSICION_TARJETA_INVALIDA` (DB 52005).
+1. Solo transiciones de `Tarjeta.TransicionEstado` → si no, `409 TRANSICION_INVALIDA` (DB 52005).
 2. Activar exige PIN asignado (`PinAsignado = 1`) → si no, `409 PIN_NO_ASIGNADO`.
 3. Estados terminales: Cancelada, Anulada, Vencida, Cerrada.
 4. `motivo` obligatorio; `TarjetaHis` guarda estado anterior, nuevo, usuario, canal e IP.
@@ -89,7 +89,7 @@ Formato ProblemDetails (ver F-04). Además de 400/401/403:
 | HTTP | `code` | Cuándo |
 |---|---|---|
 | 404 | `TARJETA_NO_ENCONTRADA` | La tarjeta de la URL no existe |
-| 409 | `TRANSICION_TARJETA_INVALIDA` | El cambio de estado no está permitido (también DB 52005) |
+| 409 | `TRANSICION_INVALIDA` | El cambio de estado no está permitido (también DB 52005) |
 | 409 | `PIN_NO_ASIGNADO` | Se intenta activar una tarjeta sin PIN |
 
 ## Definición de terminado

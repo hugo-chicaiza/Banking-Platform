@@ -17,6 +17,7 @@ from app.modules.contabilidad.router import router as contabilidad_router
 from app.modules.creditos.router import router as creditos_router
 from app.modules.cuentas.router import router as cuentas_router
 from app.modules.tarjetas.router import router as tarjetas_router
+from app.modules.tarjetas.router import router_pruebas as tarjetas_pruebas_router
 from app.modules.transacciones.router import router as transacciones_router
 from app.smoke_test import router as smoke_test_router  # SMOKE-TEST: borrar
 
@@ -59,6 +60,8 @@ app.include_router(cuentas_router, prefix=API_V1)
 app.include_router(tarjetas_router, prefix=API_V1)
 app.include_router(caja_router, prefix=API_V1)
 app.include_router(transacciones_router, prefix=API_V1)
+# PIN pad simulado para probar TAR-05 y ATM-01: responde 404 en producción
+app.include_router(tarjetas_pruebas_router, prefix=API_V1)
 
 # Público a propósito: verifica el despliegue sin sesión (fuera de /api, sin require_auth)
 app.include_router(smoke_test_router)  # SMOKE-TEST: borrar
