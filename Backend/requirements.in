@@ -28,3 +28,6 @@ argon2-cffi>=25.1,<26.0
 
 # Cliente HTTP (integraciones: buró simulado, WorkOS)
 httpx>=0.28,<1.0
+
+# Zona horaria de Ecuador (America/Guayaquil): Windows no trae la base IANA que usa zoneinfo
+tzdata>=2026.6
