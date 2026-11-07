@@ -79,4 +79,4 @@ Formato ProblemDetails (ver F-04). Además de 400/401/403:
 
 ## Pendiente
 
-- Dónde se guarda el hash: `SeguridadDB.TarjetaPIN` existe pero no tiene columnas de hash ni salt (brecha G-02, aplicar en F-08).
+- G-02 resuelto en la base: el hash se guarda en `SeguridadDB.Tarjetas.TarjetaPIN.HashPIN` (`varchar(255)`, Argon2id de `argon2-cffi`; la salt va dentro del hash). La columna se agregó a mano en la base compartida; falta incluirla en la migración F-08.

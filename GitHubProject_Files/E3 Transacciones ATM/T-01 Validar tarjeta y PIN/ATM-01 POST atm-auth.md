@@ -95,6 +95,15 @@ Formato ProblemDetails (ver F-04). Además de 400/401/403:
 - [ ] Prueba del caso feliz y de cada error de la tabla
 - [ ] Sin PAN, PIN, contraseñas ni tokens en logs
 
+## Controles compartidos con TAR-01 y TAR-05
+
+ATM-01 debe usar los mismos algoritmos con que se emitieron la tarjeta y el PIN; si no, nunca coinciden:
+
+- **Búsqueda de la tarjeta:** `Tarjeta.Tarjeta.HashNumeroTarjeta` = SHA-256 en bytes del PAN solo con dígitos (sin espacios ni guiones), igual que TAR-01.
+- **PIN:** verificar con Argon2id (`PasswordHasher().verify`) contra `SeguridadDB.Tarjetas.TarjetaPIN.HashPIN`, igual que lo guarda TAR-05. No recalcular el hash para compararlo: la salt es aleatoria.
+- **Intentos:** `TarjetaPIN.IntentosFallidos`, actualizado con bloqueo de fila para evitar condiciones de carrera.
+- **Datos sensibles:** `numeroTarjeta` y `pin` no deben aparecer en logs, errores ni URLs; igual que TAR-05, un error de validación no debe devolverlos en la respuesta.
+
 ## Pendiente
 
-- Valor de N, cómo se autentica el terminal y dónde viven los intentos (`SeguridadDB.TarjetaPIN`, brecha G-02).
+- Valor de N y cómo se autentica el terminal.
