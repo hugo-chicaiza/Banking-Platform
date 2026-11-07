@@ -16,7 +16,6 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from app.core.api.middleware import ip_cliente
 from app.core.config.logs import trace_id_actual
-from app.core.config.settings import get_settings
 from app.core.database.db import get_engine
 
 logger = logging.getLogger(__name__)
@@ -95,9 +94,7 @@ def evento_acceso_denegado(scope: Scope, status: int) -> EventoAuditoria:
     """
     usuario = (scope.get("state") or {}).get("usuario")
     id_workos = getattr(usuario, "id_usuario", None)
-    id_interno = (
-        get_settings().workos_audit_user_ids.get(id_workos) if id_workos else None
-    )
+    id_interno = getattr(usuario, "id_interno", None)
     descripcion = (
         f"{status} {scope['method']} {scope['path']} trace={trace_id_actual.get()}"
     )

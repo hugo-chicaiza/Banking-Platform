@@ -32,7 +32,7 @@ Cambia el estado del cliente.
 1. Transiciones permitidas: Activo ⇄ Inactivo; Activo → Suspendido → Activo; Activo → Bloqueado → Activo; cualquier estado no eliminado → Eliminado. Bloqueo/desbloqueo admiten ASESOR, SUPERVISOR y ADMIN, según aclaración del 2026-11-04. Otra transición, incluido solicitar el mismo estado, produce `409 TRANSICION_CLIENTE_INVALIDA`. Eliminado no se reactiva.
 2. No pasa a `Inactivo` ni `Eliminado` con cuentas Activa/Bloqueada, o con Saldo > 0 o SaldoRetenido > 0 en cualquier estado, ni con un crédito desembolsado que conserve deuda → `409 CLIENTE_CON_PRODUCTOS_VIGENTES`. Una solicitud por sí sola no prueba deuda. Se consultan cuotas del plan vigente, abonos, pagos y mora; crédito pagado y comprobado no bloquea. Información incompleta o contradictoria: `503 DEUDA_CLIENTE_NO_VERIFICABLE`, sin cambio de estado.
 3. `motivo` obligatorio y no compuesto solo de espacios, máximo 500 caracteres. Se registra junto con anterior/nuevo en JSON versionado en `ClientesHis.Observaciones`. El JSON completo debe caber en VARCHAR(500), sin truncar; esto puede reducir el motivo disponible.
-4. Identidad autenticada y mapa de servidor `WORKOS_AUDIT_USER_IDS`. Cliente, lecturas de productos, actualización y auditoría comparten transacción; las consultas de validación usan UPDLOCK/HOLDLOCK hasta commit/rollback.
+4. Identidad autenticada y metadato `idUsuario` del usuario en WorkOS. Cliente, lecturas de productos, actualización y auditoría comparten transacción; las consultas de validación usan UPDLOCK/HOLDLOCK hasta commit/rollback.
 
 ## Flujo
 

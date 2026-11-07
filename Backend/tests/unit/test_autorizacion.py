@@ -6,6 +6,7 @@ fallar test_toda_ruta_de_la_api_exige_sesion.
 """
 
 import re
+from dataclasses import replace
 
 import pytest
 from fastapi import Request
@@ -112,13 +113,88 @@ ROLES_POR_RUTA: dict[tuple[str, str], tuple[str, ...]] = {
         "AUDITOR",
         "ADMIN",
     ),
-    ("GET", "/api/v1/caja/cajas-fisicas"): ("CAJERO", "SUPERVISOR", "ADMIN"),
+    # CAJ-01: listado de cajas físicas
+    ("GET", "/api/v1/caja/cajas-fisicas"): (
+        "CAJERO",
+        "SUPERVISOR",
+        "ADMIN",
+    ),
     # CAJ-02: consulta de jornadas
     ("GET", "/api/v1/caja/jornadas"): (
         "SUPERVISOR",
         "CONTADOR",
         "AUDITOR",
     ),
+    # CAJ-05:
+    ("GET", "/api/v1/caja/jornadas/{idJornada}"): (
+        "CAJERO",
+        "SUPERVISOR",
+        "CONTADOR",
+    ),
+    # CAJ-08
+    ("GET", "/api/v1/caja/jornadas/{idJornada}/dotaciones"): (
+        "CAJERO",
+        "SUPERVISOR",
+        "CONTADOR",
+    ),
+    # CAJ-12
+    ("GET", "/api/v1/caja/jornadas/{idJornada}/movimientos"): (
+        "CAJERO",
+        "SUPERVISOR",
+        "CONTADOR",
+    ),
+    # CAJ-14
+    ("GET", "/api/v1/caja/jornadas/{idJornada}/cuadre"): (
+        "CAJERO",
+        "SUPERVISOR",
+        "CONTADOR",
+    ),
+    # TRX - 01
+    ("GET", "/api/v1/transacciones"): (
+        "SUPERVISOR",
+        "AUDITOR",
+        "CONTADOR",
+        "ADMIN",
+    ),
+    # TRX - 02
+    ("GET", "/api/v1/transacciones/{idTransaccion}"): (
+        "SUPERVISOR",
+        "AUDITOR",
+        "CONTADOR",
+        "ADMIN",
+    ),
+    # CAJ-06
+    ("POST", "/api/v1/caja/jornadas/{idJornada}/cancelacion"): ("SUPERVISOR",),
+    # CAJ-03
+    ("POST", "/api/v1/caja/jornadas"): ("CAJERO",),
+    # CAJ - 04
+    ("GET", "/api/v1/caja/jornadas/actual"): ("CAJERO",),
+    # CAJ - 07
+    ("POST", "/api/v1/caja/jornadas/{idJornada}/dotaciones"): (
+        "CAJERO",
+        "SUPERVISOR",
+    ),
+    # CAJ - 13
+    ("POST", "/api/v1/caja/jornadas/{idJornada}/cuadre"): ("CAJERO",),
+    # CAJ - 16
+    ("PUT", "/api/v1/caja/jornadas/{idJornada}/cuadre/conteo"): ("CAJERO",),
+    # CAJ - 15
+    ("POST", "/api/v1/caja/jornadas/{idJornada}/devoluciones"): (
+        "CAJERO",
+        "SUPERVISOR",
+    ),
+    # CAJ-17
+    ("POST", "/api/v1/caja/jornadas/{idJornada}/cuadre/autorizacion"): ("SUPERVISOR",),
+    # CAJ-18
+    ("POST", "/api/v1/caja/jornadas/{idJornada}/cierre"): ("CAJERO",),
+    # CAJ-09
+    ("POST", "/api/v1/caja/jornadas/{idJornada}/depositos"): ("CAJERO",),
+    # CAJ-10
+    ("POST", "/api/v1/caja/depositos/{idTransaccion}/series"): ("CAJERO",),
+    # CAJ - 11
+    ("POST", "/api/v1/caja/jornadas/{idJornada}/retiros"): ("CAJERO",),
+    # TRX - 03
+    ("POST", "/api/v1/transacciones/{idTransaccion}/reverso"): ("SUPERVISOR",),
 }
 
 
@@ -195,10 +271,24 @@ def test_rol_fuera_de_la_tarea_recibe_403(client, ruta, roles):
 @pytest.mark.parametrize("ruta", list(ROLES_POR_RUTA), ids=" ".join)
 def test_roles_de_la_tarea_pasan_el_control(client, ruta):
     roles = ROLES_POR_RUTA[ruta]
-    # AUTH: un usuario sin ningún rol del sistema también entra
     simular_sesion(app, usuario_con_roles(*roles))
 
     r = _llamar(client, *ruta)
+
+    # D-01: estos endpoints requieren vinculación
+    # WorkOS -> IdUsuario interno.
+    rutas_con_vinculacion = {
+        ("GET", "/api/v1/caja/jornadas/actual"),
+        ("POST", "/api/v1/caja/jornadas/{idJornada}/cierre"),
+        ("POST", "/api/v1/caja/jornadas/{idJornada}/depositos"),
+        ("POST", "/api/v1/caja/depositos/{idTransaccion}/series"),
+        ("POST", "/api/v1/caja/jornadas/{idJornada}/retiros"),
+        ("POST", "/api/v1/transacciones/{idTransaccion}/reverso"),
+    }
+
+    if ruta in rutas_con_vinculacion and r.status_code == 403:
+        assert r.json().get("code") == "USUARIO_INTERNO_NO_VINCULADO"
+        return
 
     assert r.status_code not in {401, 403}
 
@@ -208,15 +298,9 @@ def test_require_auth_entrega_el_usuario_de_la_sesion():
 
 
 def test_403_auditado_con_el_usuario_vinculado(client, eventos_auditados, monkeypatch):
-    from app.core.security import audit
 
-    usuario = usuario_con_roles("CAJERO")
+    usuario = replace(usuario_con_roles("CAJERO"), id_interno=12)
     # La sesión real deja el usuario en request.state; aquí se simula ese paso
-    monkeypatch.setattr(
-        audit,
-        "get_settings",
-        lambda: type("S", (), {"workos_audit_user_ids": {usuario.id_usuario: 12}})(),
-    )
 
     def sesion(request: Request) -> Usuario:
         request.state.usuario = usuario

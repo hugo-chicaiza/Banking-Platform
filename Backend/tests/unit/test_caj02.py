@@ -32,12 +32,13 @@ def client(monkeypatch):
     app = FastAPI()
     app.include_router(caja_router, prefix="/api/v1")
 
-    # Simular una sesión válida con un rol autorizado para CAJ-02
-    app.dependency_overrides[usuario_actual] = lambda: usuario_con_roles("SUPERVISOR")
-
-    # Evitar conexión real con Azure SQL
+    # Simular la conexión a la base de datos
     app.dependency_overrides[cooperativa] = lambda: Mock()
 
+    # Simular una sesión WorkOS con un usuario autorizado
+    app.dependency_overrides[usuario_actual] = lambda: usuario_con_roles("CONTADOR")
+
+    # Simular el servicio sin consultar Azure SQL
     def consulta_falsa(conn, **kwargs):
         return service.PageJornada(
             items=[],
@@ -115,6 +116,7 @@ def test_caj02_rango_fechas_invalido():
     with pytest.raises(HTTPException) as error:
         service.listar_jornadas(
             Mock(),
+            usuario=usuario_con_roles("CONTADOR"),
             id_agencia=None,
             id_usuario=None,
             estado=None,
@@ -145,6 +147,7 @@ def test_caj02_orden_invalido(sort):
     with pytest.raises(HTTPException) as error:
         service.listar_jornadas(
             Mock(),
+            usuario=usuario_con_roles("CONTADOR"),
             id_agencia=None,
             id_usuario=None,
             estado=None,
@@ -152,7 +155,7 @@ def test_caj02_orden_invalido(sort):
             hasta=None,
             page=1,
             page_size=20,
-            sort=sort,
+            sort=sort,  # IMPORTANTE: usar el parámetro de la prueba
         )
 
     assert error.value.status_code == 400
@@ -216,6 +219,7 @@ def test_caj02_filtros_service(monkeypatch):
 
     resultado = service.listar_jornadas(
         Mock(),
+        usuario=usuario_con_roles("CONTADOR"),
         id_agencia="001",
         id_usuario=25,
         estado="ABIERTA",
@@ -230,5 +234,9 @@ def test_caj02_filtros_service(monkeypatch):
     assert resultado.page == 2
     assert resultado.page_size == 10
     assert len(resultado.items) == 1
+
     assert recibidos["id_agencia"] == "001"
     assert recibidos["id_usuario"] == 25
+    assert recibidos["estado"] == "ABIERTA"
+    assert recibidos["page"] == 2
+    assert recibidos["page_size"] == 10

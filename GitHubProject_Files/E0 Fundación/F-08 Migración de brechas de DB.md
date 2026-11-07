@@ -46,4 +46,4 @@ url: https://github.com/hugo-chicaiza/Banking-Platform/issues/108
 ## Pendiente
 
 - Decidir G-06, G-07, G-12 y G-16.
-- G-02: `SeguridadDB` ya tiene `TarjetaPIN` con intentos y bloqueo, pero sin hash ni salt. Confirmar si la brecha se aplica ahí.
+- G-02: se aplica en `SeguridadDB.Tarjetas.TarjetaPIN`, que ya tiene intentos (`IntentosFallidos`), bloqueo y el hash en `HashPIN` (`varchar(255)`, Argon2id con la salt incluida). La columna se agregó a mano; falta incluirla en esta migración.
