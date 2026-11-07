@@ -41,6 +41,7 @@ from app.modules.caja.schemas import (
     PageJornada,
     PageMovimientoCaja,
     ReversoRequest,
+    SeriesBilletesRequest,
 )
 from app.modules.transacciones.dependencias import (
     DependenciasOperacion,
@@ -560,3 +561,39 @@ def registrar_deposito(
         response.headers["Idempotent-Replay"] = "true"
 
     return comprobante
+
+
+# --- CAJ-10: series de billetes ----------
+
+
+@router.post(
+    "/depositos/{idTransaccion}/series",
+    status_code=204,
+    response_class=Response,
+    operation_id="CAJ10",
+    dependencies=[Depends(require_roles("CAJERO"))],
+)
+def registrar_series(
+    request: Request,
+    usuario: UsuarioActual,
+    id_interno: IdInterno,
+    id_transaccion: Annotated[
+        int,
+        Path(
+            alias="idTransaccion",
+            gt=0,
+            le=9_223_372_036_854_775_807,
+        ),
+    ],
+    datos: SeriesBilletesRequest,
+    conn: Conexion,
+) -> None:
+    """Registra las series de billetes de un depósito."""
+    service.registrar_series(
+        conn,
+        usuario,
+        id_interno,
+        id_transaccion,
+        datos,
+        ip_cliente(request.scope),
+    )

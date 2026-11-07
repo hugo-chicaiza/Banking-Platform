@@ -309,3 +309,41 @@ class Comprobante(CamelModel):
     denominaciones: list[Desglose] | None = None
     fecha_hora_sistema: FechaHoraEc | None = None
     numero_autorizacion: str | None = None
+
+
+# --- CAJ-10: series de billetes ----------
+
+
+Serie = Annotated[
+    str,
+    StringConstraints(
+        strip_whitespace=True,
+        min_length=1,
+        max_length=20,
+        pattern=r"^[A-Za-z0-9]+$",
+    ),
+]
+
+
+class SeriesBilletesRequest(Entrada):
+    id_denominacion: IdInt
+
+    cantidad_declarada: Annotated[
+        int,
+        Field(gt=0, le=1000),
+    ]
+
+    series: Annotated[
+        list[Serie],
+        Field(min_length=1, max_length=1000),
+    ]
+
+    @model_validator(mode="after")
+    def _series_coherentes(self) -> "SeriesBilletesRequest":
+        if len(set(self.series)) != len(self.series):
+            raise ValueError("Hay series repetidas")
+
+        if len(self.series) != self.cantidad_declarada:
+            raise ValueError("La cantidad de series no es igual a la declarada")
+
+        return self
