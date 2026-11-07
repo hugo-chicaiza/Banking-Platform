@@ -1,4 +1,6 @@
+
 from datetime import date, timedelta
+from typing import Any, cast
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -127,7 +129,8 @@ def test_validar_tarjeta_rechazada(
         service.validar_tarjeta(MagicMock(), 1)
 
     assert error.value.status_code == http_esperado
-    assert error.value.detail["code"] == codigo_esperado
+    detalle = cast(dict[str, Any], error.value.detail)
+    assert detalle["code"] == codigo_esperado
 
 
 def test_validar_tarjeta_inexistente():
@@ -198,7 +201,8 @@ def test_validar_estado_pin_rechazado(
         service.validar_estado_pin(MagicMock(), 1)
 
     assert error.value.status_code == http_esperado
-    assert error.value.detail["code"] == codigo_esperado
+    detalle = cast(dict[str, Any], error.value.detail)
+    assert detalle["code"] == codigo_esperado
 
 
 def test_validar_estado_pin_inexistente():
@@ -212,4 +216,5 @@ def test_validar_estado_pin_inexistente():
         service.validar_estado_pin(MagicMock(), 999)
 
     assert error.value.status_code == 409
-    assert error.value.detail["code"] == "PIN_NO_DISPONIBLE"
+    detalle = cast(dict[str, Any], error.value.detail)
+    assert detalle["code"] == "PIN_NO_DISPONIBLE"
