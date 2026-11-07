@@ -8,7 +8,7 @@ import json
 from collections.abc import Mapping
 from datetime import date, datetime, time, timedelta
 from decimal import ROUND_HALF_UP, Decimal
-from typing import Any
+from typing import Any, Literal
 
 from sqlalchemy import Connection
 
@@ -20,6 +20,7 @@ from app.modules.caja.repository import Fila
 from app.modules.caja.schemas import (
     AutorizacionCuadre,
     CajaFisica,
+    Comprobante,
     ConteoFisico,
     CuadreCaja,
     CuadreCajaCreate,
@@ -31,8 +32,14 @@ from app.modules.caja.schemas import (
     Jornada,
     JornadaOpen,
     MovimientoCaja,
+    OperacionVentanilla,
     PageJornada,
     PageMovimientoCaja,
+)
+from app.modules.transacciones import repository as trx_repo
+from app.modules.transacciones.dependencias import (
+    DatosAsiento,
+    DependenciasOperacion,
 )
 
 ROLES_GLOBALES = frozenset({"CONTADOR", "AUDITOR", "ADMIN"})
@@ -1292,3 +1299,384 @@ def cerrar_jornada(
                 )
 
             return _recargar_jornada(conn, id_jornada)
+
+
+# --- CAJ-09: depósito en ventanilla ----------
+
+TipoVentanilla = Literal["Deposito", "Retiro"]
+
+
+def _validar_desglose(
+    conn: Connection,
+    datos: OperacionVentanilla,
+    obligatorio: bool,
+) -> None:
+    if datos.desglose is None:
+        if obligatorio:
+            raise problema(
+                422,
+                "DESGLOSE_REQUERIDO",
+                "El depósito exige el desglose.",
+            )
+        return
+
+    valores = repo.valores_denominaciones(
+        conn,
+        [d.id_denominacion for d in datos.desglose],
+    )
+
+    if len(valores) != len(datos.desglose):
+        raise problema(
+            422,
+            "DENOMINACION_NO_ENCONTRADA",
+            "Una denominación no existe.",
+        )
+
+    total = sum(
+        (decimal(valores[d.id_denominacion]) * d.cantidad for d in datos.desglose),
+        Decimal(0),
+    )
+
+    if total != datos.monto:
+        raise problema(
+            422,
+            "DESGLOSE_NO_COINCIDE_CON_MONTO",
+            "La suma del desglose no es igual al monto.",
+        )
+
+
+def _comprobante(
+    conn: Connection,
+    fila: Fila,
+    denominaciones: list[Desglose] | None,
+    descripcion: str,
+) -> Comprobante:
+    return Comprobante(
+        id_transaccion=fila["IdTransaccion"],
+        numero_comprobante=str(fila["NumeroComprobante"]).strip(),
+        tipo_transaccion=fila["TipoTransaccion"],
+        estado=fila["Estado"],
+        codigo_respuesta=str(fila["CodigoRespuesta"]).strip(),
+        descripcion_respuesta=descripcion,
+        monto=fila["Monto"],
+        comision=decimal(
+            trx_repo.comision_de(
+                conn,
+                fila["IdTransaccion"],
+            )
+        ),
+        saldo_disponible=decimal(
+            trx_repo.saldo_disponible(
+                conn,
+                fila["IdCuenta"],
+            )
+        ),
+        denominaciones=denominaciones,
+        fecha_hora_sistema=fila["FechaHoraSistema"],
+        numero_autorizacion=fila["NumeroAutorizacion"],
+    )
+
+
+def _validar_repeticion(
+    previa: Fila,
+    tipo: TipoVentanilla,
+    datos: OperacionVentanilla,
+    id_jornada: int,
+    id_cajero: int,
+) -> None:
+    """Un reintento debe ser la misma operación del mismo cajero."""
+
+    if (
+        previa["TipoTransaccion"] != tipo
+        or previa["IdCuenta"] != datos.id_cuenta
+        or decimal(previa["Monto"]) != datos.monto
+        or previa["IdJornadaCaja"] != id_jornada
+        or previa["CreadoPor"] != id_cajero
+    ):
+        raise problema(
+            409,
+            "REGISTRO_UNICO_REUTILIZADO",
+            "El registroUnico ya se usó en otra operación.",
+        )
+
+
+def operacion_ventanilla(
+    conn: Connection,
+    usuario: Usuario,
+    id_interno: int | None,
+    id_jornada: int,
+    datos: OperacionVentanilla,
+    ip: str,
+    deps: DependenciasOperacion,
+    tipo: TipoVentanilla,
+) -> tuple[Comprobante, bool]:
+    """Depósito o retiro. Devuelve (comprobante, es_repeticion)."""
+
+    with auditar(
+        "REGISTRAR_" + tipo.upper(),
+        "Transacciones.Transaccion",
+        usuario,
+        ip,
+        f"jornada={id_jornada} cuenta={datos.id_cuenta}"
+        f" registroUnico={datos.registro_unico}",
+    ) as registro:
+        deps.verificar_habilitadas()
+        cajero = exigir_id_interno(id_interno)
+
+        with conn.begin():
+            previa = trx_repo.buscar_por_registro_unico(
+                conn,
+                datos.registro_unico,
+            )
+
+            if previa is not None:
+                _validar_repeticion(
+                    previa,
+                    tipo,
+                    datos,
+                    id_jornada,
+                    cajero,
+                )
+
+                registro.id_registro = str(previa["IdTransaccion"])
+
+                return (
+                    _comprobante(
+                        conn,
+                        previa,
+                        None,
+                        "Repetición idempotente",
+                    ),
+                    True,
+                )
+
+            jornada = jornada_bloqueada(
+                conn,
+                id_jornada,
+            )
+
+            verificar_alcance(
+                usuario,
+                cajero,
+                jornada,
+                ("CAJERO",),
+            )
+
+            if jornada["Estado"] != "ABIERTA":
+                raise problema(
+                    409,
+                    "JORNADA_NO_ABIERTA",
+                    "La jornada no está ABIERTA.",
+                )
+
+            if not repo.dotacion_inicial_registrada(
+                conn,
+                id_jornada,
+            ):
+                raise problema(
+                    409,
+                    "DOTACION_INICIAL_PENDIENTE",
+                    "La jornada no opera sin la dotación INICIAL.",
+                )
+
+            if (
+                repo.obtener_cuadre_de_jornada(
+                    conn,
+                    id_jornada,
+                )
+                is not None
+            ):
+                raise problema(
+                    409,
+                    "JORNADA_EN_CUADRE",
+                    "La jornada ya tiene cuadre; no admite operaciones.",
+                )
+
+            _validar_desglose(
+                conn,
+                datos,
+                obligatorio=tipo == "Deposito",
+            )
+
+            cuenta = trx_repo.obtener_cuenta(
+                conn,
+                datos.id_cuenta,
+            )
+
+            if cuenta is None:
+                raise problema(
+                    422,
+                    "CUENTA_NO_ENCONTRADA",
+                    "La cuenta no existe.",
+                )
+
+            if cuenta["Estado"] != "Activa":
+                raise problema(
+                    409,
+                    "CUENTA_NO_ACTIVA",
+                    "La cuenta no está Activa.",
+                )
+
+            id_canal = deps.id_canal_ventanilla
+            comision = Decimal(0)
+            descripcion = "Aprobada"
+
+            if tipo == "Retiro":
+                autorizacion = trx_repo.autorizar_operacion(
+                    conn,
+                    datos.id_cuenta,
+                    id_canal,
+                    tipo,
+                    datos.monto,
+                )
+
+                codigo = str(autorizacion["CodigoRespuesta"] or "").strip()
+
+                if codigo == "51":
+                    raise problema(
+                        422,
+                        "FONDOS_INSUFICIENTES",
+                        "El disponible no cubre el monto y la comisión.",
+                    )
+
+                if codigo == "05":
+                    raise problema(
+                        409,
+                        "CUENTA_NO_ACTIVA",
+                        "La cuenta no está Activa.",
+                    )
+
+                if codigo != "00":
+                    raise problema(
+                        422,
+                        "OPERACION_RECHAZADA",
+                        "La operación fue rechazada.",
+                    )
+
+                comision = decimal(autorizacion["Comision"] or 0)
+
+                descripcion = str(autorizacion["Mensaje"] or descripcion)
+
+                if saldo_esperado(_totales(conn, id_jornada)) < datos.monto:
+                    raise problema(
+                        409,
+                        "EFECTIVO_INSUFICIENTE_EN_CAJA",
+                        "La caja no tiene efectivo para el retiro.",
+                    )
+
+            id_fecha = fecha_contable(conn)
+
+            numeracion = deps.numerar(
+                conn,
+                tipo,
+                "Normal",
+            )
+
+            id_transaccion = trx_repo.insertar_transaccion(
+                conn,
+                {
+                    "numero_comprobante": numeracion.numero_comprobante,
+                    "secuencial": numeracion.secuencial,
+                    "registro_unico": datos.registro_unico,
+                    "numero_autorizacion": numeracion.numero_autorizacion,
+                    "mti": "0200",
+                    "codigo_procesamiento": numeracion.codigo_procesamiento,
+                    "stan": numeracion.stan,
+                    "rrn": numeracion.rrn,
+                    "tipo_operacion": "Normal",
+                    "tipo_transaccion": tipo,
+                    "id_cuenta": datos.id_cuenta,
+                    "id_cuenta_destino": None,
+                    "id_canal": id_canal,
+                    "id_agencia": jornada["IdAgencia"],
+                    "id_jornada": id_jornada,
+                    "id_relacionada": None,
+                    "monto": datos.monto,
+                    "codigo_pais": deps.codigo_pais_origen,
+                    "codigo_respuesta": "00",
+                    "ip": ip,
+                    "estado": "Completada",
+                    "creado_por": cajero,
+                    "id_fecha_contable": id_fecha,
+                },
+            )
+
+            registro.id_registro = str(id_transaccion)
+
+            trx_repo.aplicar_movimiento_cuenta(
+                conn,
+                id_transaccion,
+                datos.id_cuenta,
+                "C" if tipo == "Deposito" else "D",
+                None,
+                datos.monto,
+                id_fecha,
+            )
+
+            if comision > 0:
+                deps.registrar_comision(
+                    conn,
+                    id_transaccion,
+                    comision,
+                )
+
+            id_asiento = deps.contabilizar(
+                conn,
+                DatosAsiento(
+                    id_transaccion=id_transaccion,
+                    tipo_transaccion=tipo,
+                    tipo_operacion="Normal",
+                    monto=datos.monto,
+                    id_agencia=jornada["IdAgencia"],
+                    id_fecha_contable=id_fecha,
+                ),
+            )
+
+            naturaleza = "I" if tipo == "Deposito" else "E"
+
+            id_tipo = trx_repo.id_tipo_movimiento_caja(
+                conn,
+                deps.codigo_tipo_movimiento_caja(
+                    tipo,
+                    naturaleza,
+                ),
+            )
+
+            if id_tipo is None:
+                raise problema(
+                    500,
+                    "CONFIGURACION_INCOMPLETA",
+                    "Falta configurar el tipo de movimiento de caja.",
+                )
+
+            trx_repo.insertar_movimiento_caja(
+                conn,
+                id_transaccion,
+                id_jornada,
+                jornada["IdAgencia"],
+                id_tipo,
+                datos.monto,
+                datos.observacion,
+                id_asiento,
+                id_fecha,
+            )
+
+            fila = trx_repo.obtener_transaccion(
+                conn,
+                id_transaccion,
+            )
+
+            if fila is None:
+                raise RuntimeError("La transacción no se encontró tras registrarla")
+
+            denominaciones = datos.desglose if tipo == "Retiro" else None
+
+            return (
+                _comprobante(
+                    conn,
+                    fila,
+                    denominaciones,
+                    descripcion,
+                ),
+                False,
+            )

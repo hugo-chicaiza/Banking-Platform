@@ -27,6 +27,7 @@ from app.modules.caja.schemas import (
     INT32_MAX,
     AutorizacionCuadre,
     CajaFisica,
+    Comprobante,
     ConteoFisico,
     CuadreCaja,
     CuadreCajaCreate,
@@ -36,9 +37,14 @@ from app.modules.caja.schemas import (
     DotacionRequest,
     Jornada,
     JornadaOpen,
+    OperacionVentanilla,
     PageJornada,
     PageMovimientoCaja,
     ReversoRequest,
+)
+from app.modules.transacciones.dependencias import (
+    DependenciasOperacion,
+    dependencias_operacion,
 )
 
 
@@ -512,3 +518,45 @@ def cerrar_jornada(
         id_jornada,
         ip_cliente(request.scope),
     )
+
+
+# --- CAJ-09: depósito en ventanilla ----------
+
+
+@router.post(
+    "/jornadas/{idJornada}/depositos",
+    response_model=Comprobante,
+    status_code=201,
+    operation_id="CAJ09",
+    dependencies=[Depends(require_roles("CAJERO"))],
+)
+def registrar_deposito(
+    request: Request,
+    response: Response,
+    usuario: UsuarioActual,
+    id_interno: IdInterno,
+    id_jornada: IdJornada,
+    datos: OperacionVentanilla,
+    conn: Conexion,
+    deps: Annotated[
+        DependenciasOperacion,
+        Depends(dependencias_operacion),
+    ],
+) -> Comprobante:
+    """Registra un depósito idempotente."""
+    comprobante, repeticion = service.operacion_ventanilla(
+        conn,
+        usuario,
+        id_interno,
+        id_jornada,
+        datos,
+        ip_cliente(request.scope),
+        deps,
+        "Deposito",
+    )
+
+    if repeticion:
+        response.status_code = 200
+        response.headers["Idempotent-Replay"] = "true"
+
+    return comprobante
