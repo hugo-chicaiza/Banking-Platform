@@ -65,7 +65,8 @@ class _Sesion:
             "role": self._workos.roles[0] if self._workos.roles else None,
             "roles": self._workos.roles,
             "permissions": ["cuentas:crear"],
-            "user": self._workos.usuario,
+            # Como en WorkOS real: la copia del usuario en la cookie no trae metadatos
+            "user": self._workos.usuario.model_copy(update={"metadata": {}}),
         }
 
     def authenticate(self) -> Any:
@@ -115,6 +116,10 @@ class _UserManagement:
         self.error: Exception | None = None
         self.error_jwks: Exception | None = None
         self.renovaciones = 0
+        # Vínculos guardados en la base: KeyAgencia -> IdAgencia, KeyUsuario -> UsuarioID
+        self.agencias: dict[str, str] = {"org_1": "001"}
+        self.internos: dict[str, int] = {}
+        self.consultas_base = 0
         self.llamadas: list[tuple[str, dict[str, Any]]] = []
 
     def get_authorization_url(self, **kwargs: Any) -> str:
@@ -160,6 +165,17 @@ def workos(monkeypatch) -> _UserManagement:
     cliente = SimpleNamespace(user_management=falso)
     monkeypatch.setattr(security, "get_workos", lambda: cliente)
     monkeypatch.setattr(service, "get_workos", lambda: cliente)
+
+    def agencia(id_organizacion: str | None) -> str | None:
+        falso.consultas_base += 1
+        return falso.agencias.get(id_organizacion or "")
+
+    def interno(id_workos: str) -> int | None:
+        falso.consultas_base += 1
+        return falso.internos.get(id_workos)
+
+    monkeypatch.setattr(security, "_agencia_db", agencia)
+    monkeypatch.setattr(security, "_id_interno_db", interno)
     return falso
 
 
@@ -323,12 +339,74 @@ def test_me_usuario_con_varios_roles(client, workos):
 
 
 def test_me_sin_agencia_vigente(client, workos):
-    workos.usuario = _usuario(metadata={}, first_name=None, last_name=None)
+    workos.usuario = _usuario(first_name=None, last_name=None)
+    workos.agencias.clear()
 
     cuerpo = client.get(f"{BASE}/me", headers=_con_sesion()).json()
 
     assert cuerpo["idAgencia"] is None
     assert cuerpo["nombre"] == "maria.lopez@correo.ec"
+
+
+def test_agencia_sale_del_vinculo_de_la_organizacion(client, workos):
+    cuerpo = client.get(f"{BASE}/me", headers=_con_sesion()).json()
+
+    # La organización de la sesión (org_1) está vinculada a la agencia 001
+    assert cuerpo["idAgencia"] == "001"
+    assert workos.consultas_base == 1
+
+
+def test_cambio_de_vinculo_aplica_sin_volver_a_iniciar_sesion(client, workos):
+    client.get(f"{BASE}/me", headers=_con_sesion())
+    workos.agencias["org_1"] = "002"
+
+    cuerpo = client.get(f"{BASE}/me", headers=_con_sesion()).json()
+
+    # Sin caché entre peticiones
+    assert cuerpo["idAgencia"] == "002"
+
+
+def test_organizacion_sin_vinculo_no_tiene_agencia(client, workos):
+    workos.agencias.clear()
+
+    assert client.get(f"{BASE}/me", headers=_con_sesion()).json()["idAgencia"] is None
+
+
+def test_vinculos_solo_se_consultan_si_se_usan(workos):
+    sesion = security.validar_sesion("sellada-vigente")
+    assert sesion is not None
+    assert workos.consultas_base == 0
+
+    assert sesion.usuario.interno(solo_si_leido=True) is None
+    assert workos.consultas_base == 0
+
+    assert sesion.usuario.agencia() == "001"
+    assert sesion.usuario.agencia() == "001"
+    assert sesion.usuario.interno() is None
+    assert sesion.usuario.interno() is None
+    # Una consulta por dato y por petición
+    assert workos.consultas_base == 2
+
+
+def test_id_interno_sale_de_key_usuario(workos):
+    workos.internos["user_1"] = 8
+    sesion = security.validar_sesion("sellada-vigente")
+    assert sesion is not None
+
+    assert security.id_usuario_auditoria(sesion.usuario) == 8
+
+
+def test_vinculo_falla_cerrado_si_la_base_falla(monkeypatch):
+    from sqlalchemy.exc import OperationalError
+
+    def caida(_base):
+        raise OperationalError("SELECT", {}, Exception("sin red"))
+
+    monkeypatch.setattr(security, "get_engine", caida)
+
+    assert security._id_interno_db("user_1") is None
+    assert security._agencia_db("org_1") is None
+    assert security._agencia_db(None) is None
 
 
 def test_me_con_token_vencido_renueva_la_cookie(client, workos):

@@ -4,8 +4,8 @@ Caja.JornadasCaja.IdUsuario, CajerosAsignadosAgencia.IdUsuario, CuadreCaja.IdAut
 y Transaccion.CreadoPor son `int`. WorkOS entrega `user_01...`: ese texto no se convierte
 a número ni se adivina.
 
-El vínculo es el metadato "idUsuario" del usuario en WorkOS (Usuario.id_interno): se
-administra solo en WorkOS, igual que los roles y "idAgencia". Sin ese metadato, las rutas
+El vínculo es Organizacion.Usuarios.KeyUsuario = id del usuario en WorkOS
+(Usuario.interno()). Sin vínculo, o si el usuario no está Activo, las rutas
 que necesitan el id interno responden 403 USUARIO_INTERNO_NO_VINCULADO: fallan cerradas.
 """
 
@@ -23,8 +23,8 @@ from app.core.security.auth import Usuario, UsuarioActual
 
 
 def resolver_id_interno(usuario: UsuarioActual) -> int | None:
-    """Id interno (int) del usuario autenticado: su metadato "idUsuario" de WorkOS."""
-    return usuario.id_interno
+    """Id interno (int) del usuario autenticado, vinculado por KeyUsuario."""
+    return usuario.interno()
 
 
 IdInterno = Annotated[int | None, Depends(resolver_id_interno)]
@@ -41,11 +41,12 @@ def exigir_id_interno(id_interno: int | None) -> int:
 
 
 def exigir_agencia(usuario: Usuario) -> str:
-    if usuario.id_agencia is None:
+    agencia = usuario.agencia()
+    if agencia is None:
         raise problema(
             403, "AGENCIA_NO_ASIGNADA", "Su usuario no tiene una agencia asignada."
         )
-    return usuario.id_agencia
+    return agencia
 
 
 @dataclass

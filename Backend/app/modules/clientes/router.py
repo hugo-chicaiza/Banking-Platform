@@ -155,7 +155,7 @@ def registrar_cliente(
 ) -> Any:
     """Registra un cliente (Natural o Jurídico) con su dirección principal (CLI-02 / C-01).
 
-    `creado_por` es el usuario de la sesión, con su metadato "idUsuario" de WorkOS.
+    `creado_por` es el usuario de la sesión, vinculado por Organizacion.Usuarios.KeyUsuario.
     """
     # Obtener IP del cliente para auditoría en ClientesHis
     direccion_ip = _ip_cliente(request)

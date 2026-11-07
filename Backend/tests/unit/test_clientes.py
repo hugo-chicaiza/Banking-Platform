@@ -2466,35 +2466,12 @@ def test_cli07_no_inventa_valores_para_legado(observaciones):
     _assert_solo_lectura(db)
 
 
-@pytest.mark.parametrize(
-    "metadatos",
-    [
-        None,
-        {},
-        {"idUsuario": "0"},
-        {"idUsuario": "-1"},
-        {"idUsuario": "2147483648"},
-        {"idUsuario": "12a"},
-        {"idUsuario": " 12"},
-        {"idUsuario": "١٢"},
-        {"idusuario": "12"},
-    ],
-)
-def test_metadato_id_usuario_invalido_no_vincula(metadatos):
-    assert auth._id_interno(metadatos) is None
-
-
-def test_metadato_id_usuario_valido_vincula():
-    assert auth._id_interno({"idUsuario": "12", "idAgencia": "001"}) == 12
-    assert auth._id_interno({"idUsuario": "2147483647"}) == 2147483647
-
-
-def test_vinculo_de_auditoria_viene_del_metadato_de_workos():
+def test_vinculo_de_auditoria_usa_el_id_interno():
     usuario = replace(_usuario_historial("ADMIN"), id_interno=12)
     assert auth.id_usuario_auditoria(usuario) == 12
 
 
-def test_usuario_sin_metadato_no_recibe_id_fijo():
+def test_usuario_sin_vinculo_no_recibe_id_fijo():
     with pytest.raises(service.HTTPException) as exc:
         auth.id_usuario_auditoria(_usuario_historial("ADMIN"))
     _assert_http_error(exc, 403, "USUARIO_SIN_VINCULO_AUDITORIA")
