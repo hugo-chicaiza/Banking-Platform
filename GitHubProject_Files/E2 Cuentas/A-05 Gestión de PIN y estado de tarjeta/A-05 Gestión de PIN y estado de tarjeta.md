@@ -38,4 +38,4 @@ url: https://github.com/hugo-chicaiza/Banking-Platform/issues/59
 
 ## Pendiente
 
-- G-02 (aplicar): `SeguridadDB.TarjetaPIN` no tiene columnas de hash ni salt.
+- G-02 (resuelto en la base, falta F-08): el hash del PIN vive en `SeguridadDB.Tarjetas.TarjetaPIN.HashPIN` (`varchar(255)`, Argon2id de `argon2-cffi`; la salt va dentro del hash).

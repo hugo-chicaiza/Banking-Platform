@@ -38,7 +38,7 @@ Que el cliente opere en el cajero automático con su tarjeta y PIN, y que cada o
 
 ## Decisiones pendientes
 
-- G-02: hash e intentos del PIN (`SeguridadDB.TarjetaPIN`).
+- G-02: hash (`HashPIN`) e intentos (`IntentosFallidos`) del PIN ya existen en `SeguridadDB.Tarjetas.TarjetaPIN`; falta la migración F-08.
 - G-08: ¿el ATM acepta depósitos? Si no, cerrar T-04.
 - Valor de N para bloquear la tarjeta y cómo se autentica el terminal.
 
