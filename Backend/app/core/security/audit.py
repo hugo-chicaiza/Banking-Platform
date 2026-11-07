@@ -94,7 +94,8 @@ def evento_acceso_denegado(scope: Scope, status: int) -> EventoAuditoria:
     """
     usuario = (scope.get("state") or {}).get("usuario")
     id_workos = getattr(usuario, "id_usuario", None)
-    id_interno = getattr(usuario, "id_interno", None)
+    # Sin consultar WorkOS: solo el id si la ruta ya lo había leído
+    id_interno = usuario.interno(solo_si_leido=True) if usuario else None
     descripcion = (
         f"{status} {scope['method']} {scope['path']} trace={trace_id_actual.get()}"
     )

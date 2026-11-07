@@ -19,13 +19,15 @@ import hashlib
 import logging
 import threading
 import time
-from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
-from typing import Annotated
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass, field
+from typing import Annotated, Any
 
 from fastapi import Depends, HTTPException, Request, Response
 from fastapi.security import APIKeyCookie
 from jwt.exceptions import PyJWKClientConnectionError, PyJWKClientError
+from sqlalchemy import text
+from sqlalchemy.exc import SQLAlchemyError
 from workos.types.user_management.session import (
     AuthenticateWithSessionCookieErrorResponse,
     AuthenticateWithSessionCookieFailureReason,
@@ -35,6 +37,7 @@ from workos.types.user_management.session import (
 )
 
 from app.core.api.errors import problema
+from app.core.database.db import DbName, get_engine
 from app.integrations.workos_client import (
     get_cookie_password,
     get_frontend_url,
@@ -62,8 +65,6 @@ DURACION_SESION = 8 * 60 * 60  # AUT-01: 8 h. Igualar a la sesión configurada e
 
 _METODOS_SEGUROS = {"GET", "HEAD", "OPTIONS"}
 _SITIOS_PROPIOS = {"same-origin", "none"}
-_LONGITUD_AGENCIA = 3
-_MAX_INT_SQL = 2_147_483_647
 # Peticiones paralelas con el token vencido comparten una sola renovación: WorkOS
 # acepta cada refresh token una sola vez
 _VIGENCIA_RENOVACION = 30.0
@@ -89,10 +90,44 @@ class Usuario:
     email: str
     roles: tuple[str, ...]
     permisos: tuple[str, ...]
-    id_agencia: str | None  # metadato "idAgencia" del usuario en WorkOS
-    # Metadato "idUsuario" en WorkOS: UsuarioID de Organizacion.Usuarios que se guarda
-    # en CreadoPor, RealizadoPor, etc. Lo asigna un administrador; el usuario no lo edita
+    # Valores fijos (pruebas). En una sesión real van en None y se leen con agencia()
+    # e interno(), que consultan los vínculos guardados en la base.
+    id_agencia: str | None = None
     id_interno: int | None = None
+    # Consultas a la base: solo si la ruta necesita el dato y una vez por petición;
+    # no se guardan entre peticiones.
+    cargar_agencia: Callable[[], str | None] | None = field(
+        default=None, repr=False, compare=False
+    )
+    cargar_interno: Callable[[], int | None] | None = field(
+        default=None, repr=False, compare=False
+    )
+    _leidos: dict[str, str | int | None] = field(
+        default_factory=dict, init=False, repr=False, compare=False
+    )
+
+    def agencia(self) -> str | None:
+        """IdAgencia cuya KeyAgencia es la organización de WorkOS de la sesión."""
+        if self.cargar_agencia is None:
+            return self.id_agencia
+        if "agencia" not in self._leidos:
+            self._leidos["agencia"] = self.cargar_agencia()
+        valor = self._leidos["agencia"]
+        return valor if isinstance(valor, str) else None
+
+    def interno(self, solo_si_leido: bool = False) -> int | None:
+        """UsuarioID (Organizacion.Usuarios) cuya KeyUsuario es el id de WorkOS: se
+        guarda en CreadoPor, RealizadoPor, etc.
+        solo_si_leido: no consulta la base (auditoría de accesos denegados).
+        """
+        if self.cargar_interno is None:
+            return self.id_interno
+        if "interno" not in self._leidos:
+            if solo_si_leido:
+                return None
+            self._leidos["interno"] = self.cargar_interno()
+        valor = self._leidos["interno"]
+        return valor if isinstance(valor, int) else None
 
 
 @dataclass(frozen=True)
@@ -196,24 +231,44 @@ def normalizar_roles(roles: Sequence[str] | None, rol: str | None) -> tuple[str,
     return tuple(resultado)
 
 
-def _agencia(metadatos: Mapping[str, str] | None) -> str | None:
-    agencia = (metadatos or {}).get("idAgencia")
-    if (
-        isinstance(agencia, str)
-        and len(agencia) == _LONGITUD_AGENCIA
-        and agencia.isdigit()
-    ):
-        return agencia
-    return None
+def _vinculo(base: DbName, consulta: str, llave: str) -> Any:
+    """Busca el id interno vinculado a un id de WorkOS. None si no hay vínculo o la
+    base falla: las rutas que lo necesitan responden 403 (fallan cerradas).
+    """
+    try:
+        with get_engine(base).connect() as conn:
+            return conn.execute(text(consulta), {"llave": llave}).scalar()
+    except SQLAlchemyError as exc:
+        logger.warning(
+            "auth: no se pudo leer el vínculo base=%s error=%s",
+            base,
+            type(exc).__name__,
+        )
+        return None
 
 
-def _id_interno(metadatos: Mapping[str, str] | None) -> int | None:
-    valor = (metadatos or {}).get("idUsuario")
-    if isinstance(valor, str) and valor.isascii() and valor.isdigit():
-        numero = int(valor)
-        if 1 <= numero <= _MAX_INT_SQL:
-            return numero
-    return None
+def _id_interno_db(id_workos: str) -> int | None:
+    """Organizacion.Usuarios.KeyUsuario = id del usuario en WorkOS; solo activos."""
+    valor = _vinculo(
+        "seguridad",
+        "SELECT UsuarioID FROM Organizacion.Usuarios "
+        "WHERE KeyUsuario = :llave AND Estado = 'Activo'",
+        id_workos,
+    )
+    return valor if isinstance(valor, int) else None
+
+
+def _agencia_db(id_organizacion: str | None) -> str | None:
+    """Organizacion.Agencia.KeyAgencia = organización de WorkOS; solo activas."""
+    if not id_organizacion:
+        return None
+    valor = _vinculo(
+        "cooperativa",
+        "SELECT IdAgencia FROM Organizacion.Agencia "
+        "WHERE KeyAgencia = :llave AND Estado = 'A'",
+        id_organizacion,
+    )
+    return valor if isinstance(valor, str) else None
 
 
 def _usuario(sesion: Exito) -> Usuario:
@@ -227,8 +282,8 @@ def _usuario(sesion: Exito) -> Usuario:
         email=datos.email,
         roles=normalizar_roles(sesion.roles, sesion.role),
         permisos=tuple(sesion.permissions or ()),
-        id_agencia=_agencia(datos.metadata),
-        id_interno=_id_interno(datos.metadata),
+        cargar_agencia=lambda: _agencia_db(sesion.organization_id),
+        cargar_interno=lambda: _id_interno_db(datos.id),
     )
 
 
@@ -318,14 +373,15 @@ UsuarioActual = Annotated[Usuario, Depends(usuario_actual)]
 
 
 def id_usuario_auditoria(usuario: UsuarioActual) -> int:
-    """UsuarioID para CreadoPor/RealizadoPor: el metadato "idUsuario" de WorkOS."""
-    if usuario.id_interno is None:
+    """UsuarioID para CreadoPor/RealizadoPor: Organizacion.Usuarios.KeyUsuario."""
+    id_interno = usuario.interno()
+    if id_interno is None:
         raise problema(
             403,
             "USUARIO_SIN_VINCULO_AUDITORIA",
-            "El usuario no tiene el metadato idUsuario configurado en WorkOS.",
+            "El usuario no tiene un vínculo de auditoría configurado.",
         )
-    return usuario.id_interno
+    return id_interno
 
 
 UsuarioAuditoria = Annotated[int, Depends(id_usuario_auditoria)]
