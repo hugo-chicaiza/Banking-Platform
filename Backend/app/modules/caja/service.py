@@ -20,6 +20,7 @@ from app.modules.caja.repository import Fila
 from app.modules.caja.schemas import (
     CajaFisica,
     CuadreCaja,
+    CuadreCajaCreate,
     Desglose,
     Dotacion,
     DotacionRequest,
@@ -802,3 +803,90 @@ def registrar_dotacion(
                 fila,
                 bool(salida["BovedaBajoMinimo"]),
             )
+
+
+# --- CAJ-13: generar cuadre ----------
+
+
+def _recargar_cuadre(conn: Connection, id_cuadre: int) -> CuadreCaja:
+    fila = repo.obtener_cuadre(conn, id_cuadre)
+
+    if fila is None:
+        raise RuntimeError("El cuadre desapareció dentro de la transacción")
+
+    return _cuadre(fila)
+
+
+def _totales(conn: Connection, id_jornada: int) -> Fila:
+    totales = repo.calcular_totales(conn, id_jornada)
+
+    if totales is None:
+        raise jornada_no_encontrada()
+
+    return totales
+
+
+def generar_cuadre(
+    conn: Connection,
+    usuario: Usuario,
+    id_interno: int | None,
+    id_jornada: int,
+    datos: CuadreCajaCreate,
+    ip: str,
+) -> CuadreCaja:
+    with auditar(
+        "GENERAR_CUADRE",
+        "Caja.CuadreCaja",
+        usuario,
+        ip,
+        f"jornada={id_jornada}",
+    ) as registro:
+        exigir_id_interno(id_interno)
+
+        with conn.begin():
+            jornada = jornada_bloqueada(conn, id_jornada)
+
+            verificar_alcance(
+                usuario,
+                id_interno,
+                jornada,
+                ("CAJERO",),
+            )
+
+            if jornada["Estado"] == "CANCELADA":
+                raise problema(
+                    409,
+                    "JORNADA_CANCELADA",
+                    "La jornada está CANCELADA.",
+                )
+
+            if jornada["Estado"] != "ABIERTA":
+                raise problema(
+                    409,
+                    "JORNADA_NO_ABIERTA",
+                    "La jornada no está ABIERTA.",
+                )
+
+            if repo.obtener_cuadre_de_jornada(
+                conn,
+                id_jornada,
+                bloquear=True,
+            ):
+                raise problema(
+                    409,
+                    "CUADRE_YA_EXISTE",
+                    "La jornada ya tiene un cuadre.",
+                )
+
+            id_cuadre = repo.insertar_cuadre(
+                conn,
+                id_jornada,
+                jornada["IdUsuario"],
+                _totales(conn, id_jornada),
+                fecha_contable(conn),
+                datos.observaciones,
+            )
+
+            registro.id_registro = str(id_cuadre)
+
+            return _recargar_cuadre(conn, id_cuadre)

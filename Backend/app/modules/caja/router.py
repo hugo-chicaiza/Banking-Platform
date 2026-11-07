@@ -27,6 +27,7 @@ from app.modules.caja.schemas import (
     INT32_MAX,
     CajaFisica,
     CuadreCaja,
+    CuadreCajaCreate,
     Dotacion,
     DotacionRequest,
     Jornada,
@@ -359,6 +360,35 @@ def registrar_dotacion(
     conn: Conexion,
 ) -> Dotacion:
     return service.registrar_dotacion(
+        conn,
+        usuario,
+        id_interno,
+        id_jornada,
+        datos,
+        ip_cliente(request.scope),
+    )
+
+
+# --- CAJ-13: generar cuadre ----------
+
+
+@router.post(
+    "/jornadas/{idJornada}/cuadre",
+    response_model=CuadreCaja,
+    status_code=201,
+    operation_id="CAJ13",
+    dependencies=[Depends(require_roles("CAJERO"))],
+)
+def generar_cuadre(
+    request: Request,
+    usuario: UsuarioActual,
+    id_interno: IdInterno,
+    id_jornada: IdJornada,
+    datos: CuadreCajaCreate,
+    conn: Conexion,
+) -> CuadreCaja:
+    """Genera un cuadre con totales calculados y estado PENDIENTE."""
+    return service.generar_cuadre(
         conn,
         usuario,
         id_interno,
