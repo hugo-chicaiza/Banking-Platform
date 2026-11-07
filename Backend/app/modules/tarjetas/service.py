@@ -1,4 +1,3 @@
-import hashlib
 import logging
 import secrets
 from collections.abc import Iterator
@@ -23,6 +22,7 @@ from app.core.security.hsm import (
     obtener_hsm,
 )
 from app.modules.tarjetas import repository
+from app.modules.tarjetas.identificacion import hash_pan
 from app.modules.tarjetas.schemas import (
     PageTarjeta,
     PageTarjetaHistorial,
@@ -324,7 +324,7 @@ def _emitir(
             {
                 "token": f"tok_{secrets.token_urlsafe(32)}",
                 "mascara": _enmascarar(pan),
-                "hash_pan": hashlib.sha256(pan.encode()).digest(),
+                "hash_pan": hash_pan(pan),
                 "nombre_tarjeta": payload.nombre_tarjeta,
                 "tipo_tarjeta": payload.tipo_tarjeta,
                 "nombres": cuenta["nombres"],

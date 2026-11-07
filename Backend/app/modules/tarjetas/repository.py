@@ -481,3 +481,14 @@ def listar_historial(
         {**params, "saltar": (page - 1) * page_size, "tomar": page_size},
     )
     return items, total
+
+
+def obtener_id_tarjeta_por_hash(conn: Connection, hash_pan: bytes) -> int | None:
+    """Resuelve la tarjeta sin enviar el PAN en claro a SQL ni escoger duplicados."""
+    id_tarjeta = conn.execute(
+        text(
+            "SELECT IdTarjeta FROM Tarjeta.Tarjeta WHERE HashNumeroTarjeta = :hash_pan"
+        ),
+        {"hash_pan": hash_pan},
+    ).scalar_one_or_none()
+    return None if id_tarjeta is None else int(id_tarjeta)

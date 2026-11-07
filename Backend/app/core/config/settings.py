@@ -1,8 +1,8 @@
 from functools import lru_cache
-from typing import Literal
+from typing import Annotated, Literal
 from urllib.parse import urlsplit
 
-from pydantic import SecretStr, field_validator
+from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Única excepción a HTTPS: el FE y el callback locales (Vite) en la máquina del dev
@@ -52,6 +52,20 @@ class Settings(BaseSettings):
     seguridad_db_user: str = ""
     seguridad_db_password: SecretStr = SecretStr("")
 
+    atm_hsm_aes_key_hex: str = ""
+    atm_hsm_pin_generation_key_hex: str = ""
+    atm_hsm_key_reference: str = "TEST-KEY-01"
+
+    # JWT ATM: clave RSA exclusiva, inyectada por configuración segura. Sin valores
+    # predeterminados de despliegue: si falta la clave, iss o aud, no se emite sesión.
+    atm_jwt_private_key_pem: SecretStr = SecretStr("")
+    atm_jwt_issuer: str = ""
+    atm_jwt_audience: str = ""
+
+    # Archivo externo con hashes/metadatos; se relee en cada autenticación para
+    # aplicar revocaciones sin depender de la caché de Settings o del proceso.
+    atm_terminal_credentials_file: str = ""
+
     # WorkOS AuthKit (F-03), patrón BFF: el navegador solo recibe una cookie cifrada
     workos_api_key: SecretStr = SecretStr("")
     workos_client_id: str = ""
@@ -71,6 +85,22 @@ class Settings(BaseSettings):
     hsm_sim_claves_pin_block: dict[str, SecretStr] = {}
     # La que usa el endpoint de pruebas que simula el PIN pad
     hsm_sim_referencia_pin_block: str = "TEST-KEY-01"
+
+    # Vínculos administrados por despliegue, nunca por el navegador ni por email.
+    workos_audit_user_ids: dict[
+        str, Annotated[int, Field(strict=True, ge=1, le=2147483647)]
+    ] = Field(default_factory=dict)
+
+    @field_validator("workos_audit_user_ids")
+    @classmethod
+    def _vinculos_auditoria(cls, valor: dict[str, int]) -> dict[str, int]:
+        if any(not clave.startswith("user_") or len(clave) <= 5 for clave in valor):
+            raise ValueError("Cada vínculo debe identificar un usuario WorkOS user_…")
+        if len(set(valor.values())) != len(valor):
+            raise ValueError(
+                "Cada usuario de auditoría debe tener un único vínculo WorkOS"
+            )
+        return valor
 
     @field_validator("frontend_url")
     @classmethod

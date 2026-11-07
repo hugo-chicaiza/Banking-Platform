@@ -9,6 +9,7 @@ from app.core.api.rate_limit import LimitePeticionesMiddleware
 from app.core.config.logs import configurar_logging
 from app.core.config.settings import get_settings
 from app.core.security.audit import AccesoDenegadoMiddleware
+from app.modules.atm.router import router as atm_router
 from app.modules.auth.router import router as auth_router
 from app.modules.caja.router import router as caja_router
 from app.modules.catalogos.router import router as catalogos_router
@@ -60,6 +61,7 @@ app.include_router(cuentas_router, prefix=API_V1)
 app.include_router(tarjetas_router, prefix=API_V1)
 app.include_router(caja_router, prefix=API_V1)
 app.include_router(transacciones_router, prefix=API_V1)
+app.include_router(atm_router, prefix=API_V1)
 # PIN pad simulado para probar TAR-05 y ATM-01: responde 404 en producción
 app.include_router(tarjetas_pruebas_router, prefix=API_V1)
 
