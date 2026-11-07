@@ -865,6 +865,9 @@ typing-inspection==0.4.4 \
     #   fastapi
     #   pydantic
     #   pydantic-settings
+tzdata==2026.6 \
+    --hash=sha256:0a10eec6e13ef16b627fabed9a5f2ba61a62b1c67f327305f4e7e412a70b4aec
+    # via -r requirements.in
 uvicorn==0.54.0 \
     --hash=sha256:505bdb0f318731d45f1f712071fc781a8981f6847a31c902c9f5e652d4f67faf \
     --hash=sha256:a2e33cbfaa0306f8e6b0c13e0cb89d7d7a2da3e62b90c66e18c33d9807b28620
@@ -1133,5 +1136,3 @@ workos==5.46.0 \
     --hash=sha256:b83704d4d6fcafa57439e232f62944b619aabc1c632b0ced9f71501298be0c78 \
     --hash=sha256:db6ce0fa6924bfd7a790c2bdae97cf7be8a970eaaef04156ae554157d24376f2
     # via -r requirements.in
-
-tzdata==2026.6 --hash=sha256:0a10eec6e13ef16b627fabed9a5f2ba61a62b1c67f327305f4e7e412a70b4aec
