@@ -120,6 +120,7 @@ class _UserManagement:
         self.agencias: dict[str, str] = {"org_1": "001"}
         self.internos: dict[str, int] = {}
         self.consultas_base = 0
+        self.roles_registrados: dict[str, str | None] = {}
         self.llamadas: list[tuple[str, dict[str, Any]]] = []
 
     def get_authorization_url(self, **kwargs: Any) -> str:
@@ -170,8 +171,9 @@ def workos(monkeypatch) -> _UserManagement:
         falso.consultas_base += 1
         return falso.agencias.get(id_organizacion or "")
 
-    def interno(id_workos: str) -> int | None:
+    def interno(id_workos: str, roles: str | None) -> int | None:
         falso.consultas_base += 1
+        falso.roles_registrados[id_workos] = roles
         return falso.internos.get(id_workos)
 
     monkeypatch.setattr(security, "_agencia_db", agencia)
@@ -394,6 +396,33 @@ def test_id_interno_sale_de_key_usuario(workos):
     assert sesion is not None
 
     assert security.id_usuario_auditoria(sesion.usuario) == 8
+    # Los roles que dio WorkOS se envían para guardarlos en RolesWorkOS
+    assert workos.roles_registrados["user_1"] == "CAJERO"
+
+
+def test_usuario_no_registrado_se_rechaza_antes_de_la_ruta(client, workos):
+    router = APIRouter(
+        route_class=ProblemDetailsRoute, dependencies=[Depends(security.require_auth)]
+    )
+    ejecutada: list[bool] = []
+
+    @router.get("/protegida")
+    def protegida() -> dict[str, bool]:
+        ejecutada.append(True)
+        return {"ok": True}
+
+    prueba = FastAPI()
+    prueba.include_router(router)
+    cliente = TestClient(prueba, raise_server_exceptions=False)
+
+    r = cliente.get("/protegida", headers=_con_sesion())
+    assert r.status_code == 403
+    assert r.json()["code"] == "USUARIO_NO_REGISTRADO"
+    assert ejecutada == []
+
+    workos.internos["user_1"] = 8
+    assert cliente.get("/protegida", headers=_con_sesion()).status_code == 200
+    assert ejecutada == [True]
 
 
 def test_vinculo_falla_cerrado_si_la_base_falla(monkeypatch):
@@ -404,7 +433,7 @@ def test_vinculo_falla_cerrado_si_la_base_falla(monkeypatch):
 
     monkeypatch.setattr(security, "get_engine", caida)
 
-    assert security._id_interno_db("user_1") is None
+    assert security._id_interno_db("user_1", "ADMIN") is None
     assert security._agencia_db("org_1") is None
     assert security._agencia_db(None) is None
 

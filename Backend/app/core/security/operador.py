@@ -94,6 +94,7 @@ def auditar(
                 descripcion=(
                     f"usuario={usuario.id_usuario} {detalle} motivo={_codigo_fallo(exc)}"
                 ),
+                roles=usuario.roles_texto(),
             )
         )
         raise
@@ -106,5 +107,6 @@ def auditar(
             usuario=None,
             ip=ip,
             descripcion=f"usuario={usuario.id_usuario} {detalle}",
+            roles=usuario.roles_texto(),
         )
     )

@@ -75,14 +75,18 @@ class TraceIdMiddleware:
         try:
             await self._app(scope, receive, enviar)
         finally:
-            # Sin query string: en búsquedas puede llevar cédulas o nombres
+            # Sin query string: en búsquedas puede llevar cédulas o nombres. Usuario y
+            # roles de WorkOS con que se atendió (las consultas no van a Auditoria)
+            usuario = scope.get("state", {}).get("usuario")
             logger.info(
-                "%s %s status=%s ms=%d ip=%s",
+                "%s %s status=%s ms=%d ip=%s usuario=%s roles=%s",
                 scope["method"],
                 scope["path"],
                 status,
                 (time.perf_counter() - inicio) * 1000,
                 ip_cliente(scope),
+                getattr(usuario, "id_usuario", "-"),
+                ",".join(getattr(usuario, "roles", ())) or "-",
             )
             trace_id_actual.reset(token)
 
