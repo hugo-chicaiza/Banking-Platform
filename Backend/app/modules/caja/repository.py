@@ -994,3 +994,37 @@ def valores_denominaciones(conn: Connection, ids: list[int]) -> dict[int, Any]:
         int(fila["IdDenominacion"]): fila["Valor"]
         for fila in conn.execute(sentencia, {"ids": ids}).mappings()
     }
+
+
+# --- CAJ-10: series de billetes ----------
+
+
+def registrar_series(
+    conn: Connection,
+    id_transaccion: int,
+    id_denominacion: int,
+    cantidad: int,
+    series_json: str,
+) -> None:
+    """Ejecuta Boveda.usp_RegistrarSeriesBilletes.
+
+    Envía las series como un arreglo JSON de cadenas.
+    El formato debe verificarse contra el procedimiento real.
+    """
+    conn.execute(
+        text(
+            """
+            EXEC Boveda.usp_RegistrarSeriesBilletes
+                @IdTransaccion = :id_transaccion,
+                @IdDenominacion = :id_denominacion,
+                @CantidadDeclarada = :cantidad,
+                @SeriesJson = :series
+            """
+        ),
+        {
+            "id_transaccion": id_transaccion,
+            "id_denominacion": id_denominacion,
+            "cantidad": cantidad,
+            "series": series_json,
+        },
+    )

@@ -10,6 +10,7 @@ from datetime import date, datetime, time, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any, Literal
 
+from fastapi import HTTPException
 from sqlalchemy import Connection
 
 from app.core.api.errors import problema
@@ -35,6 +36,7 @@ from app.modules.caja.schemas import (
     OperacionVentanilla,
     PageJornada,
     PageMovimientoCaja,
+    SeriesBilletesRequest,
 )
 from app.modules.transacciones import repository as trx_repo
 from app.modules.transacciones.dependencias import (
@@ -1679,4 +1681,96 @@ def operacion_ventanilla(
                     descripcion,
                 ),
                 False,
+            )
+
+
+# --- CAJ-10: series de billetes ----------
+
+
+def registrar_series(
+    conn: Connection,
+    usuario: Usuario,
+    id_interno: int | None,
+    id_transaccion: int,
+    datos: SeriesBilletesRequest,
+    ip: str,
+) -> None:
+    """Registra las series de billetes de un depósito completado."""
+
+    no_encontrada = problema(
+        404,
+        "TRANSACCION_NO_ENCONTRADA",
+        "La transacción no existe.",
+    )
+
+    with auditar(
+        "REGISTRAR_SERIES",
+        "Boveda.BilleteSerie",
+        usuario,
+        ip,
+        (
+            f"transaccion={id_transaccion} "
+            f"denominacion={datos.id_denominacion} "
+            f"cantidad={datos.cantidad_declarada}"
+        ),
+        str(id_transaccion),
+    ):
+        cajero = exigir_id_interno(id_interno)
+
+        with conn.begin():
+            transaccion = trx_repo.obtener_transaccion(
+                conn,
+                id_transaccion,
+                bloquear=True,
+            )
+
+            if transaccion is None or transaccion["IdJornadaCaja"] is None:
+                raise no_encontrada
+
+            jornada = repo.obtener_jornada(
+                conn,
+                transaccion["IdJornadaCaja"],
+                bloquear=True,
+            )
+
+            if jornada is None:
+                raise no_encontrada
+
+            try:
+                verificar_alcance(
+                    usuario,
+                    cajero,
+                    jornada,
+                    ("CAJERO",),
+                )
+            except HTTPException as exc:
+                # No revelar información de transacciones ajenas.
+                if exc.status_code == 404:
+                    raise no_encontrada from None
+                raise
+
+            if (
+                transaccion["TipoTransaccion"] != "Deposito"
+                or transaccion["TipoOperacion"] != "Normal"
+                or transaccion["Estado"] != "Completada"
+            ):
+                raise problema(
+                    409,
+                    "TRANSACCION_NO_ES_DEPOSITO",
+                    ("La transacción no es un depósito completado de ventanilla."),
+                )
+
+            if jornada["Estado"] != "ABIERTA":
+                raise problema(
+                    409,
+                    "JORNADA_NO_ABIERTA",
+                    "La jornada no está ABIERTA.",
+                )
+
+            repo.registrar_series(
+                conn,
+                id_transaccion,
+                datos.id_denominacion,
+                datos.cantidad_declarada,
+                json.dumps(datos.series),
             )
