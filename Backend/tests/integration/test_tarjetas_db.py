@@ -116,8 +116,14 @@ def test_auditoria_real_registra_exito_y_fallo(client, bd, datos, monkeypatch):
 
     id_tarjeta = _emitir(client, datos)["idTarjeta"]
     ruta = f"{BASE}/{id_tarjeta}"
-    assert client.post(f"{ruta}/pin", json=_pin(client, id_tarjeta, "1234")).status_code == 422
-    assert client.post(f"{ruta}/pin", json=_pin(client, id_tarjeta, PIN)).status_code == 204
+    assert (
+        client.post(f"{ruta}/pin", json=_pin(client, id_tarjeta, "1234")).status_code
+        == 422
+    )
+    assert (
+        client.post(f"{ruta}/pin", json=_pin(client, id_tarjeta, PIN)).status_code
+        == 204
+    )
 
     filas = seg.execute(
         text(
@@ -244,8 +250,14 @@ def test_ciclo_completo_pin_activacion_bloqueo_e_historial(client, bd, datos):
     assert r.json()["code"] == "PIN_NO_ASIGNADO"
 
     # PIN débil y asignación correcta
-    assert client.post(f"{ruta}/pin", json=_pin(client, id_tarjeta, "1234")).status_code == 422
-    assert client.post(f"{ruta}/pin", json=_pin(client, id_tarjeta, PIN)).status_code == 204
+    assert (
+        client.post(f"{ruta}/pin", json=_pin(client, id_tarjeta, "1234")).status_code
+        == 422
+    )
+    assert (
+        client.post(f"{ruta}/pin", json=_pin(client, id_tarjeta, PIN)).status_code
+        == 204
+    )
 
     guardado = seg.execute(
         text(
