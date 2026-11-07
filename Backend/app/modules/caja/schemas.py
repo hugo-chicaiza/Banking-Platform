@@ -214,3 +214,11 @@ class DotacionRequest(Entrada):
 
 class CuadreCajaCreate(Entrada):
     observaciones: Texto500 | None = None
+
+
+# --- CAJ-16: conteo físico ----------
+
+
+class ConteoFisico(Entrada):
+    saldo_final_fisico: MontoNoNegativo
+    observaciones: Texto500 | None = None

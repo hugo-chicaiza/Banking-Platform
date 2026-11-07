@@ -786,3 +786,52 @@ def obtener_cuadre(conn: Connection, id_cuadre: int) -> Fila | None:
         """,
         {"id": id_cuadre},
     )
+
+
+# --- CAJ-16: conteo físico ----------
+
+
+def registrar_conteo(
+    conn: Connection,
+    id_cuadre: int,
+    totales: Fila,
+    saldo_final_fisico: Any,
+    diferencia: Any,
+    estado: str,
+    observaciones: str | None,
+) -> bool:
+    """Actualiza el conteo físico mientras el cuadre no esté autorizado."""
+    resultado = conn.execute(
+        text(
+            """
+            UPDATE Caja.CuadreCaja
+            SET SaldoInicial = :saldo_inicial,
+                TotalDotaciones = :total_dotaciones,
+                TotalDepositos = :total_depositos,
+                TotalRetiros = :total_retiros,
+                TotalPagos = :total_pagos,
+                TotalDevolucionesBoveda = :total_devoluciones,
+                SaldoFinalFisico = :fisico,
+                DiferenciaDinero = :diferencia,
+                EstadoCuadre = :estado,
+                Observaciones = COALESCE(:observaciones, Observaciones)
+            WHERE IdCuadreCaja = :id
+              AND IdAutorizadoPor IS NULL
+            """
+        ),
+        {
+            "id": id_cuadre,
+            "saldo_inicial": totales["SaldoInicial"],
+            "total_dotaciones": totales["TotalDotaciones"],
+            "total_depositos": totales["TotalDepositos"],
+            "total_retiros": totales["TotalRetiros"],
+            "total_pagos": totales["TotalPagos"],
+            "total_devoluciones": totales["TotalDevolucionesBoveda"],
+            "fisico": saldo_final_fisico,
+            "diferencia": diferencia,
+            "estado": estado,
+            "observaciones": observaciones,
+        },
+    )
+
+    return resultado.rowcount == 1
