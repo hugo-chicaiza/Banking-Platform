@@ -908,3 +908,33 @@ def obtener_devolucion(
         """,
         {"id": id_devolucion},
     )
+
+
+# --- CAJ-17: autorización del cuadre ----------
+
+
+def autorizar_cuadre(
+    conn: Connection,
+    id_cuadre: int,
+    autorizado_por: int,
+    observaciones: str | None,
+) -> bool:
+    """Autoriza un cuadre que tenga conteo físico y no esté autorizado."""
+    resultado = conn.execute(
+        text(
+            """
+            UPDATE Caja.CuadreCaja
+            SET IdAutorizadoPor = :autorizado_por,
+                Observaciones = COALESCE(:observaciones, Observaciones)
+            WHERE IdCuadreCaja = :id
+              AND IdAutorizadoPor IS NULL
+              AND SaldoFinalFisico IS NOT NULL
+            """
+        ),
+        {
+            "id": id_cuadre,
+            "autorizado_por": autorizado_por,
+            "observaciones": observaciones,
+        },
+    )
+    return resultado.rowcount == 1

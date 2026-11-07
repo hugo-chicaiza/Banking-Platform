@@ -248,3 +248,11 @@ class Devolucion(CamelModel):
     monto: Money | None = None
     id_movimiento_boveda: int | None = None
     supera_limite_maximo: bool | None = None
+
+
+# --- CAJ-17: autorización del cuadre ----------
+
+
+class AutorizacionCuadre(Entrada):
+    autorizado_por: IdInt
+    observaciones: Texto500 | None = None

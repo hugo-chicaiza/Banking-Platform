@@ -25,6 +25,7 @@ from app.core.security.operador import IdInterno
 from app.modules.caja import service
 from app.modules.caja.schemas import (
     INT32_MAX,
+    AutorizacionCuadre,
     CajaFisica,
     ConteoFisico,
     CuadreCaja,
@@ -449,6 +450,34 @@ def registrar_devolucion(
 ) -> Devolucion:
     """Registra una devolución de caja a bóveda."""
     return service.registrar_devolucion(
+        conn,
+        usuario,
+        id_interno,
+        id_jornada,
+        datos,
+        ip_cliente(request.scope),
+    )
+
+
+# --- CAJ-17: autorización del cuadre ----------
+
+
+# CAJ-17. Rol: SUPERVISOR
+@router.post(
+    "/jornadas/{idJornada}/cuadre/autorizacion",
+    response_model=CuadreCaja,
+    operation_id="CAJ17",
+    dependencies=[Depends(require_roles("SUPERVISOR"))],
+)
+def autorizar_cuadre(
+    request: Request,
+    usuario: UsuarioActual,
+    id_interno: IdInterno,
+    id_jornada: IdJornada,
+    datos: AutorizacionCuadre,
+    conn: Conexion,
+) -> CuadreCaja:
+    return service.autorizar_cuadre(
         conn,
         usuario,
         id_interno,
