@@ -26,6 +26,7 @@ from app.modules.caja import service
 from app.modules.caja.schemas import (
     INT32_MAX,
     CajaFisica,
+    ConteoFisico,
     CuadreCaja,
     CuadreCajaCreate,
     Dotacion,
@@ -389,6 +390,34 @@ def generar_cuadre(
 ) -> CuadreCaja:
     """Genera un cuadre con totales calculados y estado PENDIENTE."""
     return service.generar_cuadre(
+        conn,
+        usuario,
+        id_interno,
+        id_jornada,
+        datos,
+        ip_cliente(request.scope),
+    )
+
+
+# --- CAJ-16: conteo físico ----------
+
+
+@router.put(
+    "/jornadas/{idJornada}/cuadre/conteo",
+    response_model=CuadreCaja,
+    operation_id="CAJ16",
+    dependencies=[Depends(require_roles("CAJERO"))],
+)
+def registrar_conteo(
+    request: Request,
+    usuario: UsuarioActual,
+    id_interno: IdInterno,
+    id_jornada: IdJornada,
+    datos: ConteoFisico,
+    conn: Conexion,
+) -> CuadreCaja:
+    """Registra el conteo físico y recalcula la diferencia."""
+    return service.registrar_conteo(
         conn,
         usuario,
         id_interno,

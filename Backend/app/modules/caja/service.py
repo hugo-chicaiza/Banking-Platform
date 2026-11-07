@@ -19,6 +19,7 @@ from app.modules.caja import repository as repo
 from app.modules.caja.repository import Fila
 from app.modules.caja.schemas import (
     CajaFisica,
+    ConteoFisico,
     CuadreCaja,
     CuadreCajaCreate,
     Desglose,
@@ -890,3 +891,93 @@ def generar_cuadre(
             registro.id_registro = str(id_cuadre)
 
             return _recargar_cuadre(conn, id_cuadre)
+
+
+# --- CAJ-16: conteo físico ----------
+
+
+def registrar_conteo(
+    conn: Connection,
+    usuario: Usuario,
+    id_interno: int | None,
+    id_jornada: int,
+    datos: ConteoFisico,
+    ip: str,
+) -> CuadreCaja:
+    """Recalcula los totales y registra el efectivo contado."""
+    with auditar(
+        "REGISTRAR_CONTEO",
+        "Caja.CuadreCaja",
+        usuario,
+        ip,
+        f"jornada={id_jornada}",
+    ) as registro:
+        exigir_id_interno(id_interno)
+
+        with conn.begin():
+            jornada = jornada_bloqueada(conn, id_jornada)
+
+            verificar_alcance(
+                usuario,
+                id_interno,
+                jornada,
+                ("CAJERO",),
+            )
+
+            if jornada["Estado"] == "CANCELADA":
+                raise problema(
+                    409,
+                    "JORNADA_CANCELADA",
+                    "La jornada está CANCELADA.",
+                )
+
+            if jornada["Estado"] != "ABIERTA":
+                raise problema(
+                    409,
+                    "CUADRE_YA_CERRADO",
+                    "El cuadre ya fue cerrado.",
+                )
+
+            cuadre = repo.obtener_cuadre_de_jornada(
+                conn,
+                id_jornada,
+                bloquear=True,
+            )
+
+            if cuadre is None:
+                raise cuadre_no_encontrado()
+
+            registro.id_registro = str(cuadre["IdCuadreCaja"])
+
+            if cuadre["IdAutorizadoPor"] is not None:
+                raise problema(
+                    409,
+                    "CUADRE_YA_CERRADO",
+                    "El cuadre ya fue cerrado.",
+                )
+
+            totales = _totales(conn, id_jornada)
+
+            fisico = decimal(datos.saldo_final_fisico)
+
+            diferencia = fisico - saldo_esperado(totales)
+
+            if not repo.registrar_conteo(
+                conn,
+                cuadre["IdCuadreCaja"],
+                totales,
+                fisico,
+                diferencia,
+                estado_por_diferencia(diferencia),
+                datos.observaciones,
+            ):
+                raise problema(
+                    409,
+                    "CUADRE_YA_CERRADO",
+                    "El cuadre ya fue cerrado.",
+                )
+
+            return _recargar_cuadre(
+                conn,
+                cuadre["IdCuadreCaja"],
+            )
