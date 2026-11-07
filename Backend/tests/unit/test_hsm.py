@@ -72,7 +72,9 @@ def test_pin_block_tiene_la_estructura_iso4():
 
 
 def test_pin_block_cambia_cada_vez_por_el_relleno_aleatorio():
-    assert HSM.construir_pin_block("7392", PAN) != HSM.construir_pin_block("7392", PAN)
+    primero, _ = HSM.construir_pin_block("7392", PAN)
+    segundo, _ = HSM.construir_pin_block("7392", PAN)
+    assert primero != segundo
 
 
 def test_pin_block_de_otro_pan_no_abre():

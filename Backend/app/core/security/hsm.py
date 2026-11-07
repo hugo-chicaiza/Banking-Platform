@@ -108,7 +108,7 @@ def datos_validacion(pan: str) -> str:
 def _aes_bloque(clave: bytes, bloque: bytes, cifrar: bool) -> bytes:
     # ISO 9564-1 formato 4 define el cifrado de un único bloque de 16 bytes con AES:
     # ECB sobre un bloque es el modo que pide la norma, no un uso genérico de ECB.
-    cipher = Cipher(algorithms.AES(clave), modes.ECB())  # nosec B305
+    cipher = Cipher(algorithms.AES(clave), modes.ECB())  # nosec B305 # NOSONAR
     operacion = cipher.encryptor() if cifrar else cipher.decryptor()
     return operacion.update(bloque) + operacion.finalize()
 
@@ -210,7 +210,9 @@ class HsmSimulado:
             if len(self.clave_pvk) == 16
             else self.clave_pvk
         )
-        cipher = Cipher(TripleDES(clave), modes.ECB())  # nosec B304 B305
+        # IBM 3624 está definido sobre DES/3DES en ECB (ver issue TAR-05): la norma lo
+        # exige y la clave nunca sale del HSM simulado
+        cipher = Cipher(TripleDES(clave), modes.ECB())  # nosec B304 B305 # NOSONAR
         cifrador = cipher.encryptor()
         resultado = cifrador.update(bytes.fromhex(datos_validacion(pan)))
         resultado += cifrador.finalize()
