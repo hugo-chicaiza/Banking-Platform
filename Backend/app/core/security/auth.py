@@ -35,7 +35,6 @@ from workos.types.user_management.session import (
 )
 
 from app.core.api.errors import problema
-from app.core.config.settings import get_settings
 from app.integrations.workos_client import (
     get_cookie_password,
     get_frontend_url,
@@ -64,6 +63,7 @@ DURACION_SESION = 8 * 60 * 60  # AUT-01: 8 h. Igualar a la sesión configurada e
 _METODOS_SEGUROS = {"GET", "HEAD", "OPTIONS"}
 _SITIOS_PROPIOS = {"same-origin", "none"}
 _LONGITUD_AGENCIA = 3
+_MAX_INT_SQL = 2_147_483_647
 # Peticiones paralelas con el token vencido comparten una sola renovación: WorkOS
 # acepta cada refresh token una sola vez
 _VIGENCIA_RENOVACION = 30.0
@@ -90,6 +90,9 @@ class Usuario:
     roles: tuple[str, ...]
     permisos: tuple[str, ...]
     id_agencia: str | None  # metadato "idAgencia" del usuario en WorkOS
+    # Metadato "idUsuario" en WorkOS: UsuarioID de Organizacion.Usuarios que se guarda
+    # en CreadoPor, RealizadoPor, etc. Lo asigna un administrador; el usuario no lo edita
+    id_interno: int | None = None
 
 
 @dataclass(frozen=True)
@@ -204,6 +207,15 @@ def _agencia(metadatos: Mapping[str, str] | None) -> str | None:
     return None
 
 
+def _id_interno(metadatos: Mapping[str, str] | None) -> int | None:
+    valor = (metadatos or {}).get("idUsuario")
+    if isinstance(valor, str) and valor.isascii() and valor.isdigit():
+        numero = int(valor)
+        if 1 <= numero <= _MAX_INT_SQL:
+            return numero
+    return None
+
+
 def _usuario(sesion: Exito) -> Usuario:
     datos = sesion.user
     nombre = " ".join(p for p in (datos.first_name, datos.last_name) if p)
@@ -216,6 +228,7 @@ def _usuario(sesion: Exito) -> Usuario:
         roles=normalizar_roles(sesion.roles, sesion.role),
         permisos=tuple(sesion.permissions or ()),
         id_agencia=_agencia(datos.metadata),
+        id_interno=_id_interno(datos.metadata),
     )
 
 
@@ -305,15 +318,14 @@ UsuarioActual = Annotated[Usuario, Depends(usuario_actual)]
 
 
 def id_usuario_auditoria(usuario: UsuarioActual) -> int:
-    """Resuelve una identidad ya autenticada usando vínculos del servidor."""
-    id_interno = get_settings().workos_audit_user_ids.get(usuario.id_usuario)
-    if id_interno is None:
+    """UsuarioID para CreadoPor/RealizadoPor: el metadato "idUsuario" de WorkOS."""
+    if usuario.id_interno is None:
         raise problema(
             403,
             "USUARIO_SIN_VINCULO_AUDITORIA",
-            "El usuario no tiene un vínculo de auditoría configurado.",
+            "El usuario no tiene el metadato idUsuario configurado en WorkOS.",
         )
-    return id_interno
+    return usuario.id_interno
 
 
 UsuarioAuditoria = Annotated[int, Depends(id_usuario_auditoria)]

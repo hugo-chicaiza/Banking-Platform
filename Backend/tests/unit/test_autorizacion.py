@@ -6,6 +6,7 @@ fallar test_toda_ruta_de_la_api_exige_sesion.
 """
 
 import re
+from dataclasses import replace
 
 import pytest
 from fastapi import Request
@@ -297,15 +298,9 @@ def test_require_auth_entrega_el_usuario_de_la_sesion():
 
 
 def test_403_auditado_con_el_usuario_vinculado(client, eventos_auditados, monkeypatch):
-    from app.core.security import audit
 
-    usuario = usuario_con_roles("CAJERO")
+    usuario = replace(usuario_con_roles("CAJERO"), id_interno=12)
     # La sesión real deja el usuario en request.state; aquí se simula ese paso
-    monkeypatch.setattr(
-        audit,
-        "get_settings",
-        lambda: type("S", (), {"workos_audit_user_ids": {usuario.id_usuario: 12}})(),
-    )
 
     def sesion(request: Request) -> Usuario:
         request.state.usuario = usuario

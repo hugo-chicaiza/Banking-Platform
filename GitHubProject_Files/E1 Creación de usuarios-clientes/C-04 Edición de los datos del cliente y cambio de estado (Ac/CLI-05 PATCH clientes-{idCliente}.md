@@ -34,7 +34,7 @@ Edita datos del cliente (registra auditoría por campo).
 3. Se mantiene `CK_Cliente_TipoPersona` (Natural / Jurídico) → 422 si se rompe.
 4. Una fila de `ClientesHis` (`TipoOperacion = 'U'`) por cada campo modificado, con valor anterior, nuevo, usuario e IP.
 5. Campos desconocidos, inmutables y `estado` se rechazan. Omitir conserva el valor; null solo se admite en campos anulables y compatibles con el tipo de persona. Sin cambios efectivos: 200 sin escrituras ni auditoría.
-6. Decisión confirmada el 2026-11-04: anterior/nuevo y motivo se guardan en JSON versionado en `Observaciones` (VARCHAR(500)); no existen columnas ValorAnterior/ValorNuevo. Si el JSON completo no cabe, 422 sin truncamiento. El usuario proviene de una sesión WorkOS y del mapa `WORKOS_AUDIT_USER_IDS` del servidor.
+6. Decisión confirmada el 2026-11-04: anterior/nuevo y motivo se guardan en JSON versionado en `Observaciones` (VARCHAR(500)); no existen columnas ValorAnterior/ValorNuevo. Si el JSON completo no cabe, 422 sin truncamiento. El usuario proviene de una sesión WorkOS y del mapa metadato `idUsuario` de WorkOS del servidor.
 
 ## Flujo
 
