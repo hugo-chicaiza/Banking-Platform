@@ -190,6 +190,8 @@ ROLES_POR_RUTA: dict[tuple[str, str], tuple[str, ...]] = {
     ("POST", "/api/v1/caja/jornadas/{idJornada}/depositos"): ("CAJERO",),
     # CAJ-10
     ("POST", "/api/v1/caja/depositos/{idTransaccion}/series"): ("CAJERO",),
+    # CAJ - 11
+    ("POST", "/api/v1/caja/jornadas/{idJornada}/retiros"): ("CAJERO",),
 }
 
 
@@ -277,6 +279,7 @@ def test_roles_de_la_tarea_pasan_el_control(client, ruta):
         ("POST", "/api/v1/caja/jornadas/{idJornada}/cierre"),
         ("POST", "/api/v1/caja/jornadas/{idJornada}/depositos"),
         ("POST", "/api/v1/caja/depositos/{idTransaccion}/series"),
+        ("POST", "/api/v1/caja/jornadas/{idJornada}/retiros"),
     }
 
     if ruta in rutas_con_vinculacion and r.status_code == 403:

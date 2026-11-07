@@ -597,3 +597,49 @@ def registrar_series(
         datos,
         ip_cliente(request.scope),
     )
+
+
+# --- CAJ-11: retiro en ventanilla ----------
+
+
+# CAJ-11. Roles: CAJERO
+@router.post(
+    "/jornadas/{idJornada}/retiros",
+    response_model=Comprobante,
+    status_code=201,
+    operation_id="CAJ11",
+    dependencies=[Depends(require_roles("CAJERO"))],
+)
+def registrar_retiro(
+    request: Request,
+    response: Response,
+    usuario: UsuarioActual,
+    id_interno: IdInterno,
+    id_jornada: IdJornada,
+    datos: OperacionVentanilla,
+    conn: Conexion,
+    deps: Annotated[
+        DependenciasOperacion,
+        Depends(dependencias_operacion),
+    ],
+) -> Comprobante:
+    """Autoriza el retiro y valida el efectivo de la caja.
+
+    La operación es idempotente por registroUnico.
+    """
+    comprobante, repeticion = service.operacion_ventanilla(
+        conn,
+        usuario,
+        id_interno,
+        id_jornada,
+        datos,
+        ip_cliente(request.scope),
+        deps,
+        "Retiro",
+    )
+
+    if repeticion:
+        response.status_code = 200
+        response.headers["Idempotent-Replay"] = "true"
+
+    return comprobante
