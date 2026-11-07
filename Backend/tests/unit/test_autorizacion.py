@@ -184,6 +184,8 @@ ROLES_POR_RUTA: dict[tuple[str, str], tuple[str, ...]] = {
     ),
     # CAJ-17
     ("POST", "/api/v1/caja/jornadas/{idJornada}/cuadre/autorizacion"): ("SUPERVISOR",),
+    # CAJ-18
+    ("POST", "/api/v1/caja/jornadas/{idJornada}/cierre"): ("CAJERO",),
 }
 
 
@@ -264,12 +266,20 @@ def test_roles_de_la_tarea_pasan_el_control(client, ruta):
 
     r = _llamar(client, *ruta)
 
-    # D-01: CAJ-04 requiere vinculación con un usuario interno.
-    if ruta == ("GET", "/api/v1/caja/jornadas/actual") and r.status_code == 403:
+    
+    # D-01: estos endpoints requieren vinculación
+    # WorkOS -> IdUsuario interno.
+    rutas_con_vinculacion = {
+        ("GET", "/api/v1/caja/jornadas/actual"),
+        ("POST", "/api/v1/caja/jornadas/{idJornada}/cierre"),
+    }
+
+    if ruta in rutas_con_vinculacion and r.status_code == 403:
         assert r.json().get("code") == "USUARIO_INTERNO_NO_VINCULADO"
         return
 
     assert r.status_code not in {401, 403}
+
 
 
 def test_require_auth_entrega_el_usuario_de_la_sesion():

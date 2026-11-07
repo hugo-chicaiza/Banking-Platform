@@ -938,3 +938,23 @@ def autorizar_cuadre(
         },
     )
     return resultado.rowcount == 1
+
+
+# --- CAJ-18: cierre de jornada ----------
+
+
+def cerrar_jornada(conn: Connection, id_jornada: int) -> bool:
+    """Cierra una jornada abierta y registra su fecha de cierre."""
+    resultado = conn.execute(
+        text(
+            """
+            UPDATE Caja.JornadasCaja
+            SET Estado = 'CERRADA',
+                FechaHoraCierre = GETDATE()
+            WHERE IdJornadaCaja = :id
+              AND Estado = 'ABIERTA'
+            """
+        ),
+        {"id": id_jornada},
+    )
+    return resultado.rowcount == 1

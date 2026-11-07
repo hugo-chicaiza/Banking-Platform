@@ -1194,3 +1194,101 @@ def autorizar_cuadre(
                 conn,
                 cuadre["IdCuadreCaja"],
             )
+
+
+# --- CAJ-18: cierre de jornada ----------
+
+
+def cerrar_jornada(
+    conn: Connection,
+    usuario: Usuario,
+    id_interno: int | None,
+    id_jornada: int,
+    ip: str,
+) -> Jornada:
+    """Cierra una jornada después de validar su cuadre."""
+    with auditar(
+        "CERRAR_JORNADA",
+        "Caja.JornadasCaja",
+        usuario,
+        ip,
+        f"jornada={id_jornada}",
+        str(id_jornada),
+    ):
+        actor = exigir_id_interno(id_interno)
+
+        with conn.begin():
+            jornada = jornada_bloqueada(conn, id_jornada)
+
+            verificar_alcance(
+                usuario,
+                actor,
+                jornada,
+                ("CAJERO",),
+            )
+
+            if jornada["Estado"] == "CERRADA":
+                raise problema(
+                    409,
+                    "JORNADA_YA_CERRADA",
+                    "La jornada ya está CERRADA.",
+                )
+
+            if jornada["Estado"] != "ABIERTA":
+                raise problema(
+                    409,
+                    "JORNADA_CANCELADA",
+                    "La jornada está CANCELADA.",
+                )
+
+            cuadre = repo.obtener_cuadre_de_jornada(
+                conn,
+                id_jornada,
+                bloquear=True,
+            )
+
+            if cuadre is None:
+                raise problema(
+                    409,
+                    "CUADRE_NO_GENERADO",
+                    "La jornada aún no tiene cuadre.",
+                )
+
+            if cuadre["SaldoFinalFisico"] is None:
+                raise problema(
+                    409,
+                    "CUADRE_PENDIENTE_DE_CONTEO",
+                    "El cuadre no tiene conteo físico.",
+                )
+
+            # Comprobar que los totales no cambiaron
+            # después del conteo físico.
+            totales_actuales = _totales(conn, id_jornada)
+
+            if saldo_esperado(totales_actuales) != saldo_esperado(cuadre):
+                raise problema(
+                    409,
+                    "CUADRE_DESACTUALIZADO",
+                    "Hubo movimientos después del conteo; registre el conteo otra vez.",
+                )
+
+            # Si existe diferencia, exigir autorización.
+            if (
+                decimal(cuadre["DiferenciaDinero"]) != 0
+                and cuadre["IdAutorizadoPor"] is None
+            ):
+                raise problema(
+                    409,
+                    "CUADRE_NO_AUTORIZADO",
+                    "El cuadre no tiene autorización del supervisor.",
+                )
+
+            # Registrar el cierre.
+            if not repo.cerrar_jornada(conn, id_jornada):
+                raise problema(
+                    409,
+                    "JORNADA_YA_CERRADA",
+                    "La jornada ya está CERRADA.",
+                )
+
+            return _recargar_jornada(conn, id_jornada)

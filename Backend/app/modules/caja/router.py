@@ -485,3 +485,30 @@ def autorizar_cuadre(
         datos,
         ip_cliente(request.scope),
     )
+
+
+# --- CAJ-18: cierre de jornada ----------
+
+
+# CAJ-18. Rol: CAJERO
+@router.post(
+    "/jornadas/{idJornada}/cierre",
+    response_model=Jornada,
+    operation_id="CAJ18",
+    dependencies=[Depends(require_roles("CAJERO"))],
+)
+def cerrar_jornada(
+    request: Request,
+    usuario: UsuarioActual,
+    id_interno: IdInterno,
+    id_jornada: IdJornada,
+    conn: Conexion,
+) -> Jornada:
+    """Cierra una jornada con conteo físico vigente."""
+    return service.cerrar_jornada(
+        conn,
+        usuario,
+        id_interno,
+        id_jornada,
+        ip_cliente(request.scope),
+    )
