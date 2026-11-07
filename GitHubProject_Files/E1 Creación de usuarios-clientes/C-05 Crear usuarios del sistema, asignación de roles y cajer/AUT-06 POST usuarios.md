@@ -30,7 +30,7 @@ Crea un usuario del sistema.
 ## Reglas de negocio
 
 1. `NombreUsuario`, `Email` y `Cedula` (10 dígitos) son únicos → `409 USUARIO_DUPLICADO`.
-2. `passwordTemporal` se guarda solo como hash en `ClaveHash`; el usuario la cambia en su primer ingreso.
+2. La contraseña la gestiona WorkOS: `passwordTemporal` nunca se guarda en la base (`ClaveHash` eliminada el 2026-11-07). Pendiente decidir si se envía a WorkOS al crear el usuario o si se quita del request.
 3. Todos los `roles` deben existir y estar `Activo` en `Seguridad.Grupos` → si no, 400.
 4. Se crea con `Estado = 'Activo'` e `IntentosFallidos = 0`; `AsignadoPor` sale del token.
 

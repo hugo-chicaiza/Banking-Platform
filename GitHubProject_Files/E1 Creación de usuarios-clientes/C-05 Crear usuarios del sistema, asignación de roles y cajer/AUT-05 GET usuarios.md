@@ -31,7 +31,7 @@ Lista usuarios del sistema.
 
 1. `q` busca por `NombreUsuario`, nombres o apellidos; `estado` filtra `Activo` | `Inactivo` | `Bloqueado`.
 2. Paginado `{ items, page, pageSize, total }`, `pageSize` máx. 100.
-3. Nunca devuelve `ClaveHash` ni `IntentosFallidos`.
+3. Nunca devuelve `IntentosFallidos`.
 
 ## Request
 
