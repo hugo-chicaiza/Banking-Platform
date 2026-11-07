@@ -1,4 +1,3 @@
-
 from datetime import date, timedelta
 from typing import Any, cast
 from unittest.mock import MagicMock, patch
