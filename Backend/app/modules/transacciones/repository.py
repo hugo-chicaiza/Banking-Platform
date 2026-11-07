@@ -452,3 +452,95 @@ def comision_de(
         ),
         {"id": id_transaccion},
     ).scalar_one()
+
+
+# --- TRX-03: reverso de transacciones ----------
+
+
+def existe_reverso(conn: Connection, id_transaccion: int) -> bool:
+    valor = conn.execute(
+        text(
+            """
+            SELECT TOP (1) 1
+            FROM Transacciones.Transaccion WITH (UPDLOCK, HOLDLOCK)
+            WHERE IdTransaccionRelacionada = :id
+              AND TipoOperacion = 'Reverso'
+            """
+        ),
+        {"id": id_transaccion},
+    ).scalar()
+
+    return valor is not None
+
+
+def movimientos_de_transaccion(
+    conn: Connection,
+    id_transaccion: int,
+) -> list[Fila]:
+    filas = conn.execute(
+        text(
+            """
+            SELECT
+                IdMovimiento,
+                IdCuenta,
+                TipoMovimiento,
+                RolCuenta,
+                Monto
+            FROM Cuentas.MovimientoTransaccion
+            WHERE IdTransaccion = :id
+            ORDER BY IdMovimiento
+            """
+        ),
+        {"id": id_transaccion},
+    ).mappings()
+
+    return [dict(fila) for fila in filas]
+
+
+def movimiento_caja_de_transaccion(
+    conn: Connection,
+    id_transaccion: int,
+) -> Fila | None:
+    fila = (
+        conn.execute(
+            text(
+                """
+                SELECT TOP (1)
+                    mc.IdJornadaCaja,
+                    mc.IdAgencia,
+                    mc.Monto,
+                    tm.Codigo,
+                    tm.Naturaleza
+                FROM Caja.MovimientosCaja AS mc
+                JOIN Caja.TipoMovimientoCaja AS tm
+                    ON tm.IdTipoMovimientoCaja = mc.IdTipoMovimiento
+                WHERE mc.IdTransaccion = :id
+                """
+            ),
+            {"id": id_transaccion},
+        )
+        .mappings()
+        .first()
+    )
+
+    return dict(fila) if fila is not None else None
+
+
+def marcar_reversada(
+    conn: Connection,
+    id_transaccion: int,
+) -> bool:
+    resultado = conn.execute(
+        text(
+            """
+            UPDATE Transacciones.Transaccion
+            SET Estado = 'Reversada'
+            WHERE IdTransaccion = :id
+              AND Estado = 'Completada'
+              AND TipoOperacion = 'Normal'
+            """
+        ),
+        {"id": id_transaccion},
+    )
+
+    return resultado.rowcount == 1

@@ -3,14 +3,20 @@
 from datetime import date
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Path, Query, Response
+from fastapi import APIRouter, Depends, Path, Query, Request, Response
 from sqlalchemy import Connection
 
 from app.core.api.errors import RESPUESTAS_ERROR, ProblemDetailsRoute, solo_parametros
+from app.core.api.middleware import ip_cliente
 from app.core.database.db import cooperativa
 from app.core.security.auth import Usuario, require_roles
-from app.modules.caja.schemas import INT32_MAX
+from app.core.security.operador import IdInterno
+from app.modules.caja.schemas import INT32_MAX, ReversoRequest
 from app.modules.transacciones import service
+from app.modules.transacciones.dependencias import (
+    DependenciasOperacion,
+    dependencias_operacion,
+)
 from app.modules.transacciones.schemas import PageTransaccion, Transaccion
 
 
@@ -115,4 +121,41 @@ def obtener_transaccion(
         conn,
         usuario,
         id_transaccion,
+    )
+
+
+# --- TRX-03: reverso de transacciones ----------
+
+
+# TRX-03. Roles: SUPERVISOR
+@router.post(
+    "/{idTransaccion}/reverso",
+    response_model=Transaccion,
+    status_code=201,
+    operation_id="TRX03",
+)
+def reversar(
+    request: Request,
+    usuario: Annotated[
+        Usuario,
+        Depends(require_roles("SUPERVISOR")),
+    ],
+    id_interno: IdInterno,
+    id_transaccion: IdTransaccion,
+    datos: ReversoRequest,
+    conn: Conexion,
+    deps: Annotated[
+        DependenciasOperacion,
+        Depends(dependencias_operacion),
+    ],
+) -> Transaccion:
+    """Registra el reverso con movimientos y asiento inverso."""
+    return service.reversar(
+        conn,
+        usuario,
+        id_interno,
+        id_transaccion,
+        datos.motivo,
+        ip_cliente(request.scope),
+        deps,
     )
