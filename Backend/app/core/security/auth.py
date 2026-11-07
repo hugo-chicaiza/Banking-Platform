@@ -106,6 +106,10 @@ class Usuario:
         default_factory=dict, init=False, repr=False, compare=False
     )
 
+    def roles_texto(self) -> str | None:
+        """Roles que dio WorkOS, para Organizacion.Usuarios y Auditoria (RolesWorkOS)."""
+        return ",".join(self.roles) or None
+
     def agencia(self) -> str | None:
         """IdAgencia cuya KeyAgencia es la organización de WorkOS de la sesión."""
         if self.cargar_agencia is None:
@@ -247,15 +251,38 @@ def _vinculo(base: DbName, consulta: str, llave: str) -> Any:
         return None
 
 
-def _id_interno_db(id_workos: str) -> int | None:
-    """Organizacion.Usuarios.KeyUsuario = id del usuario en WorkOS; solo activos."""
-    valor = _vinculo(
-        "seguridad",
-        "SELECT UsuarioID FROM Organizacion.Usuarios "
-        "WHERE KeyUsuario = :llave AND Estado = 'Activo'",
-        id_workos,
-    )
-    return valor if isinstance(valor, int) else None
+def _id_interno_db(id_workos: str, roles: str | None) -> int | None:
+    """Organizacion.Usuarios.KeyUsuario = id del usuario en WorkOS; solo activos.
+
+    Guarda en RolesWorkOS los roles que dio WorkOS (solo si cambiaron), para comparar
+    con sus grupos de la base. None si no hay vínculo o la base falla (403).
+    """
+    try:
+        with get_engine("seguridad").begin() as conn:
+            fila = conn.execute(
+                text(
+                    "SELECT UsuarioID, RolesWorkOS FROM Organizacion.Usuarios "
+                    "WHERE KeyUsuario = :llave AND Estado = 'Activo'"
+                ),
+                {"llave": id_workos},
+            ).first()
+            if fila is None:
+                return None
+            if fila.RolesWorkOS != roles:
+                conn.execute(
+                    text(
+                        "UPDATE Organizacion.Usuarios SET RolesWorkOS = :roles "
+                        "WHERE UsuarioID = :id"
+                    ),
+                    {"roles": roles, "id": fila.UsuarioID},
+                )
+            return fila.UsuarioID if isinstance(fila.UsuarioID, int) else None
+    except SQLAlchemyError as exc:
+        logger.warning(
+            "auth: no se pudo leer el vínculo base=seguridad error=%s",
+            type(exc).__name__,
+        )
+        return None
 
 
 def _agencia_db(id_organizacion: str | None) -> str | None:
@@ -274,16 +301,17 @@ def _agencia_db(id_organizacion: str | None) -> str | None:
 def _usuario(sesion: Exito) -> Usuario:
     datos = sesion.user
     nombre = " ".join(p for p in (datos.first_name, datos.last_name) if p)
+    roles = normalizar_roles(sesion.roles, sesion.role)
     return Usuario(
         id_usuario=datos.id,
         id_sesion=sesion.session_id,
         id_organizacion=sesion.organization_id,
         nombre=nombre or datos.email,
         email=datos.email,
-        roles=normalizar_roles(sesion.roles, sesion.role),
+        roles=roles,
         permisos=tuple(sesion.permissions or ()),
         cargar_agencia=lambda: _agencia_db(sesion.organization_id),
-        cargar_interno=lambda: _id_interno_db(datos.id),
+        cargar_interno=lambda: _id_interno_db(datos.id, ",".join(roles) or None),
     )
 
 
@@ -388,7 +416,16 @@ UsuarioAuditoria = Annotated[int, Depends(id_usuario_auditoria)]
 
 
 def require_auth(usuario: UsuarioActual) -> Usuario:
-    """Dependencia que declaran todos los routers: 401 sin sesión válida (roles AUTH)."""
+    """Dependencia que declaran todos los routers: 401 sin sesión válida y 403 si el
+    usuario de WorkOS no está registrado (KeyUsuario) o no está Activo en la base. Se
+    resuelve antes que la ruta: nada se consulta ni se modifica sin ese registro.
+    """
+    if usuario.interno() is None:
+        raise problema(
+            403,
+            "USUARIO_NO_REGISTRADO",
+            "Su usuario no está registrado o no está activo.",
+        )
     return usuario
 
 

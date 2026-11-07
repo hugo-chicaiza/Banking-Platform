@@ -46,6 +46,9 @@ def usuario(
         roles=roles,
         permisos=(),
         id_agencia=agencia,
+        # Registrado (KeyUsuario): require_auth deja pasar. El id interno de caja se
+        # simula aparte con resolver_id_interno
+        id_interno=1,
     )
 
 
