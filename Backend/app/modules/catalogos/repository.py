@@ -123,6 +123,7 @@ def listar_canales(conn: Connection) -> list[dict[str, Any]]:
 def listar_agencias(conn: Connection) -> list[dict[str, Any]]:
     # CAT-06: la tabla Agencia no tiene Nombre; se usa Codigo como nombre (acordado
     # con el equipo). Provincia y ciudad vienen de Catalogo.Ciudad.
+    # Orden: Matriz primero, luego por código (no depende de cómo se nombre el código).
     return _rows(
         conn,
         """
@@ -132,7 +133,7 @@ def listar_agencias(conn: Connection) -> list[dict[str, Any]]:
                a.Estado AS estado
         FROM Organizacion.Agencia AS a
         JOIN Catalogo.Ciudad AS c ON c.IdCiudad = a.IdCiudad
-        ORDER BY a.Codigo
+        ORDER BY CASE a.TipoAgencia WHEN 'Matriz' THEN 0 ELSE 1 END, a.Codigo
         """,
     )
 
