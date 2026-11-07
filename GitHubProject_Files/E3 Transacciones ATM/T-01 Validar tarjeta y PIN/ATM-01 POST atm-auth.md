@@ -97,12 +97,13 @@ Formato ProblemDetails (ver F-04). Además de 400/401/403:
 
 ## Controles compartidos con TAR-01 y TAR-05
 
-ATM-01 debe usar los mismos algoritmos con que se emitieron la tarjeta y el PIN; si no, nunca coinciden:
+ATM-01 debe usar los mismos algoritmos y el mismo HSM con que se emitieron la tarjeta y el PIN; si no, nunca coinciden. Todo está en `app/core/security/hsm.py` (interfaz `Hsm`, hoy el simulador; luego Thales, ver `Backend/docs/HSM-Thales.md`):
 
-- **Búsqueda de la tarjeta:** `Tarjeta.Tarjeta.HashNumeroTarjeta` = SHA-256 en bytes del PAN solo con dígitos (sin espacios ni guiones), igual que TAR-01.
-- **PIN:** verificar con Argon2id (`PasswordHasher().verify`) contra `SeguridadDB.Tarjetas.TarjetaPIN.HashPIN`, igual que lo guarda TAR-05. No recalcular el hash para compararlo: la salt es aleatoria.
+- **Lectura de tarjeta (simulada):** el PAN ficticio se obtiene con `tarjetas.service.pan_de_prueba(conn_seguridad, id_tarjeta, hsm)` (repositorio aislado `SeguridadDB.Pruebas.PanFicticio`, cifrado por el HSM). Solo fuera de producción.
+- **Búsqueda de la tarjeta por número:** `Tarjeta.Tarjeta.HashNumeroTarjeta` = SHA-256 en bytes del PAN solo con dígitos, igual que TAR-01.
+- **PIN:** el cajero envía un PIN Block ISO 9564-1 formato 4 (AES-256) con su `keyReference`; para probar, se arma con `POST /api/v1/pruebas/pin-block` (PIN pad simulado, solo ADMIN y fuera de producción). Se verifica con `hsm.verificar_pin(pin_block, keyReference, pan, PINOffset, ReferenciaClavePVK)` contra `SeguridadDB.Tarjetas.TarjetaPIN` (IBM 3624, mismos parámetros que TAR-05). Solo vale un PIN con `TienePINAsignado = 1` y `Estado = 'Activo'`: una asignación pendiente no se puede usar.
 - **Intentos:** `TarjetaPIN.IntentosFallidos`, actualizado con bloqueo de fila para evitar condiciones de carrera.
-- **Datos sensibles:** `numeroTarjeta` y `pin` no deben aparecer en logs, errores ni URLs; igual que TAR-05, un error de validación no debe devolverlos en la respuesta.
+- **Datos sensibles:** PAN, PIN, PIN Block y PIN Offset no deben aparecer en logs, errores ni URLs; igual que TAR-05, el body se lee a mano para que un error de validación no los devuelva.
 
 ## Pendiente
 
