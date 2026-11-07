@@ -14,9 +14,12 @@ def aes_decrypt_block(block: bytes, key: bytes) -> bytes:
     if len(block) != 16:
         raise ValueError("AES requiere un bloque de 16 bytes")
 
+    # ISO 9564 formato 4 utiliza operaciones AES de bloque.
+    # Excepción B305 limitada al simulador de laboratorio.
+    # No utilizar como implementación HSM de producción.
     cipher = Cipher(
         algorithms.AES(key),
-        modes.ECB(),
+        modes.ECB(),  # nosec B305
     )
 
     decryptor = cipher.decryptor()

@@ -27,9 +27,12 @@ def calcular_pin_natural(
     except ValueError as exc:
         raise ValueError("Datos de validación no válidos") from exc
 
+    # IBM 3624 utiliza cifrado de bloque TDES para generar
+    # el PIN natural. Excepción B305 limitada al simulador.
+    # No utilizar como implementación HSM de producción.
     cipher = Cipher(
         TripleDES(pin_generation_key),
-        modes.ECB(),
+        modes.ECB(),  # nosec B305
     )
 
     encryptor = cipher.encryptor()
