@@ -90,16 +90,26 @@ def test_validar_tarjeta_activa():
 
 
 @pytest.mark.parametrize(
-    ("estado", "pin_asignado", "dias_vigencia", "codigo_esperado"),
+    (
+        "estado",
+        "pin_asignado",
+        "dias_vigencia",
+        "codigo_esperado",
+        "http_esperado",
+    ),
     [
-        ("Bloqueada", True, 30, "TARJETA_NO_DISPONIBLE"),
-        ("Vencida", True, -1, "TARJETA_NO_DISPONIBLE"),
-        ("Activa", True, -1, "TARJETA_NO_DISPONIBLE"),
-        ("Activa", False, 30, "PIN_NO_CONFIGURADO"),
+        ("Bloqueada", True, 30, "TARJETA_BLOQUEADA", 423),
+        ("Vencida", True, -1, "TARJETA_NO_ACTIVA", 409),
+        ("Activa", True, -1, "TARJETA_NO_ACTIVA", 409),
+        ("Activa", False, 30, "PIN_NO_CONFIGURADO", 409),
     ],
 )
 def test_validar_tarjeta_rechazada(
-    estado, pin_asignado, dias_vigencia, codigo_esperado
+    estado,
+    pin_asignado,
+    dias_vigencia,
+    codigo_esperado,
+    http_esperado,
 ):
     tarjeta = {
         "estado_tarjeta": estado,
@@ -116,8 +126,8 @@ def test_validar_tarjeta_rechazada(
     ):
         service.validar_tarjeta(MagicMock(), 1)
 
-    assert error.value.status_code == 409
-    assert codigo_esperado in str(error.value.detail)
+    assert error.value.status_code == http_esperado
+    assert error.value.detail["code"] == codigo_esperado
 
 
 def test_validar_tarjeta_inexistente():
@@ -140,6 +150,7 @@ def test_validar_estado_pin_activo():
         "intentos_fallidos": 0,
         "estado_pin": "Activo",
         "fecha_bloqueo": None,
+        "pin_offset": "1234",
     }
 
     with patch(
@@ -152,18 +163,29 @@ def test_validar_estado_pin_activo():
 
 
 @pytest.mark.parametrize(
-    ("tiene_pin", "estado", "codigo_esperado"),
+    (
+        "tiene_pin",
+        "estado",
+        "codigo_esperado",
+        "http_esperado",
+    ),
     [
-        (False, "Activo", "PIN_NO_CONFIGURADO"),
-        (True, "Bloqueado", "PIN_BLOQUEADO"),
-        (True, "Inactivo", "PIN_BLOQUEADO"),
+        (False, "Activo", "PIN_NO_CONFIGURADO", 409),
+        (True, "Bloqueado", "PIN_BLOQUEADO", 423),
+        (True, "Inactivo", "PIN_NO_DISPONIBLE", 409),
     ],
 )
-def test_validar_estado_pin_rechazado(tiene_pin, estado, codigo_esperado):
+def test_validar_estado_pin_rechazado(
+    tiene_pin,
+    estado,
+    codigo_esperado,
+    http_esperado,
+):
     estado_pin = {
         "tiene_pin_asignado": tiene_pin,
         "estado_pin": estado,
         "intentos_fallidos": 0,
+        "pin_offset": "1234",
     }
 
     with (
@@ -175,8 +197,8 @@ def test_validar_estado_pin_rechazado(tiene_pin, estado, codigo_esperado):
     ):
         service.validar_estado_pin(MagicMock(), 1)
 
-    assert error.value.status_code == 409
-    assert codigo_esperado in str(error.value.detail)
+    assert error.value.status_code == http_esperado
+    assert error.value.detail["code"] == codigo_esperado
 
 
 def test_validar_estado_pin_inexistente():
@@ -190,4 +212,4 @@ def test_validar_estado_pin_inexistente():
         service.validar_estado_pin(MagicMock(), 999)
 
     assert error.value.status_code == 409
-    assert "PIN_NO_DISPONIBLE" in str(error.value.detail)
+    assert error.value.detail["code"] == "PIN_NO_DISPONIBLE"

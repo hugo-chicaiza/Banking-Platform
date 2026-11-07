@@ -1,6 +1,9 @@
+import os
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+
+import pytest
 
 from app.core.database.db import get_engine
 from app.modules.atm.repository import obtener_pin_para_verificacion
@@ -8,7 +11,15 @@ from app.modules.atm.repository import obtener_pin_para_verificacion
 ID_TARJETA_PRUEBA = 1
 
 
+@pytest.mark.integration
 def test_updlock_serializa_acceso():
+    if os.getenv("ATM_INTEGRATION_DB_ENABLED") != "1":
+        pytest.skip(
+            "Prueba de integración ATM deshabilitada. "
+            "Configurar ATM_INTEGRATION_DB_ENABLED=1 "
+            "y una base SeguridadDB de pruebas."
+        )
+
     engine = get_engine("seguridad")
 
     primer_bloqueo = threading.Event()

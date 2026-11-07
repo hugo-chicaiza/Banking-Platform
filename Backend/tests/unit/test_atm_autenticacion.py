@@ -7,6 +7,11 @@ from app.modules.atm.service import autenticar_pin_ficticio_atm
 
 
 @pytest.fixture
+def anyio_backend():
+    return "asyncio"
+
+
+@pytest.fixture
 def entorno_atm():
     conn = MagicMock()
     conn_seguridad = MagicMock()
@@ -52,7 +57,7 @@ async def ejecutar_autenticacion(entorno):
     )
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_pin_correcto(entorno_atm):
     e = entorno_atm
 
@@ -90,7 +95,7 @@ async def test_pin_correcto(entorno_atm):
         assert guardar.call_args.kwargs["pin_correcto"] is True
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 @pytest.mark.parametrize(
     "intentos,estado,codigo",
     [
@@ -135,7 +140,7 @@ async def test_intentos_fallidos(entorno_atm, intentos, estado, codigo):
         assert error.value.status_code == codigo
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_pin_bloqueado_no_consulta_hsm(entorno_atm):
     e = entorno_atm
     estado_bloqueado = {
