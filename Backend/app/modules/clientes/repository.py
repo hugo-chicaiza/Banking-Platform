@@ -156,6 +156,7 @@ def crear_cliente(
     }
 
     sql_cliente = """
+        SET NOCOUNT ON;
         DECLARE @TblCliente TABLE (IdCliente INT);
 
         INSERT INTO Clientes.Cliente (
@@ -200,18 +201,19 @@ def crear_cliente(
         "estado": "Activo",
     }
     sql_direccion = """
+        SET NOCOUNT ON;
         DECLARE @TblDireccion TABLE (IdDireccion INT);
 
         INSERT INTO Clientes.Direcciones (
-            IdCliente, TipoDireccion, CodigoPais, IdCiudad, Sector,
+            IdCliente, TipoDireccion, IdCiudad, Sector,
             CalleDireccion, ReferenciaUbicacion, CodigoPostal, EsPrincipal,
-            Estado, FechaRegistro
+            Estado, FechaRegistro, CreadoPor
         )
         OUTPUT INSERTED.IdDireccion INTO @TblDireccion
         VALUES (
-            :id_cliente, :tipo_direccion, :codigo_pais, :id_ciudad, :sector,
+            :id_cliente, :tipo_direccion, :id_ciudad, :sector,
             :calle_direccion, :referencia_ubicacion, :codigo_postal, :es_principal,
-            :estado, :fecha_registro
+            :estado, :fecha_registro, :creado_por
         );
 
         SELECT IdDireccion AS id_direccion FROM @TblDireccion;
@@ -223,6 +225,7 @@ def crear_cliente(
             "id_cliente": id_cliente,
             **datos_direccion,
             "fecha_registro": ahora,
+            "creado_por": creado_por,
         },
     )
     id_direccion = (
