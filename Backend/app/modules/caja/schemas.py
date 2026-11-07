@@ -207,3 +207,10 @@ class DotacionRequest(Entrada):
     def _desglose_unico(self) -> "DotacionRequest":
         sin_denominaciones_repetidas(self.desglose)
         return self
+
+
+# --- CAJ-13: generar cuadre ----------
+
+
+class CuadreCajaCreate(Entrada):
+    observaciones: Texto500 | None = None

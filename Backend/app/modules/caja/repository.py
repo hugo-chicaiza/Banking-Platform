@@ -616,3 +616,173 @@ def obtener_dotacion(
         """,
         {"id": id_dotacion},
     )
+
+
+# --- CAJ-13: generar cuadre ----------
+
+
+def calcular_totales(conn: Connection, id_jornada: int) -> Fila | None:
+    """Calcula los totales del cuadre a partir de movimientos reales."""
+    return _fila(
+        conn,
+        """
+        SELECT
+            j.DineroInicial AS SaldoInicial,
+            COALESCE((
+                SELECT SUM(d.Monto)
+                FROM Caja.DotacionesCaja d
+                WHERE d.IdJornadaCaja = j.IdJornadaCaja
+                  AND d.TipoDotacion = 'ADICIONAL'
+            ), 0) AS TotalDotaciones,
+            COALESCE((
+                SELECT SUM(
+                    CASE WHEN tm.Naturaleza = 'I'
+                         THEN mc.Monto ELSE -mc.Monto END
+                )
+                FROM Caja.MovimientosCaja mc
+                JOIN Caja.TipoMovimientoCaja tm
+                    ON tm.IdTipoMovimientoCaja = mc.IdTipoMovimiento
+                JOIN Transacciones.Transaccion t
+                    ON t.IdTransaccion = mc.IdTransaccion
+                WHERE mc.IdJornadaCaja = j.IdJornadaCaja
+                  AND t.TipoTransaccion = 'Deposito'
+            ), 0) AS TotalDepositos,
+            COALESCE((
+                SELECT SUM(
+                    CASE WHEN tm.Naturaleza = 'I'
+                         THEN mc.Monto ELSE -mc.Monto END
+                )
+                FROM Caja.MovimientosCaja mc
+                JOIN Caja.TipoMovimientoCaja tm
+                    ON tm.IdTipoMovimientoCaja = mc.IdTipoMovimiento
+                JOIN Transacciones.Transaccion t
+                    ON t.IdTransaccion = mc.IdTransaccion
+                WHERE mc.IdJornadaCaja = j.IdJornadaCaja
+                  AND t.TipoTransaccion = 'Pago_Credito'
+            ), 0) AS TotalPagos,
+            COALESCE((
+                SELECT SUM(
+                    CASE WHEN tm.Naturaleza = 'E'
+                         THEN mc.Monto ELSE -mc.Monto END
+                )
+                FROM Caja.MovimientosCaja mc
+                JOIN Caja.TipoMovimientoCaja tm
+                    ON tm.IdTipoMovimientoCaja = mc.IdTipoMovimiento
+                JOIN Transacciones.Transaccion t
+                    ON t.IdTransaccion = mc.IdTransaccion
+                WHERE mc.IdJornadaCaja = j.IdJornadaCaja
+                  AND t.TipoTransaccion = 'Retiro'
+            ), 0) AS TotalRetiros,
+            COALESCE((
+                SELECT SUM(dv.Monto)
+                FROM Caja.DevolucionesCaja dv
+                WHERE dv.IdJornadaCaja = j.IdJornadaCaja
+            ), 0) AS TotalDevolucionesBoveda
+        FROM Caja.JornadasCaja j
+        WHERE j.IdJornadaCaja = :id
+        """,
+        {"id": id_jornada},
+    )
+
+
+def insertar_cuadre(
+    conn: Connection,
+    id_jornada: int,
+    id_usuario: int,
+    totales: Fila,
+    id_fecha_contable: int,
+    observaciones: str | None,
+) -> int:
+    fila = conn.execute(
+        text(
+            """
+            SET NOCOUNT ON;
+
+            DECLARE @ids TABLE (Id int);
+
+            INSERT INTO Caja.CuadreCaja (
+                IdJornadaCaja,
+                IdUsuario,
+                FechaHoraCuadre,
+                SaldoInicial,
+                TotalDotaciones,
+                TotalDepositos,
+                TotalRetiros,
+                TotalPagos,
+                TotalDevolucionesBoveda,
+                SaldoFinalFisico,
+                DiferenciaDinero,
+                EstadoCuadre,
+                IdAutorizadoPor,
+                IdFechaContable,
+                Observaciones
+            )
+            OUTPUT INSERTED.IdCuadreCaja INTO @ids
+            VALUES (
+                :id_jornada,
+                :id_usuario,
+                GETDATE(),
+                :saldo_inicial,
+                :total_dotaciones,
+                :total_depositos,
+                :total_retiros,
+                :total_pagos,
+                :total_devoluciones,
+                NULL,
+                NULL,
+                'PENDIENTE',
+                NULL,
+                :id_fecha_contable,
+                :observaciones
+            );
+
+            SELECT Id FROM @ids;
+            """
+        ),
+        {
+            "id_jornada": id_jornada,
+            "id_usuario": id_usuario,
+            "saldo_inicial": totales["SaldoInicial"],
+            "total_dotaciones": totales["TotalDotaciones"],
+            "total_depositos": totales["TotalDepositos"],
+            "total_retiros": totales["TotalRetiros"],
+            "total_pagos": totales["TotalPagos"],
+            "total_devoluciones": totales["TotalDevolucionesBoveda"],
+            "id_fecha_contable": id_fecha_contable,
+            "observaciones": observaciones,
+        },
+    ).first()
+
+    if fila is None:
+        raise RuntimeError("La BD no devolvió el id del cuadre")
+
+    return int(fila[0])
+
+
+def obtener_cuadre(conn: Connection, id_cuadre: int) -> Fila | None:
+    """Obtiene un cuadre por su identificador."""
+    return _fila(
+        conn,
+        """
+        SELECT
+            IdCuadreCaja,
+            IdJornadaCaja,
+            IdUsuario,
+            FechaHoraCuadre,
+            SaldoInicial,
+            TotalDotaciones,
+            TotalDepositos,
+            TotalRetiros,
+            TotalPagos,
+            TotalDevolucionesBoveda,
+            SaldoFinalFisico,
+            DiferenciaDinero,
+            EstadoCuadre,
+            IdAutorizadoPor,
+            IdFechaContable,
+            Observaciones
+        FROM Caja.CuadreCaja
+        WHERE IdCuadreCaja = :id
+        """,
+        {"id": id_cuadre},
+    )
