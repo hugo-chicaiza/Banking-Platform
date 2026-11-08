@@ -69,7 +69,7 @@ Body `TarjetaCreate`:
 | idProducto | integer | Sí | Producto tipo Tarjeta |
 | idSubProducto | integer | Sí | Subproducto del producto (define el BIN): CAT-07 `subproductos` |
 | tipoTarjeta | Debito \| Credito | Sí | |
-| nombreTarjeta | string(50) | Sí | Nombre impreso |
+| nombreTarjeta | string(26) | Sí | Nombre impreso: lo que admite el grabado de la tarjeta física (`Tarjeta.NombreTarjeta varchar(26)`); letras, espacios, punto, guion y apóstrofo |
 | esExtension | boolean | No | |
 | idTarjetaTitular | integer | No | Obligatorio si `esExtension = true` |
 | requiereEnvio | boolean | No | |
