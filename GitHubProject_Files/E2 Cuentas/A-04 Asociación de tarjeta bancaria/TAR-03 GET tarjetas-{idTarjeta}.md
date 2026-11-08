@@ -30,6 +30,7 @@ Detalle de tarjeta.
 ## Reglas de negocio
 
 1. Tarjeta inexistente → 404. Solo número enmascarado.
+2. Incluye las fechas del ciclo de vida: `fechaSolicitud` (TAR-01), `fechaResolucion` (aprobación o rechazo en TAR-04; `null` mientras está `Solicitada`), `fechaEmision` y `fechaExpiracion` (se fijan al pasar a `Generada`).
 
 ## Flujo
 
@@ -57,18 +58,20 @@ Detalle de tarjeta.
 
 ```json
 {
-  "idTarjeta": 1,
+  "idTarjeta": 301,
   "tokenTarjeta": "TOKEN_FICTICIO",
-  "numeroEnmascarado": "numeroEnmascarado",
-  "tipoTarjeta": "tipoTarjeta",
-  "nombreTarjeta": "nombreTarjeta",
-  "idCliente": 1,
-  "idCuenta": 1,
-  "idProducto": 1,
-  "estadoActual": "estadoActual",
+  "numeroEnmascarado": "4540 12** **** 3456",
+  "tipoTarjeta": "Debito",
+  "nombreTarjeta": "MARIA MENDOZA",
+  "idCliente": 125,
+  "idCuenta": 501,
+  "idProducto": 4,
+  "estadoActual": "Generada",
   "pinAsignado": true,
-  "fechaEmision": "2026-11-04",
-  "fechaExpiracion": "2026-11-04"
+  "fechaSolicitud": "2026-11-04",
+  "fechaResolucion": "2026-11-05T10:15:00",
+  "fechaEmision": "2026-11-06",
+  "fechaExpiracion": "2031-11-06"
 }
 ```
 

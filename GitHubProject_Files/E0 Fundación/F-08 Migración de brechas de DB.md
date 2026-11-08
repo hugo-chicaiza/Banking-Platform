@@ -57,3 +57,9 @@ url: https://github.com/hugo-chicaiza/Banking-Platform/issues/108
   - Aplicar: `ALTER TABLE Organizacion.Usuarios DROP COLUMN ClaveHash;`
   - Reversión (los hashes anteriores no se recuperan): `ALTER TABLE Organizacion.Usuarios ADD ClaveHash varchar(256) NULL;`
   - Si se usan certificados, sus datos (huella SHA-256, serie, emisor, vigencia, estado) van en una tabla propia relacionada con `Organizacion.Usuarios`, no en esta columna.
+- Estados de tarjeta y PIN temporal (A-05, aplicado a mano 2026-11-07):
+  - `CooperativaDB.Tarjeta.Tarjeta.CK_Tarjeta_Estado` acepta solo `Solicitada`, `Aprobada`, `Generada`, `Activa`, `Inactiva`, `Bloqueada`, `Cancelada`, `Anulada`, `Vencida` y `Cerrada` (se quitan `EnRevision`, `Rechazada` y `Pendiente`). El valor por defecto sigue siendo `Solicitada`.
+  - `Tarjeta.TarjetaHis.CK_TarjetaHis_Estados` con los mismos estados, creado `WITH NOCHECK` (el historial es inmutable: no se validan las filas existentes).
+  - `Tarjeta.TransicionEstado`: se borran las filas con `EnRevision`, `Rechazada` o `Pendiente` y se agrega `Solicitada → Anulada` (rechazo). Quedan 17 transiciones (ver TAR-04).
+  - `SeguridadDB.Tarjetas.TarjetaPIN.RequiereCambio bit NOT NULL` con `DF_TarjetaPIN_RequiereCambio DEFAULT 0`: 1 cuando el PIN es temporal (débito recién aprobada o PIN regenerado).
+  - Reversión: recrear `CK_Tarjeta_Estado` y `CK_TarjetaHis_Estados` con los 13 estados anteriores, borrar `Solicitada → Anulada`, volver a insertar `Solicitada → EnRevision`, `Solicitada → Rechazada`, `EnRevision → Aprobada`, `EnRevision → Rechazada`, `Generada → Pendiente`, `Pendiente → Activa` y `Pendiente → Anulada`, y `ALTER TABLE Tarjetas.TarjetaPIN DROP CONSTRAINT DF_TarjetaPIN_RequiereCambio, COLUMN RequiereCambio;`.

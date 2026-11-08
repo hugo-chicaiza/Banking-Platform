@@ -43,7 +43,7 @@ La implementación utiliza PAN ficticios y un HSM simulado durante el desarrollo
    - **ATM-01:** simulación de lectura de tarjeta, identificación de la tarjeta y verificación del PIN mediante IBM 3624 PIN Offset.
 7. El `TokenTarjeta` identificará la tarjeta dentro del sistema. No se asumirá que permite recuperar el PAN sin un mecanismo de correspondencia autorizado.
 8. Una tarjeta de extensión requiere una tarjeta titular válida → `422 EXTENSION_REQUIERE_TITULAR`.
-9. La tarjeta se generará con `PinAsignado = 0` y estado `Generada`. Si `requiereEnvio = true`, se creará un registro en `Tarjeta.EnviosTarjeta` con estado `PENDIENTE` y la dirección correspondiente.
+9. La tarjeta se registrará como solicitud: estado `Solicitada`, `PinAsignado = 0` y `FechaSolicitud` con la fecha actual. `FechaEmision` se registra provisionalmente con la fecha actual (la columna es obligatoria) y se actualiza al pasar a `Generada` (TAR-04). El PIN no se asigna aquí: se genera automáticamente al aprobar la tarjeta (TAR-04). Si `requiereEnvio = true`, se creará un registro en `Tarjeta.EnviosTarjeta` con estado `PENDIENTE` y la dirección correspondiente.
 10. Las claves criptográficas utilizadas para proteger el PIN Block y generar o verificar el PIN Offset serán independientes y estarán bajo responsabilidad del componente HSM, no de TAR-01.
 11. El PAN completo, el PIN, los PIN Blocks, las claves criptográficas y otros secretos no aparecerán en logs, URLs ni respuestas de la API.
 12. La emisión deberá garantizar la consistencia entre el registro de la tarjeta y el repositorio de PAN ficticios, evitando tarjetas emitidas sin un PAN recuperable para las pruebas y registros huérfanos.
@@ -53,7 +53,7 @@ La implementación utiliza PAN ficticios y un HSM simulado durante el desarrollo
 1. Validar la cuenta, el producto, el BIN y las condiciones de emisión.
 2. Generar un PAN ficticio utilizando un rango de prueba autorizado, el BIN correspondiente y un dígito de control válido.
 3. Generar `TokenTarjeta`, `NumeroEnmascarado` y `HashNumeroTarjeta` (SHA-256).
-4. Registrar la tarjeta con estado `Generada` y `PinAsignado = 0`.
+4. Registrar la tarjeta con estado `Solicitada`, `PinAsignado = 0` y `FechaSolicitud`.
 5. Registrar el envío, cuando corresponda, y el historial en `Tarjeta.TarjetaHis`.
 6. Asociar el PAN ficticio a `IdTarjeta` en el repositorio aislado de pruebas.
 7. Confirmar que la tarjeta y su PAN ficticio quedaron correctamente asociados. Ante un fallo parcial, aplicar el mecanismo de recuperación definido para evitar inconsistencias.
@@ -100,8 +100,10 @@ Body `TarjetaCreate`:
   "idCliente": 125,
   "idCuenta": 501,
   "idProducto": 3,
-  "estadoActual": "Generada",
+  "estadoActual": "Solicitada",
   "pinAsignado": false,
+  "fechaSolicitud": "2026-10-26",
+  "fechaResolucion": null,
   "fechaEmision": "2026-10-26",
   "fechaExpiracion": "2031-10-26"
 }

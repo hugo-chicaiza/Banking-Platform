@@ -33,7 +33,8 @@ url: https://github.com/hugo-chicaiza/Banking-Platform/issues/40
 
 ## Reglas de negocio
 
-- La tarjeta nace `Generada` y sin PIN; se activa en A-05.
+- La tarjeta nace como solicitud: estado `Solicitada`, sin PIN y con `FechaSolicitud`.
+- Luego sigue `Aprobada` (PIN generado automáticamente) → `Generada` → `Activa`, según A-05.
 
 ## Dependencias
 
