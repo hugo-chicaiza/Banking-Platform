@@ -304,9 +304,6 @@ def existe_transicion(conn: Connection, origen: str, destino: str) -> bool:
     )
 
 
-_HORA_ECUADOR = "SYSDATETIMEOFFSET() AT TIME ZONE 'SA Pacific Standard Time'"
-
-
 def actualizar_estado(
     conn: Connection,
     id_tarjeta: int,
@@ -319,24 +316,34 @@ def actualizar_estado(
     """resolucion: FechaResolucion = ahora (aprobación o rechazo).
     emision: FechaEmision = hoy y FechaExpiracion a cinco años (paso a Generada).
     pin_asignado: PinAsignado = 1 (PIN generado al aprobar).
+
+    SQL fijo: las marcas van como parámetros; sin marca, la columna queda igual.
     """
-    cambios = ["Estado = :estado"]
-    if resolucion:
-        cambios.append(f"FechaResolucion = CONVERT(datetime2, {_HORA_ECUADOR})")
-    if emision:
-        cambios.append(f"FechaEmision = CONVERT(date, {_HORA_ECUADOR})")
-        cambios.append(
-            f"FechaExpiracion = DATEADD(year, 5, CONVERT(date, {_HORA_ECUADOR}))"
-        )
-    if pin_asignado:
-        cambios.append("PinAsignado = 1")
     conn.execute(
         text(
-            "UPDATE Tarjeta.Tarjeta SET "
-            + ", ".join(cambios)
-            + " WHERE IdTarjeta = :id_tarjeta"
+            """
+            UPDATE Tarjeta.Tarjeta SET
+                Estado = :estado,
+                FechaResolucion = CASE WHEN :resolucion = 1
+                    THEN CONVERT(datetime2, SYSDATETIMEOFFSET() AT TIME ZONE 'SA Pacific Standard Time')
+                    ELSE FechaResolucion END,
+                FechaEmision = CASE WHEN :emision = 1
+                    THEN CONVERT(date, SYSDATETIMEOFFSET() AT TIME ZONE 'SA Pacific Standard Time')
+                    ELSE FechaEmision END,
+                FechaExpiracion = CASE WHEN :emision = 1
+                    THEN DATEADD(year, 5, CONVERT(date, SYSDATETIMEOFFSET() AT TIME ZONE 'SA Pacific Standard Time'))
+                    ELSE FechaExpiracion END,
+                PinAsignado = CASE WHEN :pin_asignado = 1 THEN 1 ELSE PinAsignado END
+            WHERE IdTarjeta = :id_tarjeta
+            """
         ),
-        {"estado": estado, "id_tarjeta": id_tarjeta},
+        {
+            "estado": estado,
+            "id_tarjeta": id_tarjeta,
+            "resolucion": int(resolucion),
+            "emision": int(emision),
+            "pin_asignado": int(pin_asignado),
+        },
     )
 
 
@@ -347,10 +354,10 @@ def dias_laborables_desde(conn: Connection, fecha: date) -> int:
     """
     return conn.execute(
         text(
-            f"""
+            """
             SELECT COUNT(*) FROM Contabilidad.FechaContable
             WHERE EsDiaContable = 1 AND Fecha > :fecha
-              AND Fecha <= CONVERT(date, {_HORA_ECUADOR})
+              AND Fecha <= CONVERT(date, SYSDATETIMEOFFSET() AT TIME ZONE 'SA Pacific Standard Time')
             """
         ),
         {"fecha": fecha},
@@ -432,12 +439,12 @@ def guardar_pin_generado(
     }
     actualizada = conn_seguridad.execute(
         text(
-            f"""
+            """
             UPDATE Tarjetas.TarjetaPIN
             SET PINOffset = :offset, ReferenciaClavePVK = :pvk, TienePINAsignado = 1,
                 Estado = 'Activo', IntentosFallidos = 0, FechaBloqueo = NULL,
                 RequiereCambio = :requiere_cambio,
-                FechaAsignacion = CONVERT(datetime, {_HORA_ECUADOR})
+                FechaAsignacion = CONVERT(datetime, SYSDATETIMEOFFSET() AT TIME ZONE 'SA Pacific Standard Time')
             WHERE ID_Tarjeta = :id_tarjeta
             """
         ),
@@ -446,13 +453,13 @@ def guardar_pin_generado(
     if actualizada.rowcount == 0:
         conn_seguridad.execute(
             text(
-                f"""
+                """
                 INSERT INTO Tarjetas.TarjetaPIN (
                     ID_Tarjeta, TienePINAsignado, FechaAsignacion, IntentosFallidos,
                     Estado, PINOffset, ReferenciaClavePVK, RequiereCambio
                 )
                 VALUES (
-                    :id_tarjeta, 1, CONVERT(datetime, {_HORA_ECUADOR}), 0,
+                    :id_tarjeta, 1, CONVERT(datetime, SYSDATETIMEOFFSET() AT TIME ZONE 'SA Pacific Standard Time'), 0,
                     'Activo', :offset, :pvk, :requiere_cambio
                 )
                 """

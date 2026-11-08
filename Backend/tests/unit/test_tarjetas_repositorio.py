@@ -6,19 +6,25 @@ from unittest.mock import MagicMock
 from app.modules.tarjetas import repository
 
 
-def test_actualizar_estado_sql_segun_las_marcas():
+def test_actualizar_estado_sql_fijo_con_marcas_como_parametros():
     conn = MagicMock()
     repository.actualizar_estado(conn, 301, "Generada")
     sql, params = conn.execute.call_args.args
-    assert str(sql).startswith("UPDATE Tarjeta.Tarjeta SET Estado = :estado WHERE")
-    assert params == {"estado": "Generada", "id_tarjeta": 301}
+    assert params == {
+        "estado": "Generada",
+        "id_tarjeta": 301,
+        "resolucion": 0,
+        "emision": 0,
+        "pin_asignado": 0,
+    }
 
     repository.actualizar_estado(
         conn, 301, "Aprobada", resolucion=True, emision=True, pin_asignado=True
     )
-    sql = str(conn.execute.call_args.args[0])
-    assert "FechaResolucion = " in sql and "PinAsignado = 1" in sql
-    assert "FechaEmision = " in sql and "FechaExpiracion = DATEADD(year, 5" in sql
+    sql2, params = conn.execute.call_args.args
+    assert str(sql2) == str(sql)  # el texto SQL nunca cambia
+    assert params["resolucion"] == params["emision"] == params["pin_asignado"] == 1
+    assert "FechaExpiracion = CASE WHEN :emision = 1" in str(sql)
 
 
 def test_emision_inserta_solicitada_con_fecha_de_solicitud():
