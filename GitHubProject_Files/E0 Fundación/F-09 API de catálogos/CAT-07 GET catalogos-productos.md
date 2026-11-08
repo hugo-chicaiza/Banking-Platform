@@ -21,17 +21,18 @@ url: https://github.com/hugo-chicaiza/Banking-Platform/issues/120
 
 `GET /api/v1/catalogos/productos` · **Roles:** AUTH · **Historia:** F-09 (#109) · **OpenAPI:** `CAT07`
 
-Lista los productos financieros, con filtro opcional por tipo. Lo usan A-01, emisión de tarjetas y CR-01.
+Lista los productos financieros con sus subproductos, con filtro opcional por tipo. Lo usan A-01, emisión de tarjetas (TAR-01, con `tipo=Tarjeta`) y CR-01.
 
 | Lee | Escribe | DB |
 |---|---|---|
-| `ProductosFinancieros.Producto`, `ProductosFinancieros.Red` | — | — |
+| `ProductosFinancieros.Producto`, `ProductosFinancieros.SubProducto`, `ProductosFinancieros.Red` | — | — |
 
 ## Reglas de negocio
 
 1. Solo `Estado = 'A'`. Sin `tipo` devuelve todos; con `tipo` solo los de ese tipo. Ordenados por `tipoProducto` y `nombreProducto`.
 2. Campos que no aplican al tipo van en `null`: `montoAperturaMinimo` (Cuenta), `idTipoCredito` (Credito), `idRed` (Tarjeta, obligatorio por CHECK), `tipoCuenta` (Cuenta).
 3. Montos en decimal.
+4. Cada producto trae `subproductos`: sus subproductos activos (`idSubProducto`, `codigoSubProducto`, `nombreSubProducto`), ordenados por nombre. Es lo que el asesor puede ofrecer del producto; con `tipo` solo salen los subproductos de ese tipo (p. ej. `tipo=Tarjeta` → Débito y Crédito Mastercard). Un producto sin subproductos activos trae `[]`.
 
 ## Request
 
@@ -42,7 +43,17 @@ Lista los productos financieros, con filtro opcional por tipo. Lo usan A-01, emi
 ## Response `200`
 
 ```json
-[ { "idProducto": 1, "codigoProducto": "AHO-01", "nombreProducto": "Ahorro a la vista", "tipoProducto": "Cuenta", "montoAperturaMinimo": 10.00, "idTipoCredito": null, "idRed": null, "tipoCuenta": "Ahorros", "permiteOperacionesPresenciales": true } ]
+[
+  {
+    "idProducto": 4, "codigoProducto": "TAR001", "nombreProducto": "Tarjeta", "tipoProducto": "Tarjeta",
+    "montoAperturaMinimo": null, "idTipoCredito": null, "idRed": 2, "tipoCuenta": null,
+    "permiteOperacionesPresenciales": true,
+    "subproductos": [
+      { "idSubProducto": 6, "codigoSubProducto": "TCR001-MC", "nombreSubProducto": "Crédito Mastercard clásica" },
+      { "idSubProducto": 3, "codigoSubProducto": "TDB001-MC", "nombreSubProducto": "Débito Mastercard clásica" }
+    ]
+  }
+]
 ```
 
 ## Errores
