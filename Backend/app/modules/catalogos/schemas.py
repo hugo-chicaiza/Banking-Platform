@@ -3,6 +3,7 @@ from typing import Literal
 from pydantic import Field
 
 from app.core.api.schemas import CamelModel, Money
+from app.modules.catalogos.subproductos import TipoTarjeta
 
 
 class Pais(CamelModel):
@@ -58,6 +59,8 @@ class SubProducto(CamelModel):
     id_sub_producto: int
     codigo_sub_producto: str
     nombre_sub_producto: str
+    # Solo en subproductos de tarjeta (por el prefijo del código, ver subproductos.py)
+    tipo_tarjeta: TipoTarjeta | None = None
 
 
 class Producto(CamelModel):

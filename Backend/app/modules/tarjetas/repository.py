@@ -110,6 +110,7 @@ def obtener_subproducto_con_bin(
         conn,
         """
         SELECT s.IdSubProducto AS id_sub_producto, s.Estado AS estado,
+               s.CodigoSubProducto AS codigo_sub_producto,
                b.IdBIN AS id_bin, b.CodigoBIN AS codigo_bin, b.Estado AS estado_bin
         FROM ProductosFinancieros.SubProducto AS s
         LEFT JOIN Tarjeta.BIN AS b ON b.IdBIN = s.IdBIN

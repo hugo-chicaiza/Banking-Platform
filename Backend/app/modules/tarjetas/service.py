@@ -21,6 +21,7 @@ from app.core.security.hsm import (
     PinDebil,
     obtener_hsm,
 )
+from app.modules.catalogos.subproductos import tipo_tarjeta_de
 from app.modules.tarjetas import repository
 from app.modules.tarjetas.identificacion import hash_pan
 from app.modules.tarjetas.schemas import (
@@ -328,6 +329,12 @@ def _emitir(
         ):
             raise problema(
                 422, "BIN_INVALIDO", "El subproducto no tiene un BIN activo asociado."
+            )
+        if tipo_tarjeta_de(subproducto["codigo_sub_producto"]) != payload.tipo_tarjeta:
+            raise problema(
+                422,
+                "TIPO_TARJETA_NO_COINCIDE",
+                "El tipo de tarjeta no corresponde al subproducto elegido.",
             )
 
         _validar_extension(conn, payload)

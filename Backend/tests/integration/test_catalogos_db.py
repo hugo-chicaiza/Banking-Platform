@@ -109,7 +109,18 @@ def test_productos_incluyen_sus_subproductos_activos(conn):
             "id_sub_producto",
             "codigo_sub_producto",
             "nombre_sub_producto",
+            "tipo_tarjeta",
         }
+
+
+@pytest.mark.parametrize("tipo_tarjeta", ["Debito", "Credito"])
+def test_productos_filtrados_por_tipo_de_tarjeta(conn, tipo_tarjeta):
+    filas = repository.listar_productos(conn, None, tipo_tarjeta)
+
+    assert filas, "debe existir al menos un subproducto de cada tipo"
+    for producto in filas:
+        assert producto["tipo_producto"] == "Tarjeta" and producto["subproductos"]
+        assert {s["tipo_tarjeta"] for s in producto["subproductos"]} == {tipo_tarjeta}
 
 
 def test_productos_campos_que_no_aplican_van_en_null(conn):

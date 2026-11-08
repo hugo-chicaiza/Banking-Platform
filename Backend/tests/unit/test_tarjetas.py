@@ -57,6 +57,7 @@ FILA = {
 SUBPRODUCTO = {
     "id_sub_producto": 3,
     "estado": "A",
+    "codigo_sub_producto": "TDB001-MC",
     "id_bin": 1,
     "codigo_bin": "500000",
     "estado_bin": "A",
@@ -301,7 +302,12 @@ def test_emitir_usa_el_subproducto_elegido(client, emision, monkeypatch):
 
     def subproducto(_c, id_producto, id_sub_producto):
         recibido.update(producto=id_producto, sub=id_sub_producto)
-        return {**SUBPRODUCTO, "id_sub_producto": 6, "codigo_bin": "510000"}
+        return {
+            **SUBPRODUCTO,
+            "id_sub_producto": 6,
+            "codigo_sub_producto": "TCR001-MC",
+            "codigo_bin": "510000",
+        }
 
     monkeypatch.setattr(repository, "obtener_subproducto_con_bin", subproducto)
 
@@ -339,6 +345,25 @@ def test_emitir_subproducto_sin_bin_activo_422(client, emision, monkeypatch, cam
     r = client.post(BASE, json=PAYLOAD)
 
     assert r.status_code == 422 and _code(r) == "BIN_INVALIDO"
+
+
+@pytest.mark.parametrize(
+    ("tipo", "codigo"),
+    [("Credito", "TDB001-MC"), ("Debito", "TCR001-MC"), ("Debito", "XYZ001")],
+)
+def test_emitir_tipo_que_no_corresponde_al_subproducto_422(
+    client, conns, emision, monkeypatch, tipo, codigo
+):
+    monkeypatch.setattr(
+        repository,
+        "obtener_subproducto_con_bin",
+        lambda c, i, s: {**SUBPRODUCTO, "codigo_sub_producto": codigo},
+    )
+
+    r = client.post(BASE, json={**PAYLOAD, "tipoTarjeta": tipo})
+
+    assert r.status_code == 422 and _code(r) == "TIPO_TARJETA_NO_COINCIDE"
+    assert "tarjeta" not in emision and conns.coop.commits == 0
 
 
 def test_emitir_sin_subproducto_400(client, emision):
