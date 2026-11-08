@@ -48,6 +48,8 @@ FILA = {
     "id_cuenta": 4,
     "id_producto": 4,
     "estado_actual": "Solicitada",
+    "es_extension": False,
+    "id_tarjeta_titular": None,
     "pin_asignado": False,
     "fecha_solicitud": date(2026, 11, 1),
     "fecha_resolucion": None,
@@ -366,6 +368,13 @@ def test_emitir_tipo_que_no_corresponde_al_subproducto_422(
     assert "tarjeta" not in emision and conns.coop.commits == 0
 
 
+@pytest.mark.parametrize(("largo", "status"), [(26, 201), (27, 400)])
+def test_emitir_nombre_impreso_hasta_26_caracteres(client, emision, largo, status):
+    r = client.post(BASE, json={**PAYLOAD, "nombreTarjeta": "A" * largo})
+
+    assert r.status_code == status
+
+
 def test_emitir_sin_subproducto_400(client, emision):
     cuerpo = {k: v for k, v in PAYLOAD.items() if k != "idSubProducto"}
 
@@ -521,7 +530,18 @@ def test_buscar_200_sin_token_ni_pin(client, monkeypatch):
     assert item["numeroEnmascarado"] == FILA["numero_enmascarado"]
     assert "tokenTarjeta" not in item
     assert "pinAsignado" not in item
-    assert llamada["args"] == (4, None, "Generada", "fechaEmision", "asc", 1, 20)
+    assert item["esExtension"] is False and item["idTarjetaTitular"] is None
+    assert llamada["args"] == (4, None, "Generada", "fechaEmision", "asc", 1, 20, None)
+
+
+@pytest.mark.parametrize(("valor", "esperado"), [("false", False), ("true", True)])
+def test_buscar_filtra_por_extension(client, monkeypatch, valor, esperado):
+    llamada = _lista(monkeypatch)
+
+    r = client.get(BASE, params={"idCuenta": 4, "esExtension": valor})
+
+    assert r.status_code == 200
+    assert llamada["args"][-1] is esperado
 
 
 @pytest.mark.parametrize(
@@ -532,6 +552,7 @@ def test_buscar_200_sin_token_ni_pin(client, monkeypatch):
         {"page": 0},
         {"estado": "NoExiste"},
         {"idCliente": "abc"},
+        {"esExtension": "quizas"},
     ],
 )
 def test_buscar_filtros_invalidos_400(client, params):

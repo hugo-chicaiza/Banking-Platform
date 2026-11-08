@@ -13,6 +13,8 @@ _COLUMNAS_TARJETA = """
     IdCuenta AS id_cuenta,
     IdProducto AS id_producto,
     Estado AS estado_actual,
+    EsExtension AS es_extension,
+    IdTarjetaTitular AS id_tarjeta_titular,
     PinAsignado AS pin_asignado,
     FechaSolicitud AS fecha_solicitud,
     FechaResolucion AS fecha_resolucion,
@@ -251,17 +253,20 @@ def listar_tarjetas(
     direccion: str,
     page: int,
     page_size: int,
+    es_extension: bool | None = None,
 ) -> tuple[list[dict[str, Any]], int]:
     filtros = """
         FROM Tarjeta.Tarjeta
         WHERE (:id_cliente IS NULL OR IdCliente = :id_cliente)
           AND (:id_cuenta IS NULL OR IdCuenta = :id_cuenta)
           AND (:estado IS NULL OR Estado = :estado)
+          AND (:es_extension IS NULL OR EsExtension = :es_extension)
     """
     params: dict[str, Any] = {
         "id_cliente": id_cliente,
         "id_cuenta": id_cuenta,
         "estado": estado,
+        "es_extension": es_extension,
     }
     total = conn.execute(text("SELECT COUNT(*)" + filtros), params).scalar_one()
     items = _rows(

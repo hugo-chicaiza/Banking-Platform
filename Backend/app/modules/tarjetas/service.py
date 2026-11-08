@@ -411,13 +411,22 @@ def buscar_tarjetas(
     page: int,
     page_size: int,
     sort: str | None,
+    es_extension: bool | None = None,
 ) -> PageTarjeta:
     campo, direccion = _ordenamiento(
         sort, repository.CAMPOS_ORDEN_TARJETAS, ("idTarjeta", "desc")
     )
     with _transaccion(conn):
         filas, total = repository.listar_tarjetas(
-            conn, id_cliente, id_cuenta, estado, campo, direccion, page, page_size
+            conn,
+            id_cliente,
+            id_cuenta,
+            estado,
+            campo,
+            direccion,
+            page,
+            page_size,
+            es_extension,
         )
     return PageTarjeta(
         items=[TarjetaResumen(**fila) for fila in filas],

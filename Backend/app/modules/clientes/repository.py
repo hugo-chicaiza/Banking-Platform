@@ -722,6 +722,7 @@ def listar_tarjetas_perfil(conn: Connection, id_cliente: int) -> list[dict[str, 
                TipoTarjeta AS tipo_tarjeta, NombreTarjeta AS nombre_tarjeta,
                IdCliente AS id_cliente, IdCuenta AS id_cuenta,
                IdProducto AS id_producto, Estado AS estado_actual,
+               EsExtension AS es_extension, IdTarjetaTitular AS id_tarjeta_titular,
                PinAsignado AS pin_asignado, FechaEmision AS fecha_emision,
                FechaExpiracion AS fecha_expiracion
         FROM Tarjeta.Tarjeta
