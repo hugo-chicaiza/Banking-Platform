@@ -83,6 +83,46 @@ def test_productos_sin_filtro_y_por_cada_tipo(conn):
     assert por_tipo == total
 
 
+def test_productos_incluyen_sus_subproductos_activos(conn):
+    from sqlalchemy import text
+
+    tarjetas = repository.listar_productos(conn, "Tarjeta")
+    ids = {s["id_sub_producto"] for p in tarjetas for s in p["subproductos"]}
+
+    activos = {
+        fila[0]
+        for fila in conn.execute(
+            text(
+                """
+                SELECT s.IdSubProducto FROM ProductosFinancieros.SubProducto AS s
+                JOIN ProductosFinancieros.Producto AS p ON p.IdProducto = s.IdProducto
+                WHERE s.Estado = 'A' AND p.Estado = 'A' AND p.TipoProducto = 'Tarjeta'
+                """
+            )
+        )
+    }
+    assert ids == activos
+    # Con tipo=Tarjeta solo salen subproductos de tarjeta
+    for producto in tarjetas:
+        assert producto["tipo_producto"] == "Tarjeta"
+        assert set(producto["subproductos"][0]) == {
+            "id_sub_producto",
+            "codigo_sub_producto",
+            "nombre_sub_producto",
+            "tipo_tarjeta",
+        }
+
+
+@pytest.mark.parametrize("tipo_tarjeta", ["Debito", "Credito"])
+def test_productos_filtrados_por_tipo_de_tarjeta(conn, tipo_tarjeta):
+    filas = repository.listar_productos(conn, None, tipo_tarjeta)
+
+    assert filas, "debe existir al menos un subproducto de cada tipo"
+    for producto in filas:
+        assert producto["tipo_producto"] == "Tarjeta" and producto["subproductos"]
+        assert {s["tipo_tarjeta"] for s in producto["subproductos"]} == {tipo_tarjeta}
+
+
 def test_productos_campos_que_no_aplican_van_en_null(conn):
     for fila in repository.listar_productos(conn, None):
         tipo = fila["tipo_producto"]

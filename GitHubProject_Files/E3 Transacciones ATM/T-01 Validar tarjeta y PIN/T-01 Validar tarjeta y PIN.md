@@ -26,6 +26,8 @@ url: https://github.com/hugo-chicaiza/Banking-Platform/issues/5
 ## Criterios de aceptación
 
 - [ ] Tarjeta activa + PIN correcto abren una sesión ATM de 5 minutos (ATM-01)
+- [ ] PIN temporal (tarjeta de débito nueva o PIN regenerado): sesión restringida que solo permite cambiar el PIN (ATM-06) o cerrar sesión
+- [ ] Tarjeta de crédito `Generada`: se activa al usarse si ya pasaron 3 días laborables desde la emisión
 - [ ] PIN incorrecto suma un intento; al llegar a N la tarjeta se bloquea
 - [ ] Terminal inactivo, tarjeta no activa o bloqueada se rechazan con su código ISO
 - [ ] La sesión se cierra con ATM-09 o al vencer
@@ -39,4 +41,4 @@ url: https://github.com/hugo-chicaiza/Banking-Platform/issues/5
 
 ## Pendiente
 
-- G-02 (resuelto en la base, falta F-08): hash (`HashPIN`, Argon2id con salt) e intentos (`IntentosFallidos`) en `SeguridadDB.Tarjetas.TarjetaPIN`. Por definir: N, ventana de conteo y desbloqueo.
+- G-02 (ver F-08): IBM 3624 PIN Offset (`PINOffset`), intentos (`IntentosFallidos`, N = 3) y PIN temporal (`RequiereCambio`) en `SeguridadDB.Tarjetas.TarjetaPIN`. El desbloqueo del PIN es la regeneración de TAR-05.

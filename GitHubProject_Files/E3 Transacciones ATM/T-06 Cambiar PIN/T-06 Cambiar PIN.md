@@ -25,9 +25,10 @@ url: https://github.com/hugo-chicaiza/Banking-Platform/issues/11
 
 ## Criterios de aceptación
 
-- [ ] Se exige el PIN actual y un PIN nuevo no trivial (ATM-06)
-- [ ] Solo se guarda hash + salt; el historial no contiene el PIN
-- [ ] Pruebas: cambio correcto, PIN actual incorrecto, PIN débil, PIN igual al anterior
+- [ ] Se exige el PIN actual y un PIN nuevo no trivial (ATM-06), ambos como PIN Block ISO-4
+- [ ] Solo se guarda el IBM 3624 PIN Offset; el historial no contiene el PIN
+- [ ] El primer cambio del PIN temporal activa la tarjeta de débito (`Generada → Activa`) y se hace con la sesión restringida de ATM-01
+- [ ] Pruebas: cambio correcto, primer cambio con activación, PIN actual incorrecto, PIN débil, PIN igual al anterior
 
 ## Dependencias
 

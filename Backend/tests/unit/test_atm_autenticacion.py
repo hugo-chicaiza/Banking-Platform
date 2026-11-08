@@ -81,7 +81,7 @@ def comprobar_error(error, status, code):
 @pytest.mark.anyio
 async def test_pin_correcto_utiliza_contrato_compartido(entorno_atm):
     e = entorno_atm
-    assert await autenticar(e) is True
+    assert await autenticar(e) == service.PinVerificado(requiere_cambio=False)
     e.factory.assert_called_once_with()
     e.leer_pin.assert_called_once_with(e.conn_pin, 1)
     e.leer_pan.assert_called_once_with(e.conn_pin, 1, e.hsm)
@@ -358,7 +358,7 @@ async def test_activo_con_limite_agotado_no_reinicia_contador(entorno_atm, inten
 async def test_offset_cero_y_dos_intentos_siguen_permitiendo_pin_correcto(entorno_atm):
     e = entorno_atm
     e.estado.update(pin_offset="0000", intentos_fallidos=2)
-    assert await autenticar(e) is True
+    assert await autenticar(e) == service.PinVerificado(requiere_cambio=False)
     assert e.hsm.verificar_pin.call_args.args[3] == "0000"
     e.resultado.assert_called_once_with(
         conn=e.conn_pin, id_tarjeta=1, pin_correcto=True
@@ -429,3 +429,29 @@ async def test_atm_verifica_offset_generado_por_hsm_real(
         conn=e.conn_pin, id_tarjeta=1, pin_correcto=correcto
     )
     e.engine.begin.return_value.__exit__.assert_called_once_with(None, None, None)
+
+
+# A-05: tarjeta de débito Generada con PIN temporal
+
+
+@pytest.mark.anyio
+async def test_pin_temporal_correcto_devuelve_requiere_cambio(entorno_atm):
+    e = entorno_atm
+    e.tarjeta.update(estado_tarjeta="Generada", tipo_tarjeta="Debito")
+    e.estado.update(requiere_cambio=True)
+
+    assert await autenticar(e) == service.PinVerificado(requiere_cambio=True)
+
+
+@pytest.mark.anyio
+async def test_debito_generada_sin_pin_temporal_409_sin_gastar_intentos(entorno_atm):
+    e = entorno_atm
+    e.tarjeta.update(estado_tarjeta="Generada", tipo_tarjeta="Debito")
+    e.estado.update(requiere_cambio=False)
+
+    with pytest.raises(HTTPException) as error:
+        await autenticar(e)
+
+    comprobar_error(error, 409, "TARJETA_NO_ACTIVA")
+    e.hsm.verificar_pin.assert_not_called()
+    e.resultado.assert_not_called()

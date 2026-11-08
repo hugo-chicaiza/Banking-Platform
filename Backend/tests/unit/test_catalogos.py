@@ -155,14 +155,22 @@ _PRODUCTO_CUENTA = {
     "id_red": None,
     "tipo_cuenta": "Ahorro",
     "permite_operaciones_presenciales": True,
+    "subproductos": [
+        {
+            "id_sub_producto": 1,
+            "codigo_sub_producto": "AHO001-PN",
+            "nombre_sub_producto": "Ahorro a la vista persona natural",
+        }
+    ],
 }
 
 
 def test_productos_sin_filtro_devuelve_nulos_y_monto_numerico(client, monkeypatch):
     llamada = {}
 
-    def listar(_conn, tipo):
+    def listar(_conn, tipo, tipo_tarjeta):
         llamada["tipo"] = tipo
+        llamada["tipo_tarjeta"] = tipo_tarjeta
         return [_PRODUCTO_CUENTA]
 
     monkeypatch.setattr(repository, "listar_productos", listar)
@@ -182,6 +190,14 @@ def test_productos_sin_filtro_devuelve_nulos_y_monto_numerico(client, monkeypatc
             "idRed": None,
             "tipoCuenta": "Ahorro",
             "permiteOperacionesPresenciales": True,
+            "subproductos": [
+                {
+                    "idSubProducto": 1,
+                    "codigoSubProducto": "AHO001-PN",
+                    "nombreSubProducto": "Ahorro a la vista persona natural",
+                    "tipoTarjeta": None,
+                }
+            ],
         }
     ]
 
@@ -190,7 +206,7 @@ def test_productos_sin_filtro_devuelve_nulos_y_monto_numerico(client, monkeypatc
 def test_productos_filtra_por_cada_tipo(client, monkeypatch, tipo):
     llamada = {}
 
-    def listar(_conn, recibido):
+    def listar(_conn, recibido, _tipo_tarjeta):
         llamada["tipo"] = recibido
         return []
 
@@ -200,6 +216,99 @@ def test_productos_filtra_por_cada_tipo(client, monkeypatch, tipo):
 
     assert r.status_code == 200
     assert llamada["tipo"] == tipo
+
+
+@pytest.mark.parametrize(
+    ("params", "esperado"),
+    [
+        ({"tipoTarjeta": "Credito"}, (None, "Credito")),
+        ({"tipo": "Tarjeta", "tipoTarjeta": "Debito"}, ("Tarjeta", "Debito")),
+    ],
+)
+def test_productos_filtra_por_tipo_de_tarjeta(client, monkeypatch, params, esperado):
+    llamada = {}
+
+    def listar(_conn, tipo, tipo_tarjeta):
+        llamada["args"] = (tipo, tipo_tarjeta)
+        return []
+
+    monkeypatch.setattr(repository, "listar_productos", listar)
+
+    r = client.get("/api/v1/catalogos/productos", params=params)
+
+    assert r.status_code == 200 and llamada["args"] == esperado
+
+
+@pytest.mark.parametrize(
+    ("params", "code"),
+    [
+        ({"tipo": "Cuenta", "tipoTarjeta": "Debito"}, "PARAMETRO_INVALIDO"),
+        ({"tipoTarjeta": "debito"}, "DATOS_INVALIDOS"),
+        ({"tipoTarjeta": "Prepago"}, "DATOS_INVALIDOS"),
+    ],
+)
+def test_productos_tipo_de_tarjeta_invalido_400(client, params, code):
+    r = client.get("/api/v1/catalogos/productos", params=params)
+
+    assert r.status_code == 400 and r.json()["code"] == code
+
+
+def test_repositorio_filtra_subproductos_por_tipo_de_tarjeta(monkeypatch):
+    productos = [
+        {"id_producto": 4, "tipo_producto": "Tarjeta"},
+    ]
+    subproductos = [
+        {
+            "id_producto": 4,
+            "id_sub_producto": 3,
+            "codigo_sub_producto": "TDB001-MC",
+            "nombre_sub_producto": "Débito",
+            "tipo_producto": "Tarjeta",
+        },
+        {
+            "id_producto": 4,
+            "id_sub_producto": 6,
+            "codigo_sub_producto": "TCR001-MC",
+            "nombre_sub_producto": "Crédito",
+            "tipo_producto": "Tarjeta",
+        },
+    ]
+    consultas = []
+
+    def filas(_conn, sql, params=None):
+        consultas.append(params)
+        datos = (
+            productos if "FROM ProductosFinancieros.Producto\n" in sql else subproductos
+        )
+        return [dict(f) for f in datos]
+
+    monkeypatch.setattr(repository, "_rows", filas)
+
+    credito = repository.listar_productos(None, None, "Credito")  # type: ignore[arg-type]
+
+    assert consultas == [{"tipo": "Tarjeta"}, {"tipo": "Tarjeta"}]
+    assert [s["id_sub_producto"] for s in credito[0]["subproductos"]] == [6]
+    assert credito[0]["subproductos"][0]["tipo_tarjeta"] == "Credito"
+    todos = repository.listar_productos(None, "Tarjeta")  # type: ignore[arg-type]
+    assert [s["tipo_tarjeta"] for s in todos[0]["subproductos"]] == [
+        "Debito",
+        "Credito",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("codigo", "tipo"),
+    [
+        ("TDB001-MC", "Debito"),
+        ("tcr002-VI", "Credito"),
+        ("AHO001-PN", None),
+        ("", None),
+    ],
+)
+def test_tipo_de_tarjeta_por_prefijo_del_subproducto(codigo, tipo):
+    from app.modules.catalogos.subproductos import tipo_tarjeta_de
+
+    assert tipo_tarjeta_de(codigo) == tipo
 
 
 @pytest.mark.parametrize("tipo", ["Otro", "cuenta", "' OR 1=1 --"])

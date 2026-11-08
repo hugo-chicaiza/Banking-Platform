@@ -21,6 +21,7 @@ from app.core.security.hsm import (
     PinDebil,
     obtener_hsm,
 )
+from app.modules.catalogos.subproductos import tipo_tarjeta_de
 from app.modules.tarjetas import repository
 from app.modules.tarjetas.identificacion import hash_pan
 from app.modules.tarjetas.schemas import (
@@ -38,6 +39,10 @@ logger = logging.getLogger(__name__)
 
 _LONGITUD_PAN = 16
 _ESTADOS_TERMINALES = {"Cancelada", "Anulada", "Vencida", "Cerrada"}
+# Estados en los que existe (o puede regenerarse) un PIN: desde la aprobación
+_ESTADOS_CON_PIN = {"Aprobada", "Generada", "Activa", "Inactiva", "Bloqueada"}
+# A-05: una tarjeta de crédito Generada se activa sola tras estos días laborables
+DIAS_LABORABLES_ACTIVACION_CREDITO = 3
 # TarjetaHis guarda hora de Ecuador, UTC-5 todo el año
 _ZONA_BD = timezone(timedelta(hours=-5))
 
@@ -308,10 +313,28 @@ def _emitir(
                 422, "PRODUCTO_NO_ES_TARJETA", "El producto no es de tipo Tarjeta."
             )
 
-        subproducto = repository.obtener_subproducto_con_bin(conn, payload.id_producto)
+        subproducto = repository.obtener_subproducto_con_bin(
+            conn, payload.id_producto, payload.id_sub_producto
+        )
         if subproducto is None:
             raise problema(
-                422, "BIN_INVALIDO", "El producto no tiene un BIN activo asociado."
+                422,
+                "SUBPRODUCTO_NO_ENCONTRADO",
+                "El subproducto no existe o no pertenece al producto.",
+            )
+        if (
+            subproducto["estado"] != "A"
+            or subproducto["id_bin"] is None
+            or subproducto["estado_bin"] != "A"
+        ):
+            raise problema(
+                422, "BIN_INVALIDO", "El subproducto no tiene un BIN activo asociado."
+            )
+        if tipo_tarjeta_de(subproducto["codigo_sub_producto"]) != payload.tipo_tarjeta:
+            raise problema(
+                422,
+                "TIPO_TARJETA_NO_COINCIDE",
+                "El tipo de tarjeta no corresponde al subproducto elegido.",
             )
 
         _validar_extension(conn, payload)
@@ -364,8 +387,8 @@ def _emitir(
             id_tarjeta,
             "CambioEstado",
             None,
-            "Generada",
-            "Emisión de tarjeta",
+            "Solicitada",
+            "Solicitud de tarjeta",
             usuario,
             ip,
         )
@@ -428,18 +451,63 @@ def _tipo_evento(anterior: str, nuevo: str) -> str:
     return {"Bloqueada": "Bloqueo", "Anulada": "Anulacion"}.get(nuevo, "CambioEstado")
 
 
+def credito_cumple_plazo(conn: Connection, fecha_emision: date) -> bool:
+    """A-05: la tarjeta de crédito se activa a los 3 días laborables de su emisión."""
+    return (
+        repository.dias_laborables_desde(conn, fecha_emision)
+        >= DIAS_LABORABLES_ACTIVACION_CREDITO
+    )
+
+
+def _generar_pin(
+    conn_seguridad: Connection, id_tarjeta: int, tipo_tarjeta: str, hsm: Hsm
+) -> None:
+    """El HSM genera el PIN y solo se guarda su Offset, confirmado en SeguridadDB.
+
+    Débito: PIN temporal (RequiereCambio), llega impreso con la tarjeta.
+    Crédito: PIN asignado que no se entrega; el cliente lo pide al servicio al cliente.
+    """
+    pan = pan_de_prueba(conn_seguridad, id_tarjeta, hsm)
+    try:
+        offset, referencia_pvk = hsm.generar_pin(pan)
+    except ErrorHsm as exc:
+        raise _error_hsm(exc, "HSM_NO_DISPONIBLE") from None
+    finally:
+        del pan
+    try:
+        repository.guardar_pin_generado(
+            conn_seguridad,
+            id_tarjeta,
+            offset,
+            referencia_pvk,
+            requiere_cambio=tipo_tarjeta == "Debito",
+        )
+        conn_seguridad.commit()
+    except DBAPIError as exc:
+        conn_seguridad.rollback()
+        raise traducir_error_bd(exc) from None
+
+
 def cambiar_estado(
     conn: Connection,
+    conn_seguridad: Connection,
     id_tarjeta: int,
     payload: TarjetaEstadoUpdate,
     usuario: int,
     ip: str | None,
 ) -> Tarjeta:
+    """Cambia el estado según Tarjeta.TransicionEstado (A-05).
+
+    Aprobar genera el PIN en el HSM. Su Offset se confirma en SeguridadDB antes que el
+    estado en CooperativaDB: si esta falla, la tarjeta sigue Solicitada (inutilizable)
+    y repetir la aprobación genera un PIN nuevo que reemplaza al anterior.
+    """
+    destino = payload.estado
     with (
         _auditado(
             "UPDATE",
             "Tarjeta.Tarjeta",
-            f"TAR-04 Cambio de estado a {payload.estado}",
+            f"TAR-04 Cambio de estado a {destino}",
             id_tarjeta,
             usuario,
             ip,
@@ -450,27 +518,60 @@ def cambiar_estado(
         if actual is None:
             raise _tarjeta_no_encontrada()
         anterior = actual["estado_actual"]
-        if not repository.existe_transicion(conn, anterior, payload.estado):
+        if anterior == "Generada" and destino == "Activa":
+            raise problema(
+                409,
+                "ACTIVACION_AUTOMATICA",
+                "La tarjeta se activa con el primer cambio de PIN (débito) "
+                "o a los 3 días laborables (crédito).",
+            )
+        if not repository.existe_transicion(conn, anterior, destino):
             raise problema(
                 409,
                 "TRANSICION_INVALIDA",
                 "El cambio de estado no está permitido.",
             )
-        if payload.estado == "Activa" and not actual["pin_asignado"]:
+        if destino == "Activa" and not actual["pin_asignado"]:
             raise problema(
                 409, "PIN_NO_ASIGNADO", "Asigne un PIN antes de activar la tarjeta."
             )
-        repository.actualizar_estado(conn, id_tarjeta, payload.estado)
+        aprobar = destino == "Aprobada"
+        if aprobar:
+            _generar_pin(
+                conn_seguridad,
+                id_tarjeta,
+                actual["tipo_tarjeta"],
+                _hsm("HSM_NO_DISPONIBLE"),
+            )
+        repository.actualizar_estado(
+            conn,
+            id_tarjeta,
+            destino,
+            resolucion=anterior == "Solicitada",
+            emision=destino == "Generada",
+            pin_asignado=aprobar,
+        )
         repository.insertar_historial(
             conn,
             id_tarjeta,
-            _tipo_evento(anterior, payload.estado),
+            _tipo_evento(anterior, destino),
             anterior,
-            payload.estado,
+            destino,
             payload.motivo,
             usuario,
             ip,
         )
+        if aprobar:
+            repository.insertar_historial(
+                conn,
+                id_tarjeta,
+                "CambioPin",
+                None,
+                None,
+                "PIN generado automáticamente",
+                usuario,
+                ip,
+            )
         fila = repository.obtener_tarjeta(conn, id_tarjeta)
         if fila is None:  # pragma: no cover
             raise RuntimeError("La tarjeta actualizada no se encontró")
@@ -478,7 +579,7 @@ def cambiar_estado(
     logger.info(
         "tarjetas: estado id_tarjeta=%s destino=%s usuario=%s",
         id_tarjeta,
-        payload.estado,
+        destino,
         usuario,
     )
     return Tarjeta(**fila)
@@ -487,61 +588,42 @@ def cambiar_estado(
 # TAR-05
 
 
-def _recuperar_asignacion(conn_seguridad: Connection, id_tarjeta: int) -> HTTPException:
-    """CooperativaDB ya marcó el PIN: habilita en SeguridadDB el Offset pendiente."""
-    try:
-        if repository.confirmar_pin(conn_seguridad, id_tarjeta):
-            conn_seguridad.commit()
-            logger.info("tarjetas: pin recuperado id_tarjeta=%s", id_tarjeta)
-            return problema(409, "PIN_YA_ASIGNADO", "La tarjeta ya tiene PIN.")
-    except DBAPIError:
-        conn_seguridad.rollback()
-    return problema(
-        409,
-        "PIN_ASIGNACION_EN_PROCESO",
-        "Hay una asignación de PIN pendiente que aún no se puede completar.",
-    )
-
-
-def _no_confirmada() -> HTTPException:
-    return problema(
-        503,
-        "PIN_ASIGNACION_NO_CONFIRMADA",
-        "No se pudo confirmar la asignación del PIN.",
-    )
-
-
-def asignar_pin(
+def regenerar_pin(
     conn: Connection,
     conn_seguridad: Connection,
     id_tarjeta: int,
-    pin_block: SecretStr,
-    referencia: str,
     usuario: int,
     ip: str | None,
 ) -> None:
-    """PIN inicial con PIN Block ISO-4 e IBM 3624 PIN Offset, en tres pasos:
+    """Reposición del PIN: el HSM genera uno nuevo (nadie lo conoce).
 
-    1. SeguridadDB: Offset pendiente (Estado Inactivo, TienePINAsignado = 0).
-    2. CooperativaDB: PinAsignado = 1 y TarjetaHis (CambioPin).
-    3. SeguridadDB: habilita el PIN (Estado Activo, TienePINAsignado = 1).
-
-    Una asignación incompleta nunca habilita el PIN. Si falla el paso 2, el reintento
-    sobrescribe el Offset pendiente; si falla el paso 3, el siguiente intento lo
-    completa (_recuperar_asignacion).
+    Reinicia los intentos y desbloquea el PIN, sin cambiar el estado de la tarjeta.
+    El Offset se confirma primero en SeguridadDB; si luego falla CooperativaDB, el PIN
+    nuevo ya rige y se puede repetir la operación.
     """
     with _auditado(
         "UPDATE",
         "Tarjeta.Tarjeta",
-        "TAR-05 Asignación de PIN inicial",
+        "TAR-05 Regeneración de PIN",
         id_tarjeta,
         usuario,
         ip,
     ):
-        hsm = _hsm("HSM_NO_DISPONIBLE")
         try:
-            _offset_pendiente(
-                conn, conn_seguridad, id_tarjeta, pin_block, referencia, hsm
+            actual = repository.obtener_tarjeta(conn, id_tarjeta, bloquear=True)
+            if actual is None:
+                raise _tarjeta_no_encontrada()
+            if actual["estado_actual"] not in _ESTADOS_CON_PIN:
+                raise problema(
+                    409,
+                    "PIN_NO_PERMITIDO",
+                    "La tarjeta no admite PIN en su estado actual.",
+                )
+            _generar_pin(
+                conn_seguridad,
+                id_tarjeta,
+                actual["tipo_tarjeta"],
+                _hsm("HSM_NO_DISPONIBLE"),
             )
         except DBAPIError as exc:
             _rollback(conn_seguridad, conn)
@@ -551,68 +633,32 @@ def asignar_pin(
             raise
 
         try:
-            if not repository.marcar_pin_asignado(conn, id_tarjeta):
-                raise problema(409, "PIN_YA_ASIGNADO", "La tarjeta ya tiene PIN.")
+            repository.marcar_pin_asignado(conn, id_tarjeta)
             repository.insertar_historial(
                 conn,
                 id_tarjeta,
                 "CambioPin",
                 None,
                 None,
-                "Asignación de PIN inicial",
+                "Regeneración de PIN",
                 usuario,
                 ip,
             )
             conn.commit()
-        except HTTPException:
-            conn.rollback()
-            raise
         except DBAPIError:
             conn.rollback()
-            raise _no_confirmada() from None
+            logger.error(
+                "tarjetas: pin regenerado sin historial id_tarjeta=%s", id_tarjeta
+            )
+            raise problema(
+                503,
+                "PIN_ASIGNACION_NO_CONFIRMADA",
+                "No se pudo confirmar la regeneración del PIN.",
+            ) from None
 
-        try:
-            if not repository.confirmar_pin(conn_seguridad, id_tarjeta):
-                raise RuntimeError("Sin Offset pendiente")
-            conn_seguridad.commit()
-        except (DBAPIError, RuntimeError):
-            conn_seguridad.rollback()
-            raise _no_confirmada() from None
-
-    logger.info("tarjetas: pin asignado id_tarjeta=%s usuario=%s", id_tarjeta, usuario)
-
-
-def _offset_pendiente(
-    conn: Connection,
-    conn_seguridad: Connection,
-    id_tarjeta: int,
-    pin_block: SecretStr,
-    referencia: str,
-    hsm: Hsm,
-) -> None:
-    """Paso 1 de TAR-05. Deja bloqueada la tarjeta en CooperativaDB hasta el paso 2."""
-    actual = repository.obtener_tarjeta(conn, id_tarjeta, bloquear=True)
-    if actual is None:
-        raise _tarjeta_no_encontrada()
-    estado_pin = repository.obtener_estado_pin(conn_seguridad, id_tarjeta)
-    if actual["pin_asignado"]:
-        if estado_pin is None or estado_pin["confirmado"]:
-            raise problema(409, "PIN_YA_ASIGNADO", "La tarjeta ya tiene PIN.")
-        raise _recuperar_asignacion(conn_seguridad, id_tarjeta)
-
-    pan = pan_de_prueba(conn_seguridad, id_tarjeta, hsm)
-    try:
-        offset, referencia_pvk = hsm.generar_offset(
-            pin_block.get_secret_value(), referencia, pan
-        )
-    except ErrorHsm as exc:
-        raise _error_hsm(exc, "HSM_NO_DISPONIBLE") from None
-    finally:
-        del pan
-    repository.guardar_offset_pendiente(
-        conn_seguridad, id_tarjeta, offset, referencia_pvk
+    logger.info(
+        "tarjetas: pin regenerado id_tarjeta=%s usuario=%s", id_tarjeta, usuario
     )
-    conn_seguridad.commit()
 
 
 def construir_pin_block_prueba(

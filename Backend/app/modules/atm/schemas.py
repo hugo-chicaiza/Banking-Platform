@@ -37,6 +37,8 @@ class ATMAuthResponse(CamelModel):
     session_token: str
     expires_in: Literal[300] = 300
     titular: str
+    # PIN temporal (A-05): la sesión solo sirve para cambiar el PIN (ATM-06)
+    cambio_pin_requerido: bool = False
     cuentas: list[CuentaATM]
 
 

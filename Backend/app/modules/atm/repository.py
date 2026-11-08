@@ -88,6 +88,8 @@ def obtener_tarjeta(
             t.NombresTitular AS nombres_titular,
             t.ApellidosTitular AS apellidos_titular,
             t.PinAsignado AS pin_asignado,
+            t.TipoTarjeta AS tipo_tarjeta,
+            t.FechaEmision AS fecha_emision,
             t.FechaExpiracion AS fecha_expiracion,
             t.Estado AS estado_tarjeta,
             t.HashNumeroTarjeta AS hash_numero_tarjeta
@@ -142,7 +144,8 @@ def obtener_estado_pin(
             Estado AS estado_pin,
             FechaBloqueo AS fecha_bloqueo,
             PINOffset AS pin_offset,
-            ReferenciaClavePVK AS referencia_clave_pvk
+            ReferenciaClavePVK AS referencia_clave_pvk,
+            RequiereCambio AS requiere_cambio
         FROM Tarjetas.TarjetaPIN
         WHERE ID_Tarjeta = :id_tarjeta
     """)
@@ -190,6 +193,42 @@ def bloquear_tarjeta_por_pin(
             ) VALUES (
                 :id, 'Bloqueo', 'Activa', 'Bloqueada',
                 'Bloqueo por intentos de PIN en ATM', :canal, :usuario, :ip
+            )
+        """),
+        {"id": id_tarjeta, "canal": id_canal, "usuario": usuario, "ip": ip},
+    )
+
+
+def activar_tarjeta_credito(
+    conn: Connection,
+    id_tarjeta: int,
+    id_canal: int,
+    usuario: int,
+    ip: str | None,
+) -> None:
+    """A-05: Generada → Activa al cumplir el plazo, con TarjetaHis, en la transacción
+    del llamador. Idempotente: si otra petición ya la activó, no hace nada.
+    """
+    activada = conn.execute(
+        text(
+            """
+            UPDATE Tarjeta.Tarjeta SET Estado = 'Activa'
+            WHERE IdTarjeta = :id AND Estado = 'Generada' AND TipoTarjeta = 'Credito'
+            """
+        ),
+        {"id": id_tarjeta},
+    )
+    if activada.rowcount != 1:
+        return
+    conn.execute(
+        text("""
+            INSERT INTO Tarjeta.TarjetaHis (
+                IdTarjeta, TipoEvento, EstadoAnterior, EstadoActual, Descripcion,
+                IdCanal, RealizadoPor, DireccionIP
+            ) VALUES (
+                :id, 'Activacion', 'Generada', 'Activa',
+                'Activación automática: 3 días laborables desde la emisión',
+                :canal, :usuario, :ip
             )
         """),
         {"id": id_tarjeta, "canal": id_canal, "usuario": usuario, "ip": ip},
@@ -263,7 +302,8 @@ def obtener_pin_para_verificacion(
             IntentosFallidos AS intentos_fallidos,
             Estado AS estado_pin,
             PINOffset AS pin_offset,
-            ReferenciaClavePVK AS referencia_clave_pvk
+            ReferenciaClavePVK AS referencia_clave_pvk,
+            RequiereCambio AS requiere_cambio
         FROM Tarjetas.TarjetaPIN WITH (UPDLOCK, ROWLOCK)
         WHERE ID_Tarjeta = :id_tarjeta
     """)

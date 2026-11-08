@@ -10,7 +10,7 @@ from app.core.security import audit
 from app.main import app
 from app.modules.tarjetas import repository, router
 from tests.sesion import ID_AUDITORIA, simular_sesion
-from tests.tarjetas_hsm import body_pin, instalar
+from tests.tarjetas_hsm import instalar
 from tests.unit.test_tarjetas import BASE, FILA, PAYLOAD
 
 EVENTO = audit.EventoAuditoria(
@@ -85,10 +85,11 @@ def test_fallo_de_auditoria_no_rompe_ni_filtra_parametros(monkeypatch, caplog):
 
 def test_escritura_exitosa_se_audita(monkeypatch, eventos_auditados):
     c = _cliente(monkeypatch)
-    monkeypatch.setattr(repository, "obtener_tarjeta", lambda _c, _i, **_k: FILA)
-    monkeypatch.setattr(repository, "marcar_pin_asignado", lambda _c, _i: True)
+    activa = {**FILA, "estado_actual": "Activa", "pin_asignado": True}
+    monkeypatch.setattr(repository, "obtener_tarjeta", lambda _c, _i, **_k: activa)
+    monkeypatch.setattr(repository, "marcar_pin_asignado", lambda _c, _i: None)
     try:
-        r = c.post(f"{BASE}/301/pin", json=body_pin("7392"))
+        r = c.post(f"{BASE}/301/pin")
     finally:
         app.dependency_overrides.clear()
 
@@ -100,22 +101,22 @@ def test_escritura_exitosa_se_audita(monkeypatch, eventos_auditados):
         "Exitoso",
     )
     assert evento.usuario == ID_AUDITORIA and evento.ip == "testclient"
-    assert "7392" not in str(evento)
+    assert "Regeneración de PIN" in evento.descripcion
 
 
 def test_intento_fallido_se_audita_con_su_codigo(monkeypatch, eventos_auditados):
     c = _cliente(monkeypatch)
+    # FILA está Solicitada: todavía no admite PIN
     monkeypatch.setattr(repository, "obtener_tarjeta", lambda _c, _i, **_k: FILA)
     try:
-        r = c.post(f"{BASE}/301/pin", json=body_pin("1234"))
+        r = c.post(f"{BASE}/301/pin")
     finally:
         app.dependency_overrides.clear()
 
-    assert r.status_code == 422
+    assert r.status_code == 409
     evento = eventos_auditados[0]
     assert evento.resultado == "Fallido"
-    assert evento.descripcion.endswith("PIN_DEBIL")
-    assert "1234" not in str(evento)
+    assert evento.descripcion.endswith("PIN_NO_PERMITIDO")
 
 
 def test_emision_rechazada_se_audita_sin_id(monkeypatch, eventos_auditados):
