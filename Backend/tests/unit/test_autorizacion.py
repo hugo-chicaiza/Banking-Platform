@@ -24,8 +24,8 @@ _PUBLICAS = {
     ("GET", "/api/v1/auth/callback"),
     ("POST", "/api/v1/auth/logout"),  # AUT-03: idempotente, sin sesión responde 200
 }
-# ATM autentica un terminal por HTTPS y credencial propia, sin sesión WorkOS.
-_TERMINALES = {("POST", "/api/v1/atm/auth")}
+# ATM usa credencial de terminal en auth y JWT en logout, sin sesión WorkOS.
+_TERMINALES = {("POST", "/api/v1/atm/auth"), ("POST", "/api/v1/atm/logout")}
 _VALORES_PATH = {"codigo_pais": "ECU", "fecha": "2026-11-04"}
 
 # Roles de cada tarea (GitHubProject_Files)
@@ -280,6 +280,16 @@ def test_atm_registrado_exige_credencial_aun_con_sesion_workos(
     assert _code(respuesta) == "TERMINAL_NO_AUTORIZADO"
     assert eventos_auditados[-1].accion == "ACCESO_DENEGADO"
     assert "/api/v1/atm/auth" in app.openapi()["paths"]
+
+
+def test_logout_exige_jwt_atm_aun_con_sesion_workos(client):
+    simular_sesion(app, USUARIO)
+    respuesta = client.post("https://testserver/api/v1/atm/logout")
+    assert respuesta.status_code == 401
+    assert _code(respuesta) == "SESION_ATM_INVALIDA"
+    assert (
+        app.openapi()["paths"]["/api/v1/atm/logout"]["post"]["operationId"] == "ATM09"
+    )
 
 
 @pytest.mark.parametrize(

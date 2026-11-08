@@ -1,11 +1,11 @@
-"""ATM-01: credencial individual, PIN Block y sesión ATM independiente de WorkOS."""
+"""ATM-01/09: autenticación y logout de sesiones ATM independientes de WorkOS."""
 
 import asyncio
 import json
 from dataclasses import dataclass
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Request, Response
 from pydantic import ValidationError
 
 from app.core.api.errors import RESPUESTAS_ERROR, ProblemDetailsRoute, problema
@@ -127,3 +127,39 @@ def autenticar_atm(
         )
     revalidar_terminal(solicitud.terminal)
     return emisor.emitir(acceso)
+
+
+async def leer_logout_atm(
+    request: Request,
+    sesion: Annotated[session.SesionATM, Depends(session.autenticar_sesion_atm)],
+) -> session.SesionATM:
+    if request.query_params:
+        raise problema(
+            400, "DATOS_INVALIDOS", "La solicitud no admite parámetros ni cuerpo."
+        )
+    async for fragmento in request.stream():
+        if fragmento:
+            raise problema(
+                400, "DATOS_INVALIDOS", "La solicitud no admite parámetros ni cuerpo."
+            )
+    return sesion
+
+
+@router.post(
+    "/logout",
+    status_code=204,
+    response_class=Response,
+    operation_id="ATM09",
+    responses={
+        503: {
+            "description": "No se pudo comprobar o revocar la sesión ATM.",
+            "content": RESPUESTAS_ERROR[500]["content"],
+        }
+    },
+)
+def cerrar_sesion_atm(
+    sesion: Annotated[session.SesionATM, Depends(leer_logout_atm)],
+) -> Response:
+    # Un JWT ya revocado sigue siendo válido para repetir logout mientras no venza.
+    session.revocar_sesion_atm(sesion)
+    return Response(status_code=204)
