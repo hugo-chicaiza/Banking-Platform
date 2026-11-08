@@ -87,6 +87,10 @@ Formato ProblemDetails (ver F-04). Además de 400/401/403:
 | 422 | `CLAVE_NO_AUTORIZADA` | La referencia de clave no está autorizada |
 | 503 | `HSM_NO_DISPONIBLE` | No se puede completar el procesamiento criptográfico |
 
+## Prueba pendiente
+
+- [ ] Con ATM-06 terminado, probar la activación de débito de punta a punta: aprobar (TAR-04) → descargar el sobre (TAR-07) → ATM-01 con el PIN temporal (`cambioPinRequerido: true`) → ATM-06 → la tarjeta pasa de `Generada` a `Activa`, TAR-06 muestra `CambioPin` con `origen: Cliente` y el PIN temporal deja de servir.
+
 ## Definición de terminado
 
 - [ ] Coincide con `openapi.yaml` (request, response y errores)
