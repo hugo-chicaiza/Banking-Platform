@@ -1,4 +1,4 @@
-"""Emisión local de JWT ATM. No autentica terminales ni registra endpoints.
+"""Emisión, validación y revocación de JWT ATM, independientes de WorkOS y HSM.
 
 El llamador debe autenticar el terminal y validar tarjeta, PIN y cuentas antes de
 entregar AccesoATMValidado. La clave de firma no se comparte con WorkOS ni el HSM.
@@ -7,19 +7,146 @@ entregar AccesoATMValidado. La clave de firma no se comparte con WorkOS ni el HS
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from typing import Annotated
 
 import jwt
 from cryptography.exceptions import UnsupportedAlgorithm
 from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey
 from cryptography.hazmat.primitives.serialization import load_pem_private_key
+from fastapi import Depends, HTTPException, Request, Security
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jwt.exceptions import PyJWTError
+from sqlalchemy.exc import SQLAlchemyError
 
 from app.core.api.errors import problema
 from app.core.config.settings import get_settings
+from app.core.database.db import get_engine
+from app.modules.atm import repository
 from app.modules.atm.schemas import ATMAuthResponse
 from app.modules.atm.service import AccesoATMValidado
 
 DURACION_SESION_ATM = 300
+_bearer = HTTPBearer(auto_error=False, scheme_name="SesionATM", bearerFormat="JWT")
+
+
+@dataclass(frozen=True, repr=False)
+class SesionATM:
+    jti: str
+    fecha_expiracion: datetime
+    id_atm: int
+    id_tarjeta: int
+    cuentas: tuple[int, ...]
+
+
+def _sesion_invalida() -> HTTPException:
+    error = problema(401, "SESION_ATM_INVALIDA", "Se requiere una sesión ATM válida.")
+    error.headers = {"WWW-Authenticate": "Bearer"}
+    return error
+
+
+def validar_jwt_atm(token: str) -> SesionATM:
+    """Autenticidad y vigencia; no consulta revocaciones ni utiliza WorkOS/HSM."""
+    emisor = preparar_emisor_atm()
+    try:
+        datos = jwt.decode(
+            token,
+            emisor.clave.public_key(),
+            algorithms=["RS256"],
+            issuer=emisor.issuer,
+            audience=emisor.audience,
+            options={
+                "require": [
+                    "iss",
+                    "aud",
+                    "iat",
+                    "exp",
+                    "jti",
+                    "scope",
+                    "idATM",
+                    "idTarjeta",
+                    "cuentas",
+                ],
+                "strict_aud": True,
+            },
+            leeway=0,
+        )
+        jti = datos["jti"]
+        identificador = uuid.UUID(jti)
+        cuentas = datos["cuentas"]
+        if (
+            identificador.version != 4
+            or str(identificador) != jti
+            or datos["scope"] != "atm"
+            or type(datos["iat"]) is not int
+            or type(datos["exp"]) is not int
+            or datos["exp"] - datos["iat"] != DURACION_SESION_ATM
+            or not isinstance(cuentas, list)
+            or not cuentas
+            or any(
+                type(i) is not int or i <= 0
+                for i in [datos["idATM"], datos["idTarjeta"], *cuentas]
+            )
+            or len(set(cuentas)) != len(cuentas)
+        ):
+            raise ValueError("Claims inválidos")
+        return SesionATM(
+            jti,
+            datetime.fromtimestamp(datos["exp"], UTC),
+            datos["idATM"],
+            datos["idTarjeta"],
+            tuple(cuentas),
+        )
+    except (PyJWTError, ValueError, TypeError, AttributeError, OverflowError, OSError):
+        raise _sesion_invalida() from None
+
+
+def autenticar_sesion_atm(
+    request: Request,
+    _documentado: Annotated[HTTPAuthorizationCredentials | None, Security(_bearer)],
+) -> SesionATM:
+    valores = [
+        v for k, v in request.scope.get("headers", []) if k.lower() == b"authorization"
+    ]
+    if len(valores) != 1 or len(valores[0]) > 8192:
+        raise _sesion_invalida()
+    try:
+        esquema, token = valores[0].decode("ascii").split(" ")
+        if esquema.lower() != "bearer" or not token:
+            raise ValueError("Cabecera inválida")
+    except (ValueError, UnicodeError):
+        raise _sesion_invalida() from None
+    if request.scope.get("scheme") != "https":
+        raise problema(400, "HTTPS_REQUERIDO", "Se requiere HTTPS.")
+    return validar_jwt_atm(token)
+
+
+def _revocaciones_no_disponibles() -> HTTPException:
+    return problema(
+        503, "SESION_ATM_NO_DISPONIBLE", "No se pudo comprobar la sesión ATM."
+    )
+
+
+def require_sesion_atm(
+    sesion: Annotated[SesionATM, Depends(autenticar_sesion_atm)],
+) -> SesionATM:
+    """Dependencia obligatoria de operaciones ATM con sesión; no usar en logout."""
+    try:
+        with get_engine("seguridad").connect() as conn:
+            revocada = repository.sesion_atm_revocada(conn, sesion.jti)
+    except SQLAlchemyError:
+        raise _revocaciones_no_disponibles() from None
+    if revocada:
+        raise _sesion_invalida()
+    return sesion
+
+
+def revocar_sesion_atm(sesion: SesionATM) -> None:
+    try:
+        with get_engine("seguridad").begin() as conn:
+            repository.revocar_sesion_atm(conn, sesion.jti, sesion.fecha_expiracion)
+    except SQLAlchemyError:
+        # También captura fallos de commit: nunca responder 204 antes de confirmar.
+        raise _revocaciones_no_disponibles() from None
 
 
 def preparar_emisor_atm() -> "EmisorSesionATM":

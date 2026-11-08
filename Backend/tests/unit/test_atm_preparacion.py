@@ -178,8 +178,11 @@ def test_lector_http_rechaza_content_type_y_query(client):
     )
 
 
-def test_router_publica_solo_auth():
-    assert [cast(APIRoute, ruta).path for ruta in router.router.routes] == ["/atm/auth"]
+def test_router_publica_auth_y_logout():
+    assert [cast(APIRoute, ruta).path for ruta in router.router.routes] == [
+        "/atm/auth",
+        "/atm/logout",
+    ]
 
 
 @pytest.fixture

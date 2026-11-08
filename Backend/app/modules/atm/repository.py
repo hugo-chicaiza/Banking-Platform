@@ -1,6 +1,41 @@
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import Connection, text
+
+
+def sesion_atm_revocada(conn: Connection, jti: str) -> bool:
+    """Leer siempre del primario, sin caché ni lecturas sucias."""
+    return (
+        conn.execute(
+            text("SELECT 1 FROM Seguridad.SesionesATMRevocadas WHERE Jti = :jti"),
+            {"jti": jti},
+        ).scalar_one_or_none()
+        is not None
+    )
+
+
+def revocar_sesion_atm(conn: Connection, jti: str, expiracion: datetime) -> None:
+    """Transacción del llamador: serializa inserciones del mismo Jti mediante PK.
+
+    HOLDLOCK protege también el rango cuando todavía no existe la fila. Nunca
+    actualizar la fecha de una revocación existente ni extender su expiración.
+    """
+    existe = conn.execute(
+        text("""
+            SELECT 1 FROM Seguridad.SesionesATMRevocadas WITH (UPDLOCK, HOLDLOCK)
+            WHERE Jti = :jti
+        """),
+        {"jti": jti},
+    ).scalar_one_or_none()
+    if existe is None:
+        conn.execute(
+            text("""
+                INSERT INTO Seguridad.SesionesATMRevocadas (Jti, FechaExpiracion)
+                VALUES (:jti, :expiracion)
+            """),
+            {"jti": jti, "expiracion": expiracion.astimezone(UTC).replace(tzinfo=None)},
+        )
 
 
 def obtener_atm(
