@@ -35,7 +35,7 @@ Cambio de PIN en el cajero. Es también el paso que **activa una tarjeta de déb
 4. PIN nuevo de 4 dígitos y no trivial → `422 PIN_DEBIL`. El Offset nuevo se calcula con `hsm.generar_offset(pinBlockNuevo, keyReference, pan)`, que ya rechaza los PIN triviales.
 5. El PIN nuevo debe ser distinto del actual → `422 PIN_DEBIL`. Con el mismo PAN y la misma PVK, el mismo PIN da el mismo Offset: basta comparar el Offset nuevo con el guardado.
 6. **Activación de débito:** si la tarjeta es de débito, está `Generada` y el PIN era temporal (`RequiereCambio = 1`), pasa a `Activa` con `TarjetaHis` (`Activacion`, “Activación por primer cambio de PIN”, canal ATM).
-7. Se guarda el Offset nuevo con `RequiereCambio = 0`, `IntentosFallidos = 0` y `FechaUltimoCambio`; se registra `TarjetaHis` (`CambioPin`) sin el PIN.
+7. Se guarda el Offset nuevo con `RequiereCambio = 0`, `IntentosFallidos = 0` y `FechaUltimoCambio`; se registra `TarjetaHis` (`CambioPin`, `Descripcion = 'Cambio de PIN en ATM'`, que TAR-06 muestra como `origen: Cliente`) sin el PIN.
 8. Orden de escritura: primero la activación en `CooperativaDB` y luego el Offset en `SeguridadDB`. Si falla `SeguridadDB`, la tarjeta queda activa con el PIN temporal: el siguiente ATM-01 vuelve a abrir la sesión restringida y el cambio se puede repetir.
 9. Si la sesión era restringida, se revoca después del cambio (`revocar_sesion_atm`): el cliente vuelve a autenticarse con el PIN nuevo (ATM-01) para operar.
 10. Nunca registrar PAN, PIN, PIN Blocks, PIN Offset ni el token en logs, URLs ni errores.
