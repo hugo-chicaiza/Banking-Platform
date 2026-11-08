@@ -26,6 +26,7 @@ BASE = "/api/v1/tarjetas"
 PAYLOAD = {
     "idCuenta": 4,
     "idProducto": 4,
+    "idSubProducto": 3,
     "tipoTarjeta": "Debito",
     "nombreTarjeta": "MARIA MENDOZA",
 }
@@ -53,7 +54,13 @@ FILA = {
     "fecha_emision": date(2026, 11, 1),
     "fecha_expiracion": date(2031, 11, 1),
 }
-SUBPRODUCTO = {"id_sub_producto": 3, "id_bin": 1, "codigo_bin": "500000"}
+SUBPRODUCTO = {
+    "id_sub_producto": 3,
+    "estado": "A",
+    "id_bin": 1,
+    "codigo_bin": "500000",
+    "estado_bin": "A",
+}
 
 
 class _Conn:
@@ -112,7 +119,7 @@ def emision(monkeypatch):
         lambda c, i: {"tipo_producto": "Tarjeta", "estado": "A"},
     )
     monkeypatch.setattr(
-        repository, "obtener_subproducto_con_bin", lambda c, i: SUBPRODUCTO
+        repository, "obtener_subproducto_con_bin", lambda c, i, s: SUBPRODUCTO
     )
     monkeypatch.setattr(repository, "obtener_tarjeta", lambda c, i, **k: FILA)
     monkeypatch.setattr(repository, "existe_ciudad", lambda c, i: True)
@@ -289,12 +296,55 @@ def test_emitir_producto_incorrecto_422(client, emision, monkeypatch, producto):
     assert r.status_code == 422 and _code(r) == "PRODUCTO_NO_ES_TARJETA"
 
 
-def test_emitir_sin_bin_activo_422(client, emision, monkeypatch):
-    monkeypatch.setattr(repository, "obtener_subproducto_con_bin", lambda c, i: None)
+def test_emitir_usa_el_subproducto_elegido(client, emision, monkeypatch):
+    recibido = {}
+
+    def subproducto(_c, id_producto, id_sub_producto):
+        recibido.update(producto=id_producto, sub=id_sub_producto)
+        return {**SUBPRODUCTO, "id_sub_producto": 6, "codigo_bin": "510000"}
+
+    monkeypatch.setattr(repository, "obtener_subproducto_con_bin", subproducto)
+
+    r = client.post(
+        BASE, json={**PAYLOAD, "idSubProducto": 6, "tipoTarjeta": "Credito"}
+    )
+
+    assert r.status_code == 201
+    assert recibido == {"producto": 4, "sub": 6}
+    assert emision["tarjeta"]["id_sub_producto"] == 6
+    assert emision["tarjeta"]["id_bin"] == 1
+
+
+def test_emitir_subproducto_inexistente_o_de_otro_producto_422(
+    client, emision, monkeypatch
+):
+    monkeypatch.setattr(repository, "obtener_subproducto_con_bin", lambda c, i, s: None)
+
+    r = client.post(BASE, json=PAYLOAD)
+
+    assert r.status_code == 422 and _code(r) == "SUBPRODUCTO_NO_ENCONTRADO"
+
+
+@pytest.mark.parametrize(
+    "cambio",
+    [{"estado": "I"}, {"id_bin": None, "estado_bin": None}, {"estado_bin": "I"}],
+)
+def test_emitir_subproducto_sin_bin_activo_422(client, emision, monkeypatch, cambio):
+    monkeypatch.setattr(
+        repository,
+        "obtener_subproducto_con_bin",
+        lambda c, i, s: {**SUBPRODUCTO, **cambio},
+    )
 
     r = client.post(BASE, json=PAYLOAD)
 
     assert r.status_code == 422 and _code(r) == "BIN_INVALIDO"
+
+
+def test_emitir_sin_subproducto_400(client, emision):
+    cuerpo = {k: v for k, v in PAYLOAD.items() if k != "idSubProducto"}
+
+    assert client.post(BASE, json=cuerpo).status_code == 400
 
 
 def _error_db(mensaje: str) -> DBAPIError:

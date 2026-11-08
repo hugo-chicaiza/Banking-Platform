@@ -93,17 +93,22 @@ def datos(bd) -> dict[str, int]:
     id_cuenta = coop.execute(
         text("SELECT TOP 1 IdCuenta FROM Cuentas.Cuenta WHERE Estado = 'Activa'")
     ).scalar_one()
-    id_producto = coop.execute(
+    id_producto, id_sub_producto = coop.execute(
         text(
             """
-            SELECT TOP 1 p.IdProducto
+            SELECT TOP 1 p.IdProducto, s.IdSubProducto
             FROM ProductosFinancieros.Producto AS p
             JOIN ProductosFinancieros.SubProducto AS s ON s.IdProducto = p.IdProducto
-            WHERE p.TipoProducto = 'Tarjeta' AND p.Estado = 'A' AND s.IdBIN IS NOT NULL
+            WHERE p.TipoProducto = 'Tarjeta' AND p.Estado = 'A' AND s.Estado = 'A'
+              AND s.IdBIN IS NOT NULL AND s.CodigoSubProducto LIKE 'TDB%'
             """
         )
-    ).scalar_one()
-    return {"idCuenta": id_cuenta, "idProducto": id_producto}
+    ).one()
+    return {
+        "idCuenta": id_cuenta,
+        "idProducto": id_producto,
+        "idSubProducto": id_sub_producto,
+    }
 
 
 def _emitir(client: TestClient, datos: dict[str, int], **extra: Any) -> dict[str, Any]:
@@ -367,6 +372,61 @@ def test_ciclo_completo_pin_generado_activacion_bloqueo_e_historial(client, bd, 
         {"i": id_tarjeta},
     ).one()
     assert fila[1] is not None and fila[2] == "testclient"
+
+
+def test_credito_usa_su_subproducto_y_su_pin_no_es_temporal(client, bd, datos):
+    coop, seg = bd
+    id_sub_credito = coop.execute(
+        text(
+            """
+            SELECT s.IdSubProducto FROM ProductosFinancieros.SubProducto AS s
+            WHERE s.IdProducto = :p AND s.CodigoSubProducto LIKE 'TCR%'
+            """
+        ),
+        {"p": datos["idProducto"]},
+    ).scalar_one()
+    tarjeta = _emitir(
+        client, {**datos, "idSubProducto": id_sub_credito}, tipoTarjeta="Credito"
+    )
+    fila = coop.execute(
+        text(
+            """
+            SELECT t.IdSubProducto, b.CodigoBIN, t.NumeroEnmascarado
+            FROM Tarjeta.Tarjeta AS t JOIN Tarjeta.BIN AS b ON b.IdBIN = t.IdBIN
+            WHERE t.IdTarjeta = :i
+            """
+        ),
+        {"i": tarjeta["idTarjeta"]},
+    ).one()
+    assert fila[0] == id_sub_credito and fila[2].startswith(fila[1][:4])
+
+    r = client.post(
+        f"{BASE}/{tarjeta['idTarjeta']}/estado",
+        json={"estado": "Aprobada", "motivo": "x"},
+    )
+    assert r.status_code == 200
+    assert _pin_guardado(seg, tarjeta["idTarjeta"])[4] is False
+
+
+def test_subproducto_de_otro_producto_422(client, bd, datos):
+    coop, _ = bd
+    ajeno = coop.execute(
+        text(
+            "SELECT TOP 1 IdSubProducto FROM ProductosFinancieros.SubProducto "
+            "WHERE IdProducto <> :p"
+        ),
+        {"p": datos["idProducto"]},
+    ).scalar_one()
+    r = client.post(
+        BASE,
+        json={
+            **datos,
+            "idSubProducto": ajeno,
+            "tipoTarjeta": "Debito",
+            "nombreTarjeta": "PRUEBA",
+        },
+    )
+    assert r.status_code == 422 and r.json()["code"] == "SUBPRODUCTO_NO_ENCONTRADO"
 
 
 def test_transiciones_y_estados_de_la_bd_coinciden_con_la_api(bd):

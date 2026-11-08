@@ -1,5 +1,7 @@
 from typing import Literal
 
+from pydantic import Field
+
 from app.core.api.schemas import CamelModel, Money
 
 
@@ -50,6 +52,14 @@ class TipoAntecedente(CamelModel):
 TipoProducto = Literal["Cuenta", "Tarjeta", "Credito"]
 
 
+class SubProducto(CamelModel):
+    """Variante que el asesor ofrece del producto (p. ej. Débito o Crédito Mastercard)."""
+
+    id_sub_producto: int
+    codigo_sub_producto: str
+    nombre_sub_producto: str
+
+
 class Producto(CamelModel):
     id_producto: int
     codigo_producto: str
@@ -60,6 +70,7 @@ class Producto(CamelModel):
     id_red: int | None = None
     tipo_cuenta: str | None = None
     permite_operaciones_presenciales: bool
+    subproductos: list[SubProducto] = Field(default_factory=list)
 
 
 class Agencia(CamelModel):

@@ -155,6 +155,13 @@ _PRODUCTO_CUENTA = {
     "id_red": None,
     "tipo_cuenta": "Ahorro",
     "permite_operaciones_presenciales": True,
+    "subproductos": [
+        {
+            "id_sub_producto": 1,
+            "codigo_sub_producto": "AHO001-PN",
+            "nombre_sub_producto": "Ahorro a la vista persona natural",
+        }
+    ],
 }
 
 
@@ -182,6 +189,13 @@ def test_productos_sin_filtro_devuelve_nulos_y_monto_numerico(client, monkeypatc
             "idRed": None,
             "tipoCuenta": "Ahorro",
             "permiteOperacionesPresenciales": True,
+            "subproductos": [
+                {
+                    "idSubProducto": 1,
+                    "codigoSubProducto": "AHO001-PN",
+                    "nombreSubProducto": "Ahorro a la vista persona natural",
+                }
+            ],
         }
     ]
 

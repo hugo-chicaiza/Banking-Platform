@@ -79,8 +79,9 @@ def listar_tipos_antecedente(conn: Connection) -> list[dict[str, Any]]:
 
 
 def listar_productos(conn: Connection, tipo: str | None) -> list[dict[str, Any]]:
-    # CAT-07: solo activos; los campos que no aplican al tipo van en NULL
-    return _rows(
+    # CAT-07: solo activos; los campos que no aplican al tipo van en NULL. Cada
+    # producto lleva sus subproductos activos (lo que el asesor puede ofrecer)
+    productos = _rows(
         conn,
         """
         SELECT IdProducto AS id_producto, CodigoProducto AS codigo_producto,
@@ -98,6 +99,26 @@ def listar_productos(conn: Connection, tipo: str | None) -> list[dict[str, Any]]
         """,
         {"tipo": tipo},
     )
+    subproductos = _rows(
+        conn,
+        """
+        SELECT s.IdProducto AS id_producto, s.IdSubProducto AS id_sub_producto,
+               s.CodigoSubProducto AS codigo_sub_producto,
+               s.NombreSubProducto AS nombre_sub_producto
+        FROM ProductosFinancieros.SubProducto AS s
+        JOIN ProductosFinancieros.Producto AS p ON p.IdProducto = s.IdProducto
+        WHERE s.Estado = 'A' AND p.Estado = 'A'
+          AND (:tipo IS NULL OR p.TipoProducto = :tipo)
+        ORDER BY s.NombreSubProducto
+        """,
+        {"tipo": tipo},
+    )
+    por_producto: dict[int, list[dict[str, Any]]] = {}
+    for sub in subproductos:
+        por_producto.setdefault(sub.pop("id_producto"), []).append(sub)
+    for producto in productos:
+        producto["subproductos"] = por_producto.get(producto["id_producto"], [])
+    return productos
 
 
 def listar_canales(conn: Connection) -> list[dict[str, Any]]:

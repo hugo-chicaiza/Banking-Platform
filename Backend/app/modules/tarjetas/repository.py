@@ -103,20 +103,19 @@ def obtener_producto(conn: Connection, id_producto: int) -> dict[str, Any] | Non
 
 
 def obtener_subproducto_con_bin(
-    conn: Connection, id_producto: int
+    conn: Connection, id_producto: int, id_sub_producto: int
 ) -> dict[str, Any] | None:
-    """Primer subproducto activo del producto cuyo BIN también está activo."""
+    """Subproducto elegido, solo si pertenece al producto; con su BIN y estados."""
     return _one(
         conn,
         """
-        SELECT TOP 1 s.IdSubProducto AS id_sub_producto, b.IdBIN AS id_bin,
-               b.CodigoBIN AS codigo_bin
+        SELECT s.IdSubProducto AS id_sub_producto, s.Estado AS estado,
+               b.IdBIN AS id_bin, b.CodigoBIN AS codigo_bin, b.Estado AS estado_bin
         FROM ProductosFinancieros.SubProducto AS s
-        JOIN Tarjeta.BIN AS b ON b.IdBIN = s.IdBIN
-        WHERE s.IdProducto = :id_producto AND s.Estado = 'A' AND b.Estado = 'A'
-        ORDER BY s.IdSubProducto
+        LEFT JOIN Tarjeta.BIN AS b ON b.IdBIN = s.IdBIN
+        WHERE s.IdSubProducto = :id_sub_producto AND s.IdProducto = :id_producto
         """,
-        {"id_producto": id_producto},
+        {"id_producto": id_producto, "id_sub_producto": id_sub_producto},
     )
 
 

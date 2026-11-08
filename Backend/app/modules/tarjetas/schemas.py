@@ -54,6 +54,8 @@ class TarjetaCreate(_Entrada):
 
     id_cuenta: IdEntero
     id_producto: IdEntero
+    # Subproducto del producto Tarjeta (p. ej. Débito o Crédito Mastercard): define el BIN
+    id_sub_producto: IdEntero
     tipo_tarjeta: TipoTarjeta
     nombre_tarjeta: Annotated[
         str,

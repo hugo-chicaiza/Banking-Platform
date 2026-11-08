@@ -312,10 +312,22 @@ def _emitir(
                 422, "PRODUCTO_NO_ES_TARJETA", "El producto no es de tipo Tarjeta."
             )
 
-        subproducto = repository.obtener_subproducto_con_bin(conn, payload.id_producto)
+        subproducto = repository.obtener_subproducto_con_bin(
+            conn, payload.id_producto, payload.id_sub_producto
+        )
         if subproducto is None:
             raise problema(
-                422, "BIN_INVALIDO", "El producto no tiene un BIN activo asociado."
+                422,
+                "SUBPRODUCTO_NO_ENCONTRADO",
+                "El subproducto no existe o no pertenece al producto.",
+            )
+        if (
+            subproducto["estado"] != "A"
+            or subproducto["id_bin"] is None
+            or subproducto["estado_bin"] != "A"
+        ):
+            raise problema(
+                422, "BIN_INVALIDO", "El subproducto no tiene un BIN activo asociado."
             )
 
         _validar_extension(conn, payload)
