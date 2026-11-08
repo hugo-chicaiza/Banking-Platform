@@ -34,7 +34,7 @@ La implementación utiliza PAN ficticios y un HSM simulado durante el desarrollo
 ## Reglas de negocio
 
 1. La cuenta debe estar `Activa` y pertenecer al cliente → `409 CUENTA_NO_ACTIVA`.
-2. El producto debe ser de tipo `Tarjeta` → `422 PRODUCTO_NO_ES_TARJETA`. El asesor elige el subproducto (p. ej. `TDB001-MC` Débito Mastercard o `TCR001-MC` Crédito Mastercard, listados en CAT-07 con `tipo=Tarjeta`): debe pertenecer al producto → `422 SUBPRODUCTO_NO_ENCONTRADO`, y estar activo con un BIN activo → `422 BIN_INVALIDO`. El BIN de la tarjeta es el del subproducto (DB 52004).
+2. El producto debe ser de tipo `Tarjeta` → `422 PRODUCTO_NO_ES_TARJETA`. El asesor elige el subproducto (p. ej. `TDB001-MC` Débito Mastercard o `TCR001-MC` Crédito Mastercard, listados en CAT-07 con `tipo=Tarjeta`): debe pertenecer al producto → `422 SUBPRODUCTO_NO_ENCONTRADO`, y estar activo con un BIN activo → `422 BIN_INVALIDO`. El `tipoTarjeta` debe coincidir con el del subproducto (`TDB…` = Débito, `TCR…` = Crédito, ver CAT-07) → `422 TIPO_TARJETA_NO_COINCIDE`. El BIN de la tarjeta es el del subproducto (DB 52004). El formulario pide primero el tipo y ofrece solo sus subproductos (`GET /catalogos/productos?tipoTarjeta=…`).
 3. El sistema generará un PAN ficticio con el BIN correspondiente y un dígito de control válido, calculado mediante el algoritmo de Luhn. Se utilizarán exclusivamente rangos de prueba autorizados; no se emitirán PAN de tarjetas bancarias reales.
 4. En `Tarjeta.Tarjeta` únicamente se almacenarán `TokenTarjeta`, `NumeroEnmascarado` y `HashNumeroTarjeta` (SHA-256) como representaciones del número de tarjeta. El PAN completo no se almacenará en esta tabla ni se devolverá en las respuestas.
 5. **Custodia del PAN para pruebas:** el PAN ficticio se conservará en un repositorio aislado de desarrollo y pruebas, asociado a `IdTarjeta`, con acceso restringido a los componentes autorizados. Este repositorio no estará habilitado en producción.
@@ -123,6 +123,7 @@ Formato ProblemDetails (ver F-04). Además de 400/401/403:
 | 422 | `PRODUCTO_NO_ES_TARJETA` | El producto no es de tipo Tarjeta |
 | 422 | `SUBPRODUCTO_NO_ENCONTRADO` | El subproducto no existe o no pertenece al producto |
 | 422 | `BIN_INVALIDO` | El subproducto está inactivo o no tiene un BIN activo |
+| 422 | `TIPO_TARJETA_NO_COINCIDE` | `tipoTarjeta` no corresponde al subproducto elegido |
 | 422 | `EXTENSION_REQUIERE_TITULAR` | Una extensión necesita una tarjeta titular válida |
 | 503 | `PAN_NO_DISPONIBLE` | No se pudo completar la generación o custodia del PAN ficticio |
 
