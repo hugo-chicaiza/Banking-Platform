@@ -6,6 +6,7 @@ no tiene repository.py. Nunca se registran tokens, codes ni cookies en logs.
 
 import base64
 import binascii
+import hashlib
 import logging
 import re
 import secrets
@@ -33,6 +34,7 @@ logger = logging.getLogger(__name__)
 
 # Ruta interna del FE: empieza con "/"
 _RUTA_INTERNA = re.compile(r"^/(?![/\\])[!-\[\]-~]{0,511}$")
+_VERIFICADOR_PKCE = re.compile(r"[A-Za-z0-9_-]{43}")
 _RUTA_POR_DEFECTO = "/"
 _RUTA_LOGIN = "/login"
 _TABLA_AUDITORIA = "WorkOS.Sesiones"
@@ -73,28 +75,37 @@ def _auditar(
 def iniciar_login(return_to: str | None) -> tuple[str, str]:
     """Devuelve la URL del Hosted UI y el valor de la cookie de state.
 
-    La cookie guarda el state y la ruta de regreso; el callback los compara.
+    La cookie guarda el state, el verificador PKCE y la ruta de regreso.
     """
     state = secrets.token_urlsafe(32)
+    verificador = secrets.token_urlsafe(32)
+    resumen = hashlib.sha256(verificador.encode("ascii")).digest()
+    desafio = base64.urlsafe_b64encode(resumen).decode("ascii").rstrip("=")
     # Sin el relleno "=": así el valor de la cookie no necesita comillas
     ruta = ruta_segura(return_to).encode()
     destino = base64.urlsafe_b64encode(ruta).decode().rstrip("=")
     url = get_workos().user_management.get_authorization_url(
-        provider="authkit", redirect_uri=get_redirect_uri(), state=state
+        provider="authkit",
+        redirect_uri=get_redirect_uri(),
+        state=state,
+        code_challenge=desafio,
     )
-    return url, f"{state}.{destino}"
+    return url, f"{state}.{verificador}.{destino}"
 
 
-def _leer_cookie_state(valor: str | None) -> tuple[str, str] | None:
-    if not valor or "." not in valor:
+def _leer_cookie_state(valor: str | None) -> tuple[str, str, str] | None:
+    partes = (valor or "").split(".", 2)
+    if len(partes) != 3:
         return None
-    state, destino = valor.split(".", 1)
+    state, verificador, destino = partes
+    if not _VERIFICADOR_PKCE.fullmatch(verificador):
+        return None
     try:
         relleno = "=" * (-len(destino) % 4)
         ruta = base64.urlsafe_b64decode((destino + relleno).encode()).decode()
     except (binascii.Error, UnicodeDecodeError):
         return None
-    return state, ruta_segura(ruta)
+    return state, verificador, ruta_segura(ruta)
 
 
 def completar_login(
@@ -124,9 +135,11 @@ def completar_login(
     ):
         return fallo("SOLICITUD_INVALIDA", "state")
 
+    _, verificador, ruta = guardado
     try:
         resultado = get_workos().user_management.authenticate_with_code(
             code=code,
+            code_verifier=verificador,
             session={"seal_session": True, "cookie_password": get_cookie_password()},
             ip_address=ip,
             user_agent=user_agent,
@@ -152,7 +165,7 @@ def completar_login(
         ip,
     )
     logger.info("auth: login usuario=%s", resultado.user.id)
-    return f"{get_frontend_url()}{guardado[1]}", resultado.sealed_session
+    return f"{get_frontend_url()}{ruta}", resultado.sealed_session
 
 
 # --- AUT-02 refresh ----------------------------------------------------------------
