@@ -140,7 +140,13 @@ def emitir_tarjeta(
         Depends(require_roles("ASESOR", "SUPERVISOR", "ADMIN")),
         Depends(
             solo_parametros(
-                "idCliente", "idCuenta", "estado", "page", "pageSize", "sort"
+                "idCliente",
+                "idCuenta",
+                "estado",
+                "esExtension",
+                "page",
+                "pageSize",
+                "sort",
             )
         ),
     ],
@@ -152,13 +158,16 @@ def buscar_tarjetas(
     ] = None,
     id_cuenta: Annotated[int | None, Query(alias="idCuenta", gt=0, le=MAX_INT)] = None,
     estado: EstadoTarjeta | None = None,
+    es_extension: Annotated[bool | None, Query(alias="esExtension")] = None,
     page: Page = 1,
     page_size: PageSize = 20,
     sort: Sort = None,
 ) -> Any:
-    """Busca tarjetas. Los filtros se pueden combinar."""
+    """Busca tarjetas. Los filtros se pueden combinar. esExtension=false deja solo
+    las principales (las que pueden ser titulares de una extensión).
+    """
     return service.buscar_tarjetas(
-        conn, id_cliente, id_cuenta, estado, page, page_size, sort
+        conn, id_cliente, id_cuenta, estado, page, page_size, sort, es_extension
     )
 
 

@@ -67,6 +67,8 @@ Detalle de tarjeta.
   "idCuenta": 501,
   "idProducto": 4,
   "estadoActual": "Generada",
+  "esExtension": false,
+  "idTarjetaTitular": null,
   "pinAsignado": true,
   "fechaSolicitud": "2026-11-04",
   "fechaResolucion": "2026-11-05T10:15:00",

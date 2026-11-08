@@ -1189,6 +1189,8 @@ def _perfil_mock(**overrides: Any) -> dict[str, Any]:
                 "id_cuenta": 30,
                 "id_producto": 2,
                 "estado_actual": "Activa",
+                "es_extension": False,
+                "id_tarjeta_titular": None,
                 "pin_asignado": True,
                 "fecha_emision": date(2026, 11, 1),
                 "fecha_expiracion": date(2030, 11, 1),

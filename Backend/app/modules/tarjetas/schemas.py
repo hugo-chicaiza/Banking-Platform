@@ -14,6 +14,10 @@ IdEntero = Annotated[StrictInt, Field(gt=0, le=MAX_INT)]
 
 TipoTarjeta = Literal["Debito", "Credito"]
 
+# Largo máximo del nombre impreso: lo que admite el grabado de una tarjeta física
+# (columna Tarjeta.Tarjeta.NombreTarjeta varchar(26))
+MAX_NOMBRE_TARJETA = 26
+
 # Valores de CK_Tarjeta_Estado (F-08). Mantener alineados con la base
 EstadoTarjeta = Literal[
     "Solicitada",
@@ -62,7 +66,7 @@ class TarjetaCreate(_Entrada):
         StringConstraints(
             strip_whitespace=True,
             min_length=1,
-            max_length=50,
+            max_length=MAX_NOMBRE_TARJETA,
             pattern=r"^[A-Za-zÁÉÍÓÚÜÑáéíóúüñ][A-Za-zÁÉÍÓÚÜÑáéíóúüñ .'\-]*$",
         ),
     ]
@@ -125,6 +129,9 @@ class TarjetaResumen(CamelModel):
     numero_enmascarado: str
     estado_actual: EstadoTarjeta
     fecha_emision: date
+    # Extensión (adicional) y su tarjeta titular; las principales llevan False y null
+    es_extension: bool
+    id_tarjeta_titular: int | None = None
 
 
 class Tarjeta(TarjetaResumen):
