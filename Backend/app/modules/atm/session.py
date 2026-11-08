@@ -36,6 +36,8 @@ class SesionATM:
     id_atm: int
     id_tarjeta: int
     cuentas: tuple[int, ...]
+    # Sesión restringida (PIN temporal): solo ATM-06 y ATM-09
+    cambio_pin_requerido: bool = False
 
 
 def _sesion_invalida() -> HTTPException:
@@ -65,6 +67,7 @@ def validar_jwt_atm(token: str) -> SesionATM:
                     "idATM",
                     "idTarjeta",
                     "cuentas",
+                    "cambioPinRequerido",
                 ],
                 "strict_aud": True,
             },
@@ -73,6 +76,7 @@ def validar_jwt_atm(token: str) -> SesionATM:
         jti = datos["jti"]
         identificador = uuid.UUID(jti)
         cuentas = datos["cuentas"]
+        restringida = datos["cambioPinRequerido"]
         if (
             identificador.version != 4
             or str(identificador) != jti
@@ -81,7 +85,9 @@ def validar_jwt_atm(token: str) -> SesionATM:
             or type(datos["exp"]) is not int
             or datos["exp"] - datos["iat"] != DURACION_SESION_ATM
             or not isinstance(cuentas, list)
-            or not cuentas
+            or type(restringida) is not bool
+            # La sesión restringida no lleva cuentas; la normal, al menos una
+            or bool(cuentas) == restringida
             or any(
                 type(i) is not int or i <= 0
                 for i in [datos["idATM"], datos["idTarjeta"], *cuentas]
@@ -95,6 +101,7 @@ def validar_jwt_atm(token: str) -> SesionATM:
             datos["idATM"],
             datos["idTarjeta"],
             tuple(cuentas),
+            restringida,
         )
     except (PyJWTError, ValueError, TypeError, AttributeError, OverflowError, OSError):
         raise _sesion_invalida() from None
@@ -140,6 +147,21 @@ def require_sesion_atm(
     return sesion
 
 
+def require_sesion_operativa(
+    sesion: Annotated[SesionATM, Depends(require_sesion_atm)],
+) -> SesionATM:
+    """Para operaciones con cuentas (ATM-02 a ATM-08, salvo ATM-06): rechaza la sesión
+    restringida de un PIN temporal, que solo sirve para cambiar el PIN o cerrar sesión.
+    """
+    if sesion.cambio_pin_requerido:
+        raise problema(
+            403,
+            "PIN_CAMBIO_REQUERIDO",
+            "Debe cambiar el PIN antes de operar.",
+        )
+    return sesion
+
+
 def revocar_sesion_atm(sesion: SesionATM) -> None:
     try:
         with get_engine("seguridad").begin() as conn:
@@ -178,8 +200,11 @@ class EmisorSesionATM:
     def emitir(self, acceso: AccesoATMValidado) -> ATMAuthResponse:
         ids_cuentas = [cuenta.id_cuenta for cuenta in acceso.cuentas]
         ids = [acceso.id_atm, acceso.id_tarjeta, *ids_cuentas]
+        restringida = acceso.cambio_pin_requerido
         if (
-            not ids_cuentas
+            type(restringida) is not bool
+            # La sesión restringida no lleva cuentas; la normal, al menos una
+            or bool(ids_cuentas) == restringida
             or any(
                 type(identificador) is not int or identificador <= 0
                 for identificador in ids
@@ -200,6 +225,7 @@ class EmisorSesionATM:
             "idATM": acceso.id_atm,
             "idTarjeta": acceso.id_tarjeta,
             "cuentas": ids_cuentas,
+            "cambioPinRequerido": restringida,
         }
         try:
             token = jwt.encode(
@@ -211,6 +237,7 @@ class EmisorSesionATM:
         return ATMAuthResponse(
             session_token=token,
             titular=acceso.titular,
+            cambio_pin_requerido=restringida,
             cuentas=acceso.cuentas,
         )
 

@@ -24,7 +24,7 @@ from app.modules.tarjetas import repository as tarjetas_repository
 from app.modules.tarjetas import service as tarjetas_service
 from app.modules.tarjetas.identificacion import hash_pan
 from app.modules.tarjetas.schemas import TarjetaCreate, TarjetaEstadoUpdate
-from tests.tarjetas_hsm import HSM, PAN, instalar
+from tests.tarjetas_hsm import HSM, PAN, instalar, pin_generado
 from tests.unit.test_tarjetas import CUENTA, FILA, PAYLOAD, SUBPRODUCTO
 
 ACCESO_REAL = service.validar_acceso_atm
@@ -409,23 +409,31 @@ def test_sql_bloqueo_idempotente_parametrizado_y_canal_atm(estado):
         assert BODY["numeroTarjeta"] not in str(params)
 
 
-@pytest.mark.parametrize("confirmar", [True, False])
-def test_tar01_tar05_activacion_y_endpoint_comparten_pan_y_offset(
-    api, monkeypatch, confirmar, caplog
-):
-    """Emisión/asignación/activación y HTTP reales; bases exclusivamente simuladas."""
+@pytest.mark.parametrize("tipo", ["Debito", "Credito"])
+def test_tar01_tar04_atm01_comparten_pan_y_pin_generado(api, monkeypatch, tipo, caplog):
+    """Solicitud, aprobación (PIN generado por el HSM), generación y ATM-01 con HTTP
+    real; bases exclusivamente simuladas.
+
+    Débito: el PIN es temporal y ATM-01 abre la sesión restringida, sin cuentas.
+    Crédito: con 3 días laborables desde la emisión, ATM-01 la activa y opera.
+    """
     e = api
     memoria = instalar(monkeypatch)
     monkeypatch.setattr(service, "validar_acceso_atm", ACCESO_REAL)
     monkeypatch.setattr(service, "get_engine", e.get_engine)
     monkeypatch.setattr(service, "obtener_hsm", lambda: HSM)
-    fila = dict(FILA)
+    fila = {**FILA, "tipo_tarjeta": tipo}
     cooperativa, seguridad = MagicMock(), MagicMock()
     capturado = {}
 
     def insertar(_conn, datos):
         capturado.update(datos)
         return 301
+
+    def actualizar(_c, _i, estado, *, pin_asignado=False, **_kw):
+        fila.update(estado_actual=estado)
+        if pin_asignado:
+            fila.update(pin_asignado=True)
 
     monkeypatch.setattr(tarjetas_service, "_generar_pan", lambda _bin: PAN)
     monkeypatch.setattr(tarjetas_repository, "obtener_cuenta", lambda *_: CUENTA)
@@ -442,23 +450,14 @@ def test_tar01_tar05_activacion_y_endpoint_comparten_pan_y_offset(
     monkeypatch.setattr(
         tarjetas_repository, "obtener_tarjeta", lambda *_, **kw: dict(fila)
     )
-    monkeypatch.setattr(
-        tarjetas_repository,
-        "marcar_pin_asignado",
-        lambda *_: fila.update(pin_asignado=True) or True,
-    )
     monkeypatch.setattr(tarjetas_repository, "existe_transicion", lambda *_: True)
-    monkeypatch.setattr(tarjetas_repository, "existe_tarjeta", lambda *_: True)
-    monkeypatch.setattr(
-        tarjetas_repository,
-        "actualizar_estado",
-        lambda _c, _i, estado: fila.update(estado_actual=estado),
-    )
+    monkeypatch.setattr(tarjetas_repository, "actualizar_estado", actualizar)
+    monkeypatch.setattr(tarjetas_repository, "dias_laborables_desde", lambda *_: 3)
 
     tarjeta = tarjetas_service.crear_tarjeta(
         cooperativa, seguridad, TarjetaCreate.model_validate(PAYLOAD), 900, None
     )
-    assert tarjeta.estado_actual == "Generada"
+    assert tarjeta.estado_actual == "Solicitada"
     assert capturado["hash_pan"] == hash_pan(PAN)
     cifrado, referencia_pan = memoria.pans[301]
     assert HSM.descifrar_pan(cifrado, referencia_pan, 301) == PAN
@@ -468,7 +467,9 @@ def test_tar01_tar05_activacion_y_endpoint_comparten_pan_y_offset(
     def leer_tarjeta(*_):
         return {
             "estado_tarjeta": fila["estado_actual"],
+            "tipo_tarjeta": fila["tipo_tarjeta"],
             "pin_asignado": fila["pin_asignado"],
+            "fecha_emision": fila["fecha_emision"],
             "fecha_expiracion": fila["fecha_expiracion"],
             "nombres_titular": "Titular",
             "apellidos_titular": "Prueba",
@@ -479,8 +480,25 @@ def test_tar01_tar05_activacion_y_endpoint_comparten_pan_y_offset(
         assert digest == capturado["hash_pan"]
         return 301
 
+    def leer_pin(*_):
+        pin = memoria.pin(301)
+        return {
+            "estado_pin": pin["estado"],
+            "intentos_fallidos": 0,
+            "tiene_pin_asignado": True,
+            "pin_offset": pin["offset"],
+            "referencia_clave_pvk": pin["pvk"],
+            "requiere_cambio": pin["requiere_cambio"],
+        }
+
+    def activar(_conn, id_tarjeta, id_canal, usuario, _ip):
+        assert (id_tarjeta, id_canal, usuario) == (301, 4, 900)
+        fila.update(estado_actual="Activa")
+
     monkeypatch.setattr(tarjetas_repository, "obtener_id_tarjeta_por_hash", resolver)
     monkeypatch.setattr(repository, "obtener_tarjeta", leer_tarjeta)
+    monkeypatch.setattr(repository, "obtener_pin_para_verificacion", leer_pin)
+    monkeypatch.setattr(repository, "activar_tarjeta_credito", activar)
     monkeypatch.setattr(
         repository,
         "obtener_atm",
@@ -502,88 +520,54 @@ def test_tar01_tar05_activacion_y_endpoint_comparten_pan_y_offset(
             {"id_cuenta": 77, "numero_cuenta": "000001234", "tipo_cuenta": "Ahorro"}
         ],
     )
+    guardar = MagicMock(return_value={"estado_pin": "Activo", "intentos_fallidos": 0})
+    monkeypatch.setattr(repository, "guardar_resultado_pin", guardar)
 
     body = {**BODY, "numeroTarjeta": PAN}
-    bloque = tarjetas_service.construir_pin_block_prueba(
-        cooperativa, seguridad, 301, SecretStr("7392")
-    )
-    body.update(
-        encryptedPinBlock=bloque.encrypted_pin_block, keyReference=bloque.key_reference
-    )
-    # La tarjeta todavía no está activa.
+    # Solicitada: sin PIN, no opera.
     assert (
         e.client.post("/api/v1/atm/auth", json=body, headers=e.headers).status_code
         == 409
     )
 
-    if not confirmar:
-        monkeypatch.setattr(tarjetas_repository, "confirmar_pin", lambda *_: False)
-    if confirmar:
-        tarjetas_service.asignar_pin(
+    for destino in ("Aprobada", "Generada"):
+        tarjetas_service.cambiar_estado(
             cooperativa,
             seguridad,
             301,
-            SecretStr(bloque.encrypted_pin_block),
-            bloque.key_reference,
+            TarjetaEstadoUpdate(estado=destino, motivo="Prueba local"),
             900,
             None,
         )
-    else:
-        from fastapi import HTTPException
+    assert fila["estado_actual"] == "Generada" and fila["pin_asignado"]
+    assert memoria.pin(301)["requiere_cambio"] is (tipo == "Debito")
 
-        with pytest.raises(HTTPException) as error:
-            tarjetas_service.asignar_pin(
-                cooperativa,
-                seguridad,
-                301,
-                SecretStr(bloque.encrypted_pin_block),
-                bloque.key_reference,
-                900,
-                None,
-            )
-        assert error.value.status_code == 503
-
-    tarjetas_service.cambiar_estado(
-        cooperativa,
-        301,
-        TarjetaEstadoUpdate(estado="Activa", motivo="Prueba local"),
-        900,
-        None,
-    )
-
-    def leer_pin(*_):
-        pin = memoria.pin(301)
-        return {
-            "estado_pin": pin["estado"],
-            "intentos_fallidos": 0,
-            "tiene_pin_asignado": pin["confirmado"],
-            "pin_offset": pin["offset"],
-            "referencia_clave_pvk": pin["pvk"],
-        }
-
-    monkeypatch.setattr(repository, "obtener_pin_para_verificacion", leer_pin)
-    guardar = MagicMock(return_value={"estado_pin": "Activo", "intentos_fallidos": 0})
-    monkeypatch.setattr(repository, "guardar_resultado_pin", guardar)
-    # PIN Block nuevo, mismo PAN/PVK/Offset; se verifica criptografía real.
-    bloque_nuevo, ref = HSM.construir_pin_block("7392", PAN)
-    body.update(encryptedPinBlock=bloque_nuevo, keyReference=ref)
+    # El PIN nadie lo conoce: solo la prueba lo reconstruye para simular al cliente.
+    pin = pin_generado(memoria)
+    bloque, ref = HSM.construir_pin_block(pin, PAN)
+    body.update(encryptedPinBlock=bloque, keyReference=ref)
     respuesta = e.client.post("/api/v1/atm/auth", json=body, headers=e.headers)
-    if confirmar:
-        assert respuesta.status_code == 200, respuesta.text
-        claims = jwt.decode(
-            respuesta.json()["sessionToken"],
-            e.publica,
-            algorithms=["RS256"],
-            issuer="urn:test:atm",
-            audience="urn:test:operations",
-        )
-        assert claims["idTarjeta"] == 301 and claims["idATM"] == 10
-        assert claims["cuentas"] == [77]
-        assert claims["exp"] - claims["iat"] == 300
-        guardar.assert_called_once()
+
+    assert respuesta.status_code == 200, respuesta.text
+    cuerpo = respuesta.json()
+    claims = jwt.decode(
+        cuerpo["sessionToken"],
+        e.publica,
+        algorithms=["RS256"],
+        issuer="urn:test:atm",
+        audience="urn:test:operations",
+    )
+    assert claims["idTarjeta"] == 301 and claims["idATM"] == 10
+    assert claims["exp"] - claims["iat"] == 300
+    guardar.assert_called_once()
+    if tipo == "Debito":
+        # Sesión restringida: solo cambio de PIN; la tarjeta sigue Generada.
+        assert cuerpo["cambioPinRequerido"] is True and cuerpo["cuentas"] == []
+        assert claims["cambioPinRequerido"] is True and claims["cuentas"] == []
+        assert fila["estado_actual"] == "Generada"
     else:
-        assert respuesta.status_code == 409
-        assert respuesta.json()["code"] == "PIN_NO_CONFIGURADO"
-        guardar.assert_not_called()
-    for secreto in (PAN, "7392", bloque_nuevo, e.secret):
+        assert cuerpo["cambioPinRequerido"] is False
+        assert claims["cambioPinRequerido"] is False and claims["cuentas"] == [77]
+        assert fila["estado_actual"] == "Activa"
+    for secreto in (PAN, pin, bloque, e.secret):
         assert secreto not in respuesta.text and secreto not in caplog.text

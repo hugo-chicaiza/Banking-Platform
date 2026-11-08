@@ -18,8 +18,10 @@ from app.core.api.errors import traducir_error_bd
 from app.core.config.settings import get_settings
 from app.core.database.db import cooperativa, get_engine
 from app.core.security import audit
+from app.core.security.hsm import es_pin_debil, obtener_hsm
 from app.main import app
 from app.modules.tarjetas import repository, router
+from app.modules.tarjetas import service as tarjetas_service
 from tests.sesion import ID_AUDITORIA, simular_sesion
 
 pytestmark = pytest.mark.skipif(
@@ -28,16 +30,24 @@ pytestmark = pytest.mark.skipif(
 )
 
 BASE = "/api/v1/tarjetas"
-PIN = "7392"
 
 
-def _pin(client: TestClient, id_tarjeta: int, pin: str) -> dict[str, Any]:
-    """Body de TAR-05 armado por el PIN pad simulado (HSM con las claves del .env)."""
-    r = client.post(
-        "/api/v1/pruebas/pin-block", json={"idTarjeta": id_tarjeta, "pin": pin}
+def _pin_generado(seg: Connection, id_tarjeta: int) -> tuple[str, str, str]:
+    """Solo para pruebas: (PIN, PAN, Offset) del PIN que generó el HSM.
+
+    Nadie puede hacerlo en el sistema; aquí prueba que ATM-01 verificará ese PIN.
+    """
+    hsm: Any = obtener_hsm()
+    offset = seg.execute(
+        text("SELECT PINOffset FROM Tarjetas.TarjetaPIN WHERE ID_Tarjeta = :i"),
+        {"i": id_tarjeta},
+    ).scalar_one()
+    pan = tarjetas_service.pan_de_prueba(seg, id_tarjeta, hsm)
+    natural = hsm._pin_natural(pan)
+    pin = "".join(
+        str((int(n) + int(o)) % 10) for n, o in zip(natural, offset, strict=True)
     )
-    assert r.status_code == 200, r.text
-    return r.json()
+    return pin, pan, offset
 
 
 class _SinCommit:
@@ -116,14 +126,11 @@ def test_auditoria_real_registra_exito_y_fallo(client, bd, datos, monkeypatch):
 
     id_tarjeta = _emitir(client, datos)["idTarjeta"]
     ruta = f"{BASE}/{id_tarjeta}"
-    assert (
-        client.post(f"{ruta}/pin", json=_pin(client, id_tarjeta, "1234")).status_code
-        == 422
-    )
-    assert (
-        client.post(f"{ruta}/pin", json=_pin(client, id_tarjeta, PIN)).status_code
-        == 204
-    )
+    # Solicitada: todavía no admite PIN
+    assert client.post(f"{ruta}/pin").status_code == 409
+    r = client.post(f"{ruta}/estado", json={"estado": "Aprobada", "motivo": "x"})
+    assert r.status_code == 200
+    assert client.post(f"{ruta}/pin").status_code == 204
 
     filas = seg.execute(
         text(
@@ -141,10 +148,14 @@ def test_auditoria_real_registra_exito_y_fallo(client, bd, datos, monkeypatch):
         ("INSERT", "Exitoso"),
         ("UPDATE", "Fallido"),
         ("UPDATE", "Exitoso"),
+        ("UPDATE", "Exitoso"),
     ]
-    assert filas[1][4].endswith("PIN_DEBIL")
+    assert filas[1][4].endswith("PIN_NO_PERMITIDO")
+    assert filas[3][4] == "TAR-05 Regeneración de PIN"
     assert all(f[0] == ID_AUDITORIA and f[3] == "testclient" for f in filas)
-    assert PIN not in str(filas) and "1234" not in str(filas)
+    pin, pan, offset = _pin_generado(seg, id_tarjeta)
+    for secreto in (pin, pan, offset):
+        assert secreto not in str(filas)
 
 
 def test_emision_guarda_solo_token_mascara_y_hash(client, bd, datos):
@@ -155,16 +166,20 @@ def test_emision_guarda_solo_token_mascara_y_hash(client, bd, datos):
         text(
             """
             SELECT Estado, PinAsignado, NumeroEnmascarado, DATALENGTH(HashNumeroTarjeta),
-                   DATEDIFF(year, FechaEmision, FechaExpiracion), IdSubProducto, IdBIN
+                   DATEDIFF(year, FechaEmision, FechaExpiracion), IdSubProducto, IdBIN,
+                   FechaSolicitud, FechaResolucion
             FROM Tarjeta.Tarjeta WHERE IdTarjeta = :i
             """
         ),
         {"i": tarjeta["idTarjeta"]},
     ).one()
-    assert fila[0] == "Generada" and fila[1] is False
+    assert fila[0] == "Solicitada" and fila[1] is False
     assert fila[2] == tarjeta["numeroEnmascarado"] and "*" in fila[2]
     assert fila[3] == 32 and fila[4] == 5
-    assert tarjeta["estadoActual"] == "Generada"
+    assert fila[7] is not None and fila[8] is None
+    assert tarjeta["estadoActual"] == "Solicitada"
+    assert tarjeta["fechaSolicitud"] == fila[7].isoformat()
+    assert tarjeta["fechaResolucion"] is None
     assert tarjeta["tokenTarjeta"].startswith("tok_")
 
 
@@ -239,64 +254,81 @@ def test_emision_cuenta_inexistente_422(client, datos):
     assert r.json()["code"] == "CUENTA_NO_ENCONTRADA"
 
 
-def test_ciclo_completo_pin_activacion_bloqueo_e_historial(client, bd, datos):
-    coop, seg = bd
-    id_tarjeta = _emitir(client, datos)["idTarjeta"]
-    ruta = f"{BASE}/{id_tarjeta}"
-
-    # Activar sin PIN se rechaza
-    r = client.post(f"{ruta}/estado", json={"estado": "Activa", "motivo": "x"})
-    assert r.status_code == 409
-    assert r.json()["code"] == "PIN_NO_ASIGNADO"
-
-    # PIN débil y asignación correcta
-    assert (
-        client.post(f"{ruta}/pin", json=_pin(client, id_tarjeta, "1234")).status_code
-        == 422
-    )
-    assert (
-        client.post(f"{ruta}/pin", json=_pin(client, id_tarjeta, PIN)).status_code
-        == 204
-    )
-
-    guardado = seg.execute(
+def _pin_guardado(seg: Connection, id_tarjeta: int) -> Any:
+    return seg.execute(
         text(
             """
-            SELECT PINOffset, ReferenciaClavePVK, TienePINAsignado, Estado
-            FROM Tarjetas.TarjetaPIN
-            WHERE ID_Tarjeta = :i
+            SELECT PINOffset, ReferenciaClavePVK, TienePINAsignado, Estado,
+                   RequiereCambio, IntentosFallidos
+            FROM Tarjetas.TarjetaPIN WHERE ID_Tarjeta = :i
             """
         ),
         {"i": id_tarjeta},
     ).one()
-    # IBM 3624: solo el Offset de 4 dígitos y la referencia de la PVK, nunca el PIN
-    assert len(guardado[0]) == 4 and guardado[0].isdigit() and guardado[0] != PIN
+
+
+def test_ciclo_completo_pin_generado_activacion_bloqueo_e_historial(client, bd, datos):
+    coop, seg = bd
+    id_tarjeta = _emitir(client, datos)["idTarjeta"]
+    ruta = f"{BASE}/{id_tarjeta}"
+
+    def cambiar(destino: str) -> Any:
+        return client.post(
+            f"{ruta}/estado", json={"estado": destino, "motivo": f"A {destino}"}
+        )
+
+    # Solicitada no se activa
+    assert cambiar("Activa").status_code == 409
+
+    # Aprobar: FechaResolucion y PIN generado por el HSM (débito: temporal)
+    r = cambiar("Aprobada")
+    assert r.status_code == 200, r.text
+    assert r.json()["pinAsignado"] is True and r.json()["fechaResolucion"]
+    guardado = _pin_guardado(seg, id_tarjeta)
+    assert len(guardado[0]) == 4 and guardado[0].isdigit()
     assert guardado[1] == "SIM-PVK-01"
-    assert guardado[2] is True and guardado[3] == "Activo"
-    # El PAN ficticio quedó custodiado cifrado en el repositorio de pruebas
+    assert guardado[2] is True and guardado[3] == "Activo" and guardado[4] is True
+    # El PIN que eligió el HSM no es trivial y ATM-01 lo verifica con ese Offset
+    hsm: Any = obtener_hsm()
+    pin, pan, offset = _pin_generado(seg, id_tarjeta)
+    assert not es_pin_debil(pin)
+    bloque, referencia = hsm.construir_pin_block(pin, pan)
+    assert hsm.verificar_pin(bloque, referencia, pan, offset, "SIM-PVK-01")
+    assert pin not in r.text and offset not in r.text
     custodia = seg.execute(
         text("SELECT ReferenciaClave FROM Pruebas.PanFicticio WHERE IdTarjeta = :i"),
         {"i": id_tarjeta},
     ).one()
     assert custodia[0] == "SIM-PAN-01"
 
-    # El PIN se asigna una sola vez
-    r = client.post(f"{ruta}/pin", json=_pin(client, id_tarjeta, "2580"))
-    assert r.status_code == 409 and r.json()["code"] == "PIN_YA_ASIGNADO"
+    # Generar: fija FechaEmision; activar a mano no se permite
+    r = cambiar("Generada")
+    assert r.status_code == 200 and r.json()["estadoActual"] == "Generada"
+    r = cambiar("Activa")
+    assert r.status_code == 409 and r.json()["code"] == "ACTIVACION_AUTOMATICA"
 
-    # Transiciones válidas, inválida y desbloqueo
+    # ATM-06 (pendiente) activará la tarjeta; aquí se simula con el mismo UPDATE
+    coop.execute(
+        text("UPDATE Tarjeta.Tarjeta SET Estado = 'Activa' WHERE IdTarjeta = :i"),
+        {"i": id_tarjeta},
+    )
+
     for destino, esperado in [
-        ("Activa", 200),
         ("Bloqueada", 200),
         ("Generada", 409),
         ("Activa", 200),
-        ("Cancelada", 200),
-        ("Activa", 409),
     ]:
-        r = client.post(
-            f"{ruta}/estado", json={"estado": destino, "motivo": f"A {destino}"}
-        )
-        assert r.status_code == esperado, (destino, r.text)
+        assert cambiar(destino).status_code == esperado, destino
+
+    # Regenerar el PIN: Offset nuevo, temporal, intentos en cero
+    assert client.post(f"{ruta}/pin").status_code == 204
+    regenerado = _pin_guardado(seg, id_tarjeta)
+    assert regenerado[3] == "Activo" and regenerado[4] is True and regenerado[5] == 0
+
+    assert cambiar("Cancelada").status_code == 200
+    assert cambiar("Activa").status_code == 409
+    r = client.post(f"{ruta}/pin")
+    assert r.status_code == 409 and r.json()["code"] == "PIN_NO_PERMITIDO"
 
     # La cuenta no se toca al bloquear la tarjeta
     estado_cuenta = coop.execute(
@@ -309,19 +341,21 @@ def test_ciclo_completo_pin_activacion_bloqueo_e_historial(client, bd, datos):
     r = client.get(f"{ruta}/historial", params={"sort": "idHistorial,desc"})
     assert r.status_code == 200
     cuerpo = r.json()
-    assert cuerpo["total"] == 6
     tipos = [item["tipoEvento"] for item in cuerpo["items"]]
     assert tipos == [
         "CambioEstado",
+        "CambioPin",
         "Desbloqueo",
         "Bloqueo",
-        "Activacion",
+        "CambioEstado",
         "CambioPin",
         "CambioEstado",
+        "CambioEstado",
     ]
+    assert cuerpo["total"] == 8
     assert cuerpo["items"][0]["motivo"] == "A Cancelada"
     assert cuerpo["items"][0]["fechaCambio"].endswith("-05:00")
-    assert PIN not in r.text
+    assert pin not in r.text
 
     fila = coop.execute(
         text(
@@ -335,6 +369,46 @@ def test_ciclo_completo_pin_activacion_bloqueo_e_historial(client, bd, datos):
     assert fila[1] is not None and fila[2] == "testclient"
 
 
+def test_transiciones_y_estados_de_la_bd_coinciden_con_la_api(bd):
+    from typing import get_args
+
+    from app.modules.tarjetas.schemas import EstadoDestino, EstadoTarjeta
+
+    coop, _ = bd
+    definicion = coop.execute(
+        text(
+            "SELECT definition FROM sys.check_constraints "
+            "WHERE name = 'CK_Tarjeta_Estado'"
+        )
+    ).scalar_one()
+    assert set(re.findall(r"'(\w+)'", definicion)) == set(get_args(EstadoTarjeta))
+    assert set(get_args(EstadoDestino)) == set(get_args(EstadoTarjeta)) - {"Solicitada"}
+    transiciones = set(
+        coop.execute(
+            text("SELECT EstadoOrigen, EstadoDestino FROM Tarjeta.TransicionEstado")
+        ).all()
+    )
+    assert transiciones == {
+        ("Solicitada", "Aprobada"),
+        ("Solicitada", "Anulada"),
+        ("Aprobada", "Generada"),
+        ("Aprobada", "Anulada"),
+        ("Generada", "Activa"),
+        ("Generada", "Anulada"),
+        ("Activa", "Bloqueada"),
+        ("Activa", "Inactiva"),
+        ("Activa", "Cancelada"),
+        ("Activa", "Vencida"),
+        ("Activa", "Cerrada"),
+        ("Bloqueada", "Activa"),
+        ("Bloqueada", "Cancelada"),
+        ("Inactiva", "Activa"),
+        ("Inactiva", "Cancelada"),
+        ("Inactiva", "Cerrada"),
+        ("Vencida", "Cerrada"),
+    }
+
+
 def test_busqueda_filtros_paginacion_y_orden(client, datos):
     primera = _emitir(client, datos)
     segunda = _emitir(client, datos)
@@ -343,7 +417,7 @@ def test_busqueda_filtros_paginacion_y_orden(client, datos):
         BASE,
         params={
             "idCuenta": datos["idCuenta"],
-            "estado": "Generada",
+            "estado": "Solicitada",
             "pageSize": 1,
             "sort": "idTarjeta,desc",
         },
@@ -359,7 +433,7 @@ def test_busqueda_filtros_paginacion_y_orden(client, datos):
         BASE,
         params={
             "idCuenta": datos["idCuenta"],
-            "estado": "Generada",
+            "estado": "Solicitada",
             "pageSize": 1,
             "page": 2,
             "sort": "idTarjeta,desc",

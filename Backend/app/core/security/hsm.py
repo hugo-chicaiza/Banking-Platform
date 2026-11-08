@@ -1,4 +1,4 @@
-"""HSM simulado para tarjetas (TAR-01, TAR-05 y ATM-01).
+"""HSM simulado para tarjetas (TAR-01, TAR-04, TAR-05 y ATM-01).
 
 Solo para desarrollo y pruebas, con claves ficticias de la configuración. No es un HSM
 certificado ni cumple ISO 9564, PCI DSS o PCI PIN. En producción no hay simulador:
@@ -10,6 +10,8 @@ Operaciones:
 - PIN Block: ISO 9564-1 formato 4 con AES-256. La clave se elige por keyReference,
   solo entre las autorizadas en el servidor.
 - PIN Offset: IBM 3624 con una PVK 3DES independiente de la clave del PIN Block.
+- PIN generado: al aprobar una tarjeta (TAR-04) o regenerar su PIN (TAR-05) el HSM elige
+  un PIN aleatorio no trivial y devuelve solo su Offset.
 
 Ningún método devuelve el PIN en claro: el PIN solo existe dentro del simulador.
 """
@@ -80,6 +82,13 @@ class Hsm(Protocol):
         self, pin_block: str, referencia: str, pan: str
     ) -> tuple[str, str]:
         """(PIN Offset IBM 3624, referencia de la PVK). Valida la fortaleza del PIN."""
+        ...
+
+    def generar_pin(self, pan: str) -> tuple[str, str]:
+        """PIN aleatorio no trivial: (PIN Offset IBM 3624, referencia de la PVK).
+
+        El PIN no sale del HSM. En producción, el HSM de pagos lo imprime (PIN mailer).
+        """
         ...
 
     def verificar_pin(
@@ -225,10 +234,20 @@ class HsmSimulado:
         pin = self._abrir_pin_block(pin_block, referencia, pan)
         if es_pin_debil(pin):
             raise PinDebil("PIN no permitido")
+        return self._offset(pin, pan), REFERENCIA_PVK
+
+    def _offset(self, pin: str, pan: str) -> str:
         natural = self._pin_natural(pan)
-        offset = "".join(
+        return "".join(
             str((int(p) - int(n)) % 10) for p, n in zip(pin, natural, strict=True)
         )
+
+    def generar_pin(self, pan: str) -> tuple[str, str]:
+        pin = "".join(secrets.choice("0123456789") for _ in range(LONGITUD_PIN))
+        while es_pin_debil(pin):
+            pin = "".join(secrets.choice("0123456789") for _ in range(LONGITUD_PIN))
+        offset = self._offset(pin, pan)
+        del pin
         return offset, REFERENCIA_PVK
 
     def verificar_pin(

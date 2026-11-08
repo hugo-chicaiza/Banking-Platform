@@ -117,7 +117,9 @@ def test_rs256_firma_verificable_claims_y_vigencia(configuracion, clave_rsa, acc
         "idATM",
         "idTarjeta",
         "cuentas",
+        "cambioPinRequerido",
     }
+    assert claims["cambioPinRequerido"] is False
     assert claims["iss"] == ISSUER
     assert claims["aud"] == AUDIENCE
     assert inicio <= claims["iat"] <= fin
@@ -291,3 +293,76 @@ def test_contexto_invalido_no_emite(configuracion, acceso, fallo):
 
 def test_endpoint_conserva_operacion_atm01():
     assert cast(APIRoute, router.router.routes[0]).operation_id == "ATM01"
+
+
+# A-05: sesión restringida por PIN temporal
+
+
+def test_sesion_restringida_sin_cuentas_y_con_claim(configuracion, clave_rsa, acceso):
+    restringida = replace(acceso, cuentas=[], cambio_pin_requerido=True)
+
+    respuesta = session.emitir_sesion_atm(restringida)
+
+    assert respuesta.cambio_pin_requerido is True and respuesta.cuentas == []
+    claims = verificar(respuesta.session_token, clave_rsa)
+    assert claims["cambioPinRequerido"] is True and claims["cuentas"] == []
+    sesion = session.validar_jwt_atm(respuesta.session_token)
+    assert sesion.cambio_pin_requerido is True and sesion.cuentas == ()
+
+
+@pytest.mark.parametrize(
+    "inconsistente",
+    [
+        {"cambio_pin_requerido": True},  # restringida con cuentas
+        {"cambio_pin_requerido": False, "cuentas": []},  # normal sin cuentas
+    ],
+)
+def test_sesion_inconsistente_no_se_emite(configuracion, acceso, inconsistente):
+    with pytest.raises(HTTPException) as error:
+        session.emitir_sesion_atm(replace(acceso, **inconsistente))
+    assert error.value.status_code == 503
+
+
+@pytest.mark.parametrize(
+    "claims",
+    [
+        {"cambioPinRequerido": True},  # restringida con cuentas
+        {"cambioPinRequerido": False, "cuentas": []},
+        {"cambioPinRequerido": "false"},
+        {"cambioPinRequerido": None},
+    ],
+)
+def test_jwt_con_claim_de_cambio_inconsistente_es_invalido(
+    configuracion, clave_rsa, acceso, claims
+):
+    original = verificar(session.emitir_sesion_atm(acceso).session_token, clave_rsa)
+    token = jwt.encode({**original, **claims}, clave_rsa, algorithm="RS256")
+
+    with pytest.raises(HTTPException) as error:
+        session.validar_jwt_atm(token)
+    assert error.value.status_code == 401
+
+
+def test_jwt_sin_claim_de_cambio_es_invalido(configuracion, clave_rsa, acceso):
+    original = verificar(session.emitir_sesion_atm(acceso).session_token, clave_rsa)
+    original.pop("cambioPinRequerido")
+    token = jwt.encode(original, clave_rsa, algorithm="RS256")
+
+    with pytest.raises(HTTPException) as error:
+        session.validar_jwt_atm(token)
+    assert error.value.status_code == 401
+
+
+def test_sesion_operativa_rechaza_la_restringida(configuracion, acceso):
+    respuesta = session.emitir_sesion_atm(
+        replace(acceso, cuentas=[], cambio_pin_requerido=True)
+    )
+    restringida = session.validar_jwt_atm(respuesta.session_token)
+
+    with pytest.raises(HTTPException) as error:
+        session.require_sesion_operativa(restringida)
+    assert error.value.status_code == 403
+    assert cast(dict[str, Any], error.value.detail)["code"] == "PIN_CAMBIO_REQUERIDO"
+
+    normal = session.validar_jwt_atm(session.emitir_sesion_atm(acceso).session_token)
+    assert session.require_sesion_operativa(normal) is normal

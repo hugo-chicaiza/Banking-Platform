@@ -21,7 +21,7 @@ from app.modules.atm.hsm.pan_validation import validar_hash_pan
 from app.modules.atm.schemas import ATMAuthRequest, CuentaATM
 from app.modules.tarjetas import repository as tarjetas_repository
 from app.modules.tarjetas.identificacion import hash_pan
-from app.modules.tarjetas.service import pan_de_prueba
+from app.modules.tarjetas.service import credito_cumple_plazo, pan_de_prueba
 
 
 @dataclass(frozen=True)
@@ -32,6 +32,15 @@ class AccesoATMValidado:
     id_tarjeta: int
     titular: str
     cuentas: list[CuentaATM]
+    # PIN temporal: sesión restringida, sin cuentas, solo para ATM-06 y ATM-09
+    cambio_pin_requerido: bool = False
+
+
+@dataclass(frozen=True)
+class PinVerificado:
+    """Resultado de un PIN correcto. requiere_cambio: el PIN es temporal (A-05)."""
+
+    requiere_cambio: bool
 
 
 def identificar_tarjeta(conn: Connection, numero_tarjeta: str) -> int:
@@ -59,7 +68,7 @@ async def validar_acceso_atm(
     id_tarjeta = identificar_tarjeta(conn, entrada.numero_tarjeta.get_secret_value())
     tarjeta = validar_tarjeta(conn, id_tarjeta)
     try:
-        await autenticar_pin_ficticio_atm(
+        verificado = await autenticar_pin_ficticio_atm(
             conn,
             id_tarjeta,
             entrada.encrypted_pin_block.get_secret_value(),
@@ -83,6 +92,19 @@ async def validar_acceso_atm(
                     "No se pudo completar el bloqueo de la tarjeta.",
                 ) from None
         raise
+    titular = " ".join(
+        parte
+        for parte in (tarjeta["nombres_titular"], tarjeta["apellidos_titular"])
+        if parte
+    )
+    if verificado.requiere_cambio:
+        # A-05: con PIN temporal solo se permite cambiarlo (ATM-06); sin cuentas
+        return AccesoATMValidado(
+            atm["id_atm"], id_tarjeta, titular, [], cambio_pin_requerido=True
+        )
+    if tarjeta["estado_tarjeta"] == "Generada":
+        # Crédito que ya cumplió el plazo (validar_tarjeta lo comprobó)
+        _activar_credito(id_tarjeta, atm["id_canal"], usuario_bloqueo, ip)
     cuentas = [
         CuentaATM(
             id_cuenta=fila["id_cuenta"],
@@ -96,12 +118,26 @@ async def validar_acceso_atm(
         raise problema(
             409, "CUENTA_NO_ACTIVA", "No hay cuentas habilitadas para operar."
         )
-    titular = " ".join(
-        parte
-        for parte in (tarjeta["nombres_titular"], tarjeta["apellidos_titular"])
-        if parte
-    )
     return AccesoATMValidado(atm["id_atm"], id_tarjeta, titular, cuentas)
+
+
+def _activar_credito(
+    id_tarjeta: int, id_canal: int, usuario: int | None, ip: str | None
+) -> None:
+    """A-05: activa la tarjeta de crédito Generada que cumplió los 3 días laborables."""
+    if usuario is None:
+        raise problema(409, "TARJETA_NO_ACTIVA", "La tarjeta no está activa.")
+    try:
+        with get_engine("cooperativa").begin() as conn_activacion:
+            repository.activar_tarjeta_credito(
+                conn_activacion, id_tarjeta, id_canal, usuario, ip
+            )
+    except SQLAlchemyError:
+        raise problema(
+            503,
+            "ACTIVACION_NO_CONFIRMADA",
+            "No se pudo completar la activación de la tarjeta.",
+        ) from None
 
 
 def validar_terminal(
@@ -178,7 +214,26 @@ def validar_tarjeta(
             "La tarjeta está bloqueada.",
         )
 
-    if tarjeta["estado_tarjeta"] != "Activa":
+    if tarjeta["estado_tarjeta"] == "Generada":
+        # A-05: la de débito se acepta para el primer cambio de PIN (se confirma con
+        # TarjetaPIN.RequiereCambio); la de crédito, solo si ya cumplió el plazo
+        if tarjeta.get("tipo_tarjeta") == "Credito":
+            fecha_emision = tarjeta.get("fecha_emision")
+            if isinstance(fecha_emision, datetime):
+                fecha_emision = fecha_emision.date()
+            if fecha_emision is None or not credito_cumple_plazo(conn, fecha_emision):
+                raise problema(
+                    409,
+                    "TARJETA_NO_ACTIVA",
+                    "La tarjeta no está activa.",
+                )
+        elif tarjeta.get("tipo_tarjeta") != "Debito":
+            raise problema(
+                409,
+                "TARJETA_NO_ACTIVA",
+                "La tarjeta no está activa.",
+            )
+    elif tarjeta["estado_tarjeta"] != "Activa":
         raise problema(
             409,
             "TARJETA_NO_ACTIVA",
@@ -308,7 +363,7 @@ async def autenticar_pin_ficticio_atm(
     id_tarjeta: int,
     encrypted_pin_block: str,
     key_reference: str,
-) -> bool:
+) -> PinVerificado:
     """Verifica con el HSM compartido y confirma intentos antes del error HTTP.
 
     La conexión de SeguridadDB se abre aquí para que lectura bloqueante,
@@ -326,6 +381,14 @@ async def autenticar_pin_ficticio_atm(
         estado_pin = _validar_estado_pin(
             repository.obtener_pin_para_verificacion(conn_pin, id_tarjeta)
         )
+        requiere_cambio = bool(estado_pin.get("requiere_cambio"))
+        if (
+            tarjeta["estado_tarjeta"] == "Generada"
+            and tarjeta.get("tipo_tarjeta") == "Debito"
+            and not requiere_cambio
+        ):
+            # Débito Generada sin PIN temporal: no hay primer cambio que hacer
+            raise problema(409, "TARJETA_NO_ACTIVA", "La tarjeta no está activa.")
         pan = pan_de_prueba(conn_pin, id_tarjeta, hsm)
         try:
             if not validar_hash_pan(pan, tarjeta["hash_numero_tarjeta"]):
@@ -355,4 +418,4 @@ async def autenticar_pin_ficticio_atm(
         if resultado["estado_pin"] == "Bloqueado":
             raise problema(423, "PIN_BLOQUEADO", "El PIN está bloqueado.")
         raise problema(401, "PIN_INCORRECTO", "El PIN ingresado es incorrecto.")
-    return True
+    return PinVerificado(requiere_cambio=requiere_cambio)

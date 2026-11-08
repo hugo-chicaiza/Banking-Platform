@@ -225,3 +225,27 @@ def test_claves_del_pin_block_se_leen_como_json(monkeypatch):
     clave = ajustes.hsm_sim_claves_pin_block["TEST-KEY-01"]
     assert clave.get_secret_value() == "22" * 32
     assert "22" * 32 not in repr(ajustes)
+
+
+# TAR-04/TAR-05: PIN generado por el HSM
+
+
+def _pin_de(offset: str) -> str:
+    natural = HSM._pin_natural(PAN)
+    return "".join(
+        str((int(n) + int(o)) % 10) for n, o in zip(natural, offset, strict=True)
+    )
+
+
+def test_pin_generado_no_es_trivial_y_verifica_con_su_offset():
+    for _ in range(50):
+        offset, pvk = HSM.generar_pin(PAN)
+        pin = _pin_de(offset)
+        assert pvk == "SIM-PVK-01" and len(offset) == 4 and offset.isdigit()
+        assert not es_pin_debil(pin)
+        bloque, referencia = HSM.construir_pin_block(pin, PAN)
+        assert HSM.verificar_pin(bloque, referencia, PAN, offset, pvk)
+
+
+def test_pin_generado_es_aleatorio():
+    assert len({HSM.generar_pin(PAN)[0] for _ in range(30)}) > 1

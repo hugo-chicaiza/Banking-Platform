@@ -14,6 +14,8 @@ _COLUMNAS_TARJETA = """
     IdProducto AS id_producto,
     Estado AS estado_actual,
     PinAsignado AS pin_asignado,
+    FechaSolicitud AS fecha_solicitud,
+    FechaResolucion AS fecha_resolucion,
     FechaEmision AS fecha_emision,
     FechaExpiracion AS fecha_expiracion
 """
@@ -156,16 +158,18 @@ def insertar_tarjeta(conn: Connection, datos: dict[str, Any]) -> int:
             INSERT INTO Tarjeta.Tarjeta (
                 TokenTarjeta, NumeroEnmascarado, HashNumeroTarjeta, NombreTarjeta,
                 TipoTarjeta, NombresTitular, ApellidosTitular, IdCliente, IdCuenta,
-                IdProducto, IdAgencia, EsExtension, IdTarjetaTitular, FechaEmision,
-                FechaExpiracion, PinAsignado, CreadoPor, IdBIN, IdSubProducto, Estado
+                IdProducto, IdAgencia, EsExtension, IdTarjetaTitular, FechaSolicitud,
+                FechaEmision, FechaExpiracion, PinAsignado, CreadoPor, IdBIN,
+                IdSubProducto, Estado
             )
             OUTPUT INSERTED.IdTarjeta INTO @nuevas
             VALUES (
                 :token, :mascara, :hash_pan, :nombre_tarjeta,
                 :tipo_tarjeta, :nombres, :apellidos, :id_cliente, :id_cuenta,
                 :id_producto, :id_agencia, :es_extension, :id_titular, @hoy,
-                DATEADD(year, 5, @hoy), 0, :creado_por, :id_bin, :id_sub_producto,
-                'Generada'
+                -- FechaEmision es obligatoria: provisional hasta pasar a Generada
+                @hoy, DATEADD(year, 5, @hoy), 0, :creado_por, :id_bin,
+                :id_sub_producto, 'Solicitada'
             );
             SELECT IdTarjeta FROM @nuevas;
             """
@@ -300,30 +304,69 @@ def existe_transicion(conn: Connection, origen: str, destino: str) -> bool:
     )
 
 
-def actualizar_estado(conn: Connection, id_tarjeta: int, estado: str) -> None:
+_HORA_ECUADOR = "SYSDATETIMEOFFSET() AT TIME ZONE 'SA Pacific Standard Time'"
+
+
+def actualizar_estado(
+    conn: Connection,
+    id_tarjeta: int,
+    estado: str,
+    *,
+    resolucion: bool = False,
+    emision: bool = False,
+    pin_asignado: bool = False,
+) -> None:
+    """resolucion: FechaResolucion = ahora (aprobación o rechazo).
+    emision: FechaEmision = hoy y FechaExpiracion a cinco años (paso a Generada).
+    pin_asignado: PinAsignado = 1 (PIN generado al aprobar).
+    """
+    cambios = ["Estado = :estado"]
+    if resolucion:
+        cambios.append(f"FechaResolucion = CONVERT(datetime2, {_HORA_ECUADOR})")
+    if emision:
+        cambios.append(f"FechaEmision = CONVERT(date, {_HORA_ECUADOR})")
+        cambios.append(
+            f"FechaExpiracion = DATEADD(year, 5, CONVERT(date, {_HORA_ECUADOR}))"
+        )
+    if pin_asignado:
+        cambios.append("PinAsignado = 1")
     conn.execute(
         text(
-            "UPDATE Tarjeta.Tarjeta SET Estado = :estado WHERE IdTarjeta = :id_tarjeta"
+            "UPDATE Tarjeta.Tarjeta SET "
+            + ", ".join(cambios)
+            + " WHERE IdTarjeta = :id_tarjeta"
         ),
         {"estado": estado, "id_tarjeta": id_tarjeta},
     )
 
 
+def dias_laborables_desde(conn: Connection, fecha: date) -> int:
+    """Días contables (Contabilidad.FechaContable) después de `fecha` y hasta hoy.
+
+    Si el calendario no tiene cargados los días, cuentan como no laborables.
+    """
+    return conn.execute(
+        text(
+            f"""
+            SELECT COUNT(*) FROM Contabilidad.FechaContable
+            WHERE EsDiaContable = 1 AND Fecha > :fecha
+              AND Fecha <= CONVERT(date, {_HORA_ECUADOR})
+            """
+        ),
+        {"fecha": fecha},
+    ).scalar_one()
+
+
 # TAR-05
 
 
-def marcar_pin_asignado(conn: Connection, id_tarjeta: int) -> bool:
-    """Devuelve False si otra petición asignó el PIN primero."""
-    resultado = conn.execute(
+def marcar_pin_asignado(conn: Connection, id_tarjeta: int) -> None:
+    conn.execute(
         text(
-            """
-            UPDATE Tarjeta.Tarjeta SET PinAsignado = 1
-            WHERE IdTarjeta = :id_tarjeta AND PinAsignado = 0
-            """
+            "UPDATE Tarjeta.Tarjeta SET PinAsignado = 1 WHERE IdTarjeta = :id_tarjeta"
         ),
         {"id_tarjeta": id_tarjeta},
     )
-    return resultado.rowcount == 1
 
 
 # Repositorio aislado de PAN ficticios (SeguridadDB, solo desarrollo y pruebas)
@@ -366,39 +409,35 @@ def obtener_pan_ficticio(
     return None if fila is None else (bytes(fila["cifrado"]), fila["referencia"])
 
 
-# TAR-05: PIN Offset IBM 3624 en SeguridadDB
+# TAR-04 y TAR-05: PIN Offset IBM 3624 en SeguridadDB
 
 
-def obtener_estado_pin(
-    conn_seguridad: Connection, id_tarjeta: int
-) -> dict[str, Any] | None:
-    """Bloquea la fila hasta el commit: dos asignaciones no se cruzan."""
-    return _one(
-        conn_seguridad,
-        """
-        SELECT TienePINAsignado AS confirmado, Estado AS estado,
-               CASE WHEN PINOffset IS NULL THEN 0 ELSE 1 END AS tiene_offset
-        FROM Tarjetas.TarjetaPIN WITH (UPDLOCK, HOLDLOCK)
-        WHERE ID_Tarjeta = :id_tarjeta
-        """,
-        {"id_tarjeta": id_tarjeta},
-    )
-
-
-def guardar_offset_pendiente(
-    conn_seguridad: Connection, id_tarjeta: int, offset: str, referencia_pvk: str
+def guardar_pin_generado(
+    conn_seguridad: Connection,
+    id_tarjeta: int,
+    offset: str,
+    referencia_pvk: str,
+    requiere_cambio: bool,
 ) -> None:
-    """Paso 1 de TAR-05: el Offset queda guardado pero el PIN aún no se puede usar."""
-    params = {"id_tarjeta": id_tarjeta, "offset": offset, "pvk": referencia_pvk}
+    """Guarda el Offset del PIN que generó el HSM, ya habilitado.
+
+    Reemplaza el anterior: reinicia los intentos y desbloquea el PIN (SEC-ATM-02).
+    RequiereCambio = 1 marca un PIN temporal (débito): ATM-01 solo permite cambiarlo.
+    """
+    params = {
+        "id_tarjeta": id_tarjeta,
+        "offset": offset,
+        "pvk": referencia_pvk,
+        "requiere_cambio": requiere_cambio,
+    }
     actualizada = conn_seguridad.execute(
         text(
-            """
+            f"""
             UPDATE Tarjetas.TarjetaPIN
-            SET PINOffset = :offset, ReferenciaClavePVK = :pvk, TienePINAsignado = 0,
-                Estado = 'Inactivo', IntentosFallidos = 0,
-                FechaAsignacion = CONVERT(
-                    datetime, SYSDATETIMEOFFSET() AT TIME ZONE 'SA Pacific Standard Time'
-                )
+            SET PINOffset = :offset, ReferenciaClavePVK = :pvk, TienePINAsignado = 1,
+                Estado = 'Activo', IntentosFallidos = 0, FechaBloqueo = NULL,
+                RequiereCambio = :requiere_cambio,
+                FechaAsignacion = CONVERT(datetime, {_HORA_ECUADOR})
             WHERE ID_Tarjeta = :id_tarjeta
             """
         ),
@@ -407,38 +446,19 @@ def guardar_offset_pendiente(
     if actualizada.rowcount == 0:
         conn_seguridad.execute(
             text(
-                """
+                f"""
                 INSERT INTO Tarjetas.TarjetaPIN (
                     ID_Tarjeta, TienePINAsignado, FechaAsignacion, IntentosFallidos,
-                    Estado, PINOffset, ReferenciaClavePVK
+                    Estado, PINOffset, ReferenciaClavePVK, RequiereCambio
                 )
                 VALUES (
-                    :id_tarjeta, 0,
-                    CONVERT(
-                        datetime,
-                        SYSDATETIMEOFFSET() AT TIME ZONE 'SA Pacific Standard Time'
-                    ),
-                    0, 'Inactivo', :offset, :pvk
+                    :id_tarjeta, 1, CONVERT(datetime, {_HORA_ECUADOR}), 0,
+                    'Activo', :offset, :pvk, :requiere_cambio
                 )
                 """
             ),
             params,
         )
-
-
-def confirmar_pin(conn_seguridad: Connection, id_tarjeta: int) -> bool:
-    """Paso 3 de TAR-05: habilita el PIN. False si no había un Offset pendiente."""
-    resultado = conn_seguridad.execute(
-        text(
-            """
-            UPDATE Tarjetas.TarjetaPIN SET TienePINAsignado = 1, Estado = 'Activo'
-            WHERE ID_Tarjeta = :id_tarjeta AND PINOffset IS NOT NULL
-              AND TienePINAsignado = 0
-            """
-        ),
-        {"id_tarjeta": id_tarjeta},
-    )
-    return resultado.rowcount == 1
 
 
 # TAR-06

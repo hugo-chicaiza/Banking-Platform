@@ -219,3 +219,92 @@ def test_validar_estado_pin_inexistente():
     assert error.value.status_code == 409
     detalle = cast(dict[str, Any], error.value.detail)
     assert detalle["code"] == "PIN_NO_DISPONIBLE"
+
+
+# A-05: tarjeta Generada
+
+
+def _generada(tipo: str | None) -> dict:
+    return {
+        "id_tarjeta": 1,
+        "estado_tarjeta": "Generada",
+        "tipo_tarjeta": tipo,
+        "fecha_emision": date.today() - timedelta(days=7),
+        "fecha_expiracion": date.today() + timedelta(days=30),
+        "pin_asignado": True,
+    }
+
+
+def test_debito_generada_se_acepta_para_el_primer_cambio_de_pin():
+    tarjeta = _generada("Debito")
+    with patch(
+        "app.modules.atm.service.repository.obtener_tarjeta", return_value=tarjeta
+    ):
+        assert service.validar_tarjeta(MagicMock(), 1) == tarjeta
+
+
+@pytest.mark.parametrize(("dias", "aceptada"), [(3, True), (4, True), (2, False)])
+def test_credito_generada_solo_tras_tres_dias_laborables(monkeypatch, dias, aceptada):
+    tarjeta = _generada("Credito")
+    consultas = []
+
+    def laborables(_conn, fecha):
+        consultas.append(fecha)
+        return dias
+
+    monkeypatch.setattr(
+        "app.modules.tarjetas.repository.dias_laborables_desde", laborables
+    )
+    with patch(
+        "app.modules.atm.service.repository.obtener_tarjeta", return_value=tarjeta
+    ):
+        if aceptada:
+            assert service.validar_tarjeta(MagicMock(), 1) == tarjeta
+        else:
+            with pytest.raises(HTTPException) as error:
+                service.validar_tarjeta(MagicMock(), 1)
+            assert error.value.status_code == 409
+    assert consultas == [tarjeta["fecha_emision"]]
+
+
+@pytest.mark.parametrize("estado", ["Solicitada", "Aprobada"])
+def test_tarjeta_sin_generar_no_opera(estado):
+    tarjeta = {**_generada("Debito"), "estado_tarjeta": estado}
+    with (
+        patch(
+            "app.modules.atm.service.repository.obtener_tarjeta", return_value=tarjeta
+        ),
+        pytest.raises(HTTPException) as error,
+    ):
+        service.validar_tarjeta(MagicMock(), 1)
+    assert cast(dict[str, Any], error.value.detail)["code"] == "TARJETA_NO_ACTIVA"
+
+
+def test_generada_sin_tipo_conocido_no_opera():
+    with (
+        patch(
+            "app.modules.atm.service.repository.obtener_tarjeta",
+            return_value=_generada(None),
+        ),
+        pytest.raises(HTTPException) as error,
+    ):
+        service.validar_tarjeta(MagicMock(), 1)
+    assert error.value.status_code == 409
+
+
+def test_activar_credito_sql_idempotente_con_historial():
+    from app.modules.atm import repository
+
+    conn = MagicMock()
+    conn.execute.return_value.rowcount = 1
+    repository.activar_tarjeta_credito(conn, 301, 4, 900, "10.0.0.1")
+    (update, _), (insert, params) = (c.args for c in conn.execute.call_args_list)
+    assert "Estado = 'Generada'" in str(update) and "'Credito'" in str(update)
+    assert "'Activacion'" in str(insert)
+    assert params == {"id": 301, "canal": 4, "usuario": 900, "ip": "10.0.0.1"}
+
+    # Otra petición ya la activó: no se duplica el historial
+    conn = MagicMock()
+    conn.execute.return_value.rowcount = 0
+    repository.activar_tarjeta_credito(conn, 301, 4, 900, None)
+    assert conn.execute.call_count == 1

@@ -1,13 +1,14 @@
 """Carga PAN ficticio y PIN de prueba en las tarjetas existentes (solo desarrollo y pruebas).
 
 Las tarjetas semilla se crearon antes del HSM: no tienen un PAN recuperable ni un PIN
-Offset. Este script, con las mismas funciones que TAR-01 y TAR-05:
+Offset. Este script, con las mismas funciones que TAR-01 y el HSM de TAR-04/TAR-05:
 
 1. Genera un PAN ficticio que conserva la máscara actual (BIN, últimos 4 dígitos y
    Luhn válido), actualiza HashNumeroTarjeta (SHA-256, como TAR-01) y custodia el PAN
    cifrado por el HSM en Pruebas.PanFicticio.
-2. Asigna el PIN de prueba con la lógica de TAR-05 (PIN Block ISO-4 + IBM 3624 PIN
-   Offset), en las tarjetas que se indiquen.
+2. Asigna un PIN de prueba conocido (PIN Block ISO-4 + IBM 3624 PIN Offset), no
+   temporal, en las tarjetas que se indiquen. En el sistema el PIN lo genera el HSM
+   y nadie lo conoce (TAR-04/TAR-05): este atajo solo existe para probar ATM-01.
 
 Es idempotente: no toca un PAN ya custodiado ni un PIN ya asignado con Offset. Nunca
 imprime PAN, PIN, PIN Block ni Offset. No corre en producción.
@@ -26,7 +27,6 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from pydantic import SecretStr
 from sqlalchemy import Connection, text
 
 from app.core.config.settings import get_settings
@@ -70,58 +70,41 @@ def cargar_pan(coop: Connection, seg: Connection, hsm: Hsm, fila: dict) -> str:
     return "PAN ficticio custodiado"
 
 
-def reiniciar_pin_sin_offset(
-    coop: Connection, seg: Connection, id_tarjeta: int
-) -> None:
-    """Un PIN marcado como asignado sin Offset (Argon2 o semilla) no sirve: se limpia
-    para asignarlo con TAR-05.
-    """
-    seg.execute(
-        text(
-            """
-            UPDATE Tarjetas.TarjetaPIN
-            SET TienePINAsignado = 0, FechaAsignacion = NULL, IntentosFallidos = 0
-            WHERE ID_Tarjeta = :id AND PINOffset IS NULL
-            """
-        ),
-        {"id": id_tarjeta},
-    )
-    if (
-        seg.execute(
-            text("SELECT COL_LENGTH('Tarjetas.TarjetaPIN', 'HashPIN')")
-        ).scalar()
-        is not None
-    ):
-        seg.execute(
-            text(
-                "UPDATE Tarjetas.TarjetaPIN SET HashPIN = NULL WHERE ID_Tarjeta = :id"
-            ),
-            {"id": id_tarjeta},
-        )
-    coop.execute(
-        text("UPDATE Tarjeta.Tarjeta SET PinAsignado = 0 WHERE IdTarjeta = :id"),
-        {"id": id_tarjeta},
-    )
-    seg.commit()
-    coop.commit()
-
-
 def cargar_pin(
     coop: Connection, seg: Connection, hsm: Hsm, id_tarjeta: int, pin: str, usuario: int
 ) -> str:
-    estado = repository.obtener_estado_pin(seg, id_tarjeta)
+    fila = seg.execute(
+        text(
+            "SELECT TienePINAsignado, PINOffset FROM Tarjetas.TarjetaPIN "
+            "WHERE ID_Tarjeta = :id"
+        ),
+        {"id": id_tarjeta},
+    ).first()
     seg.rollback()
-    if estado is not None and estado["confirmado"] and estado["tiene_offset"]:
+    if fila is not None and fila[0] and fila[1] is not None:
         return "PIN ya asignado con Offset"
-    if estado is None or not estado["tiene_offset"]:
-        reiniciar_pin_sin_offset(coop, seg, id_tarjeta)
     pan = service.pan_de_prueba(seg, id_tarjeta, hsm)
     bloque, referencia = hsm.construir_pin_block(pin, pan)
+    offset, referencia_pvk = hsm.generar_offset(bloque, referencia, pan)
     del pan
-    service.asignar_pin(
-        coop, seg, id_tarjeta, SecretStr(bloque), referencia, usuario, _IP
+    # Mismo orden que TAR-05: primero el Offset en SeguridadDB, luego CooperativaDB
+    repository.guardar_pin_generado(
+        seg, id_tarjeta, offset, referencia_pvk, requiere_cambio=False
     )
-    return "PIN asignado (ISO-4 + IBM 3624)"
+    seg.commit()
+    repository.marcar_pin_asignado(coop, id_tarjeta)
+    repository.insertar_historial(
+        coop,
+        id_tarjeta,
+        "CambioPin",
+        None,
+        None,
+        "PIN de prueba (script de semilla)",
+        usuario,
+        _IP,
+    )
+    coop.commit()
+    return "PIN de prueba asignado (ISO-4 + IBM 3624)"
 
 
 def main() -> None:

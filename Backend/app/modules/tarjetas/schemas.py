@@ -14,24 +14,22 @@ IdEntero = Annotated[StrictInt, Field(gt=0, le=MAX_INT)]
 
 TipoTarjeta = Literal["Debito", "Credito"]
 
-# Valores de CK_Tarjeta_Estado
+# Valores de CK_Tarjeta_Estado (F-08). Mantener alineados con la base
 EstadoTarjeta = Literal[
     "Solicitada",
-    "EnRevision",
     "Aprobada",
-    "Rechazada",
     "Generada",
-    "Pendiente",
     "Activa",
     "Inactiva",
     "Bloqueada",
     "Cancelada",
-    "Vencida",
     "Anulada",
+    "Vencida",
     "Cerrada",
 ]
 
-# Estados que TAR-04 admite como destino
+# Estados que TAR-04 admite como destino: todos menos Solicitada, que solo es el
+# estado inicial (TAR-01). Las transiciones válidas las define Tarjeta.TransicionEstado
 EstadoDestino = Literal[
     "Aprobada",
     "Generada",
@@ -40,6 +38,8 @@ EstadoDestino = Literal[
     "Bloqueada",
     "Cancelada",
     "Anulada",
+    "Vencida",
+    "Cerrada",
 ]
 
 
@@ -97,31 +97,6 @@ class TarjetaEstadoUpdate(_Entrada):
     ]
 
 
-PATRON_PIN_BLOCK = r"^[0-9A-Fa-f]{32}$"
-PATRON_REFERENCIA_CLAVE = r"^[A-Za-z0-9_-]{1,32}$"
-
-
-class PinAsignar(_Entrada):
-    """Solo documenta TAR-05 en OpenAPI. El router no valida con este modelo (un error
-    de Pydantic devolvería el valor recibido): ver _leer_pin_block.
-    """
-
-    encrypted_pin_block: Annotated[
-        str,
-        Field(
-            pattern=PATRON_PIN_BLOCK,
-            description="PIN Block ISO 9564-1 formato 4 (AES-256), 16 bytes en hex",
-        ),
-    ]
-    key_reference: Annotated[
-        str,
-        Field(
-            pattern=PATRON_REFERENCIA_CLAVE,
-            description="Referencia de la clave AES-256 autorizada en el servidor",
-        ),
-    ]
-
-
 class PinBlockPruebaEntrada(_Entrada):
     """Solo documenta el PIN pad simulado en OpenAPI (ver _leer_pin_prueba)."""
 
@@ -155,6 +130,9 @@ class Tarjeta(TarjetaResumen):
 
     token_tarjeta: str
     pin_asignado: bool
+    fecha_solicitud: date | None = None
+    # Aprobación o rechazo (TAR-04); null mientras la tarjeta está Solicitada
+    fecha_resolucion: datetime | None = None
     fecha_expiracion: date
 
 

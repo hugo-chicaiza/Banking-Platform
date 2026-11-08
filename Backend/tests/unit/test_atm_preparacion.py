@@ -213,7 +213,7 @@ def entorno(monkeypatch):
     e.cuentas.return_value = [
         {"id_cuenta": 501, "numero_cuenta": "1234567890501", "tipo_cuenta": "Ahorro"}
     ]
-    e.pin = AsyncMock(return_value=True)
+    e.pin = AsyncMock(return_value=service.PinVerificado(requiere_cambio=False))
     monkeypatch.setattr(repository, "obtener_atm", e.leer_atm)
     monkeypatch.setattr(repository, "obtener_tarjeta", e.leer_tarjeta)
     monkeypatch.setattr(repository, "obtener_cuentas_autorizadas", e.cuentas)
@@ -298,3 +298,45 @@ def test_cuentas_sql_solo_cuenta_vinculada_activa():
     assert "c.Estado = 'Activa'" in str(sql)
     assert "t.Estado = 'Activa'" in str(sql)
     assert params == {"id_tarjeta": 301}
+
+
+# A-05: sesión restringida y activación de crédito
+
+
+@pytest.mark.anyio
+async def test_pin_temporal_prepara_sesion_restringida_sin_cuentas(entorno):
+    e = entorno
+    e.pin.return_value = service.PinVerificado(requiere_cambio=True)
+
+    resultado = await service.validar_acceso_atm(
+        e.conn, ATMAuthRequest.model_validate(BODY)
+    )
+
+    assert resultado.cambio_pin_requerido is True and resultado.cuentas == []
+    assert resultado.titular == "Maria Mendoza"
+    e.cuentas.assert_not_called()
+
+
+@pytest.mark.anyio
+async def test_credito_generada_se_activa_tras_pin_correcto(entorno, monkeypatch):
+    e = entorno
+    e.leer_atm.return_value["id_canal"] = 4
+    e.leer_tarjeta.return_value.update(
+        estado_tarjeta="Generada",
+        tipo_tarjeta="Credito",
+        fecha_emision=date.today() - timedelta(days=7),
+    )
+    monkeypatch.setattr(tarjetas_repository, "dias_laborables_desde", lambda *_: 3)
+    activar = MagicMock()
+    monkeypatch.setattr(repository, "activar_tarjeta_credito", activar)
+    conn_activacion = MagicMock()
+    engine = MagicMock()
+    engine.begin.return_value.__enter__.return_value = conn_activacion
+    monkeypatch.setattr(service, "get_engine", lambda _db: engine)
+
+    resultado = await service.validar_acceso_atm(
+        e.conn, ATMAuthRequest.model_validate(BODY), usuario_bloqueo=900, ip="1.2.3.4"
+    )
+
+    activar.assert_called_once_with(conn_activacion, 301, 4, 900, "1.2.3.4")
+    assert resultado.cambio_pin_requerido is False and resultado.cuentas
