@@ -73,6 +73,7 @@ def laboratory_session() -> tuple[str, str, str, datetime]:
                         tipo_cuenta="Ahorro",
                     )
                 ],
+                pin_version="2026-11-01T10:00:00.000000",
             )
         ).session_token
         validated = session.validar_jwt_atm(token)

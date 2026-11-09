@@ -18,6 +18,7 @@ from app.modules.atm import repository, router, service
 from app.modules.atm.schemas import ATMAuthRequest
 from app.modules.tarjetas import repository as tarjetas_repository
 from app.modules.tarjetas.identificacion import hash_pan
+from tests.pin_version import VERSION_PIN
 
 PAN = "5000001234567896"
 BLOQUE = "A" * 32
@@ -178,10 +179,11 @@ def test_lector_http_rechaza_content_type_y_query(client):
     )
 
 
-def test_router_publica_auth_y_logout():
+def test_router_publica_auth_logout_y_consulta_saldo():
     assert [cast(APIRoute, ruta).path for ruta in router.router.routes] == [
         "/atm/auth",
         "/atm/logout",
+        "/atm/consulta-saldo",
     ]
 
 
@@ -213,7 +215,11 @@ def entorno(monkeypatch):
     e.cuentas.return_value = [
         {"id_cuenta": 501, "numero_cuenta": "1234567890501", "tipo_cuenta": "Ahorro"}
     ]
-    e.pin = AsyncMock(return_value=service.PinVerificado(requiere_cambio=False))
+    e.pin = AsyncMock(
+        return_value=service.PinVerificado(
+            requiere_cambio=False, pin_version=VERSION_PIN
+        )
+    )
     monkeypatch.setattr(repository, "obtener_atm", e.leer_atm)
     monkeypatch.setattr(repository, "obtener_tarjeta", e.leer_tarjeta)
     monkeypatch.setattr(repository, "obtener_cuentas_autorizadas", e.cuentas)
@@ -306,12 +312,15 @@ def test_cuentas_sql_solo_cuenta_vinculada_activa():
 @pytest.mark.anyio
 async def test_pin_temporal_prepara_sesion_restringida_sin_cuentas(entorno):
     e = entorno
-    e.pin.return_value = service.PinVerificado(requiere_cambio=True)
+    e.pin.return_value = service.PinVerificado(
+        requiere_cambio=True, pin_version=VERSION_PIN
+    )
 
     resultado = await service.validar_acceso_atm(
         e.conn, ATMAuthRequest.model_validate(BODY)
     )
 
+    assert resultado.pin_version == VERSION_PIN
     assert resultado.cambio_pin_requerido is True and resultado.cuentas == []
     assert resultado.titular == "Maria Mendoza"
     e.cuentas.assert_not_called()

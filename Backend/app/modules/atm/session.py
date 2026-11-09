@@ -21,6 +21,11 @@ from sqlalchemy.exc import SQLAlchemyError
 from app.core.api.errors import problema
 from app.core.config.settings import get_settings
 from app.core.database.db import get_engine
+from app.core.security.pin_version import (
+    PinVersionNoDisponible,
+    validar_version,
+    version_desde_fecha,
+)
 from app.modules.atm import repository
 from app.modules.atm.schemas import ATMAuthResponse
 from app.modules.atm.service import AccesoATMValidado
@@ -38,6 +43,7 @@ class SesionATM:
     cuentas: tuple[int, ...]
     # Sesión restringida (PIN temporal): solo ATM-06 y ATM-09
     cambio_pin_requerido: bool = False
+    pin_version: str | None = field(default=None, repr=False)
 
 
 def _sesion_invalida() -> HTTPException:
@@ -77,6 +83,10 @@ def validar_jwt_atm(token: str) -> SesionATM:
         identificador = uuid.UUID(jti)
         cuentas = datos["cuentas"]
         restringida = datos["cambioPinRequerido"]
+        # Los JWT previos sin versión solo pueden usarse para cerrar sesión.
+        pin_version = (
+            validar_version(datos["pinVersion"]) if "pinVersion" in datos else None
+        )
         if (
             identificador.version != 4
             or str(identificador) != jti
@@ -102,6 +112,7 @@ def validar_jwt_atm(token: str) -> SesionATM:
             datos["idTarjeta"],
             tuple(cuentas),
             restringida,
+            pin_version,
         )
     except (PyJWTError, ValueError, TypeError, AttributeError, OverflowError, OSError):
         raise _sesion_invalida() from None
@@ -147,8 +158,43 @@ def require_sesion_atm(
     return sesion
 
 
-def require_sesion_operativa(
+def require_sesion_pin_actual(
     sesion: Annotated[SesionATM, Depends(require_sesion_atm)],
+) -> SesionATM:
+    """Compartida por operaciones y futuro ATM-06; nunca aplicar a logout."""
+    if sesion.pin_version is None:
+        raise _sesion_invalida()
+    try:
+        validar_version(sesion.pin_version)
+        with get_engine("seguridad").connect() as conn:
+            actual = repository.obtener_asignacion_pin_actual(conn, sesion.id_tarjeta)
+        if actual is None:
+            raise _sesion_invalida()
+        version = version_desde_fecha(actual.get("fecha_asignacion"))
+    except (SQLAlchemyError, PinVersionNoDisponible):
+        raise _revocaciones_no_disponibles() from None
+    if version != sesion.pin_version:
+        raise _sesion_invalida()
+    intentos = actual.get("intentos_fallidos")
+    pendiente = actual.get("requiere_cambio")
+    if (
+        actual.get("tiene_pin_asignado") is not True
+        or actual.get("estado_pin") != "Activo"
+        or type(intentos) is not int
+        or intentos < 0
+        or intentos >= 3
+        or type(pendiente) is not bool
+    ):
+        raise problema(403, "OPERACION_NO_PERMITIDA", "El PIN no permite operar.")
+    if pendiente and not sesion.cambio_pin_requerido:
+        raise problema(
+            403, "PIN_CAMBIO_REQUERIDO", "Debe cambiar el PIN antes de operar."
+        )
+    return sesion
+
+
+def require_sesion_operativa(
+    sesion: Annotated[SesionATM, Depends(require_sesion_pin_actual)],
 ) -> SesionATM:
     """Para operaciones con cuentas (ATM-02 a ATM-08, salvo ATM-06): rechaza la sesión
     restringida de un PIN temporal, que solo sirve para cambiar el PIN o cerrar sesión.
@@ -201,6 +247,10 @@ class EmisorSesionATM:
         ids_cuentas = [cuenta.id_cuenta for cuenta in acceso.cuentas]
         ids = [acceso.id_atm, acceso.id_tarjeta, *ids_cuentas]
         restringida = acceso.cambio_pin_requerido
+        try:
+            pin_version = validar_version(acceso.pin_version)
+        except PinVersionNoDisponible:
+            raise _sesion_no_disponible() from None
         if (
             type(restringida) is not bool
             # La sesión restringida no lleva cuentas; la normal, al menos una
@@ -226,6 +276,7 @@ class EmisorSesionATM:
             "idTarjeta": acceso.id_tarjeta,
             "cuentas": ids_cuentas,
             "cambioPinRequerido": restringida,
+            "pinVersion": pin_version,
         }
         try:
             token = jwt.encode(

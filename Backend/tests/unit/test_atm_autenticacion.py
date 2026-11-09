@@ -16,6 +16,7 @@ from app.core.security.hsm import (
 from app.modules.atm import repository, service
 from app.modules.tarjetas import repository as tarjetas_repository
 from app.modules.tarjetas.service import pan_de_prueba
+from tests.pin_version import FECHA_PIN, VERSION_PIN
 
 
 @pytest.fixture
@@ -41,6 +42,7 @@ def entorno_atm(monkeypatch):
         "tiene_pin_asignado": True,
         "estado_pin": "Activo",
         "intentos_fallidos": 0,
+        "fecha_asignacion": FECHA_PIN,
         "pin_offset": "1234",
         "referencia_clave_pvk": "SIM-PVK-01",
     }
@@ -81,7 +83,9 @@ def comprobar_error(error, status, code):
 @pytest.mark.anyio
 async def test_pin_correcto_utiliza_contrato_compartido(entorno_atm):
     e = entorno_atm
-    assert await autenticar(e) == service.PinVerificado(requiere_cambio=False)
+    assert await autenticar(e) == service.PinVerificado(
+        requiere_cambio=False, pin_version=VERSION_PIN
+    )
     e.factory.assert_called_once_with()
     e.leer_pin.assert_called_once_with(e.conn_pin, 1)
     e.leer_pan.assert_called_once_with(e.conn_pin, 1, e.hsm)
@@ -92,6 +96,32 @@ async def test_pin_correcto_utiliza_contrato_compartido(entorno_atm):
         conn=e.conn_pin, id_tarjeta=1, pin_correcto=True
     )
     e.engine.begin.return_value.__exit__.assert_called_once_with(None, None, None)
+
+
+@pytest.mark.anyio
+async def test_version_se_captura_antes_de_confirmar_y_no_se_relee(entorno_atm):
+    e = entorno_atm
+
+    def guardar(**_kwargs):
+        e.estado["fecha_asignacion"] = FECHA_PIN.replace(day=2)
+        return {"intentos_fallidos": 0, "estado_pin": "Activo"}
+
+    e.resultado.side_effect = guardar
+    verified = await autenticar(e)
+    assert verified.pin_version == VERSION_PIN
+    e.leer_pin.assert_called_once()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("fecha", [None, "2026-11-01"])
+async def test_fecha_asignacion_invalida_no_consume_intentos(entorno_atm, fecha):
+    e = entorno_atm
+    e.estado["fecha_asignacion"] = fecha
+    with pytest.raises(HTTPException) as exc:
+        await autenticar(e)
+    assert exc.value.status_code == 503
+    e.resultado.assert_not_called()
+    e.hsm.verificar_pin.assert_not_called()
 
 
 @pytest.mark.anyio
@@ -238,6 +268,7 @@ async def test_fallo_persistencia_revierte_transaccion(entorno_atm):
 def test_consulta_offset_y_pvk_con_mock(consulta, bloquea):
     conn = MagicMock()
     conn.execute.return_value.mappings.return_value.first.return_value = {
+        "fecha_asignacion": FECHA_PIN,
         "pin_offset": "1234",
         "referencia_clave_pvk": "SIM-PVK-01",
     }
@@ -358,7 +389,9 @@ async def test_activo_con_limite_agotado_no_reinicia_contador(entorno_atm, inten
 async def test_offset_cero_y_dos_intentos_siguen_permitiendo_pin_correcto(entorno_atm):
     e = entorno_atm
     e.estado.update(pin_offset="0000", intentos_fallidos=2)
-    assert await autenticar(e) == service.PinVerificado(requiere_cambio=False)
+    assert await autenticar(e) == service.PinVerificado(
+        requiere_cambio=False, pin_version=VERSION_PIN
+    )
     assert e.hsm.verificar_pin.call_args.args[3] == "0000"
     e.resultado.assert_called_once_with(
         conn=e.conn_pin, id_tarjeta=1, pin_correcto=True
@@ -440,7 +473,9 @@ async def test_pin_temporal_correcto_devuelve_requiere_cambio(entorno_atm):
     e.tarjeta.update(estado_tarjeta="Generada", tipo_tarjeta="Debito")
     e.estado.update(requiere_cambio=True)
 
-    assert await autenticar(e) == service.PinVerificado(requiere_cambio=True)
+    assert await autenticar(e) == service.PinVerificado(
+        requiere_cambio=True, pin_version=VERSION_PIN
+    )
 
 
 @pytest.mark.anyio
