@@ -282,6 +282,8 @@ class HsmSimulado:
         if len(offset) != LONGITUD_PIN or not offset.isdigit():
             return False
         pin = self._abrir_pin_block(pin_block, referencia, pan)
+        if len(pin) != LONGITUD_PIN:
+            raise PinBlockInvalido("Longitud no admitida por el adaptador")
         natural = self._pin_natural(pan)
         esperado = "".join(
             str((int(n) + int(o)) % 10) for n, o in zip(natural, offset, strict=True)

@@ -77,6 +77,30 @@ class AtmSaldoRequest(CamelModel):
     registro_unico: str = Field(pattern=r"^[A-Za-z0-9]{12}$")
 
 
+class AtmCambioPinRequest(CamelModel):
+    model_config = ConfigDict(extra="forbid", strict=True, validate_by_name=False)
+
+    encrypted_pin_block_actual: SecretStr = Field(
+        repr=False, json_schema_extra={"pattern": r"^[0-9a-fA-F]{32}$"}
+    )
+    encrypted_pin_block_nuevo: SecretStr = Field(
+        repr=False, json_schema_extra={"pattern": r"^[0-9a-fA-F]{32}$"}
+    )
+    key_reference: str = Field(pattern=r"^[A-Za-z0-9_-]{1,32}$")
+
+    @field_validator(
+        "encrypted_pin_block_actual", "encrypted_pin_block_nuevo", mode="before"
+    )
+    @classmethod
+    def _bloque(cls, valor: object) -> str:
+        if (
+            not isinstance(valor, str)
+            or re.fullmatch(r"[0-9a-fA-F]{32}", valor) is None
+        ):
+            raise ValueError("Bloque inválido")
+        return valor
+
+
 class AtmSaldoResponse(CamelModel):
     id_transaccion: int
     numero_comprobante: str

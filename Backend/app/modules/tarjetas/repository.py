@@ -457,6 +457,13 @@ def guardar_pin_generado(
             FROM Tarjetas.TarjetaPIN WITH (UPDLOCK, HOLDLOCK)
             WHERE ID_Tarjeta = :id_tarjeta AND ID_Tarjeta IS NOT NULL;
 
+            -- Todos los escritores adquieren primero PIN y despues coordinacion.
+            IF EXISTS (
+                SELECT 1 FROM Tarjetas.CambioPINATMOperacion WITH (UPDLOCK, HOLDLOCK)
+                WHERE ID_Tarjeta = :id_tarjeta AND FechaFinalizacionUTC IS NULL
+            )
+                THROW 52147, 'Cambio de PIN pendiente de reconciliacion.', 1;
+
             -- Capturar DESPUÉS de adquirir el bloqueo, con precisión datetime.
             SET @Ahora = CONVERT(datetime,
                 SYSDATETIMEOFFSET() AT TIME ZONE 'SA Pacific Standard Time');

@@ -66,6 +66,16 @@ class Settings(BaseSettings):
     # aplicar revocaciones sin depender de la caché de Settings o del proceso.
     atm_terminal_credentials_file: str = ""
 
+    # Ejecutor independiente: no se inicia desde FastAPI. Intentos POR ejecucion,
+    # nunca un contador acumulado ni los intentos fallidos del PIN del cliente.
+    atm_pin_recovery_enabled: bool = False
+    atm_pin_recovery_min_age_seconds: int = Field(default=30, ge=0, le=86400)
+    atm_pin_recovery_max_age_seconds: int = Field(default=1800, ge=1, le=604800)
+    atm_pin_recovery_batch_size: int = Field(default=20, ge=1, le=200)
+    atm_pin_recovery_budget_seconds: int = Field(default=45, ge=1, le=300)
+    atm_pin_recovery_max_attempts_per_run: int = Field(default=3, ge=1, le=10)
+    atm_pin_recovery_retry_delay_seconds: float = Field(default=1, ge=0, le=30)
+
     # WorkOS AuthKit (F-03), patrón BFF: el navegador solo recibe una cookie cifrada
     workos_api_key: SecretStr = SecretStr("")
     workos_client_id: str = ""
