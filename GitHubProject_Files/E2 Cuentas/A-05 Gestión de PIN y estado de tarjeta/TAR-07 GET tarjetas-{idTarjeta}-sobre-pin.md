@@ -50,10 +50,10 @@ Hay un documento por tarjeta en la colección `sobres_pin`, con `_id = idTarjeta
 
 | Campo | Contenido |
 |---|---|
-| `estado` | `Pendiente`, `Entregado` o `Reemplazado` |
+| `idSobre` | Identificador aleatorio de este sobre |
+| `estado` | `Pendiente` o `Entregado`. Un sobre nuevo de la misma tarjeta reemplaza al anterior |
 | `origen` | `Aprobacion` o `Regeneracion` |
-| `contenido` | El PDF cifrado con **AES-256-GCM**, clave `SOBRE_PIN_CLAVE`, dato asociado `idTarjeta` y versión. Se **borra** al entregarse |
-| `version` | Número de versión del sobre |
+| `contenido` | El PDF cifrado con **AES-256-GCM**, clave `SOBRE_PIN_CLAVE`, dato asociado `idTarjeta` e `idSobre`. Se **borra** al entregarse |
 | `creadoEn` | Fecha de creación |
 | `expiraEn` | Fecha en que vence. Al entregarse se elimina el campo |
 | `entregadoEn` | Fecha de entrega |
@@ -68,13 +68,14 @@ Hay un documento por tarjeta en la colección `sobres_pin`, con `_id = idTarjeta
 ## Reglas de negocio
 
 1. La tarjeta debe existir → si no, `404 TARJETA_NO_ENCONTRADA`.
-2. Si no hay sobre (crédito, vencido, nunca generado o reemplazado) → `404 SOBRE_PIN_NO_DISPONIBLE`.
+2. Si no hay sobre pendiente y vigente (crédito, vencido o nunca generado) → `404 SOBRE_PIN_NO_DISPONIBLE`.
 3. Si ya se entregó → `409 SOBRE_PIN_ENTREGADO`. Para emitir otra hoja hay que regenerar el PIN (TAR-05).
 4. **Entrega única y atómica:** la misma operación pasa el sobre a `Entregado`, borra `contenido` y registra `entregadoEn` y `entregadoPor`. Si dos asesores lo piden al mismo tiempo, solo uno recibe el PDF.
-5. Si el almacén no responde → `503 SOBRE_PIN_ALMACEN_NO_DISPONIBLE`.
-6. La respuesta lleva `Content-Type: application/pdf`, `Content-Disposition: attachment; filename="sobre-pin-{idTarjeta}.pdf"` y `Cache-Control: no-store`.
-7. Se audita en `Auditoria.Auditoria` como `SELECT Tarjeta.Tarjeta – TAR-07 Entrega de sobre de PIN` (Exitoso o Fallido). Nunca se registran el PIN ni el PDF.
-8. El PIN, el PDF y la clave no aparecen en logs, errores ni en la auditoría.
+5. Si el almacén no responde o no está configurado → `503 SOBRE_PIN_ALMACEN_NO_DISPONIBLE`.
+6. Si TAR-04 o TAR-05 guardaron el sobre pero luego no pudieron confirmar el Offset en SeguridadDB, el sobre se descarta: nunca se entrega un PIN que no quedó vigente.
+7. La respuesta lleva `Content-Type: application/pdf`, `Content-Disposition: attachment; filename="sobre-pin-{idTarjeta}.pdf"` y `Cache-Control: no-store`.
+8. Se audita en `Auditoria.Auditoria` como `SELECT Tarjeta.Tarjeta – TAR-07 Entrega de sobre de PIN` (Exitoso o Fallido). Nunca se registran el PIN ni el PDF.
+9. El PIN, el PDF y la clave no aparecen en logs, errores ni en la auditoría.
 
 ## Flujo
 
