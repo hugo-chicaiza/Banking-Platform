@@ -98,3 +98,77 @@ def test_cli02_recupera_identidades_y_guarda_historial(conn: Connection):
     assert fila["TipoOperacion"] == "I"
     assert fila["CreadoPor"] == fila["ModificadoPor"] == ID_AUDITORIA
     assert fila["CreadoPorDireccion"] == ID_AUDITORIA
+
+
+def _cliente_con_direccion(conn: Connection) -> tuple[int, str]:
+    fila = conn.execute(
+        text(
+            """
+            SELECT TOP 1 c.IdCliente, c.Identificacion
+            FROM Clientes.Cliente AS c
+            WHERE EXISTS (SELECT 1 FROM Clientes.Direcciones AS d
+                          WHERE d.IdCliente = c.IdCliente AND d.Estado = 'Activo')
+            ORDER BY c.IdCliente
+            """
+        )
+    ).first()
+    if fila is None:
+        pytest.skip("Se necesita un cliente con dirección activa")
+    return fila[0], fila[1]
+
+
+def test_consultas_de_direcciones_derivan_el_pais_de_la_ciudad(conn: Connection):
+    """CLI-03, CLI-04 y CLI-09: Direcciones ya no tiene CodigoPais (sale de la ciudad)."""
+    id_cliente, identificacion = _cliente_con_direccion(conn)
+
+    filas, total = repository.consultar_clientes(conn, identificacion=identificacion)
+    assert total == 1 and filas[0]["id_cliente"] == id_cliente
+
+    detalle = repository.obtener_cliente_detalle(conn, id_cliente)
+    assert detalle is not None
+
+    direcciones = repository.listar_direcciones(conn, id_cliente)
+    assert direcciones
+    paises: dict[int, str] = {
+        fila[0]: fila[1]
+        for fila in conn.execute(
+            text("SELECT IdCiudad, CodigoPais FROM Catalogo.Ciudad")
+        )
+    }
+    for direccion in direcciones:
+        assert direccion["codigo_pais"] == paises[direccion["id_ciudad"]]
+
+
+def test_alta_y_cambio_de_direccion_sin_codigo_pais(conn: Connection):
+    """CLI-10 y CLI-11 escriben la dirección sin la columna eliminada."""
+    id_cliente, _ = _cliente_con_direccion(conn)
+    id_ciudad, codigo_pais = conn.execute(
+        text("SELECT TOP 1 IdCiudad, CodigoPais FROM Catalogo.Ciudad ORDER BY IdCiudad")
+    ).one()
+
+    nueva = repository.insertar_direccion(
+        conn,
+        id_cliente,
+        {
+            "tipo_direccion": "Trabajo",
+            "codigo_pais": codigo_pais,
+            "id_ciudad": id_ciudad,
+            "calle_direccion": "Av. Prueba 123",
+            "referencia_ubicacion": "Frente al parque",
+        },
+        modificado_por=ID_AUDITORIA,
+        direccion_ip="127.0.0.1",
+    )
+    assert nueva["codigo_pais"] == codigo_pais
+
+    actualizada = repository.actualizar_direccion(
+        conn,
+        id_cliente,
+        nueva["id_direccion"],
+        {"calle_direccion": "Av. Prueba 456"},
+        modificado_por=ID_AUDITORIA,
+        direccion_ip="127.0.0.1",
+        valores_anteriores=nueva,
+    )
+    assert actualizada["calle_direccion"] == "Av. Prueba 456"
+    assert actualizada["codigo_pais"] == codigo_pais

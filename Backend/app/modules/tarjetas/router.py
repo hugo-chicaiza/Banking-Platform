@@ -140,7 +140,13 @@ def emitir_tarjeta(
         Depends(require_roles("ASESOR", "SUPERVISOR", "ADMIN")),
         Depends(
             solo_parametros(
-                "idCliente", "idCuenta", "estado", "page", "pageSize", "sort"
+                "idCliente",
+                "idCuenta",
+                "estado",
+                "esExtension",
+                "page",
+                "pageSize",
+                "sort",
             )
         ),
     ],
@@ -152,13 +158,16 @@ def buscar_tarjetas(
     ] = None,
     id_cuenta: Annotated[int | None, Query(alias="idCuenta", gt=0, le=MAX_INT)] = None,
     estado: EstadoTarjeta | None = None,
+    es_extension: Annotated[bool | None, Query(alias="esExtension")] = None,
     page: Page = 1,
     page_size: PageSize = 20,
     sort: Sort = None,
 ) -> Any:
-    """Busca tarjetas. Los filtros se pueden combinar."""
+    """Busca tarjetas. Los filtros se pueden combinar. esExtension=false deja solo
+    las principales (las que pueden ser titulares de una extensión).
+    """
     return service.buscar_tarjetas(
-        conn, id_cliente, id_cuenta, estado, page, page_size, sort
+        conn, id_cliente, id_cuenta, estado, page, page_size, sort, es_extension
     )
 
 
@@ -212,6 +221,42 @@ def regenerar_pin(
     solo se guarda su IBM 3624 PIN Offset. No cambia el estado de la tarjeta.
     """
     service.regenerar_pin(conn, conn_seguridad, id_tarjeta, usuario, _ip(request))
+
+
+# TAR-07. Roles: ASESOR, SUPERVISOR, ADMIN
+@router.get(
+    "/{idTarjeta}/sobre-pin",
+    response_class=Response,
+    responses={
+        200: {
+            "content": {"application/pdf": {}},
+            "description": "Sobre de PIN (PDF). Se entrega una sola vez.",
+        }
+    },
+    dependencies=[
+        Depends(require_roles("ASESOR", "SUPERVISOR", "ADMIN")),
+        Depends(solo_parametros()),
+    ],
+)
+def sobre_pin(
+    id_tarjeta: IdTarjetaPath,
+    request: Request,
+    usuario: UsuarioAuditoria,
+    conn: Db,
+) -> Response:
+    """Descarga, una sola vez, el sobre de PIN de una tarjeta de débito: PDF con el PIN
+    temporal para entregar al cliente con la tarjeta. Luego queda Entregado.
+    """
+    pdf = service.entregar_sobre_pin(conn, id_tarjeta, usuario, _ip(request))
+    return Response(
+        content=pdf,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'attachment; filename="sobre-pin-{id_tarjeta}.pdf"',
+            "Cache-Control": "no-store",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
 
 
 # TAR-06. Roles: SUPERVISOR, AUDITOR, ADMIN

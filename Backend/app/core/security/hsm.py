@@ -12,8 +12,10 @@ Operaciones:
 - PIN Offset: IBM 3624 con una PVK 3DES independiente de la clave del PIN Block.
 - PIN generado: al aprobar una tarjeta (TAR-04) o regenerar su PIN (TAR-05) el HSM elige
   un PIN aleatorio no trivial y devuelve solo su Offset.
+- Sobre de PIN: en débito, `generar_pin_para_sobre` entrega además el PIN para
+  imprimir el sobre (TAR-07), como la salida de "PIN mailer" de un HSM de pagos.
 
-Ningún método devuelve el PIN en claro: el PIN solo existe dentro del simulador.
+Fuera de esa salida de impresión, ningún método devuelve el PIN en claro.
 """
 
 import hmac
@@ -27,6 +29,7 @@ from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.decrepit.ciphers.algorithms import TripleDES
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from pydantic import SecretStr
 
 from app.core.config.settings import get_settings
 
@@ -88,6 +91,13 @@ class Hsm(Protocol):
         """PIN aleatorio no trivial: (PIN Offset IBM 3624, referencia de la PVK).
 
         El PIN no sale del HSM. En producción, el HSM de pagos lo imprime (PIN mailer).
+        """
+        ...
+
+    def generar_pin_para_sobre(self, pan: str) -> tuple[str, str, SecretStr]:
+        """Como generar_pin, pero entrega además el PIN para imprimir el sobre de PIN
+        (TAR-07): es la salida de "PIN mailer" de un HSM de pagos. Quien lo recibe solo
+        lo usa para armar el sobre y lo descarta; nunca se guarda en claro.
         """
         ...
 
@@ -242,13 +252,22 @@ class HsmSimulado:
             str((int(p) - int(n)) % 10) for p, n in zip(pin, natural, strict=True)
         )
 
-    def generar_pin(self, pan: str) -> tuple[str, str]:
+    @staticmethod
+    def _pin_aleatorio() -> str:
         pin = "".join(secrets.choice("0123456789") for _ in range(LONGITUD_PIN))
         while es_pin_debil(pin):
             pin = "".join(secrets.choice("0123456789") for _ in range(LONGITUD_PIN))
+        return pin
+
+    def generar_pin(self, pan: str) -> tuple[str, str]:
+        pin = self._pin_aleatorio()
         offset = self._offset(pin, pan)
         del pin
         return offset, REFERENCIA_PVK
+
+    def generar_pin_para_sobre(self, pan: str) -> tuple[str, str, SecretStr]:
+        pin = self._pin_aleatorio()
+        return self._offset(pin, pan), REFERENCIA_PVK, SecretStr(pin)
 
     def verificar_pin(
         self,

@@ -30,6 +30,15 @@ Historial de eventos de la tarjeta.
 ## Reglas de negocio
 
 1. Orden por fecha descendente; paginado (máx. 100). `TarjetaHis` es inmutable.
+2. Los eventos `CambioPin` no traen `motivo` ni estados: traen `resultado` y `origen`, que indica quién fijó el PIN. `origen` se deduce de la `Descripcion` que escribe cada operación:
+
+   | `origen` | Operación | `Descripcion` en `TarjetaHis` |
+   |---|---|---|
+   | `Generacion` | TAR-04 al aprobar: el HSM genera el PIN | `PIN generado automáticamente` (o la histórica `Asignación de PIN inicial`) |
+   | `Regeneracion` | TAR-05: reposición del PIN por el banco | `Regeneración de PIN` |
+   | `Cliente` | ATM-06: el titular cambia su PIN en el cajero | `Cambio de PIN en ATM` |
+
+   Una descripción desconocida devuelve `origen: null`. Solo `Cliente` significa que el titular cambió el PIN.
 
 ## Flujo
 
@@ -65,9 +74,9 @@ Historial de eventos de la tarjeta.
     {
       "idHistorial": 103,
       "idTarjeta": 301,
-      "tipoEvento": "CAMBIO_ESTADO",
-      "estadoAnterior": "BLOQUEADA",
-      "estadoNuevo": "ACTIVA",
+      "tipoEvento": "CambioEstado",
+      "estadoAnterior": "Bloqueada",
+      "estadoNuevo": "Activa",
       "motivo": "Desbloqueo autorizado.",
       "fechaCambio": "2026-10-26T15:30:00-05:00",
       "realizadoPor": 12
@@ -75,9 +84,9 @@ Historial de eventos de la tarjeta.
     {
       "idHistorial": 102,
       "idTarjeta": 301,
-      "tipoEvento": "CAMBIO_ESTADO",
-      "estadoAnterior": "ACTIVA",
-      "estadoNuevo": "BLOQUEADA",
+      "tipoEvento": "CambioEstado",
+      "estadoAnterior": "Activa",
+      "estadoNuevo": "Bloqueada",
       "motivo": "Solicitud del titular por posible extravío.",
       "fechaCambio": "2026-10-25T10:15:00-05:00",
       "realizadoPor": 12
@@ -85,8 +94,9 @@ Historial de eventos de la tarjeta.
     {
       "idHistorial": 101,
       "idTarjeta": 301,
-      "tipoEvento": "ASIGNACION_PIN",
+      "tipoEvento": "CambioPin",
       "resultado": "COMPLETADO",
+      "origen": "Regeneracion",
       "fechaCambio": "2026-10-24T09:00:00-05:00",
       "realizadoPor": 15
     }

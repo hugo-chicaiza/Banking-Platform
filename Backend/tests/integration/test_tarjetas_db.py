@@ -429,6 +429,43 @@ def test_subproducto_de_otro_producto_422(client, bd, datos):
     assert r.status_code == 422 and r.json()["code"] == "SUBPRODUCTO_NO_ENCONTRADO"
 
 
+def test_busqueda_distingue_principales_y_extensiones(client, bd, datos):
+    titular = _emitir(client, datos)
+    extension = _emitir(
+        client, datos, esExtension=True, idTarjetaTitular=titular["idTarjeta"]
+    )
+
+    def ids(**params: Any) -> dict[int, dict[str, Any]]:
+        r = client.get(
+            BASE, params={"idCuenta": datos["idCuenta"], "pageSize": 100, **params}
+        )
+        assert r.status_code == 200
+        return {item["idTarjeta"]: item for item in r.json()["items"]}
+
+    todas = ids()
+    assert todas[extension["idTarjeta"]]["esExtension"] is True
+    assert todas[extension["idTarjeta"]]["idTarjetaTitular"] == titular["idTarjeta"]
+    assert todas[titular["idTarjeta"]]["esExtension"] is False
+    principales = ids(esExtension="false")
+    assert titular["idTarjeta"] in principales
+    assert extension["idTarjeta"] not in principales
+    assert all(not item["esExtension"] for item in principales.values())
+
+
+def test_nombre_tarjeta_admite_26_caracteres_en_la_bd(bd):
+    coop, _ = bd
+    largo = coop.execute(
+        text(
+            "SELECT CHARACTER_MAXIMUM_LENGTH FROM INFORMATION_SCHEMA.COLUMNS "
+            "WHERE TABLE_SCHEMA = 'Tarjeta' AND TABLE_NAME = 'Tarjeta' "
+            "AND COLUMN_NAME = 'NombreTarjeta'"
+        )
+    ).scalar_one()
+    from app.modules.tarjetas.schemas import MAX_NOMBRE_TARJETA
+
+    assert largo == MAX_NOMBRE_TARJETA == 26
+
+
 def test_transiciones_y_estados_de_la_bd_coinciden_con_la_api(bd):
     from typing import get_args
 

@@ -353,7 +353,9 @@ def _direcciones_por_clientes(
         SELECT IdCliente            AS id_cliente,
                IdDireccion          AS id_direccion,
                TipoDireccion        AS tipo_direccion,
-               CodigoPais           AS codigo_pais,
+               -- El país sale de la ciudad: Direcciones ya no tiene CodigoPais
+               (SELECT c.CodigoPais FROM Catalogo.Ciudad AS c
+                WHERE c.IdCiudad = Clientes.Direcciones.IdCiudad) AS codigo_pais,
                IdCiudad             AS id_ciudad,
                Sector               AS sector,
                CalleDireccion       AS calle_direccion,
@@ -722,6 +724,7 @@ def listar_tarjetas_perfil(conn: Connection, id_cliente: int) -> list[dict[str, 
                TipoTarjeta AS tipo_tarjeta, NombreTarjeta AS nombre_tarjeta,
                IdCliente AS id_cliente, IdCuenta AS id_cuenta,
                IdProducto AS id_producto, Estado AS estado_actual,
+               EsExtension AS es_extension, IdTarjetaTitular AS id_tarjeta_titular,
                PinAsignado AS pin_asignado, FechaEmision AS fecha_emision,
                FechaExpiracion AS fecha_expiracion
         FROM Tarjeta.Tarjeta
@@ -783,23 +786,26 @@ def insertar_direccion(
 
     ahora = datetime.now(UTC)
     sql = """
+        SET NOCOUNT ON;
         DECLARE @TblDir TABLE (IdDireccion INT);
 
         INSERT INTO Clientes.Direcciones (
-            IdCliente, TipoDireccion, CodigoPais, IdCiudad, Sector,
+            IdCliente, TipoDireccion, IdCiudad, Sector,
             CalleDireccion, ReferenciaUbicacion, CodigoPostal, EsPrincipal,
-            Estado, FechaRegistro
+            Estado, FechaRegistro, CreadoPor
         )
         OUTPUT INSERTED.IdDireccion INTO @TblDir
         VALUES (
-            :id_cliente, :tipo_direccion, :codigo_pais, :id_ciudad, :sector,
+            :id_cliente, :tipo_direccion, :id_ciudad, :sector,
             :calle_direccion, :referencia_ubicacion, :codigo_postal, :es_principal,
-            :estado, :fecha_registro
+            :estado, :fecha_registro, :creado_por
         );
 
         SELECT IdDireccion          AS id_direccion,
                TipoDireccion        AS tipo_direccion,
-               CodigoPais           AS codigo_pais,
+               -- El país sale de la ciudad: Direcciones ya no tiene CodigoPais
+               (SELECT c.CodigoPais FROM Catalogo.Ciudad AS c
+                WHERE c.IdCiudad = Clientes.Direcciones.IdCiudad) AS codigo_pais,
                IdCiudad             AS id_ciudad,
                Sector               AS sector,
                CalleDireccion       AS calle_direccion,
@@ -822,6 +828,8 @@ def insertar_direccion(
         "es_principal": datos.get("es_principal", False),
         "estado": "Activo",
         "fecha_registro": ahora,
+        # CreadoPor es NOT NULL: quien registra la dirección
+        "creado_por": modificado_por,
     }
     row = _one(conn, sql, params)
     if not row:
@@ -850,7 +858,9 @@ def obtener_direccion(
         """
         SELECT IdDireccion          AS id_direccion,
                TipoDireccion        AS tipo_direccion,
-               CodigoPais           AS codigo_pais,
+               -- El país sale de la ciudad: Direcciones ya no tiene CodigoPais
+               (SELECT c.CodigoPais FROM Catalogo.Ciudad AS c
+                WHERE c.IdCiudad = Clientes.Direcciones.IdCiudad) AS codigo_pais,
                IdCiudad             AS id_ciudad,
                Sector               AS sector,
                CalleDireccion       AS calle_direccion,
@@ -906,9 +916,9 @@ def actualizar_direccion(
     }
 
     sql = """
+        SET NOCOUNT ON;
         UPDATE Clientes.Direcciones
         SET TipoDireccion = :tipo_direccion,
-            CodigoPais = :codigo_pais,
             IdCiudad = :id_ciudad,
             Sector = :sector,
             CalleDireccion = :calle_direccion,
@@ -919,7 +929,9 @@ def actualizar_direccion(
 
         SELECT IdDireccion          AS id_direccion,
                TipoDireccion        AS tipo_direccion,
-               CodigoPais           AS codigo_pais,
+               -- El país sale de la ciudad: Direcciones ya no tiene CodigoPais
+               (SELECT c.CodigoPais FROM Catalogo.Ciudad AS c
+                WHERE c.IdCiudad = Clientes.Direcciones.IdCiudad) AS codigo_pais,
                IdCiudad             AS id_ciudad,
                Sector               AS sector,
                CalleDireccion       AS calle_direccion,

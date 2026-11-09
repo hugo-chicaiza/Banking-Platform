@@ -49,6 +49,7 @@ Solicitada ─► Aprobada ─► Generada ─► Activa ◄─► Bloqueada / I
 - [ ] `Generada → Activa` no se puede hacer a mano (`409 ACTIVACION_AUTOMATICA`)
 - [ ] Regenerar el PIN (olvido o bloqueo por intentos) con TAR-05
 - [ ] Ver el historial de eventos de la tarjeta (TAR-06)
+- [ ] Débito: al aprobar o regenerar el PIN se genera el sobre de PIN (PDF con el PIN temporal), guardado cifrado y descargable una sola vez para entregarlo al cliente (TAR-07)
 - [ ] El PIN nunca aparece en logs, respuestas ni errores
 - [ ] Pruebas: aprobación con PIN generado, transición válida e inválida, activación manual rechazada, regeneración de PIN
 
@@ -60,5 +61,7 @@ Solicitada ─► Aprobada ─► Generada ─► Activa ◄─► Bloqueada / I
 ## Pendiente
 
 - Proceso programado que active las tarjetas de crédito al cumplir los 3 días laborables (hoy se activan al usarse en ATM-01).
-- Canal de entrega del PIN de débito (hoja impresa) y solicitud del PIN de crédito por servicio al cliente: no se simulan.
+- Canal de entrega del PIN de débito: el sobre de PIN se genera y se descarga con TAR-07; la impresión y la entrega física al cliente quedan fuera del sistema. La solicitud del PIN de crédito por servicio al cliente no se simula.
+- [ ] **Cuando ATM-06 esté desarrollado:** probar de punta a punta la activación de una tarjeta de débito: aprobar (TAR-04), descargar el sobre (TAR-07), ingresar al ATM con el PIN temporal (ATM-01 con `cambioPinRequerido: true`), cambiar el PIN (ATM-06) y verificar que la tarjeta pase de `Generada` a `Activa`, que TAR-06 registre `CambioPin` con `origen: Cliente` y que el PIN temporal ya no sirva.
+- [ ] Crear MongoDB en Azure y configurar `MONGO_URI` y `SOBRE_PIN_CLAVE` para los sobres de PIN (ver TAR-07). Mientras tanto, fuera de producción, se guardan cifrados en disco local.
 - G-02 y estados de tarjeta: ver F-08 (`TarjetaPIN.RequiereCambio`, `CK_Tarjeta_Estado`, `Tarjeta.TransicionEstado`).

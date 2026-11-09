@@ -14,6 +14,23 @@ IdEntero = Annotated[StrictInt, Field(gt=0, le=MAX_INT)]
 
 TipoTarjeta = Literal["Debito", "Credito"]
 
+# Largo máximo del nombre impreso: lo que admite el grabado de una tarjeta física
+# (columna Tarjeta.Tarjeta.NombreTarjeta varchar(26))
+MAX_NOMBRE_TARJETA = 26
+
+# TAR-06: quién fijó el PIN de un evento CambioPin, según la Descripcion que escribe
+# cada operación en Tarjeta.TarjetaHis. Solo "Cliente" es un cambio hecho por el titular
+OrigenPin = Literal["Generacion", "Regeneracion", "Cliente"]
+DESCRIPCION_PIN_GENERADO = "PIN generado automáticamente"  # TAR-04 al aprobar
+DESCRIPCION_PIN_REGENERADO = "Regeneración de PIN"  # TAR-05
+DESCRIPCION_PIN_CLIENTE = "Cambio de PIN en ATM"  # ATM-06
+ORIGEN_PIN: dict[str, OrigenPin] = {
+    DESCRIPCION_PIN_GENERADO: "Generacion",
+    "Asignación de PIN inicial": "Generacion",  # eventos anteriores al HSM
+    DESCRIPCION_PIN_REGENERADO: "Regeneracion",
+    DESCRIPCION_PIN_CLIENTE: "Cliente",
+}
+
 # Valores de CK_Tarjeta_Estado (F-08). Mantener alineados con la base
 EstadoTarjeta = Literal[
     "Solicitada",
@@ -62,7 +79,7 @@ class TarjetaCreate(_Entrada):
         StringConstraints(
             strip_whitespace=True,
             min_length=1,
-            max_length=50,
+            max_length=MAX_NOMBRE_TARJETA,
             pattern=r"^[A-Za-zÁÉÍÓÚÜÑáéíóúüñ][A-Za-zÁÉÍÓÚÜÑáéíóúüñ .'\-]*$",
         ),
     ]
@@ -88,6 +105,8 @@ class TarjetaEstadoUpdate(_Entrada):
     """Body de POST /api/v1/tarjetas/{idTarjeta}/estado (TAR-04)."""
 
     estado: EstadoDestino
+    # Se muestra en TAR-06. El ejemplo evita que Swagger proponga texto aleatorio
+    # generado desde el patrón
     motivo: Annotated[
         str,
         StringConstraints(
@@ -96,6 +115,7 @@ class TarjetaEstadoUpdate(_Entrada):
             max_length=500,
             pattern=r"^[^\x00-\x1f\x7f]+$",
         ),
+        Field(examples=["Solicitud del cliente aprobada"]),
     ]
 
 
@@ -125,6 +145,9 @@ class TarjetaResumen(CamelModel):
     numero_enmascarado: str
     estado_actual: EstadoTarjeta
     fecha_emision: date
+    # Extensión (adicional) y su tarjeta titular; las principales llevan False y null
+    es_extension: bool
+    id_tarjeta_titular: int | None = None
 
 
 class Tarjeta(TarjetaResumen):
@@ -155,6 +178,8 @@ class TarjetaHistorial(CamelModel):
     estado_nuevo: str | None = None
     motivo: str | None = None
     resultado: str | None = None
+    # Solo en CambioPin: None si la descripción no es de una operación conocida
+    origen: OrigenPin | None = None
     fecha_cambio: datetime
     realizado_por: int
 
