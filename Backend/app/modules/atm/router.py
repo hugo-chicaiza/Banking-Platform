@@ -14,6 +14,7 @@ from app.core.api.errors import RESPUESTAS_ERROR, ProblemDetailsRoute, problema
 from app.core.database.db import get_engine
 from app.modules.atm import (
     cambio_pin_service,
+    retiros_service,
     reversos_service,
     saldo_service,
     service,
@@ -24,6 +25,7 @@ from app.modules.atm.schemas import (
     ATMAuthRequest,
     ATMAuthResponse,
     AtmCambioPinRequest,
+    AtmRetiroRequest,
     AtmReversoRequest,
     AtmSaldoRequest,
     AtmSaldoResponse,
@@ -70,6 +72,25 @@ def _objeto_sin_duplicados(pares: list[tuple[str, Any]]) -> dict[str, Any]:
             raise ValueError("JSON inválido")
         datos[clave] = valor
     return datos
+
+
+async def _leer_cuerpo_operacion_atm(request: Request) -> bytearray:
+    """Controles comunes, despues de autenticar y antes de parsear datos sensibles."""
+    if request.query_params:
+        raise problema(400, "DATOS_INVALIDOS", "La solicitud no admite parámetros.")
+    if (
+        request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+        != "application/json"
+    ):
+        raise problema(415, "TIPO_CONTENIDO_INVALIDO", "Se requiere application/json.")
+    cuerpo = bytearray()
+    async for fragmento in request.stream():
+        if len(cuerpo) + len(fragmento) > _MAX_BODY_AUTH:
+            raise problema(
+                413, "SOLICITUD_DEMASIADO_GRANDE", "La solicitud es demasiado grande."
+            )
+        cuerpo.extend(fragmento)
+    return cuerpo
 
 
 async def leer_auth_atm(request: Request) -> ATMAuthRequest:
@@ -234,20 +255,7 @@ async def leer_cambio_pin_atm(
     terminal: Annotated[TerminalAutenticado, Depends(require_terminal)],
 ) -> CambioPinAutenticado:
     # Validar sesión y credencial antes de consumir el cuerpo sensible.
-    if request.query_params:
-        raise problema(400, "DATOS_INVALIDOS", "La solicitud no admite parámetros.")
-    if (
-        request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
-        != "application/json"
-    ):
-        raise problema(415, "TIPO_CONTENIDO_INVALIDO", "Se requiere application/json.")
-    cuerpo = bytearray()
-    async for fragmento in request.stream():
-        if len(cuerpo) + len(fragmento) > _MAX_BODY_AUTH:
-            raise problema(
-                413, "SOLICITUD_DEMASIADO_GRANDE", "La solicitud es demasiado grande."
-            )
-        cuerpo.extend(fragmento)
+    cuerpo = await _leer_cuerpo_operacion_atm(request)
     try:
         entrada = AtmCambioPinRequest.model_validate(
             json.loads(cuerpo, object_pairs_hook=_objeto_sin_duplicados)
@@ -321,20 +329,7 @@ async def leer_transferencia_atm(
     sesion: Annotated[session.SesionATM, Depends(session.require_sesion_operativa)],
     terminal: Annotated[TerminalAutenticado, Depends(require_terminal)],
 ) -> TransferenciaAutenticada:
-    if request.query_params:
-        raise problema(400, "DATOS_INVALIDOS", "La solicitud no admite parámetros.")
-    if (
-        request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
-        != "application/json"
-    ):
-        raise problema(415, "TIPO_CONTENIDO_INVALIDO", "Se requiere application/json.")
-    cuerpo = bytearray()
-    async for fragmento in request.stream():
-        if len(cuerpo) + len(fragmento) > _MAX_BODY_AUTH:
-            raise problema(
-                413, "SOLICITUD_DEMASIADO_GRANDE", "La solicitud es demasiado grande."
-            )
-        cuerpo.extend(fragmento)
+    cuerpo = await _leer_cuerpo_operacion_atm(request)
     try:
         # Evitar convertir primero a float y perder centavos en importes grandes.
         entrada = AtmTransferenciaRequest.model_validate(
@@ -395,20 +390,7 @@ async def leer_reverso_atm(
     sesion: Annotated[session.SesionATM, Depends(session.require_sesion_operativa)],
     terminal: Annotated[TerminalAutenticado, Depends(require_terminal)],
 ) -> ReversoAutenticado:
-    if request.query_params:
-        raise problema(400, "DATOS_INVALIDOS", "La solicitud no admite parámetros.")
-    if (
-        request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
-        != "application/json"
-    ):
-        raise problema(415, "TIPO_CONTENIDO_INVALIDO", "Se requiere application/json.")
-    cuerpo = bytearray()
-    async for fragmento in request.stream():
-        if len(cuerpo) + len(fragmento) > _MAX_BODY_AUTH:
-            raise problema(
-                413, "SOLICITUD_DEMASIADO_GRANDE", "La solicitud es demasiado grande."
-            )
-        cuerpo.extend(fragmento)
+    cuerpo = await _leer_cuerpo_operacion_atm(request)
     try:
         entrada = AtmReversoRequest.model_validate(
             json.loads(cuerpo, object_pairs_hook=_objeto_sin_duplicados)
@@ -447,5 +429,62 @@ def reversar_atm(
     dependencias: Annotated[DependenciasOperacion, Depends(dependencias_operacion)],
 ) -> Response:
     reversos_service.solicitar_reverso(
+        solicitud.sesion, solicitud.terminal, solicitud.entrada, dependencias
+    )
+
+
+@dataclass(frozen=True, repr=False)
+class RetiroAutenticado:
+    sesion: session.SesionATM
+    terminal: TerminalAutenticado
+    entrada: AtmRetiroRequest
+
+
+async def leer_retiro_atm(
+    request: Request,
+    sesion: Annotated[session.SesionATM, Depends(session.require_sesion_operativa)],
+    terminal: Annotated[TerminalAutenticado, Depends(require_terminal)],
+) -> RetiroAutenticado:
+    cuerpo = await _leer_cuerpo_operacion_atm(request)
+    try:
+        entrada = AtmRetiroRequest.model_validate(
+            json.loads(
+                cuerpo, parse_float=Decimal, object_pairs_hook=_objeto_sin_duplicados
+            )
+        )
+    except (ValueError, ValidationError):
+        raise problema(
+            400, "DATOS_INVALIDOS", "La solicitud tiene datos inválidos."
+        ) from None
+    return RetiroAutenticado(sesion, terminal, entrada)
+
+
+@router.post(
+    "/retiros",
+    status_code=501,
+    response_class=Response,
+    operation_id="ATM03",
+    description="ATM-03 parcial: retiros deshabilitados hasta resolver contabilidad y dispensación.",
+    openapi_extra={
+        "security": ({"SesionATM": [], "APIKeyHeader": []},),
+        "requestBody": {
+            "required": True,
+            "content": {
+                "application/json": {"schema": AtmRetiroRequest.model_json_schema()}
+            },
+        },
+    },
+    responses={
+        501: {
+            "description": "Operación financiera no habilitada.",
+            "content": RESPUESTAS_ERROR[500]["content"],
+        }
+    },
+)
+def retirar_atm(
+    solicitud: Annotated[RetiroAutenticado, Depends(leer_retiro_atm)],
+    dependencias: Annotated[DependenciasOperacion, Depends(dependencias_operacion)],
+) -> Response:
+    retiros_service.solicitar_retiro(
         solicitud.sesion, solicitud.terminal, solicitud.entrada, dependencias
     )

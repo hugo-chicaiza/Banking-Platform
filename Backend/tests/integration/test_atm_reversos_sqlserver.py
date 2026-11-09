@@ -1,9 +1,6 @@
 """ATM-08 opt-in: SQL local sintetico, sin flujo financiero ni acceso a Azure."""
 
 import os
-import time
-from concurrent.futures import ThreadPoolExecutor
-from threading import Event
 from uuid import uuid4
 
 import pytest
@@ -18,6 +15,7 @@ from tests.integration.atm_cambio_pin_sql_lab import (
     identificador,
     motor,
 )
+from tests.integration.atm_sql_concurrency import comprobar_serializacion
 
 
 @pytest.fixture(scope="module")
@@ -115,8 +113,6 @@ def test_indices_existentes_rechazan_duplicado_y_rollback(engine, registro, rela
 
 @pytest.mark.parametrize("por_registro", [False, True])
 def test_locks_serializan_preparacion_sin_reversar(engine, por_registro):
-    listo, intentado, liberar = Event(), Event(), Event()
-
     def bloquear(c):
         c.exec_driver_sql("SET LOCK_TIMEOUT 4000")
         if por_registro:
@@ -125,35 +121,7 @@ def test_locks_serializan_preparacion_sin_reversar(engine, por_registro):
             assert repo.leer_original(c, 71) is not None
             assert not repo.tiene_reverso(c, 71)
 
-    def primero():
-        with engine.connect() as c:
-            tx = c.begin()
-            try:
-                bloquear(c)
-                listo.set()
-                assert liberar.wait(4)
-            finally:
-                tx.rollback()
-
-    def segundo():
-        assert listo.wait(4)
-        with engine.connect() as c:
-            tx = c.begin()
-            try:
-                intentado.set()
-                bloquear(c)
-            finally:
-                tx.rollback()
-
-    with ThreadPoolExecutor(2) as pool:
-        a, b = pool.submit(primero), pool.submit(segundo)
-        assert intentado.wait(4)
-        time.sleep(0.25)
-        solapamiento = not b.done()
-        liberar.set()
-        a.result(timeout=6)
-        b.result(timeout=6)
-    assert solapamiento
+    comprobar_serializacion(engine, bloquear)
     with engine.begin() as c:
         assert not repo.tiene_reverso(c, 71)
         original = repo.leer_original(c, 71)

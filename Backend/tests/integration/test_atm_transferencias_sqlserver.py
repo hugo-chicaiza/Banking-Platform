@@ -5,9 +5,6 @@ Prueba consultas parametrizadas y locks reales; conserva la base creada.
 """
 
 import os
-import time
-from concurrent.futures import ThreadPoolExecutor
-from threading import Event
 from uuid import uuid4
 
 import pytest
@@ -20,6 +17,7 @@ from tests.integration.atm_cambio_pin_sql_lab import (
     identificador,
     motor,
 )
+from tests.integration.atm_sql_concurrency import comprobar_serializacion
 
 
 @pytest.fixture(scope="module")
@@ -100,8 +98,6 @@ def test_sql_bloqueo_ordenado_y_rollback_no_cambian_saldos(engine):
 
 @pytest.mark.parametrize("registro", [False, True])
 def test_sql_concurrencia_serializa_cuentas_y_registro_sin_escribir(engine, registro):
-    listo, intentado, liberar = Event(), Event(), Event()
-
     def bloqueo(c, orden):
         c.exec_driver_sql("SET LOCK_TIMEOUT 4000")
         if registro:
@@ -109,36 +105,9 @@ def test_sql_concurrencia_serializa_cuentas_y_registro_sin_escribir(engine, regi
         else:
             repo.bloquear_cuentas(c, *orden)
 
-    def primero():
-        with engine.connect() as c:
-            tx = c.begin()
-            try:
-                bloqueo(c, (2, 1))
-                listo.set()
-                assert liberar.wait(4)
-            finally:
-                tx.rollback()
-
-    def segundo():
-        assert listo.wait(4)
-        with engine.connect() as c:
-            tx = c.begin()
-            try:
-                intentado.set()
-                bloqueo(c, (1, 2))
-            finally:
-                tx.rollback()
-
-    with ThreadPoolExecutor(2) as pool:
-        a = pool.submit(primero)
-        b = pool.submit(segundo)
-        assert intentado.wait(4)
-        time.sleep(0.25)
-        solapamiento = not b.done()
-        liberar.set()
-        a.result(timeout=6)
-        b.result(timeout=6)
-    assert solapamiento
+    comprobar_serializacion(
+        engine, lambda c: bloqueo(c, (2, 1)), lambda c: bloqueo(c, (1, 2))
+    )
     with engine.begin() as c:
         assert c.scalar(text("SELECT COUNT(*) FROM Transacciones.Transaccion")) == 1
         assert c.scalar(text("SELECT SUM(Saldo) FROM Cuentas.Cuenta")) == 1200

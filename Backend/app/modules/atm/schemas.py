@@ -13,7 +13,7 @@ from pydantic import (
 )
 
 from app.core.api.schemas import CamelModel, Money
-from app.modules.caja.schemas import MontoPositivo, RegistroUnico
+from app.modules.caja.schemas import FechaHoraEc, MontoPositivo, RegistroUnico
 
 CodigoATM = Annotated[
     str,
@@ -77,6 +77,32 @@ class AtmSaldoRequest(CamelModel):
 
     id_cuenta: int = Field(gt=0, le=2147483647)
     registro_unico: str = Field(pattern=r"^[A-Za-z0-9]{12}$")
+
+
+class AtmRetiroRequest(CamelModel):
+    """ATM-03: moneda USD del modulo Cuentas, sin exoneracion desde ATM."""
+
+    model_config = ConfigDict(extra="forbid", strict=True, validate_by_name=False)
+
+    id_cuenta: int = Field(gt=0, le=2147483647)
+    monto: MontoPositivo
+    registro_unico: RegistroUnico
+    fecha_hora_dispositivo: FechaHoraEc | None = None
+
+    @field_validator("monto", mode="before", json_schema_input_type=int | float)
+    @classmethod
+    def _numero_monetario(cls, valor: object) -> Decimal:
+        # Mismo contrato numerico que ATM-05, sin aceptar cadenas ni booleanos.
+        return AtmTransferenciaRequest._numero_monetario(valor)
+
+    @field_validator("fecha_hora_dispositivo", mode="before")
+    @classmethod
+    def _fecha_dispositivo(cls, valor: object) -> datetime | None:
+        if valor is None:
+            return None
+        if not isinstance(valor, str):
+            raise ValueError("Fecha invalida")  # noqa: TRY004 -- Pydantic requiere error de validacion, no TypeError.
+        return datetime.fromisoformat(valor)
 
 
 class AtmReversoRequest(CamelModel):
