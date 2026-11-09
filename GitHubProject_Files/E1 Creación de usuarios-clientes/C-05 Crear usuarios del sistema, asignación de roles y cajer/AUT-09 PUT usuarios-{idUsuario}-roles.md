@@ -21,69 +21,40 @@ url: https://github.com/hugo-chicaiza/Banking-Platform/issues/193
 
 `PUT /api/v1/usuarios/{idUsuario}/roles` · **Roles:** ADMIN · **Historia:** C-05 (#48) · **OpenAPI:** `AUT09`
 
-Reemplaza los roles del usuario.
+Reemplaza el rol del usuario. Un solo rol por usuario; vive en la membresía de WorkOS (EnquoCoop) y se copia en `RolesWorkOS`.
 
-| Lee | Escribe | DB |
+| Lee | Escribe | Externo |
 |---|---|---|
-| — | `Seguridad.GruposUsuarios` | — |
+| `Organizacion.Usuarios` | `Organizacion.Usuarios.RolesWorkOS`, `Caja.CajerosAsignadosAgencia`, `Auditoria.Auditoria` (CAMBIAR_ROL) | WorkOS (membresía o invitación) |
 
 ## Reglas de negocio
 
-1. Reemplaza el conjunto completo de roles; la lista no puede estar vacía.
-2. Roles válidos: ADMIN, ASESOR, CAJERO, SUPERVISOR, APROBADOR_CREDITO, CONTADOR, AUDITOR (deben existir en `Seguridad.Grupos`) → si no, 400.
-3. Los roles quitados pasan a `Estado = 'Inactivo'` (no se borran); los nuevos se insertan con `AsignadoPor` del token.
-4. El último ADMIN activo no puede perder el rol ADMIN → 409.
+1. Vinculado → `update_organization_membership(role_slug = org-<rol>)`. Pendiente → se revoca la invitación y se envía otra con el rol nuevo.
+2. Mismo rol → 200 sin cambios.
+3. **Último ADMIN** → `409 ULTIMO_ADMIN`. Cuenta como ADMIN real: usuario `Activo`, vinculado (`KeyUsuario`) y con membresía **activa** `org-admin` en WorkOS. Una fila sin membresía no cuenta.
+4. Si deja de ser CAJERO se cierra su asignación vigente de caja.
+5. La sesión del usuario toma el rol nuevo cuando se renueva su access token (minutos, AUT-02).
+6. WorkOS falla → la base se revierte (`503`).
 
-## Flujo
-
-1. Validar roles y regla del último ADMIN.
-2. Desactivar los roles quitados e insertar los nuevos en una transacción.
-3. Responder 200; los tokens vigentes conservan los roles viejos hasta su renovación (AUT-02).
-
-## Request
-
-| Parámetro | En | Tipo | Req. | Regla |
-|---|---|---|---|---|
-| idUsuario | path | integer | Sí |  |
-
-Body `RolesUpdate`:
-
-| Campo | Tipo | Req. | Regla |
-|---|---|---|---|
-| roles | string[] | Sí | ADMIN, ASESOR, CAJERO, SUPERVISOR, APROBADOR_CREDITO, CONTADOR, AUDITOR |
+## Request · `RolUpdate`
 
 ```json
-{
-  "roles": [
-    "CAJERO"
-  ]
-}
+{ "rol": "SUPERVISOR" }
 ```
 
 ## Response `200`
 
-`Usuario`
-
-```json
-{
-  "idUsuario": 1,
-  "username": "mlopez",
-  "nombre": "María López",
-  "email": "maria.lopez@correo.ec",
-  "roles": [
-    "CAJERO"
-  ],
-  "estado": "Activo",
-  "fechaCreacion": "2026-11-04T10:15:00-05:00"
-}
-```
+`UsuarioDetalle` (ver AUT-07).
 
 ## Errores
 
-Formato ProblemDetails (ver F-04). Solo 400/401/403/404.
+| HTTP | `code` | Cuándo |
+|---|---|---|
+| 400 | `DATOS_INVALIDOS` | Rol inexistente o cuerpo distinto |
+| 404 | `USUARIO_NO_ENCONTRADO` | No existe |
+| 409 | `ULTIMO_ADMIN` | Quitaría el último ADMIN real |
+| 503 | `WORKOS_NO_DISPONIBLE` | WorkOS caído (no cambia nada) |
 
 ## Definición de terminado
 
-- [ ] Coincide con `openapi.yaml` (request, response y errores)
-- [ ] Prueba del caso feliz y de cada error de la tabla
-- [ ] Sin PAN, PIN, contraseñas ni tokens en logs
+- [x] Vinculado, pendiente, mismo rol, rol inválido, último ADMIN, ADMIN sin membresía (`tests/unit/test_usuarios.py`)
