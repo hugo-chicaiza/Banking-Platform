@@ -1,8 +1,8 @@
 """Apoyo de pruebas de tarjetas: HSM simulado con claves fijas y SeguridadDB en memoria.
 
 Reemplaza solo las funciones del repositorio que tocan SeguridadDB (PAN ficticio y
-TarjetaPIN); el HSM es el simulador real, así que el PIN Block ISO-4 y el Offset IBM
-3624 se prueban de punta a punta.
+TarjetaPIN); el HSM es el simulador real, así que la generación del PIN y el Offset
+IBM 3624 se prueban de punta a punta.
 """
 
 from dataclasses import dataclass, field
@@ -43,30 +43,14 @@ def instalar(monkeypatch) -> SeguridadEnMemoria:
     def guardar_pan(_c, id_tarjeta, cifrado, referencia):
         memoria.pans[id_tarjeta] = (cifrado, referencia)
 
-    def estado(_c, id_tarjeta):
-        fila = memoria.pines.get(id_tarjeta)
-        if fila is None:
-            return None
-        return {
-            "confirmado": fila["confirmado"],
-            "estado": fila["estado"],
-            "tiene_offset": fila["offset"] is not None,
-        }
-
-    def pendiente(_c, id_tarjeta, offset, referencia_pvk):
+    def guardar_pin(_c, id_tarjeta, offset, referencia_pvk, requiere_cambio):
         memoria.pines[id_tarjeta] = {
             "offset": offset,
             "pvk": referencia_pvk,
-            "confirmado": False,
-            "estado": "Inactivo",
+            "requiere_cambio": requiere_cambio,
+            "estado": "Activo",
+            "intentos": 0,
         }
-
-    def confirmar(_c, id_tarjeta):
-        fila = memoria.pines.get(id_tarjeta)
-        if fila is None or fila["offset"] is None or fila["confirmado"]:
-            return False
-        fila.update(confirmado=True, estado="Activo")
-        return True
 
     monkeypatch.setattr(repository, "guardar_pan_ficticio", guardar_pan)
     monkeypatch.setattr(
@@ -75,16 +59,20 @@ def instalar(monkeypatch) -> SeguridadEnMemoria:
     monkeypatch.setattr(
         repository, "obtener_pan_ficticio", lambda _c, i: memoria.pans.get(i)
     )
-    monkeypatch.setattr(repository, "obtener_estado_pin", estado)
-    monkeypatch.setattr(repository, "guardar_offset_pendiente", pendiente)
-    monkeypatch.setattr(repository, "confirmar_pin", confirmar)
+    monkeypatch.setattr(repository, "guardar_pin_generado", guardar_pin)
     return memoria
 
 
-def body_pin(pin: str, pan: str = PAN) -> dict[str, str]:
-    """Body de TAR-05 tal como lo enviaría el PIN pad."""
-    bloque, referencia = HSM.construir_pin_block(pin, pan)
-    return {"encryptedPinBlock": bloque, "keyReference": referencia}
+def pin_generado(memoria: SeguridadEnMemoria, id_tarjeta: int = 301) -> str:
+    """Solo para pruebas: reconstruye el PIN que eligió el HSM (natural + Offset).
+
+    En el sistema nadie puede hacerlo; aquí sirve para probar que ATM-01 lo acepta.
+    """
+    natural = HSM._pin_natural(PAN)
+    offset = memoria.pin(id_tarjeta)["offset"]
+    return "".join(
+        str((int(n) + int(o)) % 10) for n, o in zip(natural, offset, strict=True)
+    )
 
 
 def pin_valido(memoria: SeguridadEnMemoria, pin: str, id_tarjeta: int = 301) -> bool:
@@ -92,3 +80,9 @@ def pin_valido(memoria: SeguridadEnMemoria, pin: str, id_tarjeta: int = 301) -> 
     fila = memoria.pin(id_tarjeta)
     bloque, referencia = HSM.construir_pin_block(pin, PAN)
     return HSM.verificar_pin(bloque, referencia, PAN, fila["offset"], fila["pvk"])
+
+
+def body_pin(pin: str, pan: str = PAN) -> dict[str, str]:
+    """PIN Block ISO-4 tal como lo enviaría el PIN pad del cajero."""
+    bloque, referencia = HSM.construir_pin_block(pin, pan)
+    return {"encryptedPinBlock": bloque, "keyReference": referencia}

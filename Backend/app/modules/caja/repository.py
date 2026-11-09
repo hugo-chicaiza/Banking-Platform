@@ -1,9 +1,10 @@
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import Connection, bindparam, text
 
 from app.core.database.procedimientos import ejecutar_con_salidas
+from app.modules.contabilidad import service as contabilidad
 
 Fila = dict[str, Any]
 
@@ -546,13 +547,11 @@ def insertar_jornada(
 # --- CAJ-07: dotación ----------
 
 
-def id_fecha_contable(conn: Connection) -> int | None:
-    """Obtiene el identificador de la fecha contable vigente."""
-    valor = conn.execute(
-        text("SELECT Contabilidad.fn_IdFechaContable(GETDATE())")
-    ).scalar()
-
-    return int(valor) if valor is not None else None
+def id_fecha_contable(conn: Connection, fecha_hora: datetime | None = None) -> int:
+    """Resuelve el calendario SQL con hora de Ecuador, sin usar GETDATE()."""
+    return contabilidad.resolver_id_fecha_contable(
+        conn, fecha_hora if fecha_hora is not None else contabilidad.ahora_ecuador()
+    )
 
 
 def registrar_dotacion(

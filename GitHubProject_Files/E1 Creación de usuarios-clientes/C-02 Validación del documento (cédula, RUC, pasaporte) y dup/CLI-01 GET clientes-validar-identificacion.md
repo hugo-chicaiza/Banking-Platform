@@ -32,6 +32,8 @@ Valida formato del documento y si ya existe.
 1. Cédula: 10 dígitos con dígito verificador módulo 10. RUC: 13 dígitos terminados en `001`. Pasaporte: 5 a 13 caracteres alfanuméricos (`CK_Cliente_Identificacion`).
 2. Responde 200 siempre que los parámetros lleguen; el resultado va en `valido` y `existe` (si existe, incluye `idCliente`).
 3. No escribe nada; CLI-02 repite la validación al crear.
+4. RUC natural: se valida la cédula base con módulo 10. RUC de sociedades (tercer dígito 6/9): se valida formato, provincia y terminación 001; no se aplica el algoritmo de cédula. El SRI emite números sin verificador algorítmico, por lo que este endpoint no certifica inscripción ni estado tributario. Véase el [comunicado publicado por Gobierno Electrónico](https://minka.gob.ec/mintel/ge/rutr/gobec_forms/-/issues/32).
+5. Documentos usan caracteres ASCII compatibles con la restricción SQL. Los parámetros ausentes o fuera del esquema devuelven `400 DATOS_INVALIDOS` en ProblemDetails.
 
 ## Flujo
 

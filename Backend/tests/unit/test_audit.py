@@ -1,6 +1,7 @@
 """Auditoría (F-04) y su uso en las escrituras de tarjetas."""
 
 import logging
+from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import SQLAlchemyError
@@ -9,8 +10,9 @@ from app.core.database.db import cooperativa
 from app.core.security import audit
 from app.main import app
 from app.modules.tarjetas import repository, router
+from tests.pin_version import DriverLimitesSQL
 from tests.sesion import ID_AUDITORIA, simular_sesion
-from tests.tarjetas_hsm import body_pin, instalar
+from tests.tarjetas_hsm import instalar
 from tests.unit.test_tarjetas import BASE, FILA, PAYLOAD
 
 EVENTO = audit.EventoAuditoria(
@@ -27,6 +29,11 @@ EVENTO = audit.EventoAuditoria(
 class _Conn:
     def __init__(self) -> None:
         self.parametros: dict | None = None
+        self.connection = SimpleNamespace(driver_connection=DriverLimitesSQL())
+        self.invalidated = False
+
+    def invalidate(self) -> None:
+        self.invalidated = True
 
     def execute(self, _sql, parametros):
         self.parametros = parametros
@@ -38,8 +45,8 @@ class _Conn:
         return None
 
 
-def _cliente(monkeypatch) -> TestClient:
-    conn = _Conn()
+def _cliente(monkeypatch, conn: _Conn | None = None) -> TestClient:
+    conn = conn if conn is not None else _Conn()
     app.dependency_overrides[cooperativa] = lambda: conn
     app.dependency_overrides[router.seguridad] = lambda: conn
     simular_sesion(app)
@@ -84,11 +91,13 @@ def test_fallo_de_auditoria_no_rompe_ni_filtra_parametros(monkeypatch, caplog):
 
 
 def test_escritura_exitosa_se_audita(monkeypatch, eventos_auditados):
-    c = _cliente(monkeypatch)
-    monkeypatch.setattr(repository, "obtener_tarjeta", lambda _c, _i, **_k: FILA)
-    monkeypatch.setattr(repository, "marcar_pin_asignado", lambda _c, _i: True)
+    conn = _Conn()
+    c = _cliente(monkeypatch, conn)
+    activa = {**FILA, "estado_actual": "Activa", "pin_asignado": True}
+    monkeypatch.setattr(repository, "obtener_tarjeta", lambda _c, _i, **_k: activa)
+    monkeypatch.setattr(repository, "marcar_pin_asignado", lambda _c, _i: None)
     try:
-        r = c.post(f"{BASE}/301/pin", json=body_pin("7392"))
+        r = c.post(f"{BASE}/301/pin")
     finally:
         app.dependency_overrides.clear()
 
@@ -100,22 +109,29 @@ def test_escritura_exitosa_se_audita(monkeypatch, eventos_auditados):
         "Exitoso",
     )
     assert evento.usuario == ID_AUDITORIA and evento.ip == "testclient"
-    assert "7392" not in str(evento)
+    assert "Regeneración de PIN" in evento.descripcion
+    assert conn.connection.driver_connection.timeout == 0
+    assert conn.connection.driver_connection.lock_timeout == -1
+    assert conn.invalidated is False
 
 
 def test_intento_fallido_se_audita_con_su_codigo(monkeypatch, eventos_auditados):
-    c = _cliente(monkeypatch)
+    conn = _Conn()
+    c = _cliente(monkeypatch, conn)
+    # FILA está Solicitada: todavía no admite PIN
     monkeypatch.setattr(repository, "obtener_tarjeta", lambda _c, _i, **_k: FILA)
     try:
-        r = c.post(f"{BASE}/301/pin", json=body_pin("1234"))
+        r = c.post(f"{BASE}/301/pin")
     finally:
         app.dependency_overrides.clear()
 
-    assert r.status_code == 422
+    assert r.status_code == 409
     evento = eventos_auditados[0]
     assert evento.resultado == "Fallido"
-    assert evento.descripcion.endswith("PIN_DEBIL")
-    assert "1234" not in str(evento)
+    assert evento.descripcion.endswith("PIN_NO_PERMITIDO")
+    assert conn.connection.driver_connection.timeout == 0
+    assert conn.connection.driver_connection.lock_timeout == -1
+    assert conn.invalidated is False
 
 
 def test_emision_rechazada_se_audita_sin_id(monkeypatch, eventos_auditados):

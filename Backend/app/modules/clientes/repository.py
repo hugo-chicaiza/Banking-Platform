@@ -353,7 +353,9 @@ def _direcciones_por_clientes(
         SELECT IdCliente            AS id_cliente,
                IdDireccion          AS id_direccion,
                TipoDireccion        AS tipo_direccion,
-               CodigoPais           AS codigo_pais,
+               -- El país sale de la ciudad: Direcciones ya no tiene CodigoPais
+               (SELECT c.CodigoPais FROM Catalogo.Ciudad AS c
+                WHERE c.IdCiudad = Clientes.Direcciones.IdCiudad) AS codigo_pais,
                IdCiudad             AS id_ciudad,
                Sector               AS sector,
                CalleDireccion       AS calle_direccion,
@@ -722,6 +724,7 @@ def listar_tarjetas_perfil(conn: Connection, id_cliente: int) -> list[dict[str, 
                TipoTarjeta AS tipo_tarjeta, NombreTarjeta AS nombre_tarjeta,
                IdCliente AS id_cliente, IdCuenta AS id_cuenta,
                IdProducto AS id_producto, Estado AS estado_actual,
+               EsExtension AS es_extension, IdTarjetaTitular AS id_tarjeta_titular,
                PinAsignado AS pin_asignado, FechaEmision AS fecha_emision,
                FechaExpiracion AS fecha_expiracion
         FROM Tarjeta.Tarjeta
@@ -783,23 +786,26 @@ def insertar_direccion(
 
     ahora = datetime.now(UTC)
     sql = """
+        SET NOCOUNT ON;
         DECLARE @TblDir TABLE (IdDireccion INT);
 
         INSERT INTO Clientes.Direcciones (
-            IdCliente, TipoDireccion, CodigoPais, IdCiudad, Sector,
+            IdCliente, TipoDireccion, IdCiudad, Sector,
             CalleDireccion, ReferenciaUbicacion, CodigoPostal, EsPrincipal,
-            Estado, FechaRegistro
+            Estado, FechaRegistro, CreadoPor
         )
         OUTPUT INSERTED.IdDireccion INTO @TblDir
         VALUES (
-            :id_cliente, :tipo_direccion, :codigo_pais, :id_ciudad, :sector,
+            :id_cliente, :tipo_direccion, :id_ciudad, :sector,
             :calle_direccion, :referencia_ubicacion, :codigo_postal, :es_principal,
-            :estado, :fecha_registro
+            :estado, :fecha_registro, :creado_por
         );
 
         SELECT IdDireccion          AS id_direccion,
                TipoDireccion        AS tipo_direccion,
-               CodigoPais           AS codigo_pais,
+               -- El país sale de la ciudad: Direcciones ya no tiene CodigoPais
+               (SELECT c.CodigoPais FROM Catalogo.Ciudad AS c
+                WHERE c.IdCiudad = Clientes.Direcciones.IdCiudad) AS codigo_pais,
                IdCiudad             AS id_ciudad,
                Sector               AS sector,
                CalleDireccion       AS calle_direccion,
@@ -822,6 +828,8 @@ def insertar_direccion(
         "es_principal": datos.get("es_principal", False),
         "estado": "Activo",
         "fecha_registro": ahora,
+        # CreadoPor es NOT NULL: quien registra la dirección
+        "creado_por": modificado_por,
     }
     row = _one(conn, sql, params)
     if not row:
@@ -850,7 +858,9 @@ def obtener_direccion(
         """
         SELECT IdDireccion          AS id_direccion,
                TipoDireccion        AS tipo_direccion,
-               CodigoPais           AS codigo_pais,
+               -- El país sale de la ciudad: Direcciones ya no tiene CodigoPais
+               (SELECT c.CodigoPais FROM Catalogo.Ciudad AS c
+                WHERE c.IdCiudad = Clientes.Direcciones.IdCiudad) AS codigo_pais,
                IdCiudad             AS id_ciudad,
                Sector               AS sector,
                CalleDireccion       AS calle_direccion,
@@ -884,42 +894,36 @@ def actualizar_direccion(
     if cambios.get("es_principal"):
         _desmarcar_principal(conn, id_cliente)
 
-    params: dict[str, Any] = {
-        "id_direccion": id_direccion,
-        "id_cliente": id_cliente,
-        "tipo_direccion": cambios.get(
-            "tipo_direccion", valores_anteriores["tipo_direccion"]
-        ),
-        "codigo_pais": cambios.get("codigo_pais", valores_anteriores["codigo_pais"]),
-        "id_ciudad": cambios.get("id_ciudad", valores_anteriores["id_ciudad"]),
-        "sector": cambios.get("sector", valores_anteriores.get("sector")),
-        "calle_direccion": cambios.get(
-            "calle_direccion", valores_anteriores["calle_direccion"]
-        ),
-        "referencia_ubicacion": cambios.get(
-            "referencia_ubicacion", valores_anteriores["referencia_ubicacion"]
-        ),
-        "codigo_postal": cambios.get(
-            "codigo_postal", valores_anteriores.get("codigo_postal")
-        ),
-        "es_principal": cambios.get("es_principal", valores_anteriores["es_principal"]),
-    }
-
+    params: dict[str, Any] = {"id_direccion": id_direccion, "id_cliente": id_cliente}
+    for campo in (
+        "tipo_direccion",
+        "id_ciudad",
+        "sector",
+        "calle_direccion",
+        "referencia_ubicacion",
+        "codigo_postal",
+        "es_principal",
+    ):
+        params[campo] = cambios.get(campo)
+        params["enviado_" + campo] = campo in cambios
+    # Para los campos omitidos se conserva la columna actual, nunca el snapshot anterior.
     sql = """
+        SET NOCOUNT ON;
         UPDATE Clientes.Direcciones
-        SET TipoDireccion = :tipo_direccion,
-            CodigoPais = :codigo_pais,
-            IdCiudad = :id_ciudad,
-            Sector = :sector,
-            CalleDireccion = :calle_direccion,
-            ReferenciaUbicacion = :referencia_ubicacion,
-            CodigoPostal = :codigo_postal,
-            EsPrincipal = :es_principal
+        SET TipoDireccion = CASE WHEN :enviado_tipo_direccion = 1 THEN :tipo_direccion ELSE TipoDireccion END,
+            IdCiudad = CASE WHEN :enviado_id_ciudad = 1 THEN :id_ciudad ELSE IdCiudad END,
+            Sector = CASE WHEN :enviado_sector = 1 THEN :sector ELSE Sector END,
+            CalleDireccion = CASE WHEN :enviado_calle_direccion = 1 THEN :calle_direccion ELSE CalleDireccion END,
+            ReferenciaUbicacion = CASE WHEN :enviado_referencia_ubicacion = 1 THEN :referencia_ubicacion ELSE ReferenciaUbicacion END,
+            CodigoPostal = CASE WHEN :enviado_codigo_postal = 1 THEN :codigo_postal ELSE CodigoPostal END,
+            EsPrincipal = CASE WHEN :enviado_es_principal = 1 THEN :es_principal ELSE EsPrincipal END
         WHERE IdDireccion = :id_direccion AND IdCliente = :id_cliente;
 
         SELECT IdDireccion          AS id_direccion,
                TipoDireccion        AS tipo_direccion,
-               CodigoPais           AS codigo_pais,
+               -- El país sale de la ciudad: Direcciones ya no tiene CodigoPais
+               (SELECT c.CodigoPais FROM Catalogo.Ciudad AS c
+                WHERE c.IdCiudad = Clientes.Direcciones.IdCiudad) AS codigo_pais,
                IdCiudad             AS id_ciudad,
                Sector               AS sector,
                CalleDireccion       AS calle_direccion,
@@ -951,9 +955,18 @@ def actualizar_direccion(
 
 
 def eliminar_direccion_logica(
-    conn: Connection, id_cliente: int, id_direccion: int
+    conn: Connection,
+    id_cliente: int,
+    id_direccion: int,
+    *,
+    modificado_por: int,
+    direccion_ip: str,
+    estado_anterior: str,
 ) -> None:
-    """Baja lógica: Estado = 'Eliminado' (CLI-12)."""
+    """El llamador bloquea el cliente; baja e historial comparten su transacción."""
+    observaciones = observaciones_cambio(
+        estado_anterior, "Eliminado", f"Baja lógica de dirección {id_direccion}"
+    )
     conn.execute(
         text("""
             UPDATE Clientes.Direcciones
@@ -962,6 +975,15 @@ def eliminar_direccion_logica(
               AND IdCliente = :id_cliente
         """),
         {"id_direccion": id_direccion, "id_cliente": id_cliente},
+    )
+    insertar_historial_cliente(
+        conn,
+        id_cliente=id_cliente,
+        tipo_operacion="D",
+        campo="DIRECCION.estado",
+        modificado_por=modificado_por,
+        direccion_ip=direccion_ip,
+        observaciones=observaciones,
     )
 
 

@@ -35,7 +35,7 @@ url: https://github.com/hugo-chicaiza/Banking-Platform/issues/17
 
 ## Reglas de negocio
 
-- Contraseñas solo como hash (`ClaveHash`), nunca en texto plano ni en logs.
+- Las contraseñas las gestiona WorkOS: la base no guarda contraseñas ni hashes (`ClaveHash` eliminada el 2026-11-07); nunca en texto plano ni en logs.
 - El JWT lleva `sub` = IdUsuario, `roles[]` e `idAgencia`; todo `CreadoPor`/`RegistradoPor` sale del token.
 - Los roles son los `Seguridad.Grupos` asignados en `GruposUsuarios` con `Estado = 'Activo'`.
 

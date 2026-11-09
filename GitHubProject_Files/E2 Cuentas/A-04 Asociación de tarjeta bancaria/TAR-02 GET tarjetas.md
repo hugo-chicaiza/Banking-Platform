@@ -31,6 +31,8 @@ Busca tarjetas.
 
 1. Solo número enmascarado; nunca PAN, token ni hash.
 2. Filtros combinables; paginado (máx. 100).
+3. Cada tarjeta indica si es una extensión (`esExtension`) y, en ese caso, su tarjeta titular (`idTarjetaTitular`; `null` en las principales).
+4. `esExtension=false` deja solo las principales: es lo que usa TAR-01 para ofrecer la tarjeta titular de una nueva extensión (junto con un estado no terminal).
 
 ## Flujo
 
@@ -51,7 +53,8 @@ Busca tarjetas.
 |---|---|---|---|---|
 | idCliente | query | integer | No | Cliente |
 | idCuenta | query | integer | No | Cuenta |
-| estado | query | string | No | Estado actual |
+| esExtension | query | boolean | No | `true` solo extensiones, `false` solo principales |
+| estado | query | string | No | Estado actual: Solicitada, Aprobada, Generada, Activa, Inactiva, Bloqueada, Cancelada, Anulada, Vencida o Cerrada |
 | page | query | integer | No | Página (desde 1) |
 | pageSize | query | integer | No | Tamaño (máx. 100) |
 | sort | query | string | No | Campo,asc/desc |
@@ -71,7 +74,9 @@ Busca tarjetas.
       "tipoTarjeta": "Debito",
       "nombreTarjeta": "MARIA MENDOZA",
       "numeroEnmascarado": "4540 12** **** 3456",
-      "estadoActual": "PENDIENTE_ACTIVACION",
+      "estadoActual": "Generada",
+      "esExtension": false,
+      "idTarjetaTitular": null,
       "fechaEmision": "2026-10-26"
     },
     {
@@ -82,7 +87,9 @@ Busca tarjetas.
       "tipoTarjeta": "Debito",
       "nombreTarjeta": "MARIA MENDOZA",
       "numeroEnmascarado": "4540 12** **** 7890",
-      "estadoActual": "ACTIVA",
+      "estadoActual": "Activa",
+      "esExtension": true,
+      "idTarjetaTitular": 301,
       "fechaEmision": "2026-09-15"
     }
   ],

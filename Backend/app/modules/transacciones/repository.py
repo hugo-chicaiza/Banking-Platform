@@ -1,10 +1,12 @@
 """SQL de Transacciones. Solo consultas parametrizadas con fragmentos fijos."""
 
+from datetime import datetime
 from typing import Any
 
 from sqlalchemy import Connection, text
 
 from app.core.database.procedimientos import ejecutar_con_salidas
+from app.modules.contabilidad.service import ahora_ecuador
 
 Fila = dict[str, Any]
 
@@ -198,19 +200,19 @@ def autorizar_operacion(
     id_canal: int,
     tipo: str,
     monto: Any,
+    *,
+    fecha_hora: datetime | None = None,
 ) -> Fila:
     """Ejecuta Transacciones.usp_AutorizarOperacion."""
 
-    return ejecutar_con_salidas(
-        conn,
-        """
+    lote = """
         SET NOCOUNT ON;
 
         DECLARE
             @CodigoRespuesta char(2),
             @Mensaje nvarchar(400),
             @Comision decimal(18, 2),
-            @Ahora datetime2 = GETDATE();
+            @Ahora datetime2 = ?;
 
         EXEC Transacciones.usp_AutorizarOperacion
             @IdCuenta = ?,
@@ -226,9 +228,15 @@ def autorizar_operacion(
             @CodigoRespuesta AS CodigoRespuesta,
             @Mensaje AS Mensaje,
             @Comision AS Comision;
-        """,
-        (id_cuenta, id_canal, tipo, monto),
+        """
+    parametros: tuple[Any, ...] = (
+        fecha_hora if fecha_hora is not None else ahora_ecuador(),
+        id_cuenta,
+        id_canal,
+        tipo,
+        monto,
     )
+    return ejecutar_con_salidas(conn, lote, parametros)
 
 
 def insertar_transaccion(
@@ -243,7 +251,7 @@ def insertar_transaccion(
             SET NOCOUNT ON;
 
             DECLARE @ids TABLE (Id bigint);
-            DECLARE @Ahora datetime2 = GETDATE();
+            DECLARE @Ahora datetime2 = :fecha_hora;
 
             INSERT INTO Transacciones.Transaccion (
                 NumeroComprobante,
@@ -416,7 +424,8 @@ def insertar_movimiento_caja(
                 :id_agencia,
                 :id_tipo,
                 :monto,
-                GETDATE(),
+                (SELECT FechaHoraSistema FROM Transacciones.Transaccion
+                 WHERE IdTransaccion = :id_transaccion),
                 :observacion,
                 :id_asiento,
                 :id_fecha_contable

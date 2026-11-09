@@ -32,6 +32,10 @@ Edita una dirección o la marca principal.
 1. Marcar como principal desmarca la anterior en la misma transacción.
 2. Cada campo cambiado va a `ClientesHis`.
 3. Dirección de otro cliente o inexistente → 404.
+4. Una dirección eliminada no se edita (`409 DIRECCION_NO_EDITABLE`). Una dirección inactiva no se promueve a principal (`409 DIRECCION_NO_ACTIVA`).
+5. La principal activa no admite `esPrincipal: false`: se debe promover otra (`409 DIRECCION_PRINCIPAL_REQUERIDA`).
+6. Alta, edición y baja toman el bloqueo del cliente hasta commit/rollback. PATCH actualiza únicamente los campos enviados y modificados; los omitidos conservan el valor persistido.
+7. Texto de calle/referencia: 1–250 caracteres, no solo espacios; sector: máximo 50; código postal: seis dígitos ASCII. null solo borra sector y código postal. Se rechazan campos desconocidos.
 
 ## Request
 
@@ -40,16 +44,16 @@ Edita una dirección o la marca principal.
 | idCliente | path | integer | Sí |  |
 | idDireccion | path | integer | Sí |  |
 
-Body `DireccionCreate`:
+Body `DireccionUpdate` (todos los campos son opcionales):
 
 | Campo | Tipo | Req. | Regla |
 |---|---|---|---|
-| tipoDireccion | Domicilio \| Trabajo \| Correspondencia \| Otra | Sí |  |
-| codigoPais | string(3) | No | Default ECU |
-| idCiudad | integer | Sí |  |
-| sector | string | No |  |
-| calleDireccion | string | Sí |  |
-| referenciaUbicacion | string | Sí |  |
+| tipoDireccion | Domicilio \| Trabajo \| Correspondencia \| Otra | No | No admite null |
+| codigoPais | string(3) | No | Se valida contra la ciudad final; no admite null |
+| idCiudad | integer | No | No admite null |
+| sector | string(50) | No | Admite null |
+| calleDireccion | string(250) | No | No admite null ni solo espacios |
+| referenciaUbicacion | string(250) | No | No admite null ni solo espacios |
 | codigoPostal | string(6) | No | 6 dígitos |
 | esPrincipal | boolean | No |  |
 
@@ -87,7 +91,7 @@ Body `DireccionCreate`:
 
 ## Errores
 
-Formato ProblemDetails (ver F-04). Solo 400/401/403/404.
+Formato ProblemDetails (ver F-04). 400 para datos inválidos; 401/403 para sesión/permisos; 404 para cliente o dirección inexistente; 409 para cliente eliminado o los conflictos de principal descritos arriba; 422 para catálogo inválido.
 
 ## Definición de terminado
 

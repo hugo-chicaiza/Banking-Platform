@@ -60,6 +60,55 @@ def test_tabla_cliente_tiene_columnas(conn):
     assert row == 2, "Clientes.Cliente no tiene IdCliente o Estado"
 
 
+def test_cta06_consulta_ledger_real_sin_modificar_saldos(conn):
+    from datetime import date
+
+    from sqlalchemy import text
+
+    from app.modules.cuentas import service
+
+    id_cuenta = conn.execute(
+        text("""
+                SELECT TOP 1 c.IdCuenta FROM Cuentas.Cuenta c
+                WHERE EXISTS (SELECT 1 FROM Cuentas.MovimientoTransaccion m WHERE m.IdCuenta=c.IdCuenta)
+                ORDER BY c.IdCuenta
+            """)
+    ).scalar_one_or_none()
+    if id_cuenta is None:
+        pytest.skip(
+            "Se necesita una cuenta con movimientos para comprobar los saldos históricos"
+        )
+    desde, hasta = date(1900, 1, 1), date(9999, 12, 31)
+    esperado = conn.execute(
+        text("""
+        SELECT TOP 20 m.IdMovimiento,m.SaldoAnterior,m.SaldoPosterior,m.FechaHoraSistema,
+                      f.Fecha, t.IdCuenta, t.IdCuentaDestino
+        FROM Cuentas.MovimientoTransaccion m
+        JOIN Transacciones.Transaccion t ON t.IdTransaccion=m.IdTransaccion
+        JOIN Contabilidad.FechaContable f ON f.IdFechaContable=m.IdFechaContable
+        WHERE m.IdCuenta=:id
+        ORDER BY m.FechaHoraSistema DESC,m.IdMovimiento DESC
+    """),
+        {"id": id_cuenta},
+    ).all()
+    total = conn.execute(
+        text("SELECT COUNT(*) FROM Cuentas.MovimientoTransaccion WHERE IdCuenta=:id"),
+        {"id": id_cuenta},
+    ).scalar_one()
+    resultado = service.listar_movimientos(conn, id_cuenta, desde=desde, hasta=hasta)
+    assert resultado.total == total and total > 0
+    assert [m.id_movimiento for m in resultado.items] == [fila[0] for fila in esperado]
+    for movimiento, fila in zip(resultado.items, esperado, strict=True):
+        assert movimiento.saldo_anterior == fila[1]
+        assert movimiento.saldo_posterior == fila[2]
+        assert movimiento.fecha_hora_sistema.replace(tzinfo=None) == fila[3]
+        assert movimiento.fecha_contable == fila[4]
+    vacia = service.listar_movimientos(
+        conn, id_cuenta, desde=desde, hasta=hasta, page=1_000_000
+    )
+    assert vacia.items == [] and vacia.total == total
+
+
 def test_tabla_riesgo_cliente_tiene_columnas(conn):
     """RiesgoCliente expone el resultado y la vigencia usados por CTA-01."""
     from sqlalchemy import text
@@ -345,6 +394,30 @@ def test_cta_gestion_funcion_firma_y_semantica(conn):
     )
 
 
+def test_historial_cupos_conserva_esquema_original_tras_reversion(conn):
+    from sqlalchemy import text
+
+    columnas = set(
+        conn.execute(
+            text("""
+        SELECT name FROM sys.columns WHERE object_id=OBJECT_ID('Canal.CuposModHis')
+    """)
+        ).scalars()
+    )
+    assert columnas == {
+        "IdCupoModHis",
+        "IdCanalCupoCliente",
+        "CupoDiarioAnterior",
+        "CupoDiarioNuevo",
+        "CupoMensualAnterior",
+        "CupoMensualNuevo",
+        "MontoMaxTxAnterior",
+        "MontoMaxTxNuevo",
+        "ModificadoPor",
+        "FechaModificacion",
+    }
+
+
 def test_cta_gestion_trigger_no_duplica_historial(conn):
     from sqlalchemy import text
 
@@ -574,3 +647,110 @@ def test_cta07_y_cta09_sql_real_sin_escrituras(conn):
                         campo=campo,
                         direccion=direccion,
                     )
+
+
+@pytest.mark.parametrize("fallar_historial", [False, True])
+def test_cupo_e_historial_original_comparten_transaccion(monkeypatch, fallar_historial):
+    from datetime import date
+
+    from sqlalchemy import text
+
+    from app.modules.cuentas import service
+    from app.modules.cuentas.schemas import CupoUpdate
+    from tests.sesion import ID_AUDITORIA
+
+    # Esta prueba no usa la fixture de solo lectura. Toda escritura queda en una
+    # transacción externa que se revierte, incluso si el servicio hace commit.
+    with get_engine("cooperativa").connect() as conexion:
+        try:
+            referencia = conexion.execute(
+                text("""
+                SELECT TOP 1 c.IdCuenta,p.IdCanal,p.CupoDiarioMaximo,p.CupoMensualMaximo,
+                             p.MontoMaxTransaccion
+                FROM Cuentas.Cuenta c
+                JOIN ProductosFinancieros.ProductoCanalCupo p ON p.IdSubProducto=c.IdSubProducto
+                WHERE p.MaxTransaccionesDia >= 2
+                ORDER BY c.IdCuenta,p.IdCanal
+            """)
+            ).one_or_none()
+            if referencia is None:
+                pytest.skip(
+                    "Se necesita una cuenta con cupos configurados en su subproducto"
+                )
+            cuenta, canal = referencia[0], referencia[1]
+            inicial = CupoUpdate.model_validate(
+                {
+                    "cupoDiario": referencia[2],
+                    "cupoMensual": referencia[3],
+                    "montoMaxTransaccion": referencia[4],
+                    "maxTransaccionesDia": 1,
+                    "fechaVigencia": date(2030, 1, 1),
+                }
+            )
+            anterior = repository.bloquear_cupo_personalizado(conexion, cuenta, canal)
+            repository.guardar_cupo_personalizado(
+                conexion,
+                cuenta,
+                canal,
+                inicial,
+                ID_AUDITORIA,
+                existe=anterior is not None,
+            )
+            savepoint = conexion.begin_nested()
+            with monkeypatch.context() as cambios:
+                cambios.setattr(conexion, "commit", savepoint.commit)
+                cambios.setattr(conexion, "rollback", savepoint.rollback)
+                if fallar_historial:
+
+                    def fallar(*args, **kwargs):
+                        raise RuntimeError("Historial no disponible")
+
+                    cambios.setattr(repository, "insertar_historial_cupo", fallar)
+                    with pytest.raises(RuntimeError):
+                        service.actualizar_cupo(
+                            conexion,
+                            cuenta,
+                            canal,
+                            inicial.model_copy(
+                                update={
+                                    "fecha_vigencia": None,
+                                    "max_transacciones_dia": 2,
+                                }
+                            ),
+                            ID_AUDITORIA,
+                        )
+                else:
+                    resultado = service.actualizar_cupo(
+                        conexion,
+                        cuenta,
+                        canal,
+                        inicial.model_copy(
+                            update={"fecha_vigencia": None, "max_transacciones_dia": 2}
+                        ),
+                        ID_AUDITORIA,
+                    )
+                    assert resultado.fecha_vigencia is None
+            actual = (
+                conexion.execute(
+                    text("""
+                SELECT FechaVigencia AS fecha_vigencia,MaxTransaccionesDia AS max_transacciones_dia
+                FROM Canal.CanalCupoClienteCustom WHERE IdCuenta=:cuenta AND IdCanal=:canal
+            """),
+                    {"cuenta": cuenta, "canal": canal},
+                )
+                .mappings()
+                .one()
+            )
+            assert actual["fecha_vigencia"] == (
+                date(2030, 1, 1) if fallar_historial else None
+            )
+            assert actual["max_transacciones_dia"] == (1 if fallar_historial else 2)
+            if not fallar_historial:
+                historial = service.obtener_historial_cupo(
+                    conexion, cuenta, canal
+                ).items[0]
+                assert historial.cupo_diario_anterior == inicial.cupo_diario
+                assert historial.cupo_diario_nuevo == inicial.cupo_diario
+                assert historial.modificado_por == ID_AUDITORIA
+        finally:
+            conexion.rollback()

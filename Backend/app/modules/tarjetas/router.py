@@ -22,12 +22,9 @@ from app.modules.tarjetas.schemas import (
     MAX_INT,
     MAX_PAGE_SIZE,
     MAX_PAGINA,
-    PATRON_PIN_BLOCK,
-    PATRON_REFERENCIA_CLAVE,
     EstadoTarjeta,
     PageTarjeta,
     PageTarjetaHistorial,
-    PinAsignar,
     PinBlockPrueba,
     PinBlockPruebaEntrada,
     Tarjeta,
@@ -83,34 +80,11 @@ async def _leer_json(request: Request, error: Exception) -> dict[str, Any]:
     return datos
 
 
-async def _leer_pin_block(request: Request) -> tuple[SecretStr, str]:
-    """TAR-05. El PIN Block no va a logs ni errores: un error de Pydantic lo
-    devolvería en `input`, por eso no se valida con PinAsignar.
-    """
-    datos = await _leer_json(
-        request,
-        problema(
-            400,
-            "DATOS_INVALIDOS",
-            "El body debe tener encryptedPinBlock y keyReference.",
-        ),
-    )
-    if set(datos) != {"encryptedPinBlock", "keyReference"}:
-        raise problema(
-            400,
-            "DATOS_INVALIDOS",
-            "El body debe tener encryptedPinBlock y keyReference.",
-        )
-    bloque, referencia = datos["encryptedPinBlock"], datos["keyReference"]
-    if not isinstance(bloque, str) or not re.fullmatch(PATRON_PIN_BLOCK, bloque):
-        raise problema(422, "PIN_BLOCK_INVALIDO", "El PIN Block no es válido.")
-    if not isinstance(referencia, str) or not re.fullmatch(
-        PATRON_REFERENCIA_CLAVE, referencia
-    ):
-        raise problema(
-            422, "CLAVE_NO_AUTORIZADA", "La referencia de clave no está autorizada."
-        )
-    return SecretStr(bloque.upper()), referencia
+async def _sin_body(request: Request) -> None:
+    """TAR-05 no lleva body: el PIN lo genera el HSM, nunca lo envía el cliente."""
+    async for parte in request.stream():
+        if parte:
+            raise problema(400, "DATOS_INVALIDOS", "La solicitud no admite cuerpo.")
 
 
 async def _leer_pin_prueba(request: Request) -> tuple[int, SecretStr]:
@@ -150,7 +124,8 @@ def emitir_tarjeta(
     conn: Db,
     conn_seguridad: Annotated[Connection, Depends(seguridad)],
 ) -> Any:
-    """Emite una tarjeta en estado Generada y sin PIN para una cuenta Activa.
+    """Registra la solicitud de tarjeta (estado Solicitada, sin PIN) para una cuenta
+    Activa. El PIN se genera al aprobarla (TAR-04).
 
     El PAN ficticio queda cifrado en el repositorio aislado de pruebas.
     """
@@ -165,7 +140,13 @@ def emitir_tarjeta(
         Depends(require_roles("ASESOR", "SUPERVISOR", "ADMIN")),
         Depends(
             solo_parametros(
-                "idCliente", "idCuenta", "estado", "page", "pageSize", "sort"
+                "idCliente",
+                "idCuenta",
+                "estado",
+                "esExtension",
+                "page",
+                "pageSize",
+                "sort",
             )
         ),
     ],
@@ -177,13 +158,16 @@ def buscar_tarjetas(
     ] = None,
     id_cuenta: Annotated[int | None, Query(alias="idCuenta", gt=0, le=MAX_INT)] = None,
     estado: EstadoTarjeta | None = None,
+    es_extension: Annotated[bool | None, Query(alias="esExtension")] = None,
     page: Page = 1,
     page_size: PageSize = 20,
     sort: Sort = None,
 ) -> Any:
-    """Busca tarjetas. Los filtros se pueden combinar."""
+    """Busca tarjetas. Los filtros se pueden combinar. esExtension=false deja solo
+    las principales (las que pueden ser titulares de una extensión).
+    """
     return service.buscar_tarjetas(
-        conn, id_cliente, id_cuenta, estado, page, page_size, sort
+        conn, id_cliente, id_cuenta, estado, page, page_size, sort, es_extension
     )
 
 
@@ -210,41 +194,68 @@ def cambiar_estado(
     request: Request,
     usuario: UsuarioAuditoria,
     conn: Db,
+    conn_seguridad: Annotated[Connection, Depends(seguridad)],
 ) -> Any:
-    """Cambia el estado según Tarjeta.TransicionEstado. Para activar debe tener PIN."""
-    return service.cambiar_estado(conn, id_tarjeta, payload, usuario, _ip(request))
+    """Cambia el estado según Tarjeta.TransicionEstado. Al aprobar, el HSM genera el
+    PIN (nadie lo conoce). Generada → Activa es automática (ATM-06 o plazo de crédito).
+    """
+    return service.cambiar_estado(
+        conn, conn_seguridad, id_tarjeta, payload, usuario, _ip(request)
+    )
 
 
 # TAR-05. Roles: ASESOR, ADMIN
 @router.post(
     "/{idTarjeta}/pin",
     status_code=204,
-    dependencies=[Depends(require_roles("ASESOR", "ADMIN"))],
-    openapi_extra={
-        "requestBody": {
-            "required": True,
-            "content": {
-                "application/json": {
-                    "schema": PinAsignar.model_json_schema(by_alias=True)
-                }
-            },
-        }
-    },
+    dependencies=[Depends(require_roles("ASESOR", "ADMIN")), Depends(_sin_body)],
 )
-def asignar_pin(
+def regenerar_pin(
     id_tarjeta: IdTarjetaPath,
-    entrada: Annotated[tuple[SecretStr, str], Depends(_leer_pin_block)],
     request: Request,
     usuario: UsuarioAuditoria,
     conn: Db,
     conn_seguridad: Annotated[Connection, Depends(seguridad)],
 ) -> None:
-    """Asigna el PIN inicial con un PIN Block ISO-4 (AES-256) y genera su PIN Offset
-    IBM 3624 en el HSM. Solo se puede hacer una vez.
+    """Regenera el PIN (reposición o desbloqueo del PIN): el HSM genera uno nuevo y
+    solo se guarda su IBM 3624 PIN Offset. No cambia el estado de la tarjeta.
     """
-    pin_block, referencia = entrada
-    service.asignar_pin(
-        conn, conn_seguridad, id_tarjeta, pin_block, referencia, usuario, _ip(request)
+    service.regenerar_pin(conn, conn_seguridad, id_tarjeta, usuario, _ip(request))
+
+
+# TAR-07. Roles: ASESOR, SUPERVISOR, ADMIN
+@router.get(
+    "/{idTarjeta}/sobre-pin",
+    response_class=Response,
+    responses={
+        200: {
+            "content": {"application/pdf": {}},
+            "description": "Sobre de PIN (PDF). Se entrega una sola vez.",
+        }
+    },
+    dependencies=[
+        Depends(require_roles("ASESOR", "SUPERVISOR", "ADMIN")),
+        Depends(solo_parametros()),
+    ],
+)
+def sobre_pin(
+    id_tarjeta: IdTarjetaPath,
+    request: Request,
+    usuario: UsuarioAuditoria,
+    conn: Db,
+) -> Response:
+    """Descarga, una sola vez, el sobre de PIN de una tarjeta de débito: PDF con el PIN
+    temporal para entregar al cliente con la tarjeta. Luego queda Entregado.
+    """
+    pdf = service.entregar_sobre_pin(conn, id_tarjeta, usuario, _ip(request))
+    return Response(
+        content=pdf,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'attachment; filename="sobre-pin-{id_tarjeta}.pdf"',
+            "Cache-Control": "no-store",
+            "X-Content-Type-Options": "nosniff",
+        },
     )
 
 

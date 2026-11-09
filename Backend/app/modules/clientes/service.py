@@ -1,4 +1,5 @@
 import json
+import re
 from datetime import UTC, date, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any
@@ -331,7 +332,7 @@ def _validar_productos_cliente(conn: Connection, id_cliente: int) -> None:
         solicitudes = sorted(
             {d["id_solicitud"] for d in desembolsos if d["estado"] == "DESEMBOLSADO"}
         )
-        tiene_productos = any(
+        tiene_productos = any(d["estado"] == "PENDIENTE" for d in desembolsos) or any(
             _credito_tiene_deuda(conn, solicitud) for solicitud in solicitudes
         )
     if tiene_productos:
@@ -450,7 +451,7 @@ def obtener_perfil_cliente(conn: Connection, id_cliente: int) -> ClientePerfil:
 def validar_cedula_ecuatoriana(cedula: str) -> tuple[bool, str]:
     """Valida una cédula ecuatoriana con el algoritmo Módulo 10"""
 
-    if len(cedula) != 10 or not cedula.isdigit():
+    if re.fullmatch(r"[0-9]{10}", cedula) is None:
         return False, "La cédula debe tener exactamente 10 dígitos numéricos."
 
     provincia = int(cedula[:2])
@@ -484,13 +485,23 @@ def validar_cedula_ecuatoriana(cedula: str) -> tuple[bool, str]:
 
 
 def validar_ruc(ruc: str) -> tuple[bool, str]:
-    """Valida un RUC ecuatoriano de persona natural"""
+    """Valida formato offline; no certifica inscripción ni estado ante el SRI.
 
-    if len(ruc) != 13 or not ruc.isdigit():
+    Los RUC de sociedades emitidos por el SRI no siempre tienen un dígito
+    verificador algorítmico. No aplicarles el módulo 10 de una cédula natural.
+    """
+
+    if re.fullmatch(r"[0-9]{13}", ruc) is None:
         return False, "El RUC debe tener exactamente 13 dígitos numéricos."
 
     if not ruc.endswith("001"):
-        return False, "El RUC de persona natural debe terminar en 001."
+        return False, "El RUC debe terminar en 001."
+
+    provincia = int(ruc[:2])
+    if not (1 <= provincia <= 24 or provincia == 30):
+        return False, "Provincia inválida en el RUC."
+    if ruc[2] in ("6", "9"):
+        return True, "Formato de RUC válido; la inscripción se verifica ante el SRI."
 
     base_cedula = ruc[:10]
     valida, motivo = validar_cedula_ecuatoriana(base_cedula)
@@ -502,7 +513,7 @@ def validar_ruc(ruc: str) -> tuple[bool, str]:
 
 def validar_pasaporte(pasaporte: str) -> tuple[bool, str]:
     """Valida pasaporte: 5 a 13 caracteres alfanuméricos."""
-    if not (5 <= len(pasaporte) <= 13 and pasaporte.isalnum()):
+    if re.fullmatch(r"[A-Za-z0-9]{5,13}", pasaporte) is None:
         return (
             False,
             "El pasaporte debe tener entre 5 y 13 caracteres alfanuméricos.",
@@ -692,9 +703,15 @@ def registrar_cliente(
 # ---------------------------------------------------------------------------
 
 
-def _validar_cliente_existe(conn: Connection, id_cliente: int) -> dict[str, Any]:
+def _validar_cliente_existe(
+    conn: Connection, id_cliente: int, *, bloquear: bool = False
+) -> dict[str, Any]:
     """Retorna datos del cliente o lanza 404."""
-    cliente = repository.obtener_cliente_por_id(conn, id_cliente)
+    cliente = (
+        repository.bloquear_cliente(conn, id_cliente)
+        if bloquear
+        else repository.obtener_cliente_por_id(conn, id_cliente)
+    )
     if cliente is None:
         raise _problema(
             404,
@@ -702,6 +719,21 @@ def _validar_cliente_existe(conn: Connection, id_cliente: int) -> dict[str, Any]
             f"No se encontró un cliente con id {id_cliente}.",
         )
     return cliente
+
+
+def validar_activacion_cuenta(conn: Connection, id_cliente: int) -> None:
+    """Serializa la reactivación con bajas y evaluaciones de riesgo del titular.
+
+    El llamador conserva la transacción: primero cliente, después cuenta.
+    """
+    cliente = _validar_cliente_existe(conn, id_cliente, bloquear=True)
+    if cliente["estado"] != "Activo":
+        raise problema(409, "CLIENTE_NO_ACTIVO", "El cliente no está Activo.")
+    riesgos = repository.listar_evaluaciones_riesgo(conn, id_cliente, solo_vigente=True)
+    if any(r["resultado_evaluacion"] == "Rechazado" for r in riesgos):
+        raise problema(
+            409, "RIESGO_RECHAZADO", "El cliente tiene riesgo vigente rechazado."
+        )
 
 
 def _validar_cliente_no_eliminado(cliente: dict[str, Any], id_cliente: int) -> None:
@@ -755,10 +787,6 @@ def agregar_direccion(
         HTTPException 409 CLIENTE_ELIMINADO
         HTTPException 422 CATALOGO_INVALIDO
     """
-    cliente = _validar_cliente_existe(conn, id_cliente)
-    _validar_cliente_no_eliminado(cliente, id_cliente)
-    _validar_ciudad_pais(conn, payload.id_ciudad, payload.codigo_pais)
-
     datos = {
         "tipo_direccion": payload.tipo_direccion,
         "codigo_pais": payload.codigo_pais,
@@ -771,6 +799,9 @@ def agregar_direccion(
     }
 
     try:
+        cliente = _validar_cliente_existe(conn, id_cliente, bloquear=True)
+        _validar_cliente_no_eliminado(cliente, id_cliente)
+        _validar_ciudad_pais(conn, payload.id_ciudad, payload.codigo_pais)
         row = repository.insertar_direccion(
             conn,
             id_cliente,
@@ -778,12 +809,13 @@ def agregar_direccion(
             modificado_por=modificado_por,
             direccion_ip=direccion_ip,
         )
+        resultado = Direccion(**row)
         conn.commit()
     except Exception:
         conn.rollback()
         raise
 
-    return Direccion(**row)
+    return resultado
 
 
 # ---------------------------------------------------------------------------
@@ -806,34 +838,44 @@ def editar_direccion(
         HTTPException 404 DIRECCION_NO_ENCONTRADA
         HTTPException 422 CATALOGO_INVALIDO
     """
-    _validar_cliente_existe(conn, id_cliente)
-
-    actual = repository.obtener_direccion(conn, id_cliente, id_direccion)
-    if actual is None:
-        raise _problema(
-            404,
-            "DIRECCION_NO_ENCONTRADA",
-            f"No se encontró la dirección {id_direccion} para el cliente {id_cliente}.",
-        )
-
-    # Construir dict solo con campos enviados
-    cambios: dict[str, Any] = {}
-    enviados = payload.model_dump(exclude_unset=True)
-
-    # Si envían codigo_pais o id_ciudad, validar la combinación
-    codigo_pais_final = enviados.get("codigo_pais", actual["codigo_pais"])
-    id_ciudad_final = enviados.get("id_ciudad", actual["id_ciudad"])
-    if "codigo_pais" in enviados or "id_ciudad" in enviados:
-        _validar_ciudad_pais(conn, id_ciudad_final, codigo_pais_final)
-
-    for campo, valor in enviados.items():
-        if valor != actual.get(campo):
-            cambios[campo] = valor
-
-    if not cambios:
-        return Direccion(**actual)
-
     try:
+        cliente = _validar_cliente_existe(conn, id_cliente, bloquear=True)
+        _validar_cliente_no_eliminado(cliente, id_cliente)
+        actual = repository.obtener_direccion(conn, id_cliente, id_direccion)
+        if actual is None:
+            raise problema(404, "DIRECCION_NO_ENCONTRADA", "La dirección no existe.")
+        if actual["estado"] == "Eliminado":
+            raise problema(409, "DIRECCION_NO_EDITABLE", "La dirección está eliminada.")
+        enviados = payload.model_dump(exclude_unset=True)
+        if enviados.get("es_principal") is True and actual["estado"] != "Activo":
+            raise problema(
+                409, "DIRECCION_NO_ACTIVA", "La dirección principal debe estar activa."
+            )
+        if (
+            actual["es_principal"]
+            and actual["estado"] == "Activo"
+            and enviados.get("es_principal") is False
+        ):
+            raise problema(
+                409,
+                "DIRECCION_PRINCIPAL_REQUERIDA",
+                "Seleccione otra dirección como principal antes de desmarcar la actual.",
+            )
+        if "codigo_pais" in enviados or "id_ciudad" in enviados:
+            _validar_ciudad_pais(
+                conn,
+                enviados.get("id_ciudad", actual["id_ciudad"]),
+                enviados.get("codigo_pais", actual["codigo_pais"]),
+            )
+        cambios = {
+            campo: valor
+            for campo, valor in enviados.items()
+            if valor != actual.get(campo)
+        }
+        if not cambios:
+            resultado = Direccion(**actual)
+            conn.rollback()
+            return resultado
         row = repository.actualizar_direccion(
             conn,
             id_cliente,
@@ -843,12 +885,13 @@ def editar_direccion(
             direccion_ip=direccion_ip,
             valores_anteriores=actual,
         )
+        resultado = Direccion(**row)
         conn.commit()
     except Exception:
         conn.rollback()
         raise
 
-    return Direccion(**row)
+    return resultado
 
 
 # ---------------------------------------------------------------------------
@@ -860,33 +903,38 @@ def eliminar_direccion(
     conn: Connection,
     id_cliente: int,
     id_direccion: int,
+    modificado_por: int,
+    direccion_ip: str,
 ) -> None:
-    """Baja lógica de una dirección (CLI-12).
+    """Baja lógica y su historial en una sola transacción (CLI-12).
 
     Raises:
         HTTPException 404 CLIENTE_NO_ENCONTRADO
         HTTPException 404 DIRECCION_NO_ENCONTRADA
         HTTPException 409 NO_SE_PUEDE_ELIMINAR_PRINCIPAL
     """
-    _validar_cliente_existe(conn, id_cliente)
-
-    actual = repository.obtener_direccion(conn, id_cliente, id_direccion)
-    if actual is None:
-        raise _problema(
-            404,
-            "DIRECCION_NO_ENCONTRADA",
-            f"No se encontró la dirección {id_direccion} para el cliente {id_cliente}.",
-        )
-
-    if actual.get("es_principal") and actual.get("estado") == "Activo":
-        raise _problema(
-            409,
-            "NO_SE_PUEDE_ELIMINAR_PRINCIPAL",
-            "No se puede eliminar la dirección principal activa. Asigne otra dirección como principal primero.",
-        )
-
     try:
-        repository.eliminar_direccion_logica(conn, id_cliente, id_direccion)
+        _validar_cliente_existe(conn, id_cliente, bloquear=True)
+        actual = repository.obtener_direccion(conn, id_cliente, id_direccion)
+        if actual is None:
+            raise problema(404, "DIRECCION_NO_ENCONTRADA", "La dirección no existe.")
+        if actual["estado"] == "Eliminado":
+            conn.rollback()  # Reintento idempotente: no hay otra baja que auditar.
+            return
+        if actual.get("es_principal") and actual.get("estado") == "Activo":
+            raise problema(
+                409,
+                "NO_SE_PUEDE_ELIMINAR_PRINCIPAL",
+                "Asigne otra dirección como principal antes de eliminar la actual.",
+            )
+        repository.eliminar_direccion_logica(
+            conn,
+            id_cliente,
+            id_direccion,
+            modificado_por=modificado_por,
+            direccion_ip=direccion_ip,
+            estado_anterior=actual["estado"],
+        )
         conn.commit()
     except Exception:
         conn.rollback()
@@ -901,28 +949,26 @@ def registrar_evaluacion_riesgo(
     direccion_ip: str,
 ) -> RiesgoRegistrado:
     """Valida y registra una evaluación con auditoría en una transacción."""
-    cliente = _validar_cliente_existe(conn, id_cliente)
-    _validar_cliente_no_eliminado(cliente, id_cliente)
-
-    if payload.tiene_antecedentes != (payload.id_tipo_antecedente is not None):
-        raise _problema(
-            422,
-            "ANTECEDENTE_REQUERIDO",
-            "El tipo de antecedente es obligatorio solo si tieneAntecedentes es true.",
-        )
-    if (
-        payload.id_tipo_antecedente is not None
-        and not repository.existe_tipo_antecedente_activo(
-            conn, payload.id_tipo_antecedente
-        )
-    ):
-        raise _problema(
-            422,
-            "CATALOGO_INVALIDO",
-            "El tipo de antecedente no existe o está inactivo.",
-        )
-
     try:
+        cliente = _validar_cliente_existe(conn, id_cliente, bloquear=True)
+        _validar_cliente_no_eliminado(cliente, id_cliente)
+        if payload.tiene_antecedentes != (payload.id_tipo_antecedente is not None):
+            raise _problema(
+                422,
+                "ANTECEDENTE_REQUERIDO",
+                "El tipo de antecedente es obligatorio solo si tieneAntecedentes es true.",
+            )
+        if (
+            payload.id_tipo_antecedente is not None
+            and not repository.existe_tipo_antecedente_activo(
+                conn, payload.id_tipo_antecedente
+            )
+        ):
+            raise _problema(
+                422,
+                "CATALOGO_INVALIDO",
+                "El tipo de antecedente no existe o está inactivo.",
+            )
         row = repository.insertar_evaluacion_riesgo(
             conn,
             id_cliente,

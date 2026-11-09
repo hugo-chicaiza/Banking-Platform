@@ -37,7 +37,7 @@ router = APIRouter(
     tags=["clientes"],
     dependencies=[Depends(require_auth)],
 )
-_gestion_router = APIRouter()
+_gestion_router = APIRouter(route_class=ProblemDetailsRoute, responses=RESPUESTAS_ERROR)
 
 Db = Annotated[Connection, Depends(cooperativa)]
 
@@ -113,6 +113,7 @@ def obtener_perfil_cliente(idCliente: int, conn: Db) -> ClientePerfil:
 
 @_gestion_router.get(
     "/validar-identificacion",
+    operation_id="CLI01",
     response_model=ValidacionIdentificacion,
     dependencies=_ASESOR_ADMIN,
 )
@@ -145,7 +146,11 @@ def validar_identificacion(
 
 
 @_gestion_router.post(
-    "", response_model=Cliente, status_code=201, dependencies=_ASESOR_ADMIN
+    "",
+    operation_id="CLI02",
+    response_model=Cliente,
+    status_code=201,
+    dependencies=_ASESOR_ADMIN,
 )
 def registrar_cliente(
     payload: ClienteCreate,
@@ -171,6 +176,7 @@ def registrar_cliente(
 
 @_gestion_router.get(
     "/{idCliente}/direcciones",
+    operation_id="CLI09",
     response_model=list[Direccion],
     dependencies=_ASESOR_ADMIN,
 )
@@ -190,6 +196,7 @@ def listar_direcciones(
 
 @_gestion_router.post(
     "/{idCliente}/direcciones",
+    operation_id="CLI10",
     response_model=Direccion,
     status_code=201,
     dependencies=_ASESOR_ADMIN,
@@ -216,6 +223,7 @@ def agregar_direccion(
 
 @_gestion_router.patch(
     "/{idCliente}/direcciones/{idDireccion}",
+    operation_id="CLI11",
     response_model=Direccion,
     dependencies=_ASESOR_ADMIN,
 )
@@ -242,16 +250,21 @@ def editar_direccion(
 
 @_gestion_router.delete(
     "/{idCliente}/direcciones/{idDireccion}",
+    operation_id="CLI12",
     status_code=204,
     dependencies=_ASESOR_ADMIN,
 )
 def eliminar_direccion(
     idCliente: int,
     idDireccion: int,
+    request: Request,
+    modificado_por: UsuarioAuditoria,
     conn: Db,
 ) -> Response:
     """Baja lógica de una dirección (CLI-12 / C-07)."""
-    service.eliminar_direccion(conn, idCliente, idDireccion)
+    service.eliminar_direccion(
+        conn, idCliente, idDireccion, modificado_por, _ip_cliente(request)
+    )
     return Response(status_code=204)
 
 

@@ -30,7 +30,7 @@ Detalle de usuario.
 ## Reglas de negocio
 
 1. Usuario inexistente → 404.
-2. Devuelve roles activos; nunca `ClaveHash`.
+2. Devuelve roles activos.
 
 ## Request
 

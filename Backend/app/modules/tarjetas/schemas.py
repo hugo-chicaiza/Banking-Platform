@@ -14,24 +14,39 @@ IdEntero = Annotated[StrictInt, Field(gt=0, le=MAX_INT)]
 
 TipoTarjeta = Literal["Debito", "Credito"]
 
-# Valores de CK_Tarjeta_Estado
+# Largo máximo del nombre impreso: lo que admite el grabado de una tarjeta física
+# (columna Tarjeta.Tarjeta.NombreTarjeta varchar(26))
+MAX_NOMBRE_TARJETA = 26
+
+# TAR-06: quién fijó el PIN de un evento CambioPin, según la Descripcion que escribe
+# cada operación en Tarjeta.TarjetaHis. Solo "Cliente" es un cambio hecho por el titular
+OrigenPin = Literal["Generacion", "Regeneracion", "Cliente"]
+DESCRIPCION_PIN_GENERADO = "PIN generado automáticamente"  # TAR-04 al aprobar
+DESCRIPCION_PIN_REGENERADO = "Regeneración de PIN"  # TAR-05
+DESCRIPCION_PIN_CLIENTE = "Cambio de PIN en ATM"  # ATM-06
+ORIGEN_PIN: dict[str, OrigenPin] = {
+    DESCRIPCION_PIN_GENERADO: "Generacion",
+    "Asignación de PIN inicial": "Generacion",  # eventos anteriores al HSM
+    DESCRIPCION_PIN_REGENERADO: "Regeneracion",
+    DESCRIPCION_PIN_CLIENTE: "Cliente",
+}
+
+# Valores de CK_Tarjeta_Estado (F-08). Mantener alineados con la base
 EstadoTarjeta = Literal[
     "Solicitada",
-    "EnRevision",
     "Aprobada",
-    "Rechazada",
     "Generada",
-    "Pendiente",
     "Activa",
     "Inactiva",
     "Bloqueada",
     "Cancelada",
-    "Vencida",
     "Anulada",
+    "Vencida",
     "Cerrada",
 ]
 
-# Estados que TAR-04 admite como destino
+# Estados que TAR-04 admite como destino: todos menos Solicitada, que solo es el
+# estado inicial (TAR-01). Las transiciones válidas las define Tarjeta.TransicionEstado
 EstadoDestino = Literal[
     "Aprobada",
     "Generada",
@@ -40,6 +55,8 @@ EstadoDestino = Literal[
     "Bloqueada",
     "Cancelada",
     "Anulada",
+    "Vencida",
+    "Cerrada",
 ]
 
 
@@ -54,13 +71,15 @@ class TarjetaCreate(_Entrada):
 
     id_cuenta: IdEntero
     id_producto: IdEntero
+    # Subproducto del producto Tarjeta (p. ej. Débito o Crédito Mastercard): define el BIN
+    id_sub_producto: IdEntero
     tipo_tarjeta: TipoTarjeta
     nombre_tarjeta: Annotated[
         str,
         StringConstraints(
             strip_whitespace=True,
             min_length=1,
-            max_length=50,
+            max_length=MAX_NOMBRE_TARJETA,
             pattern=r"^[A-Za-zÁÉÍÓÚÜÑáéíóúüñ][A-Za-zÁÉÍÓÚÜÑáéíóúüñ .'\-]*$",
         ),
     ]
@@ -86,6 +105,8 @@ class TarjetaEstadoUpdate(_Entrada):
     """Body de POST /api/v1/tarjetas/{idTarjeta}/estado (TAR-04)."""
 
     estado: EstadoDestino
+    # Se muestra en TAR-06. El ejemplo evita que Swagger proponga texto aleatorio
+    # generado desde el patrón
     motivo: Annotated[
         str,
         StringConstraints(
@@ -94,31 +115,7 @@ class TarjetaEstadoUpdate(_Entrada):
             max_length=500,
             pattern=r"^[^\x00-\x1f\x7f]+$",
         ),
-    ]
-
-
-PATRON_PIN_BLOCK = r"^[0-9A-Fa-f]{32}$"
-PATRON_REFERENCIA_CLAVE = r"^[A-Za-z0-9_-]{1,32}$"
-
-
-class PinAsignar(_Entrada):
-    """Solo documenta TAR-05 en OpenAPI. El router no valida con este modelo (un error
-    de Pydantic devolvería el valor recibido): ver _leer_pin_block.
-    """
-
-    encrypted_pin_block: Annotated[
-        str,
-        Field(
-            pattern=PATRON_PIN_BLOCK,
-            description="PIN Block ISO 9564-1 formato 4 (AES-256), 16 bytes en hex",
-        ),
-    ]
-    key_reference: Annotated[
-        str,
-        Field(
-            pattern=PATRON_REFERENCIA_CLAVE,
-            description="Referencia de la clave AES-256 autorizada en el servidor",
-        ),
+        Field(examples=["Solicitud del cliente aprobada"]),
     ]
 
 
@@ -148,6 +145,9 @@ class TarjetaResumen(CamelModel):
     numero_enmascarado: str
     estado_actual: EstadoTarjeta
     fecha_emision: date
+    # Extensión (adicional) y su tarjeta titular; las principales llevan False y null
+    es_extension: bool
+    id_tarjeta_titular: int | None = None
 
 
 class Tarjeta(TarjetaResumen):
@@ -155,6 +155,9 @@ class Tarjeta(TarjetaResumen):
 
     token_tarjeta: str
     pin_asignado: bool
+    fecha_solicitud: date | None = None
+    # Aprobación o rechazo (TAR-04); null mientras la tarjeta está Solicitada
+    fecha_resolucion: datetime | None = None
     fecha_expiracion: date
 
 
@@ -175,6 +178,8 @@ class TarjetaHistorial(CamelModel):
     estado_nuevo: str | None = None
     motivo: str | None = None
     resultado: str | None = None
+    # Solo en CambioPin: None si la descripción no es de una operación conocida
+    origen: OrigenPin | None = None
     fecha_cambio: datetime
     realizado_por: int
 

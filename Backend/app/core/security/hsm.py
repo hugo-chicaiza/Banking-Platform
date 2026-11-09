@@ -1,4 +1,4 @@
-"""HSM simulado para tarjetas (TAR-01, TAR-05 y ATM-01).
+"""HSM simulado para tarjetas (TAR-01, TAR-04, TAR-05 y ATM-01).
 
 Solo para desarrollo y pruebas, con claves ficticias de la configuración. No es un HSM
 certificado ni cumple ISO 9564, PCI DSS o PCI PIN. En producción no hay simulador:
@@ -10,8 +10,12 @@ Operaciones:
 - PIN Block: ISO 9564-1 formato 4 con AES-256. La clave se elige por keyReference,
   solo entre las autorizadas en el servidor.
 - PIN Offset: IBM 3624 con una PVK 3DES independiente de la clave del PIN Block.
+- PIN generado: al aprobar una tarjeta (TAR-04) o regenerar su PIN (TAR-05) el HSM elige
+  un PIN aleatorio no trivial y devuelve solo su Offset.
+- Sobre de PIN: en débito, `generar_pin_para_sobre` entrega además el PIN para
+  imprimir el sobre (TAR-07), como la salida de "PIN mailer" de un HSM de pagos.
 
-Ningún método devuelve el PIN en claro: el PIN solo existe dentro del simulador.
+Fuera de esa salida de impresión, ningún método devuelve el PIN en claro.
 """
 
 import hmac
@@ -25,6 +29,7 @@ from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.decrepit.ciphers.algorithms import TripleDES
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from pydantic import SecretStr
 
 from app.core.config.settings import get_settings
 
@@ -80,6 +85,20 @@ class Hsm(Protocol):
         self, pin_block: str, referencia: str, pan: str
     ) -> tuple[str, str]:
         """(PIN Offset IBM 3624, referencia de la PVK). Valida la fortaleza del PIN."""
+        ...
+
+    def generar_pin(self, pan: str) -> tuple[str, str]:
+        """PIN aleatorio no trivial: (PIN Offset IBM 3624, referencia de la PVK).
+
+        El PIN no sale del HSM. En producción, el HSM de pagos lo imprime (PIN mailer).
+        """
+        ...
+
+    def generar_pin_para_sobre(self, pan: str) -> tuple[str, str, SecretStr]:
+        """Como generar_pin, pero entrega además el PIN para imprimir el sobre de PIN
+        (TAR-07): es la salida de "PIN mailer" de un HSM de pagos. Quien lo recibe solo
+        lo usa para armar el sobre y lo descarta; nunca se guarda en claro.
+        """
         ...
 
     def verificar_pin(
@@ -225,11 +244,30 @@ class HsmSimulado:
         pin = self._abrir_pin_block(pin_block, referencia, pan)
         if es_pin_debil(pin):
             raise PinDebil("PIN no permitido")
+        return self._offset(pin, pan), REFERENCIA_PVK
+
+    def _offset(self, pin: str, pan: str) -> str:
         natural = self._pin_natural(pan)
-        offset = "".join(
+        return "".join(
             str((int(p) - int(n)) % 10) for p, n in zip(pin, natural, strict=True)
         )
+
+    @staticmethod
+    def _pin_aleatorio() -> str:
+        pin = "".join(secrets.choice("0123456789") for _ in range(LONGITUD_PIN))
+        while es_pin_debil(pin):
+            pin = "".join(secrets.choice("0123456789") for _ in range(LONGITUD_PIN))
+        return pin
+
+    def generar_pin(self, pan: str) -> tuple[str, str]:
+        pin = self._pin_aleatorio()
+        offset = self._offset(pin, pan)
+        del pin
         return offset, REFERENCIA_PVK
+
+    def generar_pin_para_sobre(self, pan: str) -> tuple[str, str, SecretStr]:
+        pin = self._pin_aleatorio()
+        return self._offset(pin, pan), REFERENCIA_PVK, SecretStr(pin)
 
     def verificar_pin(
         self,
@@ -244,6 +282,8 @@ class HsmSimulado:
         if len(offset) != LONGITUD_PIN or not offset.isdigit():
             return False
         pin = self._abrir_pin_block(pin_block, referencia, pan)
+        if len(pin) != LONGITUD_PIN:
+            raise PinBlockInvalido("Longitud no admitida por el adaptador")
         natural = self._pin_natural(pan)
         esperado = "".join(
             str((int(n) + int(o)) % 10) for n, o in zip(natural, offset, strict=True)

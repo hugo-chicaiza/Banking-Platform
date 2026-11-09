@@ -1,10 +1,13 @@
 """CAJ-11 · POST /api/v1/caja/jornadas/{idJornada}/retiros (pruebas sin BD)."""
 
 from collections.abc import Iterator
+from datetime import datetime
 from decimal import Decimal
+from unittest.mock import Mock
 
 import pytest
 
+from app.modules.caja import service
 from app.modules.caja.router import router
 from app.modules.transacciones import repository as trx_repo
 from tests.caja_contexto import (
@@ -54,6 +57,25 @@ def test_caj11_retiro_completo(ctx: Contexto) -> None:
     assert ctx.llamadas["aplicar_movimiento_cuenta"][0][2] == "D"
     assert deps.comisiones == [(5001, Decimal("0.50"))]
     assert ctx.llamadas["id_tipo_movimiento_caja"] == [("RET_E",)]
+
+
+def test_retiro_comparte_instante_con_autorizacion_y_calendario(
+    ctx: Contexto, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    preparar_retiro(ctx)
+    instante = datetime(2026, 11, 6, 19)
+    reloj = Mock(side_effect=[instante, AssertionError("Se volvió a leer el reloj")])
+    monkeypatch.setattr(service, "ahora_ecuador", reloj)
+    autorizar = Mock(wraps=trx_repo.autorizar_operacion)
+    monkeypatch.setattr(trx_repo, "autorizar_operacion", autorizar)
+
+    r = ctx.cliente.post(f"{BASE}/jornadas/55/retiros", json=CUERPO_RETIRO)
+
+    assert r.status_code == 201, r.text
+    reloj.assert_called_once_with()
+    assert autorizar.call_args.kwargs["fecha_hora"] == instante
+    assert ctx.llamadas["id_fecha_contable"] == [(instante,)]
+    assert ctx.llamadas["insertar_transaccion"][0][0]["fecha_hora"] == instante
 
 
 @pytest.mark.parametrize(

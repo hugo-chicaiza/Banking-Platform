@@ -490,17 +490,19 @@ def _direccion_row(**overrides: Any) -> dict[str, Any]:
 def _patch_cliente_existe(
     monkeypatch, *, estado: str = "Activo", id_cliente: int = 10
 ) -> None:
-    """Mockea obtener_cliente_por_id para que retorne un cliente existente."""
-    monkeypatch.setattr(
-        repository,
-        "obtener_cliente_por_id",
-        lambda conn, cid: {"id_cliente": id_cliente, "estado": estado},
-    )
+    """Mismo cliente para lecturas normales y bloqueadas de las escrituras."""
+    for metodo in ("obtener_cliente_por_id", "bloquear_cliente"):
+        monkeypatch.setattr(
+            repository,
+            metodo,
+            lambda conn, cid: {"id_cliente": id_cliente, "estado": estado},
+        )
 
 
 def _patch_cliente_no_existe(monkeypatch) -> None:
     """Mockea obtener_cliente_por_id para que retorne None."""
     monkeypatch.setattr(repository, "obtener_cliente_por_id", lambda conn, cid: None)
+    monkeypatch.setattr(repository, "bloquear_cliente", lambda conn, cid: None)
 
 
 # ---------------------------------------------------------------------------
@@ -759,11 +761,11 @@ def test_cli12_eliminar_direccion_caso_feliz(monkeypatch):
     dir_actual = _direccion_row(id_direccion=5, es_principal=False)
     monkeypatch.setattr(repository, "obtener_direccion", lambda c, cid, did: dir_actual)
     monkeypatch.setattr(
-        repository, "eliminar_direccion_logica", lambda c, cid, did: None
+        repository, "eliminar_direccion_logica", lambda c, cid, did, **kwargs: None
     )
 
     # No lanza excepción
-    service.eliminar_direccion(conn, 10, 5)
+    service.eliminar_direccion(conn, 10, 5, 12, "192.0.2.10")
 
 
 def test_cli12_eliminar_direccion_principal_activa_409(monkeypatch):
@@ -774,7 +776,7 @@ def test_cli12_eliminar_direccion_principal_activa_409(monkeypatch):
     monkeypatch.setattr(repository, "obtener_direccion", lambda c, cid, did: dir_actual)
 
     with pytest.raises(service.HTTPException) as exc:
-        service.eliminar_direccion(conn, 10, 5)
+        service.eliminar_direccion(conn, 10, 5, 12, "192.0.2.10")
 
     _assert_http_error(exc, 409, "NO_SE_PUEDE_ELIMINAR_PRINCIPAL")
 
@@ -784,7 +786,7 @@ def test_cli12_eliminar_direccion_cliente_no_existe(monkeypatch):
     _patch_cliente_no_existe(monkeypatch)
 
     with pytest.raises(service.HTTPException) as exc:
-        service.eliminar_direccion(conn, 999, 5)
+        service.eliminar_direccion(conn, 999, 5, 12, "192.0.2.10")
 
     _assert_http_error(exc, 404, "CLIENTE_NO_ENCONTRADO")
 
@@ -795,7 +797,7 @@ def test_cli12_eliminar_direccion_no_encontrada(monkeypatch):
     monkeypatch.setattr(repository, "obtener_direccion", lambda c, cid, did: None)
 
     with pytest.raises(service.HTTPException) as exc:
-        service.eliminar_direccion(conn, 10, 999)
+        service.eliminar_direccion(conn, 10, 999, 12, "192.0.2.10")
 
     _assert_http_error(exc, 404, "DIRECCION_NO_ENCONTRADA")
 
@@ -808,11 +810,11 @@ def test_cli12_eliminar_direccion_principal_inactiva_ok(monkeypatch):
     dir_actual = _direccion_row(id_direccion=5, es_principal=True, estado="Inactivo")
     monkeypatch.setattr(repository, "obtener_direccion", lambda c, cid, did: dir_actual)
     monkeypatch.setattr(
-        repository, "eliminar_direccion_logica", lambda c, cid, did: None
+        repository, "eliminar_direccion_logica", lambda c, cid, did, **kwargs: None
     )
 
     # No lanza excepción
-    service.eliminar_direccion(conn, 10, 5)
+    service.eliminar_direccion(conn, 10, 5, 12, "192.0.2.10")
 
 
 # CLI-13 / CLI-14 · Riesgo: respuestas SQL programadas, sin BD ni sockets.
@@ -977,7 +979,7 @@ def test_cli13_catalogo_inexistente_o_inactivo_422(id_tipo):
         )
     _assert_http_error(exc, 422, "CATALOGO_INVALIDO")
     assert len(db.consultas) == 2
-    assert db.commits == 0
+    assert db.commits == 0 and db.rollbacks == 1
 
 
 @pytest.mark.parametrize(
@@ -995,7 +997,7 @@ def test_cli13_cliente_invalido(cliente, status, code):
         )
     _assert_http_error(exc, status, code)
     assert len(db.consultas) == 1
-    assert db.commits == 0
+    assert db.commits == 0 and db.rollbacks == 1
 
 
 @pytest.mark.parametrize("etapa", ["insertar", "leer", "auditar", "commit"])
@@ -1189,6 +1191,8 @@ def _perfil_mock(**overrides: Any) -> dict[str, Any]:
                 "id_cuenta": 30,
                 "id_producto": 2,
                 "estado_actual": "Activa",
+                "es_extension": False,
+                "id_tarjeta_titular": None,
                 "pin_asignado": True,
                 "fecha_emision": date(2026, 11, 1),
                 "fecha_expiracion": date(2030, 11, 1),
@@ -2307,7 +2311,7 @@ def test_cli06_credito_totalmente_pagado_no_impide_baja():
     assert not db.respuestas
 
 
-@pytest.mark.parametrize("estado_desembolso", ["PENDIENTE", "REVERSADO"])
+@pytest.mark.parametrize("estado_desembolso", ["REVERSADO"])
 def test_cli06_sin_productos_vigentes_permite_baja(estado_desembolso):
     lecturas = [
         [{"estado": "Inactiva", "saldo": Decimal(0), "saldo_retenido": Decimal(0)}],
@@ -2535,3 +2539,396 @@ def test_cli05_cli06_openapi_sin_sockets():
     assert modelo["properties"]["nombres"]["type"] == "string"
     assert modelo["properties"]["email"]["type"] == "string"
     assert modelo["properties"]["telefonoCelular"]["type"] == "string"
+
+
+@pytest.mark.parametrize("destino", ["Inactivo", "Eliminado"])
+def test_cli06_obligacion_de_desembolso_pendiente_impide_baja(destino):
+    db = _conn_escritura(
+        cambios={"estado": destino},
+        lecturas=[
+            [{"estado": "Inactiva", "saldo": Decimal(0), "saldo_retenido": Decimal(0)}],
+            [{"id_solicitud": 30, "estado": "PENDIENTE"}],
+        ],
+    )
+    with pytest.raises(service.HTTPException) as exc:
+        service.cambiar_estado_cliente(
+            cast(Connection, db),
+            10,
+            ClienteEstadoUpdate.model_validate({"estado": destino, "motivo": "Baja"}),
+            12,
+            "192.0.2.10",
+            ("ADMIN",),
+        )
+    _assert_http_error(exc, 409, "CLIENTE_CON_PRODUCTOS_VIGENTES")
+    _assert_sin_escrituras(db)
+    assert db.rollbacks == 1
+
+
+@pytest.mark.parametrize(
+    "estado,principal,enviados,code",
+    [
+        ("Eliminado", False, {"esPrincipal": True}, "DIRECCION_NO_EDITABLE"),
+        ("Eliminado", False, {"sector": "Otro"}, "DIRECCION_NO_EDITABLE"),
+        ("Inactivo", False, {"esPrincipal": True}, "DIRECCION_NO_ACTIVA"),
+        ("Activo", True, {"esPrincipal": False}, "DIRECCION_PRINCIPAL_REQUERIDA"),
+    ],
+)
+def test_cli11_preserva_principal_activa(estado, principal, enviados, code):
+    db = _RiesgoConn(
+        [
+            [{"id_cliente": 10, "estado": "Activo"}],
+            [_direccion_row(estado=estado, es_principal=principal)],
+        ]
+    )
+    with pytest.raises(service.HTTPException) as exc:
+        service.editar_direccion(
+            cast(Connection, db),
+            10,
+            1,
+            service.DireccionUpdate.model_validate(enviados),
+            12,
+            "192.0.2.10",
+        )
+    _assert_http_error(exc, 409, code)
+    assert not any("UPDATE " in sql for sql, _ in db.consultas)
+    assert "UPDLOCK, HOLDLOCK" in db.consultas[0][0]
+    assert db.rollbacks == 1 and db.commits == 0
+
+
+def test_cli11_patch_no_reescribe_campos_omitidos_con_snapshot_antiguo():
+    anterior = _direccion_row(sector="Anterior")
+    # Otro escritor ya guardó este sector después del snapshot de la llamada.
+    persistida = {
+        **anterior,
+        "sector": "Cambio concurrente",
+        "calle_direccion": "Calle nueva",
+    }
+    db = _RiesgoConn([[persistida], []])
+    resultado = repository.actualizar_direccion(
+        cast(Connection, db),
+        10,
+        1,
+        {"calle_direccion": "Calle nueva"},
+        modificado_por=12,
+        direccion_ip="192.0.2.10",
+        valores_anteriores=anterior,
+    )
+    sql, params = db.consultas[0]
+    assert "ELSE Sector END" in sql and "ELSE EsPrincipal END" in sql
+    assert params["enviado_calle_direccion"] is True
+    assert params["calle_direccion"] == "Calle nueva"
+    assert params["enviado_sector"] is False and params["sector"] is None
+    assert params["enviado_es_principal"] is False
+    assert resultado["sector"] == "Cambio concurrente"
+
+
+@pytest.mark.parametrize("operacion", ["alta", "edicion", "baja"])
+def test_direcciones_bloquean_cliente_antes_de_consultar_y_escribir(
+    monkeypatch, operacion
+):
+    db = _RiesgoConn([[{"id_cliente": 10, "estado": "Activo"}]])
+
+    def fallar(*args, **kwargs):
+        raise RuntimeError("lectura interrumpida")
+
+    metodo = {
+        "alta": "existe_ciudad",
+        "edicion": "obtener_direccion",
+        "baja": "obtener_direccion",
+    }[operacion]
+    monkeypatch.setattr(repository, metodo, fallar)
+    with pytest.raises(RuntimeError):
+        if operacion == "alta":
+            service.agregar_direccion(
+                cast(Connection, db), 10, _payload_direccion_nueva(), 12, "192.0.2.10"
+            )
+        elif operacion == "edicion":
+            service.editar_direccion(
+                cast(Connection, db),
+                10,
+                1,
+                service.DireccionUpdate(sector="Otro"),
+                12,
+                "192.0.2.10",
+            )
+        else:
+            service.eliminar_direccion(cast(Connection, db), 10, 1, 12, "192.0.2.10")
+    assert "Clientes.Cliente WITH (UPDLOCK, HOLDLOCK)" in db.consultas[0][0]
+    assert db.rollbacks == 1 and db.commits == 0
+
+
+@pytest.mark.parametrize(
+    "campo,valor",
+    [
+        ("email", "no-es-email"),
+        ("nombres", "   "),
+        ("nombres", "A" * 251),
+        ("apellidos", "   "),
+        ("razon_social", "A" * 251),
+        ("nombre_comercial", "A" * 251),
+    ],
+)
+def test_alta_y_edicion_comparten_validaciones_de_cliente(campo, valor):
+    with pytest.raises(ValidationError):
+        ClienteCreate.model_validate(
+            _payload_natural_valido().model_dump() | {campo: valor}
+        )
+    with pytest.raises(ValidationError):
+        ClienteUpdate.model_validate({campo: valor})
+
+
+@pytest.mark.parametrize(
+    "campo,valor",
+    [
+        ("sector", "A" * 51),
+        ("calle_direccion", "A" * 251),
+        ("referencia_ubicacion", "   "),
+        ("codigo_postal", "ABC123"),
+    ],
+)
+def test_direcciones_validan_longitudes_y_formatos_en_todas_las_escrituras(
+    campo, valor
+):
+    base = _payload_natural_valido().direccion.model_dump()
+    for modelo in (DireccionCreate, service.DireccionNueva, service.DireccionUpdate):
+        with pytest.raises(ValidationError):
+            modelo.model_validate(base | {campo: valor})
+
+
+@pytest.mark.parametrize(
+    "campo",
+    [
+        "tipoDireccion",
+        "codigoPais",
+        "idCiudad",
+        "calleDireccion",
+        "referenciaUbicacion",
+        "esPrincipal",
+    ],
+)
+def test_cli11_null_no_borra_columnas_obligatorias(campo):
+    with pytest.raises(ValidationError):
+        service.DireccionUpdate.model_validate({campo: None})
+    assert service.DireccionUpdate.model_validate({"sector": None}).sector is None
+
+
+def test_cli02_siempre_registra_una_direccion_principal():
+    with pytest.raises(ValidationError):
+        DireccionCreate.model_validate(
+            {
+                "idCiudad": 1,
+                "calleDireccion": "Calle",
+                "referenciaUbicacion": "Parque",
+                "esPrincipal": False,
+            }
+        )
+
+
+@pytest.mark.parametrize("ruc", ["1790085783001", "1799999999001", "1760000000001"])
+def test_ruc_sociedades_no_se_valida_como_cedula_natural(ruc):
+    valida, mensaje = service.validar_ruc(ruc)
+    assert valida and "SRI" in mensaje
+
+
+@pytest.mark.parametrize(
+    "documento,tipo", [("١٧١٠٠٣٤٠٦٥", "C"), ("ABCDé", "P"), ("2591234567001", "R")]
+)
+def test_documentos_rechazan_caracteres_fuera_del_formato_sql(documento, tipo):
+    assert service.validar_formato_documento(tipo, documento)[0] is False
+
+
+@pytest.mark.parametrize("estado", ["Activa", "Inactiva", "Bloqueada", "Cerrada"])
+def test_perfil_cuenta_publica_los_mismos_estados_que_cuentas(estado):
+    fila = _perfil_mock()["cuentas"][0] | {"estado": estado, "id_moneda": 840}
+    cuenta = service.CuentaPerfil(**fila)
+    assert cuenta.model_dump(by_alias=True)["estado"] == estado.upper()
+
+
+@pytest.mark.parametrize(
+    "method,path,body",
+    [
+        ("POST", "/api/v1/clientes", {}),
+        ("PATCH", "/api/v1/clientes/10", {"email": "invalido"}),
+        ("POST", "/api/v1/clientes/10/direcciones", {}),
+        ("PATCH", "/api/v1/clientes/10/direcciones/1", {"calleDireccion": None}),
+        ("GET", "/api/v1/clientes/validar-identificacion", None),
+    ],
+)
+def test_errores_de_validacion_clientes_tienen_un_solo_formato(method, path, body):
+    import asyncio
+
+    import httpx
+    from fastapi import FastAPI
+
+    from app.core.database.db import cooperativa
+    from tests.sesion import simular_sesion
+
+    local = FastAPI()
+    local.include_router(router.router, prefix="/api/v1")
+    simular_sesion(local)
+    local.dependency_overrides[cooperativa] = lambda: None
+
+    async def llamar():
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=local), base_url="http://test"
+        ) as client:
+            return await client.request(method, path, json=body)
+
+    respuesta = asyncio.run(llamar())
+    assert respuesta.status_code == 400
+    assert respuesta.headers["content-type"] == "application/problem+json"
+    assert respuesta.json()["code"] == "DATOS_INVALIDOS"
+    assert respuesta.json()["traceId"] and respuesta.json()["errors"]
+    assert all("input" not in error for error in respuesta.json()["errors"])
+
+
+def test_error_sql_en_direcciones_se_traduce_sin_exponer_parametros(monkeypatch):
+    import asyncio
+
+    import httpx
+    from fastapi import FastAPI
+    from sqlalchemy.exc import DBAPIError
+
+    from app.core.database.db import cooperativa
+    from tests.sesion import simular_sesion
+
+    local = FastAPI()
+    local.include_router(router.router, prefix="/api/v1")
+    simular_sesion(local)
+    local.dependency_overrides[cooperativa] = lambda: None
+
+    def fallar(*args):
+        raise DBAPIError(
+            "SELECT DATO_PRIVADO",
+            {"identificacion": "DATO_PRIVADO"},
+            Exception("error simulado"),
+            False,
+        )
+
+    monkeypatch.setattr(service, "listar_direcciones", fallar)
+
+    async def llamar():
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=local), base_url="http://test"
+        ) as client:
+            return await client.get("/api/v1/clientes/10/direcciones")
+
+    respuesta = asyncio.run(llamar())
+    assert respuesta.status_code == 500
+    assert respuesta.headers["content-type"] == "application/problem+json"
+    assert respuesta.json()["code"] == "ERROR_INTERNO"
+    assert "DATO_PRIVADO" not in respuesta.text
+
+
+@pytest.mark.parametrize("estado", ["Activo", "Inactivo"])
+def test_cli12_baja_registra_usuario_ip_fecha_y_transicion(estado):
+    db = _RiesgoConn(
+        [
+            [{"id_cliente": 10, "estado": "Activo"}],
+            [_direccion_row(id_direccion=5, es_principal=False, estado=estado)],
+            [],
+            [],
+        ]
+    )
+    service.eliminar_direccion(cast(Connection, db), 10, 5, 12, "192.0.2.10")
+    assert db.commits == 1 and db.rollbacks == 0 and not db.respuestas
+    sql, params = db.consultas[2]
+    assert "UPDATE Clientes.Direcciones" in sql
+    assert params == {"id_cliente": 10, "id_direccion": 5}
+    sql, params = db.consultas[3]
+    assert "INSERT INTO Clientes.ClientesHis" in sql
+    assert params["tipo_operacion"] == "D" and params["campo"] == "DIRECCION.estado"
+    assert params["modificado_por"] == 12 and params["direccion_ip"] == "192.0.2.10"
+    assert params["fecha_modificacion"].tzinfo is UTC
+    datos = json.loads(params["observaciones"])
+    assert datos["valorAnterior"] == estado and datos["valorNuevo"] == "Eliminado"
+    assert datos["motivo"] == "Baja lógica de dirección 5"
+
+
+def test_cli12_reintento_de_baja_no_inventa_otro_cambio_ni_historial():
+    db = _RiesgoConn(
+        [
+            [{"id_cliente": 10, "estado": "Activo"}],
+            [_direccion_row(id_direccion=5, es_principal=False, estado="Eliminado")],
+        ]
+    )
+    service.eliminar_direccion(cast(Connection, db), 10, 5, 12, "192.0.2.10")
+    assert db.commits == 0 and db.rollbacks == 1 and not db.respuestas
+    assert not any("UPDATE " in sql or "INSERT " in sql for sql, _ in db.consultas)
+
+
+@pytest.mark.parametrize("fallo", [2, 3, "commit"])
+def test_cli12_fallo_de_baja_historial_o_commit_revierte_ambos(fallo):
+    db = _EscrituraConn(
+        [
+            [{"id_cliente": 10, "estado": "Activo"}],
+            [_direccion_row(id_direccion=5, es_principal=False)],
+            [],
+            [],
+        ],
+        fallo=fallo,
+    )
+    with pytest.raises(RuntimeError):
+        service.eliminar_direccion(cast(Connection, db), 10, 5, 12, "192.0.2.10")
+    assert db.commits == 0 and db.rollbacks == 1
+
+
+def test_cli12_http_identidad_de_sesion_y_mecanismo_ip_actual(monkeypatch):
+    import asyncio
+
+    import httpx
+    from fastapi import FastAPI
+
+    from app.core.database.db import cooperativa
+    from tests.sesion import USUARIO
+
+    local = FastAPI()
+    local.include_router(router.router, prefix="/api/v1")
+    local.dependency_overrides[auth.usuario_actual] = lambda: replace(
+        USUARIO, id_interno=12
+    )
+    local.dependency_overrides[cooperativa] = lambda: None
+    eliminar = MagicMock()
+    monkeypatch.setattr(service, "eliminar_direccion", eliminar)
+
+    async def llamar():
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=local), base_url="http://test"
+        ) as client:
+            return await client.delete(
+                "/api/v1/clientes/10/direcciones/5?modificadoPor=999",
+                headers={"x-forwarded-for": "203.0.113.77, 192.0.2.1"},
+            )
+
+    respuesta = asyncio.run(llamar())
+    assert respuesta.status_code == 204
+    # Se conserva el helper de IP existente; la configuración del proxy queda pendiente.
+    eliminar.assert_called_once_with(None, 10, 5, 12, "203.0.113.77")
+
+
+def test_cli12_sin_usuario_interno_no_se_ejecuta_baja(monkeypatch):
+    import asyncio
+
+    import httpx
+    from fastapi import FastAPI
+
+    from app.core.database.db import cooperativa
+    from tests.sesion import USUARIO
+
+    local = FastAPI()
+    local.include_router(router.router, prefix="/api/v1")
+    local.dependency_overrides[auth.usuario_actual] = lambda: replace(
+        USUARIO, id_interno=None
+    )
+    local.dependency_overrides[cooperativa] = lambda: None
+    eliminar = MagicMock()
+    monkeypatch.setattr(service, "eliminar_direccion", eliminar)
+
+    async def llamar():
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=local), base_url="http://test"
+        ) as client:
+            return await client.delete("/api/v1/clientes/10/direcciones/5")
+
+    assert asyncio.run(llamar()).status_code == 403
+    eliminar.assert_not_called()

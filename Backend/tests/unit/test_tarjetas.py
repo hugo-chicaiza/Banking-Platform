@@ -6,6 +6,7 @@ cierran fuera de development.
 
 import hashlib
 import logging
+import re
 from datetime import date, datetime
 from types import SimpleNamespace
 from typing import Any
@@ -18,14 +19,16 @@ from app.core.database.db import cooperativa
 from app.core.security.auth import ROLES
 from app.core.security.hsm import HsmNoDisponible, es_pin_debil
 from app.main import app
-from app.modules.tarjetas import repository, router, service
+from app.modules.tarjetas import repository, router, schemas, service
+from tests.pin_version import DriverLimitesSQL
 from tests.sesion import simular_sesion, usuario_con_roles
-from tests.tarjetas_hsm import HSM, PAN, body_pin, instalar, pin_valido
+from tests.tarjetas_hsm import HSM, PAN, instalar, pin_generado, pin_valido
 
 BASE = "/api/v1/tarjetas"
 PAYLOAD = {
     "idCuenta": 4,
     "idProducto": 4,
+    "idSubProducto": 3,
     "tipoTarjeta": "Debito",
     "nombreTarjeta": "MARIA MENDOZA",
 }
@@ -46,19 +49,35 @@ FILA = {
     "id_cliente": 4,
     "id_cuenta": 4,
     "id_producto": 4,
-    "estado_actual": "Generada",
+    "estado_actual": "Solicitada",
+    "es_extension": False,
+    "id_tarjeta_titular": None,
     "pin_asignado": False,
+    "fecha_solicitud": date(2026, 11, 1),
+    "fecha_resolucion": None,
     "fecha_emision": date(2026, 11, 1),
     "fecha_expiracion": date(2031, 11, 1),
 }
-SUBPRODUCTO = {"id_sub_producto": 3, "id_bin": 1, "codigo_bin": "500000"}
+SUBPRODUCTO = {
+    "id_sub_producto": 3,
+    "estado": "A",
+    "codigo_sub_producto": "TDB001-MC",
+    "id_bin": 1,
+    "codigo_bin": "500000",
+    "estado_bin": "A",
+}
 
 
 class _Conn:
     def __init__(self) -> None:
+        self.connection = SimpleNamespace(driver_connection=DriverLimitesSQL())
+        self.invalidated = False
         self.commits = 0
         self.rollbacks = 0
         self.falla_commit: Exception | None = None
+
+    def invalidate(self) -> None:
+        self.invalidated = True
 
     def commit(self) -> None:
         if self.falla_commit is not None:
@@ -110,7 +129,7 @@ def emision(monkeypatch):
         lambda c, i: {"tipo_producto": "Tarjeta", "estado": "A"},
     )
     monkeypatch.setattr(
-        repository, "obtener_subproducto_con_bin", lambda c, i: SUBPRODUCTO
+        repository, "obtener_subproducto_con_bin", lambda c, i, s: SUBPRODUCTO
     )
     monkeypatch.setattr(repository, "obtener_tarjeta", lambda c, i, **k: FILA)
     monkeypatch.setattr(repository, "existe_ciudad", lambda c, i: True)
@@ -140,17 +159,19 @@ def _code(respuesta) -> str:
 # TAR-01
 
 
-def test_emitir_201_nace_generada_sin_pan_ni_hash(client, conns, emision):
+def test_emitir_201_nace_solicitada_sin_pin_pan_ni_hash(client, conns, emision):
     r = client.post(BASE, json=PAYLOAD)
 
     assert r.status_code == 201
     cuerpo = r.json()
-    assert cuerpo["estadoActual"] == "Generada"
+    assert cuerpo["estadoActual"] == "Solicitada"
     assert cuerpo["pinAsignado"] is False
+    assert cuerpo["fechaSolicitud"] == "2026-11-01"
+    assert cuerpo["fechaResolucion"] is None
     assert "hashNumeroTarjeta" not in cuerpo
     assert conns.coop.commits == 1
     assert "envio" not in emision
-    assert emision["historial"][2:5] == ("CambioEstado", None, "Generada")
+    assert emision["historial"][2:5] == ("CambioEstado", None, "Solicitada")
     assert r.headers["cache-control"] == "no-store"
 
 
@@ -285,12 +306,86 @@ def test_emitir_producto_incorrecto_422(client, emision, monkeypatch, producto):
     assert r.status_code == 422 and _code(r) == "PRODUCTO_NO_ES_TARJETA"
 
 
-def test_emitir_sin_bin_activo_422(client, emision, monkeypatch):
-    monkeypatch.setattr(repository, "obtener_subproducto_con_bin", lambda c, i: None)
+def test_emitir_usa_el_subproducto_elegido(client, emision, monkeypatch):
+    recibido = {}
+
+    def subproducto(_c, id_producto, id_sub_producto):
+        recibido.update(producto=id_producto, sub=id_sub_producto)
+        return {
+            **SUBPRODUCTO,
+            "id_sub_producto": 6,
+            "codigo_sub_producto": "TCR001-MC",
+            "codigo_bin": "510000",
+        }
+
+    monkeypatch.setattr(repository, "obtener_subproducto_con_bin", subproducto)
+
+    r = client.post(
+        BASE, json={**PAYLOAD, "idSubProducto": 6, "tipoTarjeta": "Credito"}
+    )
+
+    assert r.status_code == 201
+    assert recibido == {"producto": 4, "sub": 6}
+    assert emision["tarjeta"]["id_sub_producto"] == 6
+    assert emision["tarjeta"]["id_bin"] == 1
+
+
+def test_emitir_subproducto_inexistente_o_de_otro_producto_422(
+    client, emision, monkeypatch
+):
+    monkeypatch.setattr(repository, "obtener_subproducto_con_bin", lambda c, i, s: None)
+
+    r = client.post(BASE, json=PAYLOAD)
+
+    assert r.status_code == 422 and _code(r) == "SUBPRODUCTO_NO_ENCONTRADO"
+
+
+@pytest.mark.parametrize(
+    "cambio",
+    [{"estado": "I"}, {"id_bin": None, "estado_bin": None}, {"estado_bin": "I"}],
+)
+def test_emitir_subproducto_sin_bin_activo_422(client, emision, monkeypatch, cambio):
+    monkeypatch.setattr(
+        repository,
+        "obtener_subproducto_con_bin",
+        lambda c, i, s: {**SUBPRODUCTO, **cambio},
+    )
 
     r = client.post(BASE, json=PAYLOAD)
 
     assert r.status_code == 422 and _code(r) == "BIN_INVALIDO"
+
+
+@pytest.mark.parametrize(
+    ("tipo", "codigo"),
+    [("Credito", "TDB001-MC"), ("Debito", "TCR001-MC"), ("Debito", "XYZ001")],
+)
+def test_emitir_tipo_que_no_corresponde_al_subproducto_422(
+    client, conns, emision, monkeypatch, tipo, codigo
+):
+    monkeypatch.setattr(
+        repository,
+        "obtener_subproducto_con_bin",
+        lambda c, i, s: {**SUBPRODUCTO, "codigo_sub_producto": codigo},
+    )
+
+    r = client.post(BASE, json={**PAYLOAD, "tipoTarjeta": tipo})
+
+    assert r.status_code == 422 and _code(r) == "TIPO_TARJETA_NO_COINCIDE"
+    assert "tarjeta" not in emision and conns.coop.commits == 0
+
+
+@pytest.mark.parametrize(("largo", "status"), [(26, 201), (27, 400)])
+def test_emitir_nombre_impreso_hasta_26_caracteres(client, emision, largo, status):
+    r = client.post(BASE, json={**PAYLOAD, "nombreTarjeta": "A" * largo})
+
+    assert r.status_code == status
+
+
+def test_emitir_sin_subproducto_400(client, emision):
+    cuerpo = {k: v for k, v in PAYLOAD.items() if k != "idSubProducto"}
+
+    assert client.post(BASE, json=cuerpo).status_code == 400
 
 
 def _error_db(mensaje: str) -> DBAPIError:
@@ -442,7 +537,18 @@ def test_buscar_200_sin_token_ni_pin(client, monkeypatch):
     assert item["numeroEnmascarado"] == FILA["numero_enmascarado"]
     assert "tokenTarjeta" not in item
     assert "pinAsignado" not in item
-    assert llamada["args"] == (4, None, "Generada", "fechaEmision", "asc", 1, 20)
+    assert item["esExtension"] is False and item["idTarjetaTitular"] is None
+    assert llamada["args"] == (4, None, "Generada", "fechaEmision", "asc", 1, 20, None)
+
+
+@pytest.mark.parametrize(("valor", "esperado"), [("false", False), ("true", True)])
+def test_buscar_filtra_por_extension(client, monkeypatch, valor, esperado):
+    llamada = _lista(monkeypatch)
+
+    r = client.get(BASE, params={"idCuenta": 4, "esExtension": valor})
+
+    assert r.status_code == 200
+    assert llamada["args"][-1] is esperado
 
 
 @pytest.mark.parametrize(
@@ -453,6 +559,7 @@ def test_buscar_200_sin_token_ni_pin(client, monkeypatch):
         {"page": 0},
         {"estado": "NoExiste"},
         {"idCliente": "abc"},
+        {"esExtension": "quizas"},
     ],
 )
 def test_buscar_filtros_invalidos_400(client, params):
@@ -506,34 +613,38 @@ def test_detalle_id_invalido_400(client, valor):
 
 
 def _estado(monkeypatch, fila, transicion=True):
-    capturado: dict[str, Any] = {}
+    capturado: dict[str, Any] = {"historiales": []}
     monkeypatch.setattr(repository, "obtener_tarjeta", lambda c, i, **k: fila)
     monkeypatch.setattr(repository, "existe_transicion", lambda c, o, d: transicion)
-    monkeypatch.setattr(
-        repository,
-        "actualizar_estado",
-        lambda c, i, e: capturado.__setitem__("estado", e),
-    )
-    monkeypatch.setattr(
-        repository,
-        "insertar_historial",
-        lambda *a: capturado.__setitem__("historial", a),
-    )
+
+    def actualizar(_c, _i, estado, **marcas):
+        capturado["estado"] = estado
+        capturado["marcas"] = marcas
+
+    def historial(*a):
+        capturado["historial"] = a
+        capturado["historiales"].append(a)
+
+    monkeypatch.setattr(repository, "actualizar_estado", actualizar)
+    monkeypatch.setattr(repository, "insertar_historial", historial)
     return capturado
 
 
 @pytest.mark.parametrize(
-    ("anterior", "destino", "evento"),
+    ("anterior", "destino", "evento", "marcas"),
     [
-        ("Generada", "Activa", "Activacion"),
-        ("Activa", "Bloqueada", "Bloqueo"),
-        ("Bloqueada", "Activa", "Desbloqueo"),
-        ("Generada", "Anulada", "Anulacion"),
-        ("Activa", "Cancelada", "CambioEstado"),
+        ("Solicitada", "Anulada", "Anulacion", {"resolucion": True}),
+        ("Aprobada", "Generada", "CambioEstado", {"emision": True}),
+        ("Activa", "Bloqueada", "Bloqueo", {}),
+        ("Bloqueada", "Activa", "Desbloqueo", {}),
+        ("Generada", "Anulada", "Anulacion", {}),
+        ("Activa", "Cancelada", "CambioEstado", {}),
+        ("Activa", "Vencida", "CambioEstado", {}),
+        ("Vencida", "Cerrada", "CambioEstado", {}),
     ],
 )
-def test_estado_valido_200_registra_historial(
-    client, conns, monkeypatch, anterior, destino, evento
+def test_estado_valido_200_registra_historial_y_fechas(
+    client, conns, monkeypatch, anterior, destino, evento, marcas
 ):
     capturado = _estado(
         monkeypatch, {**FILA, "estado_actual": anterior, "pin_asignado": True}
@@ -545,9 +656,105 @@ def test_estado_valido_200_registra_historial(
 
     assert r.status_code == 200
     assert capturado["estado"] == destino
+    esperado = {"resolucion": False, "emision": False, "pin_asignado": False}
+    assert capturado["marcas"] == {**esperado, **marcas}
     assert capturado["historial"][2:6] == (evento, anterior, destino, "Motivo")
     assert capturado["historial"][7] == "testclient"
-    assert conns.coop.commits == 1
+    assert conns.coop.commits == 1 and conns.seg.commits == 0
+
+
+@pytest.mark.parametrize(("tipo", "temporal"), [("Debito", True), ("Credito", False)])
+def test_aprobar_genera_pin_automatico_sin_exponerlo(
+    client, conns, monkeypatch, seg, caplog, tipo, temporal
+):
+    capturado = _estado(monkeypatch, {**FILA, "tipo_tarjeta": tipo})
+    seg.custodiar()
+    caplog.set_level(logging.DEBUG)
+
+    r = client.post(
+        f"{BASE}/301/estado", json={"estado": "Aprobada", "motivo": "Aprobada"}
+    )
+
+    assert r.status_code == 200
+    assert capturado["marcas"] == {
+        "resolucion": True,
+        "emision": False,
+        "pin_asignado": True,
+    }
+    fila = seg.pin()
+    assert fila["estado"] == "Activo" and fila["requiere_cambio"] is temporal
+    # El Offset verifica un PIN no trivial que eligió el HSM, y solo ese
+    pin = pin_generado(seg)
+    assert not es_pin_debil(pin)
+    assert pin_valido(seg, pin)
+    assert not pin_valido(seg, f"{(int(pin) + 1) % 10000:04d}")
+    eventos = [h[2] for h in capturado["historiales"]]
+    assert eventos == ["CambioEstado", "CambioPin"]
+    assert capturado["historiales"][1][5] == "PIN generado automáticamente"
+    for secreto in (pin, fila["offset"], PAN):
+        assert secreto not in r.text and secreto not in caplog.text
+        assert secreto not in str(capturado["historiales"])
+    # SeguridadDB confirma el Offset antes que CooperativaDB el estado
+    assert conns.seg.commits == 1 and conns.coop.commits == 1
+
+
+def test_aprobar_sin_pan_custodiado_503_sin_cambiar_estado(client, conns, monkeypatch):
+    capturado = _estado(monkeypatch, FILA)
+
+    r = client.post(f"{BASE}/301/estado", json={"estado": "Aprobada", "motivo": "x"})
+
+    assert r.status_code == 503 and _code(r) == "PAN_NO_DISPONIBLE"
+    assert "estado" not in capturado and conns.coop.commits == 0
+
+
+def test_aprobar_sin_hsm_503_sin_cambiar_estado(client, conns, monkeypatch, seg):
+    capturado = _estado(monkeypatch, FILA)
+    seg.custodiar()
+
+    def sin_hsm():
+        raise HsmNoDisponible("x")
+
+    monkeypatch.setattr(service, "obtener_hsm", sin_hsm)
+
+    r = client.post(f"{BASE}/301/estado", json={"estado": "Aprobada", "motivo": "x"})
+
+    assert r.status_code == 503 and _code(r) == "HSM_NO_DISPONIBLE"
+    assert "estado" not in capturado and seg.pines == {}
+
+
+def test_aprobar_si_falla_cooperativa_la_tarjeta_sigue_solicitada_y_se_reintenta(
+    client, conns, monkeypatch, seg
+):
+    capturado = _estado(monkeypatch, FILA)
+    seg.custodiar()
+    conns.coop.falla_commit = DBAPIError("COMMIT", {}, Exception("caida"))
+
+    r = client.post(f"{BASE}/301/estado", json={"estado": "Aprobada", "motivo": "x"})
+
+    assert r.status_code == 503 and _code(r) == "PIN_ASIGNACION_NO_CONFIRMADA"
+    assert conns.coop.rollbacks == 1
+    primer_offset = seg.pin()["offset"]
+
+    conns.coop.falla_commit = None
+    capturado.clear()
+    capturado["historiales"] = []
+    r = client.post(f"{BASE}/301/estado", json={"estado": "Aprobada", "motivo": "x"})
+
+    assert r.status_code == 200
+    # El reintento genera un PIN nuevo que reemplaza al anterior
+    assert pin_valido(seg, pin_generado(seg))
+    assert len(primer_offset) == 4
+
+
+def test_generada_a_activa_a_mano_409_activacion_automatica(client, conns, monkeypatch):
+    capturado = _estado(
+        monkeypatch, {**FILA, "estado_actual": "Generada", "pin_asignado": True}
+    )
+
+    r = client.post(f"{BASE}/301/estado", json={"estado": "Activa", "motivo": "x"})
+
+    assert r.status_code == 409 and _code(r) == "ACTIVACION_AUTOMATICA"
+    assert "estado" not in capturado and conns.coop.commits == 0
 
 
 def test_estado_transicion_invalida_409(client, conns, monkeypatch):
@@ -559,8 +766,8 @@ def test_estado_transicion_invalida_409(client, conns, monkeypatch):
     assert "estado" not in capturado and conns.coop.commits == 0
 
 
-def test_activar_sin_pin_409(client, monkeypatch):
-    capturado = _estado(monkeypatch, FILA)
+def test_reactivar_sin_pin_409(client, monkeypatch):
+    capturado = _estado(monkeypatch, {**FILA, "estado_actual": "Bloqueada"})
 
     r = client.post(f"{BASE}/301/estado", json={"estado": "Activa", "motivo": "x"})
 
@@ -577,9 +784,9 @@ def test_estado_inexistente_404(client, monkeypatch):
 
 
 def test_estado_trigger_52005_409_sin_filtrar_sql(client, conns, monkeypatch):
-    _estado(monkeypatch, {**FILA, "pin_asignado": True})
+    _estado(monkeypatch, {**FILA, "estado_actual": "Bloqueada", "pin_asignado": True})
 
-    def falla(*_a):
+    def falla(*_a, **_k):
         raise _error_db("[SQL Server]Cambio no permitido (52005) (SQLExecDirectW)")
 
     monkeypatch.setattr(repository, "actualizar_estado", falla)
@@ -596,7 +803,11 @@ def test_estado_trigger_52005_409_sin_filtrar_sql(client, conns, monkeypatch):
     [
         {"estado": "Activa"},
         {"estado": "Activa", "motivo": "   "},
-        {"estado": "Cerrada", "motivo": "x"},
+        # Solicitada solo es el estado inicial; los demás ya no existen
+        {"estado": "Solicitada", "motivo": "x"},
+        {"estado": "EnRevision", "motivo": "x"},
+        {"estado": "Rechazada", "motivo": "x"},
+        {"estado": "Pendiente", "motivo": "x"},
         {"estado": "Activa", "motivo": "x" * 501},
         {"estado": "Activa", "motivo": "x", "pinAsignado": True},
     ],
@@ -608,10 +819,15 @@ def test_estado_body_invalido_400(client, body):
 # TAR-05
 
 
-def _pin(monkeypatch, seg, fila=FILA, marcado=True, custodiar=True):
-    capturado: dict[str, Any] = {}
+def _pin(monkeypatch, seg, fila=None, custodiar=True):
+    capturado: dict[str, Any] = {"marcado": False}
+    fila = {**FILA, "estado_actual": "Activa", "pin_asignado": True} | (fila or {})
     monkeypatch.setattr(repository, "obtener_tarjeta", lambda c, i, **k: fila)
-    monkeypatch.setattr(repository, "marcar_pin_asignado", lambda c, i: marcado)
+    monkeypatch.setattr(
+        repository,
+        "marcar_pin_asignado",
+        lambda c, i: capturado.__setitem__("marcado", True),
+    )
     monkeypatch.setattr(
         repository,
         "insertar_historial",
@@ -622,164 +838,69 @@ def _pin(monkeypatch, seg, fila=FILA, marcado=True, custodiar=True):
     return capturado
 
 
-def test_pin_204_genera_offset_ibm3624_y_confirma_en_tres_pasos(
-    client, conns, monkeypatch, seg
+@pytest.mark.parametrize(("tipo", "temporal"), [("Debito", True), ("Credito", False)])
+def test_regenerar_pin_204_reemplaza_offset_y_desbloquea(
+    client, conns, monkeypatch, seg, tipo, temporal
 ):
-    capturado = _pin(monkeypatch, seg)
-    body = body_pin("7392")
+    capturado = _pin(monkeypatch, seg, {"tipo_tarjeta": tipo})
+    seg.pines[301] = {
+        "offset": "1111",
+        "pvk": "x",
+        "requiere_cambio": False,
+        "estado": "Bloqueado",
+        "intentos": 3,
+    }
 
-    r = client.post(f"{BASE}/301/pin", json=body)
+    r = client.post(f"{BASE}/301/pin")
 
     assert r.status_code == 204 and r.content == b""
     fila = seg.pin()
-    assert fila["confirmado"] and fila["estado"] == "Activo"
-    assert len(fila["offset"]) == 4 and fila["offset"].isdigit()
-    # El Offset verifica el PIN como lo hará ATM-01, y solo ese PIN
-    assert pin_valido(seg, "7392") and not pin_valido(seg, "7393")
+    assert fila["offset"] != "1111" and fila["estado"] == "Activo"
+    assert fila["intentos"] == 0 and fila["requiere_cambio"] is temporal
+    assert pin_valido(seg, pin_generado(seg))
+    assert capturado["marcado"]
     assert capturado["historial"][2] == "CambioPin"
-    for secreto in ("7392", body["encryptedPinBlock"], fila["offset"]):
-        assert secreto not in str(capturado["historial"])
-    # SeguridadDB: Offset pendiente y luego habilitado; CooperativaDB: PinAsignado
-    assert conns.seg.commits == 2 and conns.coop.commits == 1
-
-
-def test_pin_ya_asignado_409(client, monkeypatch, seg):
-    _pin(monkeypatch, seg, {**FILA, "pin_asignado": True})
-    seg.pines[301] = {
-        "offset": "1111",
-        "pvk": "x",
-        "confirmado": True,
-        "estado": "Activo",
-    }
-
-    r = client.post(f"{BASE}/301/pin", json=body_pin("7392"))
-
-    assert r.status_code == 409 and _code(r) == "PIN_YA_ASIGNADO"
-    assert seg.pin()["offset"] == "1111"
-
-
-def test_pin_recupera_asignacion_que_no_se_habilito(client, monkeypatch, seg):
-    # CooperativaDB ya tiene PinAsignado = 1 pero SeguridadDB quedó pendiente
-    _pin(monkeypatch, seg, {**FILA, "pin_asignado": True})
-    seg.pines[301] = {
-        "offset": "1111",
-        "pvk": "x",
-        "confirmado": False,
-        "estado": "Inactivo",
-    }
-
-    r = client.post(f"{BASE}/301/pin", json=body_pin("7392"))
-
-    assert r.status_code == 409 and _code(r) == "PIN_YA_ASIGNADO"
-    assert seg.pin()["confirmado"] and seg.pin()["offset"] == "1111"
-
-
-def test_pin_recuperacion_fallida_409_en_proceso(client, monkeypatch, seg):
-    _pin(monkeypatch, seg, {**FILA, "pin_asignado": True})
-    seg.pines[301] = {
-        "offset": "1111",
-        "pvk": "x",
-        "confirmado": False,
-        "estado": "Inactivo",
-    }
-
-    def falla(*_a):
-        raise DBAPIError("UPDATE", {}, Exception("caida"))
-
-    monkeypatch.setattr(repository, "confirmar_pin", falla)
-
-    r = client.post(f"{BASE}/301/pin", json=body_pin("7392"))
-
-    assert r.status_code == 409 and _code(r) == "PIN_ASIGNACION_EN_PROCESO"
-    assert not seg.pin()["confirmado"]
-
-
-def test_pin_carrera_concurrente_409_no_habilita(client, conns, monkeypatch, seg):
-    _pin(monkeypatch, seg, marcado=False)
-
-    r = client.post(f"{BASE}/301/pin", json=body_pin("7392"))
-
-    assert r.status_code == 409 and _code(r) == "PIN_YA_ASIGNADO"
-    # Una asignación incompleta nunca habilita el PIN
-    assert not seg.pin()["confirmado"] and conns.coop.commits == 0
-
-
-def test_pin_tarjeta_inexistente_404(client, monkeypatch, seg):
-    _pin(monkeypatch, seg, None)
-
-    assert client.post(f"{BASE}/9/pin", json=body_pin("7392")).status_code == 404
-
-
-@pytest.mark.parametrize("pin", ["0000", "1111", "1234", "4321", "6789", "9876"])
-def test_pin_debil_422_sin_guardar(client, monkeypatch, seg, pin):
-    _pin(monkeypatch, seg)
-
-    r = client.post(f"{BASE}/301/pin", json=body_pin(pin))
-
-    assert r.status_code == 422 and _code(r) == "PIN_DEBIL"
-    assert seg.pines == {}
-    assert pin not in r.text
-
-
-@pytest.mark.parametrize("pin", ["1235", "2580", "1212", "7392", "0001"])
-def test_pin_no_trivial_es_aceptado(pin):
-    assert es_pin_debil(pin) is False
-
-
-def test_pin_clave_no_autorizada_422(client, monkeypatch, seg):
-    _pin(monkeypatch, seg)
-    body = {**body_pin("7392"), "keyReference": "OTRA-CLAVE"}
-
-    r = client.post(f"{BASE}/301/pin", json=body)
-
-    assert r.status_code == 422 and _code(r) == "CLAVE_NO_AUTORIZADA"
-    assert seg.pines == {}
+    assert capturado["historial"][5] == "Regeneración de PIN"
+    assert conns.seg.commits == 1 and conns.coop.commits == 1
 
 
 @pytest.mark.parametrize(
-    "bloque",
-    [
-        "00112233445566778899AABBCCDDEEFF",  # hex válido pero no es un PIN Block ISO-4
-        "0011",
-        "ZZ112233445566778899AABBCCDDEEFF",
-        7392,
-        None,
-    ],
+    "estado", ["Aprobada", "Generada", "Activa", "Inactiva", "Bloqueada"]
 )
-def test_pin_block_invalido_422(client, monkeypatch, seg, bloque):
-    _pin(monkeypatch, seg)
+def test_regenerar_pin_en_estados_permitidos(client, monkeypatch, seg, estado):
+    _pin(monkeypatch, seg, {"estado_actual": estado})
 
-    r = client.post(
-        f"{BASE}/301/pin",
-        json={"encryptedPinBlock": bloque, "keyReference": "TEST-KEY-01"},
-    )
-
-    assert r.status_code == 422 and _code(r) == "PIN_BLOCK_INVALIDO"
-    assert seg.pines == {}
+    assert client.post(f"{BASE}/301/pin").status_code == 204
 
 
-def test_pin_block_de_otra_tarjeta_es_invalido(client, monkeypatch, seg):
-    # ISO-4 liga el PIN Block al PAN: no sirve para otra tarjeta
-    _pin(monkeypatch, seg)
+@pytest.mark.parametrize(
+    "estado", ["Solicitada", "Cancelada", "Anulada", "Vencida", "Cerrada"]
+)
+def test_regenerar_pin_estado_no_permitido_409(client, conns, monkeypatch, seg, estado):
+    _pin(monkeypatch, seg, {"estado_actual": estado})
 
-    r = client.post(f"{BASE}/301/pin", json=body_pin("7392", pan="5000001111111116"))
+    r = client.post(f"{BASE}/301/pin")
 
-    assert r.status_code == 422 and _code(r) == "PIN_BLOCK_INVALIDO"
+    assert r.status_code == 409 and _code(r) == "PIN_NO_PERMITIDO"
+    assert seg.pines == {} and conns.coop.commits == 0
+
+
+def test_regenerar_pin_tarjeta_inexistente_404(client, monkeypatch, seg):
+    monkeypatch.setattr(repository, "obtener_tarjeta", lambda c, i, **k: None)
+
+    assert client.post(f"{BASE}/9/pin").status_code == 404
 
 
 @pytest.mark.parametrize(
     "contenido",
     [
         b'{"pin": "7392"}',
-        b'{"encryptedPinBlock": "00112233445566778899AABBCCDDEEFF"}',
-        b'{"encryptedPinBlock": "x", "keyReference": "y", "pin": "7392"}',
-        b'"7392"',
-        b"{no json 7392",
-        b"",
-        b'{"encryptedPinBlock": "' + b"A" * 2000 + b'", "keyReference": "k"}',
+        b'{"encryptedPinBlock": "00112233445566778899AABBCCDDEEFF", "keyReference": "k"}',
+        b"{}",
+        b"7392",
     ],
 )
-def test_pin_body_invalido_400_nunca_repite_el_valor(
+def test_regenerar_pin_con_body_400_nunca_repite_el_valor(
     client, monkeypatch, seg, contenido
 ):
     _pin(monkeypatch, seg)
@@ -795,15 +916,15 @@ def test_pin_body_invalido_400_nunca_repite_el_valor(
     assert seg.pines == {}
 
 
-def test_pin_sin_pan_custodiado_503(client, monkeypatch, seg):
+def test_regenerar_pin_sin_pan_custodiado_503(client, monkeypatch, seg):
     _pin(monkeypatch, seg, custodiar=False)
 
-    r = client.post(f"{BASE}/301/pin", json=body_pin("7392"))
+    r = client.post(f"{BASE}/301/pin")
 
     assert r.status_code == 503 and _code(r) == "PAN_NO_DISPONIBLE"
 
 
-def test_pin_sin_hsm_503(client, monkeypatch, seg):
+def test_regenerar_pin_sin_hsm_503(client, monkeypatch, seg):
     _pin(monkeypatch, seg)
 
     def sin_hsm():
@@ -811,76 +932,117 @@ def test_pin_sin_hsm_503(client, monkeypatch, seg):
 
     monkeypatch.setattr(service, "obtener_hsm", sin_hsm)
 
-    r = client.post(f"{BASE}/301/pin", json=body_pin("7392"))
+    r = client.post(f"{BASE}/301/pin")
 
     assert r.status_code == 503 and _code(r) == "HSM_NO_DISPONIBLE"
+    assert seg.pines == {}
 
 
-def test_pin_falla_cooperativa_queda_pendiente_y_el_reintento_completa(
+def test_regenerar_pin_falla_cooperativa_503_pero_el_pin_nuevo_rige(
     client, conns, monkeypatch, seg
 ):
     _pin(monkeypatch, seg)
     conns.coop.falla_commit = DBAPIError("COMMIT", {}, Exception("caida"))
 
-    r = client.post(f"{BASE}/301/pin", json=body_pin("7392"))
+    r = client.post(f"{BASE}/301/pin")
 
     assert r.status_code == 503 and _code(r) == "PIN_ASIGNACION_NO_CONFIRMADA"
-    assert not seg.pin()["confirmado"]
-
-    conns.coop.falla_commit = None
-    r = client.post(f"{BASE}/301/pin", json=body_pin("2580"))
-
-    assert r.status_code == 204
-    assert seg.pin()["confirmado"] and pin_valido(seg, "2580")
+    assert conns.seg.commits == 1 and conns.coop.rollbacks == 1
+    assert pin_valido(seg, pin_generado(seg))
+    assert "Requiere reconciliación" in r.json()["detail"]
 
 
-def test_pin_falla_al_habilitar_503_sin_habilitar(client, monkeypatch, seg):
-    _pin(monkeypatch, seg)
-    monkeypatch.setattr(repository, "confirmar_pin", lambda _c, _i: False)
+@pytest.mark.parametrize("aprobar", [True, False])
+def test_asignacion_pin_limita_ambas_bases_y_restaura(
+    client, conns, monkeypatch, seg, aprobar
+):
+    if aprobar:
+        _estado(monkeypatch, FILA)
+        seg.custodiar()
+    else:
+        _pin(monkeypatch, seg)
+    original = repository.obtener_tarjeta
+    guardar = repository.guardar_pin_generado
 
-    r = client.post(f"{BASE}/301/pin", json=body_pin("7392"))
+    def leer(conn, *args, **kwargs):
+        driver = conn.connection.driver_connection
+        assert (driver.timeout, driver.lock_timeout) == (15, 5000)
+        return original(conn, *args, **kwargs)
 
-    assert r.status_code == 503 and _code(r) == "PIN_ASIGNACION_NO_CONFIRMADA"
-    assert not seg.pin()["confirmado"]
+    def asignar(conn, *args, **kwargs):
+        for conexion in (conns.coop, conn):
+            driver = conexion.connection.driver_connection
+            assert (driver.timeout, driver.lock_timeout) == (15, 5000)
+        return guardar(conn, *args, **kwargs)
+
+    monkeypatch.setattr(repository, "obtener_tarjeta", leer)
+    monkeypatch.setattr(repository, "guardar_pin_generado", asignar)
+    respuesta = (
+        client.post(f"{BASE}/301/estado", json={"estado": "Aprobada", "motivo": "lab"})
+        if aprobar
+        else client.post(f"{BASE}/301/pin")
+    )
+    assert respuesta.status_code == (200 if aprobar else 204)
+    for conexion in (conns.coop, conns.seg):
+        driver = conexion.connection.driver_connection
+        assert (driver.timeout, driver.lock_timeout) == (0, -1)
 
 
-def test_pin_ni_pin_block_ni_offset_aparecen_en_logs(client, monkeypatch, seg, caplog):
+@pytest.mark.parametrize("aprobar", [True, False])
+def test_asignacion_pin_timeout_tarjeta_no_llega_a_seguridad(
+    client, conns, monkeypatch, aprobar
+):
+    def bloqueada(*args, **kwargs):
+        raise DBAPIError("lab", {}, Exception("lock (1222) (SQLExecDirectW)"))
+
+    monkeypatch.setattr(repository, "obtener_tarjeta", bloqueada)
+    respuesta = (
+        client.post(f"{BASE}/301/estado", json={"estado": "Aprobada", "motivo": "lab"})
+        if aprobar
+        else client.post(f"{BASE}/301/pin")
+    )
+    assert respuesta.status_code == 503
+    assert _code(respuesta) == "PIN_ASIGNACION_NO_CONFIRMADA"
+    assert conns.coop.rollbacks >= 1
+    assert conns.coop.commits == conns.seg.commits == 0
+
+
+def test_regenerar_pin_ni_pin_ni_offset_aparecen_en_logs(
+    client, monkeypatch, seg, caplog
+):
     _pin(monkeypatch, seg)
     caplog.set_level(logging.DEBUG)
-    body = body_pin("7392")
 
-    r = client.post(f"{BASE}/301/pin", json=body)
-    client.post(f"{BASE}/301/pin", json=body_pin("1234"))
+    r = client.post(f"{BASE}/301/pin")
 
-    for secreto in (
-        "7392",
-        "1234",
-        body["encryptedPinBlock"],
-        seg.pin()["offset"],
-        PAN,
-    ):
-        assert secreto not in caplog.text
     assert r.status_code == 204
+    for secreto in (pin_generado(seg), seg.pin()["offset"], PAN):
+        assert secreto not in caplog.text and secreto not in r.text
 
 
-def test_pin_fallo_de_bd_revierte_ambas_y_no_filtra_nada(
+def test_regenerar_pin_fallo_de_bd_revierte_ambas_y_no_filtra_nada(
     client, conns, monkeypatch, seg, caplog
 ):
     _pin(monkeypatch, seg)
     caplog.set_level(logging.DEBUG)
 
-    def falla(*_a):
+    def falla(*_a, **_k):
         raise DBAPIError("UPDATE x", {"offset": "SECRETO"}, Exception("caida"))
 
-    monkeypatch.setattr(repository, "guardar_offset_pendiente", falla)
+    monkeypatch.setattr(repository, "guardar_pin_generado", falla)
 
-    r = client.post(f"{BASE}/301/pin", json=body_pin("7392"))
+    r = client.post(f"{BASE}/301/pin")
 
-    assert r.status_code == 500 and _code(r) == "ERROR_INTERNO"
+    assert r.status_code == 503 and _code(r) == "PIN_ASIGNACION_NO_CONFIRMADA"
     assert conns.coop.rollbacks >= 1 and conns.seg.rollbacks >= 1
     assert conns.coop.commits == 0 and conns.seg.commits == 0
     for texto in (r.text, caplog.text):
         assert "SECRETO" not in texto and "UPDATE" not in texto
+
+
+@pytest.mark.parametrize("pin", ["1235", "2580", "1212", "7392", "0001"])
+def test_pin_no_trivial_es_aceptado(pin):
+    assert es_pin_debil(pin) is False
 
 
 # PIN pad simulado (solo fuera de producción)
@@ -888,18 +1050,29 @@ def test_pin_fallo_de_bd_revierte_ambas_y_no_filtra_nada(
 PIN_BLOCK = "/api/v1/pruebas/pin-block"
 
 
-def test_pin_block_prueba_sirve_para_tar05(client, monkeypatch, seg):
+def test_pin_block_prueba_arma_un_bloque_que_verifica_el_offset(
+    client, monkeypatch, seg
+):
     _pin(monkeypatch, seg)
     monkeypatch.setattr(repository, "existe_tarjeta", lambda c, i: True)
+    assert client.post(f"{BASE}/301/pin").status_code == 204
+    pin = pin_generado(seg)
 
-    r = client.post(PIN_BLOCK, json={"idTarjeta": 301, "pin": "7392"})
+    r = client.post(PIN_BLOCK, json={"idTarjeta": 301, "pin": pin})
 
     assert r.status_code == 200
     cuerpo = r.json()
     assert set(cuerpo) == {"encryptedPinBlock", "keyReference"}
-    assert "7392" not in r.text and PAN not in r.text
-    assert client.post(f"{BASE}/301/pin", json=cuerpo).status_code == 204
-    assert pin_valido(seg, "7392")
+    assert pin not in r.text and PAN not in r.text
+    # Es el bloque que ATM-01 verifica contra el Offset guardado
+    fila = seg.pin()
+    assert HSM.verificar_pin(
+        cuerpo["encryptedPinBlock"],
+        cuerpo["keyReference"],
+        PAN,
+        fila["offset"],
+        fila["pvk"],
+    )
 
 
 def test_pin_block_prueba_tarjeta_inexistente_404(client, monkeypatch, seg):
@@ -1000,8 +1173,44 @@ def test_historial_200_desc_con_zona_y_sin_datos_internos(client, monkeypatch):
     assert bloqueo["motivo"] == "Extravío"
     assert bloqueo["fechaCambio"] == "2026-10-26T15:30:00-05:00"
     assert pin["resultado"] == "COMPLETADO"
+    assert pin["origen"] == "Generacion"
     assert "motivo" not in pin and "estadoNuevo" not in pin
+    assert "origen" not in bloqueo
     assert "direccionIP" not in r.text and "idCanal" not in r.text
+
+
+@pytest.mark.parametrize(
+    ("descripcion", "origen"),
+    [
+        ("PIN generado automáticamente", "Generacion"),
+        ("Asignación de PIN inicial", "Generacion"),
+        ("Regeneración de PIN", "Regeneracion"),
+        ("Cambio de PIN en ATM", "Cliente"),
+        ("Texto desconocido", None),
+        (None, None),
+    ],
+)
+def test_historial_cambio_pin_indica_quien_fijo_el_pin(
+    client, monkeypatch, descripcion, origen
+):
+    evento = {**EVENTOS[1], "descripcion": descripcion}
+    monkeypatch.setattr(repository, "existe_tarjeta", lambda c, i: True)
+    monkeypatch.setattr(repository, "listar_historial", lambda *a: ([evento], 1))
+
+    r = client.get(f"{BASE}/301/historial")
+
+    assert r.status_code == 200
+    (pin,) = r.json()["items"]
+    assert pin["resultado"] == "COMPLETADO"
+    assert pin.get("origen") == origen
+    assert "motivo" not in pin
+
+
+def test_historial_usa_las_descripciones_que_escriben_tar04_y_tar05():
+    # Si cambia el texto que se guarda, TAR-06 dejaría de reconocer el origen
+    assert schemas.ORIGEN_PIN[schemas.DESCRIPCION_PIN_GENERADO] == "Generacion"
+    assert schemas.ORIGEN_PIN[schemas.DESCRIPCION_PIN_REGENERADO] == "Regeneracion"
+    assert schemas.ORIGEN_PIN[schemas.DESCRIPCION_PIN_CLIENTE] == "Cliente"
 
 
 def test_historial_pasa_el_filtro_de_fechas(client, monkeypatch):
@@ -1065,7 +1274,7 @@ _RUTAS_Y_ROLES = [
         {"estado": "Activa", "motivo": "x"},
         ("ASESOR", "SUPERVISOR", "ADMIN"),
     ),
-    ("post", f"{BASE}/1/pin", body_pin("7392"), ("ASESOR", "ADMIN")),
+    ("post", f"{BASE}/1/pin", None, ("ASESOR", "ADMIN")),
     ("get", f"{BASE}/1/historial", None, ("SUPERVISOR", "AUDITOR", "ADMIN")),
 ]
 
@@ -1100,16 +1309,252 @@ def test_rol_sin_permiso_403(conns, metodo, ruta, body, roles):
     assert r.status_code == 403 and _code(r) == "SIN_PERMISO"
 
 
-def test_openapi_documenta_las_seis_rutas_y_el_body_del_pin():
+def test_openapi_documenta_las_seis_rutas_y_el_pin_sin_body():
     rutas = app.openapi()["paths"]
 
     assert set(rutas[BASE]) == {"post", "get"}
     assert "get" in rutas[f"{BASE}/{{idTarjeta}}"]
     assert "post" in rutas[f"{BASE}/{{idTarjeta}}/estado"]
     assert "get" in rutas[f"{BASE}/{{idTarjeta}}/historial"]
-    esquema = rutas[f"{BASE}/{{idTarjeta}}/pin"]["post"]["requestBody"]["content"]
-    assert set(esquema["application/json"]["schema"]["required"]) == {
-        "encryptedPinBlock",
-        "keyReference",
-    }
+    # TAR-05: el PIN lo genera el HSM; el cliente nunca lo envía
+    assert "requestBody" not in rutas[f"{BASE}/{{idTarjeta}}/pin"]["post"]
     assert "post" in rutas["/api/v1/pruebas/pin-block"]
+
+
+def test_openapi_tar04_trae_un_motivo_de_ejemplo_legible():
+    # Sin ejemplo, Swagger arma uno aleatorio desde el patrón y termina en TarjetaHis
+    esquema = app.openapi()["components"]["schemas"]["TarjetaEstadoUpdate"]
+    assert esquema["properties"]["motivo"]["examples"] == [
+        "Solicitud del cliente aprobada"
+    ]
+
+
+# TAR-04 / TAR-05 / TAR-07: sobre de PIN de débito
+
+
+@pytest.fixture()
+def sobres(monkeypatch, tmp_path):
+    """Almacén de sobres en una carpeta temporal (como sin MongoDB en desarrollo)."""
+    from app.modules.tarjetas.sobre_pin import AlmacenDisco, Cifrador, ServicioSobres
+
+    servicio = ServicioSobres(
+        AlmacenDisco(tmp_path),
+        Cifrador(bytes(range(32))),
+        "EnquoCoop",
+        "www.coop.com.ec",
+        30,
+    )
+    monkeypatch.setattr(
+        "app.modules.tarjetas.sobre_pin.obtener_servicio", lambda: servicio
+    )
+    return tmp_path
+
+
+def _pin_del_sobre(pdf: bytes) -> str:
+    from tests.unit.test_sobre_pin import texto_pdf
+
+    encontrado = re.search(r"\((\d) (\d) (\d) (\d)\)", texto_pdf(pdf))
+    assert encontrado is not None
+    return "".join(encontrado.groups())
+
+
+def test_aprobar_debito_genera_sobre_con_el_pin_vigente(
+    client, monkeypatch, seg, sobres, caplog
+):
+    _estado(monkeypatch, FILA)
+    seg.custodiar()
+    monkeypatch.setattr(repository, "existe_tarjeta", lambda c, i: True)
+    caplog.set_level(logging.DEBUG)
+
+    r = client.post(
+        f"{BASE}/301/estado", json={"estado": "Aprobada", "motivo": "Aprobada"}
+    )
+    assert r.status_code == 200
+    sobre = client.get(f"{BASE}/301/sobre-pin")
+
+    assert sobre.status_code == 200
+    assert sobre.headers["content-type"] == "application/pdf"
+    assert (
+        sobre.headers["content-disposition"]
+        == 'attachment; filename="sobre-pin-301.pdf"'
+    )
+    assert sobre.headers["cache-control"] == "no-store"
+    pin = _pin_del_sobre(sobre.content)
+    # El PIN impreso es el que verifica el Offset guardado
+    assert pin == pin_generado(seg) and pin_valido(seg, pin)
+    # Un PIN de 4 dígitos puede coincidir por azar con fechas o ids del texto: se
+    # busca como lo imprime el sobre y como campo de la respuesta
+    assert " ".join(pin) not in caplog.text
+    assert not {"pin", "pinGenerado"} & set(r.json())
+
+
+def test_sobre_se_entrega_una_sola_vez(client, monkeypatch, seg, sobres):
+    _estado(monkeypatch, FILA)
+    seg.custodiar()
+    monkeypatch.setattr(repository, "existe_tarjeta", lambda c, i: True)
+    client.post(f"{BASE}/301/estado", json={"estado": "Aprobada", "motivo": "Aprobada"})
+
+    assert client.get(f"{BASE}/301/sobre-pin").status_code == 200
+    r = client.get(f"{BASE}/301/sobre-pin")
+
+    assert r.status_code == 409 and _code(r) == "SOBRE_PIN_ENTREGADO"
+
+
+def test_aprobar_credito_no_genera_sobre(client, monkeypatch, seg, sobres):
+    _estado(monkeypatch, {**FILA, "tipo_tarjeta": "Credito"})
+    seg.custodiar()
+    monkeypatch.setattr(repository, "existe_tarjeta", lambda c, i: True)
+
+    client.post(f"{BASE}/301/estado", json={"estado": "Aprobada", "motivo": "Aprobada"})
+    r = client.get(f"{BASE}/301/sobre-pin")
+
+    assert r.status_code == 404 and _code(r) == "SOBRE_PIN_NO_DISPONIBLE"
+    assert seg.pin()["requiere_cambio"] is False
+
+
+def test_aprobar_debito_si_no_se_guarda_el_sobre_503_y_no_cambia_nada(
+    client, conns, monkeypatch, seg, sobres
+):
+    from app.modules.tarjetas import sobre_pin
+
+    capturado = _estado(monkeypatch, FILA)
+    seg.custodiar()
+
+    def falla(*_a, **_k):
+        raise sobre_pin.AlmacenNoDisponible("OSError")
+
+    monkeypatch.setattr(sobre_pin.AlmacenDisco, "guardar", falla)
+
+    r = client.post(f"{BASE}/301/estado", json={"estado": "Aprobada", "motivo": "x"})
+
+    assert r.status_code == 503 and _code(r) == "SOBRE_PIN_NO_GUARDADO"
+    # Ni el Offset ni el estado: no queda un PIN que nadie conoce
+    assert 301 not in seg.pines and "estado" not in capturado
+    assert conns.seg.commits == 0 and conns.coop.commits == 0
+
+
+def test_aprobar_debito_si_falla_el_offset_se_descarta_el_sobre(
+    client, conns, monkeypatch, seg, sobres
+):
+    _estado(monkeypatch, FILA)
+    seg.custodiar()
+    monkeypatch.setattr(repository, "existe_tarjeta", lambda c, i: True)
+    conns.seg.falla_commit = DBAPIError("x", {}, Exception("falla"))
+
+    r = client.post(f"{BASE}/301/estado", json={"estado": "Aprobada", "motivo": "x"})
+
+    assert r.status_code >= 500
+    assert not (sobres / "301.json").exists()
+
+
+def test_aprobar_debito_sin_almacen_aprueba_sin_sobre(client, monkeypatch, seg):
+    capturado = _estado(monkeypatch, FILA)
+    seg.custodiar()
+    monkeypatch.setattr(repository, "existe_tarjeta", lambda c, i: True)
+
+    r = client.post(f"{BASE}/301/estado", json={"estado": "Aprobada", "motivo": "x"})
+
+    assert r.status_code == 200 and capturado["estado"] == "Aprobada"
+    sobre = client.get(f"{BASE}/301/sobre-pin")
+    assert (
+        sobre.status_code == 503 and _code(sobre) == "SOBRE_PIN_ALMACEN_NO_DISPONIBLE"
+    )
+
+
+def test_regenerar_debito_reemplaza_el_sobre(client, monkeypatch, seg, sobres):
+    _pin(monkeypatch, seg)
+    monkeypatch.setattr(repository, "existe_tarjeta", lambda c, i: True)
+
+    assert client.post(f"{BASE}/301/pin").status_code == 204
+    primero = pin_generado(seg)
+    assert client.post(f"{BASE}/301/pin").status_code == 204
+    segundo = pin_generado(seg)
+
+    pin = _pin_del_sobre(client.get(f"{BASE}/301/sobre-pin").content)
+    assert pin == segundo
+    if primero != segundo:
+        assert not pin_valido(seg, primero)
+
+
+def test_sobre_pin_tarjeta_inexistente_404(client, monkeypatch, sobres):
+    monkeypatch.setattr(repository, "existe_tarjeta", lambda c, i: False)
+
+    r = client.get(f"{BASE}/301/sobre-pin")
+
+    assert r.status_code == 404 and _code(r) == "TARJETA_NO_ENCONTRADA"
+
+
+def test_sobre_pin_sin_sobre_404(client, monkeypatch, sobres):
+    monkeypatch.setattr(repository, "existe_tarjeta", lambda c, i: True)
+
+    r = client.get(f"{BASE}/301/sobre-pin")
+
+    assert r.status_code == 404 and _code(r) == "SOBRE_PIN_NO_DISPONIBLE"
+
+
+def test_sobre_pin_solo_asesor_supervisor_admin(client):
+    simular_sesion(app, usuario_con_roles("CAJERO", "AUDITOR"))
+
+    assert client.get(f"{BASE}/301/sobre-pin").status_code == 403
+
+
+def test_sobre_pin_parametro_desconocido_400(client):
+    assert client.get(f"{BASE}/301/sobre-pin?x=1").status_code == 400
+
+
+def test_sobre_pin_se_audita_sin_el_pin(
+    client, monkeypatch, seg, sobres, eventos_auditados
+):
+    _estado(monkeypatch, FILA)
+    seg.custodiar()
+    monkeypatch.setattr(repository, "existe_tarjeta", lambda c, i: True)
+    client.post(f"{BASE}/301/estado", json={"estado": "Aprobada", "motivo": "x"})
+
+    client.get(f"{BASE}/301/sobre-pin")
+
+    evento = eventos_auditados[-1]
+    assert evento.descripcion == "TAR-07 Entrega de sobre de PIN"
+    assert evento.resultado == "Exitoso" and evento.accion == "SELECT"
+    assert pin_generado(seg) not in str(eventos_auditados)
+
+
+@pytest.mark.parametrize("aprobar", [False, True])
+def test_fecha_pin_no_avanza_conserva_compensacion_original_del_sobre(
+    client, conns, monkeypatch, seg, sobres, aprobar
+):
+    from app.core.security.pin_version import PinVersionNoDisponible
+
+    _estado(monkeypatch, FILA) if aprobar else _pin(monkeypatch, seg)
+    seg.custodiar()
+
+    def no_avanza(*args, **kwargs):
+        raise PinVersionNoDisponible()
+
+    monkeypatch.setattr(repository, "guardar_pin_generado", no_avanza)
+    respuesta = (
+        client.post(f"{BASE}/301/estado", json={"estado": "Aprobada", "motivo": "lab"})
+        if aprobar
+        else client.post(f"{BASE}/301/pin")
+    )
+    assert respuesta.status_code == 503
+    assert conns.seg.commits == conns.coop.commits == 0
+    assert conns.seg.rollbacks >= 1
+    assert not (sobres / "301.json").exists()
+
+
+def test_commit_ambiguo_con_sobre_exige_reconciliar_sin_reintento(
+    client, conns, monkeypatch, seg, sobres
+):
+    from unittest.mock import Mock
+
+    _pin(monkeypatch, seg)
+    guardar = Mock(wraps=repository.guardar_pin_generado)
+    monkeypatch.setattr(repository, "guardar_pin_generado", guardar)
+    conns.seg.falla_commit = DBAPIError("LAB", {}, Exception("resultado incierto"))
+    respuesta = client.post(f"{BASE}/301/pin")
+    assert respuesta.status_code == 503 and "reconcili" in respuesta.text
+    guardar.assert_called_once()
+    assert conns.seg.invalidated is True
+    assert conns.coop.commits == 0
+    # Conserva el descarte original de TAR-07; no implica que SQL haya revertido.
+    assert not (sobres / "301.json").exists()

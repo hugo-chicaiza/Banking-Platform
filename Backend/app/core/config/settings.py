@@ -1,8 +1,8 @@
 from functools import lru_cache
-from typing import Literal
+from typing import Annotated, Literal
 from urllib.parse import urlsplit
 
-from pydantic import SecretStr, field_validator
+from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Única excepción a HTTPS: el FE y el callback locales (Vite) en la máquina del dev
@@ -52,6 +52,30 @@ class Settings(BaseSettings):
     seguridad_db_user: str = ""
     seguridad_db_password: SecretStr = SecretStr("")
 
+    atm_hsm_aes_key_hex: str = ""
+    atm_hsm_pin_generation_key_hex: str = ""
+    atm_hsm_key_reference: str = "TEST-KEY-01"
+
+    # JWT ATM: clave RSA exclusiva, inyectada por configuración segura. Sin valores
+    # predeterminados de despliegue: si falta la clave, iss o aud, no se emite sesión.
+    atm_jwt_private_key_pem: SecretStr = SecretStr("")
+    atm_jwt_issuer: str = ""
+    atm_jwt_audience: str = ""
+
+    # Archivo externo con hashes/metadatos; se relee en cada autenticación para
+    # aplicar revocaciones sin depender de la caché de Settings o del proceso.
+    atm_terminal_credentials_file: str = ""
+
+    # Ejecutor independiente: no se inicia desde FastAPI. Intentos POR ejecucion,
+    # nunca un contador acumulado ni los intentos fallidos del PIN del cliente.
+    atm_pin_recovery_enabled: bool = False
+    atm_pin_recovery_min_age_seconds: int = Field(default=30, ge=0, le=86400)
+    atm_pin_recovery_max_age_seconds: int = Field(default=1800, ge=1, le=604800)
+    atm_pin_recovery_batch_size: int = Field(default=20, ge=1, le=200)
+    atm_pin_recovery_budget_seconds: int = Field(default=45, ge=1, le=300)
+    atm_pin_recovery_max_attempts_per_run: int = Field(default=3, ge=1, le=10)
+    atm_pin_recovery_retry_delay_seconds: float = Field(default=1, ge=0, le=30)
+
     # WorkOS AuthKit (F-03), patrón BFF: el navegador solo recibe una cookie cifrada
     workos_api_key: SecretStr = SecretStr("")
     workos_client_id: str = ""
@@ -71,6 +95,35 @@ class Settings(BaseSettings):
     hsm_sim_claves_pin_block: dict[str, SecretStr] = {}
     # La que usa el endpoint de pruebas que simula el PIN pad
     hsm_sim_referencia_pin_block: str = "TEST-KEY-01"
+
+    # Sobre de PIN de débito (TAR-07): PDF con el PIN temporal, cifrado en reposo y
+    # entregado una sola vez. Sin clave no se generan sobres.
+    sobre_pin_clave: SecretStr = SecretStr("")  # AES-256-GCM: 64 hex
+    sobre_pin_dias: Annotated[int, Field(ge=1, le=365)] = 30
+    # Carpeta local mientras no hay MongoDB (solo fuera de producción)
+    sobre_pin_dir: str = ".sobres_pin"
+    cooperativa_nombre: str = "EnquoCoop"
+    cooperativa_sitio_web: str = "www.coop.com.ec"
+
+    # MongoDB (Azure Cosmos DB for MongoDB o Atlas). Vacío = sin MongoDB
+    mongo_uri: SecretStr = SecretStr("")
+    mongo_db: str = "banking_platform"
+
+    # Vínculos administrados por despliegue, nunca por el navegador ni por email.
+    workos_audit_user_ids: dict[
+        str, Annotated[int, Field(strict=True, ge=1, le=2147483647)]
+    ] = Field(default_factory=dict)
+
+    @field_validator("workos_audit_user_ids")
+    @classmethod
+    def _vinculos_auditoria(cls, valor: dict[str, int]) -> dict[str, int]:
+        if any(not clave.startswith("user_") or len(clave) <= 5 for clave in valor):
+            raise ValueError("Cada vínculo debe identificar un usuario WorkOS user_…")
+        if len(set(valor.values())) != len(valor):
+            raise ValueError(
+                "Cada usuario de auditoría debe tener un único vínculo WorkOS"
+            )
+        return valor
 
     @field_validator("frontend_url")
     @classmethod

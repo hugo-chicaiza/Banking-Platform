@@ -2,6 +2,8 @@ from typing import Any
 
 from sqlalchemy import Connection, text
 
+from app.modules.catalogos.subproductos import tipo_tarjeta_de
+
 
 def _rows(
     conn: Connection, sql: str, params: dict[str, Any] | None = None
@@ -78,9 +80,15 @@ def listar_tipos_antecedente(conn: Connection) -> list[dict[str, Any]]:
     )
 
 
-def listar_productos(conn: Connection, tipo: str | None) -> list[dict[str, Any]]:
-    # CAT-07: solo activos; los campos que no aplican al tipo van en NULL
-    return _rows(
+def listar_productos(
+    conn: Connection, tipo: str | None, tipo_tarjeta: str | None = None
+) -> list[dict[str, Any]]:
+    # CAT-07: solo activos; los campos que no aplican al tipo van en NULL. Cada
+    # producto lleva sus subproductos activos (lo que el asesor puede ofrecer).
+    # tipo_tarjeta deja solo productos Tarjeta y sus subproductos de ese tipo
+    if tipo_tarjeta is not None:
+        tipo = "Tarjeta"
+    productos = _rows(
         conn,
         """
         SELECT IdProducto AS id_producto, CodigoProducto AS codigo_producto,
@@ -98,6 +106,35 @@ def listar_productos(conn: Connection, tipo: str | None) -> list[dict[str, Any]]
         """,
         {"tipo": tipo},
     )
+    subproductos = _rows(
+        conn,
+        """
+        SELECT s.IdProducto AS id_producto, s.IdSubProducto AS id_sub_producto,
+               s.CodigoSubProducto AS codigo_sub_producto,
+               s.NombreSubProducto AS nombre_sub_producto,
+               p.TipoProducto AS tipo_producto
+        FROM ProductosFinancieros.SubProducto AS s
+        JOIN ProductosFinancieros.Producto AS p ON p.IdProducto = s.IdProducto
+        WHERE s.Estado = 'A' AND p.Estado = 'A'
+          AND (:tipo IS NULL OR p.TipoProducto = :tipo)
+        ORDER BY s.NombreSubProducto
+        """,
+        {"tipo": tipo},
+    )
+    por_producto: dict[int, list[dict[str, Any]]] = {}
+    for sub in subproductos:
+        es_tarjeta = sub.pop("tipo_producto") == "Tarjeta"
+        sub["tipo_tarjeta"] = (
+            tipo_tarjeta_de(sub["codigo_sub_producto"]) if es_tarjeta else None
+        )
+        if tipo_tarjeta is None or sub["tipo_tarjeta"] == tipo_tarjeta:
+            por_producto.setdefault(sub.pop("id_producto"), []).append(sub)
+    for producto in productos:
+        producto["subproductos"] = por_producto.get(producto["id_producto"], [])
+    if tipo_tarjeta is not None:
+        # Solo los productos que tienen algo que ofrecer de ese tipo
+        productos = [p for p in productos if p["subproductos"]]
+    return productos
 
 
 def listar_canales(conn: Connection) -> list[dict[str, Any]]:
@@ -123,6 +160,7 @@ def listar_canales(conn: Connection) -> list[dict[str, Any]]:
 def listar_agencias(conn: Connection) -> list[dict[str, Any]]:
     # CAT-06: la tabla Agencia no tiene Nombre; se usa Codigo como nombre (acordado
     # con el equipo). Provincia y ciudad vienen de Catalogo.Ciudad.
+    # Orden: Matriz primero, luego por código (no depende de cómo se nombre el código).
     return _rows(
         conn,
         """
@@ -132,7 +170,7 @@ def listar_agencias(conn: Connection) -> list[dict[str, Any]]:
                a.Estado AS estado
         FROM Organizacion.Agencia AS a
         JOIN Catalogo.Ciudad AS c ON c.IdCiudad = a.IdCiudad
-        ORDER BY a.Codigo
+        ORDER BY CASE a.TipoAgencia WHEN 'Matriz' THEN 0 ELSE 1 END, a.Codigo
         """,
     )
 

@@ -25,6 +25,7 @@ from app.modules.catalogos.schemas import (
     TipoMovimientoCaja,
     TipoProducto,
 )
+from app.modules.catalogos.subproductos import TipoTarjeta
 
 # Catálogos de solo lectura: sin service.py porque no hay reglas de negocio
 router = APIRouter(
@@ -80,10 +81,23 @@ def listar_tipos_antecedente(conn: Db) -> Any:
 @router.get(
     "/productos",
     response_model=list[Producto],
-    dependencies=[Depends(solo_parametros("tipo"))],
+    dependencies=[Depends(solo_parametros("tipo", "tipoTarjeta"))],
 )
-def listar_productos(conn: Db, tipo: TipoProducto | None = None) -> Any:
-    return repository.listar_productos(conn, tipo)
+def listar_productos(
+    conn: Db,
+    tipo: TipoProducto | None = None,
+    tipo_tarjeta: Annotated[TipoTarjeta | None, Query(alias="tipoTarjeta")] = None,
+) -> Any:
+    """Productos activos con sus subproductos. tipoTarjeta (Debito/Credito) deja solo
+    los subproductos de tarjeta de ese tipo, para que la emisión sea congruente.
+    """
+    if tipo_tarjeta is not None and tipo not in (None, "Tarjeta"):
+        raise problema(
+            400,
+            "PARAMETRO_INVALIDO",
+            "tipoTarjeta solo aplica a productos de tipo Tarjeta.",
+        )
+    return repository.listar_productos(conn, tipo, tipo_tarjeta)
 
 
 @router.get("/paises/{codigo_pais}/ciudades", response_model=list[Ciudad])

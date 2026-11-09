@@ -3,6 +3,8 @@ from typing import Any
 
 from sqlalchemy import Connection, text
 
+from app.core.security.pin_version import PinVersionNoDisponible, version_desde_fecha
+
 _COLUMNAS_TARJETA = """
     IdTarjeta AS id_tarjeta,
     TokenTarjeta AS token_tarjeta,
@@ -13,7 +15,11 @@ _COLUMNAS_TARJETA = """
     IdCuenta AS id_cuenta,
     IdProducto AS id_producto,
     Estado AS estado_actual,
+    EsExtension AS es_extension,
+    IdTarjetaTitular AS id_tarjeta_titular,
     PinAsignado AS pin_asignado,
+    FechaSolicitud AS fecha_solicitud,
+    FechaResolucion AS fecha_resolucion,
     FechaEmision AS fecha_emision,
     FechaExpiracion AS fecha_expiracion
 """
@@ -101,20 +107,20 @@ def obtener_producto(conn: Connection, id_producto: int) -> dict[str, Any] | Non
 
 
 def obtener_subproducto_con_bin(
-    conn: Connection, id_producto: int
+    conn: Connection, id_producto: int, id_sub_producto: int
 ) -> dict[str, Any] | None:
-    """Primer subproducto activo del producto cuyo BIN también está activo."""
+    """Subproducto elegido, solo si pertenece al producto; con su BIN y estados."""
     return _one(
         conn,
         """
-        SELECT TOP 1 s.IdSubProducto AS id_sub_producto, b.IdBIN AS id_bin,
-               b.CodigoBIN AS codigo_bin
+        SELECT s.IdSubProducto AS id_sub_producto, s.Estado AS estado,
+               s.CodigoSubProducto AS codigo_sub_producto,
+               b.IdBIN AS id_bin, b.CodigoBIN AS codigo_bin, b.Estado AS estado_bin
         FROM ProductosFinancieros.SubProducto AS s
-        JOIN Tarjeta.BIN AS b ON b.IdBIN = s.IdBIN
-        WHERE s.IdProducto = :id_producto AND s.Estado = 'A' AND b.Estado = 'A'
-        ORDER BY s.IdSubProducto
+        LEFT JOIN Tarjeta.BIN AS b ON b.IdBIN = s.IdBIN
+        WHERE s.IdSubProducto = :id_sub_producto AND s.IdProducto = :id_producto
         """,
-        {"id_producto": id_producto},
+        {"id_producto": id_producto, "id_sub_producto": id_sub_producto},
     )
 
 
@@ -156,16 +162,18 @@ def insertar_tarjeta(conn: Connection, datos: dict[str, Any]) -> int:
             INSERT INTO Tarjeta.Tarjeta (
                 TokenTarjeta, NumeroEnmascarado, HashNumeroTarjeta, NombreTarjeta,
                 TipoTarjeta, NombresTitular, ApellidosTitular, IdCliente, IdCuenta,
-                IdProducto, IdAgencia, EsExtension, IdTarjetaTitular, FechaEmision,
-                FechaExpiracion, PinAsignado, CreadoPor, IdBIN, IdSubProducto, Estado
+                IdProducto, IdAgencia, EsExtension, IdTarjetaTitular, FechaSolicitud,
+                FechaEmision, FechaExpiracion, PinAsignado, CreadoPor, IdBIN,
+                IdSubProducto, Estado
             )
             OUTPUT INSERTED.IdTarjeta INTO @nuevas
             VALUES (
                 :token, :mascara, :hash_pan, :nombre_tarjeta,
                 :tipo_tarjeta, :nombres, :apellidos, :id_cliente, :id_cuenta,
                 :id_producto, :id_agencia, :es_extension, :id_titular, @hoy,
-                DATEADD(year, 5, @hoy), 0, :creado_por, :id_bin, :id_sub_producto,
-                'Generada'
+                -- FechaEmision es obligatoria: provisional hasta pasar a Generada
+                @hoy, DATEADD(year, 5, @hoy), 0, :creado_por, :id_bin,
+                :id_sub_producto, 'Solicitada'
             );
             SELECT IdTarjeta FROM @nuevas;
             """
@@ -247,17 +255,20 @@ def listar_tarjetas(
     direccion: str,
     page: int,
     page_size: int,
+    es_extension: bool | None = None,
 ) -> tuple[list[dict[str, Any]], int]:
     filtros = """
         FROM Tarjeta.Tarjeta
         WHERE (:id_cliente IS NULL OR IdCliente = :id_cliente)
           AND (:id_cuenta IS NULL OR IdCuenta = :id_cuenta)
           AND (:estado IS NULL OR Estado = :estado)
+          AND (:es_extension IS NULL OR EsExtension = :es_extension)
     """
     params: dict[str, Any] = {
         "id_cliente": id_cliente,
         "id_cuenta": id_cuenta,
         "estado": estado,
+        "es_extension": es_extension,
     }
     total = conn.execute(text("SELECT COUNT(*)" + filtros), params).scalar_one()
     items = _rows(
@@ -300,30 +311,76 @@ def existe_transicion(conn: Connection, origen: str, destino: str) -> bool:
     )
 
 
-def actualizar_estado(conn: Connection, id_tarjeta: int, estado: str) -> None:
+def actualizar_estado(
+    conn: Connection,
+    id_tarjeta: int,
+    estado: str,
+    *,
+    resolucion: bool = False,
+    emision: bool = False,
+    pin_asignado: bool = False,
+) -> None:
+    """resolucion: FechaResolucion = ahora (aprobación o rechazo).
+    emision: FechaEmision = hoy y FechaExpiracion a cinco años (paso a Generada).
+    pin_asignado: PinAsignado = 1 (PIN generado al aprobar).
+
+    SQL fijo: las marcas van como parámetros; sin marca, la columna queda igual.
+    """
     conn.execute(
         text(
-            "UPDATE Tarjeta.Tarjeta SET Estado = :estado WHERE IdTarjeta = :id_tarjeta"
+            """
+            UPDATE Tarjeta.Tarjeta SET
+                Estado = :estado,
+                FechaResolucion = CASE WHEN :resolucion = 1
+                    THEN CONVERT(datetime2, SYSDATETIMEOFFSET() AT TIME ZONE 'SA Pacific Standard Time')
+                    ELSE FechaResolucion END,
+                FechaEmision = CASE WHEN :emision = 1
+                    THEN CONVERT(date, SYSDATETIMEOFFSET() AT TIME ZONE 'SA Pacific Standard Time')
+                    ELSE FechaEmision END,
+                FechaExpiracion = CASE WHEN :emision = 1
+                    THEN DATEADD(year, 5, CONVERT(date, SYSDATETIMEOFFSET() AT TIME ZONE 'SA Pacific Standard Time'))
+                    ELSE FechaExpiracion END,
+                PinAsignado = CASE WHEN :pin_asignado = 1 THEN 1 ELSE PinAsignado END
+            WHERE IdTarjeta = :id_tarjeta
+            """
         ),
-        {"estado": estado, "id_tarjeta": id_tarjeta},
+        {
+            "estado": estado,
+            "id_tarjeta": id_tarjeta,
+            "resolucion": int(resolucion),
+            "emision": int(emision),
+            "pin_asignado": int(pin_asignado),
+        },
     )
+
+
+def dias_laborables_desde(conn: Connection, fecha: date) -> int:
+    """Días contables (Contabilidad.FechaContable) después de `fecha` y hasta hoy.
+
+    Si el calendario no tiene cargados los días, cuentan como no laborables.
+    """
+    return conn.execute(
+        text(
+            """
+            SELECT COUNT(*) FROM Contabilidad.FechaContable
+            WHERE EsDiaContable = 1 AND Fecha > :fecha
+              AND Fecha <= CONVERT(date, SYSDATETIMEOFFSET() AT TIME ZONE 'SA Pacific Standard Time')
+            """
+        ),
+        {"fecha": fecha},
+    ).scalar_one()
 
 
 # TAR-05
 
 
-def marcar_pin_asignado(conn: Connection, id_tarjeta: int) -> bool:
-    """Devuelve False si otra petición asignó el PIN primero."""
-    resultado = conn.execute(
+def marcar_pin_asignado(conn: Connection, id_tarjeta: int) -> None:
+    conn.execute(
         text(
-            """
-            UPDATE Tarjeta.Tarjeta SET PinAsignado = 1
-            WHERE IdTarjeta = :id_tarjeta AND PinAsignado = 0
-            """
+            "UPDATE Tarjeta.Tarjeta SET PinAsignado = 1 WHERE IdTarjeta = :id_tarjeta"
         ),
         {"id_tarjeta": id_tarjeta},
     )
-    return resultado.rowcount == 1
 
 
 # Repositorio aislado de PAN ficticios (SeguridadDB, solo desarrollo y pruebas)
@@ -366,79 +423,83 @@ def obtener_pan_ficticio(
     return None if fila is None else (bytes(fila["cifrado"]), fila["referencia"])
 
 
-# TAR-05: PIN Offset IBM 3624 en SeguridadDB
+# TAR-04 y TAR-05: PIN Offset IBM 3624 en SeguridadDB
 
 
-def obtener_estado_pin(
-    conn_seguridad: Connection, id_tarjeta: int
-) -> dict[str, Any] | None:
-    """Bloquea la fila hasta el commit: dos asignaciones no se cruzan."""
-    return _one(
-        conn_seguridad,
-        """
-        SELECT TienePINAsignado AS confirmado, Estado AS estado,
-               CASE WHEN PINOffset IS NULL THEN 0 ELSE 1 END AS tiene_offset
-        FROM Tarjetas.TarjetaPIN WITH (UPDLOCK, HOLDLOCK)
-        WHERE ID_Tarjeta = :id_tarjeta
-        """,
-        {"id_tarjeta": id_tarjeta},
-    )
-
-
-def guardar_offset_pendiente(
-    conn_seguridad: Connection, id_tarjeta: int, offset: str, referencia_pvk: str
+def guardar_pin_generado(
+    conn_seguridad: Connection,
+    id_tarjeta: int,
+    offset: str,
+    referencia_pvk: str,
+    requiere_cambio: bool,
 ) -> None:
-    """Paso 1 de TAR-05: el Offset queda guardado pero el PIN aún no se puede usar."""
-    params = {"id_tarjeta": id_tarjeta, "offset": offset, "pvk": referencia_pvk}
-    actualizada = conn_seguridad.execute(
+    """Guarda el Offset del PIN que generó el HSM, ya habilitado.
+
+    Reemplaza el anterior: reinicia los intentos y desbloquea el PIN (SEC-ATM-02).
+    RequiereCambio = 1 marca un PIN temporal (débito): ATM-01 solo permite cambiarlo.
+    """
+    if type(id_tarjeta) is not int or id_tarjeta <= 0:
+        raise PinVersionNoDisponible("Identificador de asignación no disponible")
+    params = {
+        "id_tarjeta": id_tarjeta,
+        "offset": offset,
+        "pvk": referencia_pvk,
+        "requiere_cambio": requiere_cambio,
+    }
+    fecha = conn_seguridad.execute(
         text(
             """
-            UPDATE Tarjetas.TarjetaPIN
-            SET PINOffset = :offset, ReferenciaClavePVK = :pvk, TienePINAsignado = 0,
-                Estado = 'Inactivo', IntentosFallidos = 0,
-                FechaAsignacion = CONVERT(
-                    datetime, SYSDATETIMEOFFSET() AT TIME ZONE 'SA Pacific Standard Time'
-                )
-            WHERE ID_Tarjeta = :id_tarjeta
+            SET NOCOUNT ON;
+            DECLARE @Existe bit = 0, @Anterior datetime, @Asignado bit,
+                    @Ahora datetime;
+            SELECT @Existe = 1, @Anterior = FechaAsignacion,
+                   @Asignado = TienePINAsignado
+            FROM Tarjetas.TarjetaPIN WITH (UPDLOCK, HOLDLOCK)
+            WHERE ID_Tarjeta = :id_tarjeta AND ID_Tarjeta IS NOT NULL;
+
+            -- Todos los escritores adquieren primero PIN y despues coordinacion.
+            IF EXISTS (
+                SELECT 1 FROM Tarjetas.CambioPINATMOperacion WITH (UPDLOCK, HOLDLOCK)
+                WHERE ID_Tarjeta = :id_tarjeta AND FechaFinalizacionUTC IS NULL
+            )
+                THROW 52147, 'Cambio de PIN pendiente de reconciliacion.', 1;
+
+            -- Capturar DESPUÉS de adquirir el bloqueo, con precisión datetime.
+            SET @Ahora = CONVERT(datetime,
+                SYSDATETIMEOFFSET() AT TIME ZONE 'SA Pacific Standard Time');
+            IF @Ahora IS NULL OR (@Existe = 1 AND (
+                @Ahora <= @Anterior OR (@Anterior IS NULL AND @Asignado = 1)))
+            BEGIN
+                SELECT CAST(NULL AS datetime) AS FechaAsignacion;
+                RETURN;
+            END;
+
+            IF @Existe = 1
+                UPDATE Tarjetas.TarjetaPIN
+                SET PINOffset = :offset, ReferenciaClavePVK = :pvk,
+                    TienePINAsignado = 1, Estado = 'Activo', IntentosFallidos = 0,
+                    FechaBloqueo = NULL, RequiereCambio = :requiere_cambio,
+                    FechaAsignacion = @Ahora
+                WHERE ID_Tarjeta = :id_tarjeta;
+            ELSE
+                INSERT INTO Tarjetas.TarjetaPIN (
+                    ID_Tarjeta, TienePINAsignado, FechaAsignacion,
+                    IntentosFallidos, Estado, PINOffset,
+                    ReferenciaClavePVK, RequiereCambio
+                ) VALUES (
+                    :id_tarjeta, 1, @Ahora, 0, 'Activo', :offset,
+                    :pvk, :requiere_cambio
+                );
+
+            SELECT FechaAsignacion FROM Tarjetas.TarjetaPIN
+            WHERE ID_Tarjeta = :id_tarjeta;
             """
         ),
         params,
-    )
-    if actualizada.rowcount == 0:
-        conn_seguridad.execute(
-            text(
-                """
-                INSERT INTO Tarjetas.TarjetaPIN (
-                    ID_Tarjeta, TienePINAsignado, FechaAsignacion, IntentosFallidos,
-                    Estado, PINOffset, ReferenciaClavePVK
-                )
-                VALUES (
-                    :id_tarjeta, 0,
-                    CONVERT(
-                        datetime,
-                        SYSDATETIMEOFFSET() AT TIME ZONE 'SA Pacific Standard Time'
-                    ),
-                    0, 'Inactivo', :offset, :pvk
-                )
-                """
-            ),
-            params,
-        )
-
-
-def confirmar_pin(conn_seguridad: Connection, id_tarjeta: int) -> bool:
-    """Paso 3 de TAR-05: habilita el PIN. False si no había un Offset pendiente."""
-    resultado = conn_seguridad.execute(
-        text(
-            """
-            UPDATE Tarjetas.TarjetaPIN SET TienePINAsignado = 1, Estado = 'Activo'
-            WHERE ID_Tarjeta = :id_tarjeta AND PINOffset IS NOT NULL
-              AND TienePINAsignado = 0
-            """
-        ),
-        {"id_tarjeta": id_tarjeta},
-    )
-    return resultado.rowcount == 1
+    ).scalar_one()
+    if fecha is None:
+        raise PinVersionNoDisponible("La fecha de asignación no puede avanzar")
+    version_desde_fecha(fecha)
 
 
 # TAR-06
@@ -481,3 +542,14 @@ def listar_historial(
         {**params, "saltar": (page - 1) * page_size, "tomar": page_size},
     )
     return items, total
+
+
+def obtener_id_tarjeta_por_hash(conn: Connection, hash_pan: bytes) -> int | None:
+    """Resuelve la tarjeta sin enviar el PAN en claro a SQL ni escoger duplicados."""
+    id_tarjeta = conn.execute(
+        text(
+            "SELECT IdTarjeta FROM Tarjeta.Tarjeta WHERE HashNumeroTarjeta = :hash_pan"
+        ),
+        {"hash_pan": hash_pan},
+    ).scalar_one_or_none()
+    return None if id_tarjeta is None else int(id_tarjeta)

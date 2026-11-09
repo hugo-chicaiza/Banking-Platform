@@ -30,9 +30,10 @@ Cambia el estado del cliente.
 ## Reglas de negocio
 
 1. Transiciones permitidas: Activo ⇄ Inactivo; Activo → Suspendido → Activo; Activo → Bloqueado → Activo; cualquier estado no eliminado → Eliminado. Bloqueo/desbloqueo admiten ASESOR, SUPERVISOR y ADMIN, según aclaración del 2026-11-04. Otra transición, incluido solicitar el mismo estado, produce `409 TRANSICION_CLIENTE_INVALIDA`. Eliminado no se reactiva.
-2. No pasa a `Inactivo` ni `Eliminado` con cuentas Activa/Bloqueada, o con Saldo > 0 o SaldoRetenido > 0 en cualquier estado, ni con un crédito desembolsado que conserve deuda → `409 CLIENTE_CON_PRODUCTOS_VIGENTES`. Una solicitud por sí sola no prueba deuda. Se consultan cuotas del plan vigente, abonos, pagos y mora; crédito pagado y comprobado no bloquea. Información incompleta o contradictoria: `503 DEUDA_CLIENTE_NO_VERIFICABLE`, sin cambio de estado.
+2. No pasa a `Inactivo` ni `Eliminado` con cuentas Activa/Bloqueada, con Saldo > 0 o SaldoRetenido > 0 en cualquier estado, con un desembolso `PENDIENTE`, ni con un crédito `DESEMBOLSADO` que conserve deuda → `409 CLIENTE_CON_PRODUCTOS_VIGENTES`. El desembolso pendiente representa una obligación y no se cancela mediante la baja. Se consultan cuotas del plan vigente, capital, intereses, seguros, impuestos, abonos, pagos y mora; crédito pagado y comprobado no bloquea. Información incompleta o contradictoria: `503 DEUDA_CLIENTE_NO_VERIFICABLE`, sin cambio de estado.
 3. `motivo` obligatorio y no compuesto solo de espacios, máximo 500 caracteres. Se registra junto con anterior/nuevo en JSON versionado en `ClientesHis.Observaciones`. El JSON completo debe caber en VARCHAR(500), sin truncar; esto puede reducir el motivo disponible.
 4. Identidad autenticada y metadato `idUsuario` del usuario en WorkOS. Cliente, lecturas de productos, actualización y auditoría comparten transacción; las consultas de validación usan UPDLOCK/HOLDLOCK hasta commit/rollback.
+5. `Eliminado` es una baja lógica terminal mediante UPDATE de Estado. `Inactivo` es desactivación reversible. Ninguna de las dos elimina físicamente al cliente o su historial.
 
 ## Flujo
 
@@ -111,7 +112,7 @@ Formato ProblemDetails (ver F-04). Además de 400/401/403:
 | 403 | `USUARIO_SIN_VINCULO_AUDITORIA` | El usuario WorkOS no tiene un ID entero vinculado en el servidor |
 | 404 | `CLIENTE_NO_ENCONTRADO` | El cliente no existe |
 | 409 | `TRANSICION_CLIENTE_INVALIDA` | Transición no permitida o mismo estado |
-| 409 | `CLIENTE_CON_PRODUCTOS_VIGENTES` | Tiene cuentas con saldo o créditos vigentes |
+| 409 | `CLIENTE_CON_PRODUCTOS_VIGENTES` | Tiene cuentas vigentes/con saldo, un desembolso pendiente o deuda de un crédito desembolsado |
 | 422 | `AUDITORIA_EXCEDE_LIMITE` | El cambio y motivo completos no caben en Observaciones |
 | 503 | `DEUDA_CLIENTE_NO_VERIFICABLE` | No se pudo comprobar el saldo vigente del crédito con plan, cuotas y pagos |
 

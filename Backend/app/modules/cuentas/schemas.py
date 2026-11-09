@@ -75,6 +75,28 @@ class SaldoCuenta(CamelModel):
     fecha_consulta: AwareDatetime
 
 
+class MovimientoCuenta(CamelModel):
+    id_movimiento: int
+    id_transaccion: int
+    numero_comprobante: str | None
+    tipo_transaccion: str
+    tipo_movimiento: Literal["C", "D"]
+    rol_cuenta: Literal["Origen", "Destino"] | None
+    monto: Money
+    saldo_anterior: Money
+    saldo_posterior: Money
+    fecha_contable: date
+    fecha_hora_sistema: AwareDatetime
+    id_canal: int | None
+
+
+class PageMovimientoCuenta(CamelModel):
+    items: list[MovimientoCuenta]
+    page: int
+    page_size: int
+    total: int
+
+
 class CuentaEstadoUpdate(CamelModel):
     model_config = ConfigDict(extra="forbid", validate_by_name=False)
 

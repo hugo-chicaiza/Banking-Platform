@@ -24,6 +24,16 @@ _PUBLICAS = {
     ("GET", "/api/v1/auth/callback"),
     ("POST", "/api/v1/auth/logout"),  # AUT-03: idempotente, sin sesión responde 200
 }
+# ATM usa credencial de terminal y/o JWT propios, sin sesión WorkOS.
+_TERMINALES = {
+    ("POST", "/api/v1/atm/auth"),
+    ("POST", "/api/v1/atm/logout"),
+    ("POST", "/api/v1/atm/consulta-saldo"),
+    ("POST", "/api/v1/atm/cambio-pin"),
+    ("POST", "/api/v1/atm/transferencias"),
+    ("POST", "/api/v1/atm/reversos"),
+    ("POST", "/api/v1/atm/retiros"),
+}
 _VALORES_PATH = {"codigo_pais": "ECU", "fecha": "2026-11-04"}
 
 # Roles de cada tarea (GitHubProject_Files)
@@ -95,6 +105,12 @@ ROLES_POR_RUTA: dict[tuple[str, str], tuple[str, ...]] = {
         "SUPERVISOR",
         "ADMIN",
     ),
+    ("GET", "/api/v1/cuentas/{idCuenta}/movimientos"): (
+        "ASESOR",
+        "CAJERO",
+        "SUPERVISOR",
+        "ADMIN",
+    ),
     ("PATCH", "/api/v1/cuentas/{idCuenta}/estado"): ("ASESOR", "SUPERVISOR", "ADMIN"),
     ("GET", "/api/v1/cuentas/{idCuenta}/cupos"): ("ASESOR", "SUPERVISOR", "ADMIN"),
     ("PUT", "/api/v1/cuentas/{idCuenta}/cupos/{idCanal}"): ("SUPERVISOR", "ADMIN"),
@@ -108,6 +124,11 @@ ROLES_POR_RUTA: dict[tuple[str, str], tuple[str, ...]] = {
     ("GET", "/api/v1/tarjetas/{idTarjeta}"): ("ASESOR", "SUPERVISOR", "ADMIN"),
     ("POST", "/api/v1/tarjetas/{idTarjeta}/estado"): ("ASESOR", "SUPERVISOR", "ADMIN"),
     ("POST", "/api/v1/tarjetas/{idTarjeta}/pin"): ("ASESOR", "ADMIN"),
+    ("GET", "/api/v1/tarjetas/{idTarjeta}/sobre-pin"): (
+        "ASESOR",
+        "SUPERVISOR",
+        "ADMIN",
+    ),
     ("POST", "/api/v1/pruebas/pin-block"): ("ADMIN",),
     ("GET", "/api/v1/tarjetas/{idTarjeta}/historial"): (
         "SUPERVISOR",
@@ -215,8 +236,8 @@ def _concreta(ruta: str) -> str:
 
 @pytest.fixture(autouse=True)
 def _pin_pad_simulado_habilitado(monkeypatch):
-    """El CI corre como production, donde /pruebas/pin-block responde 404: aquí se
-    prueba su control de acceso como en development.
+    """El CI usa production: simular development para probar permisos del PIN pad,
+    sin habilitarlo en produccion real.
     """
     from types import SimpleNamespace
 
@@ -246,11 +267,13 @@ def _code(respuesta) -> str:
 
 
 def test_tabla_de_roles_cubre_todas_las_rutas_protegidas():
-    protegidas = set(_rutas_api()) - _PUBLICAS - {("POST", "/api/v1/auth/refresh")}
+    protegidas = (
+        set(_rutas_api()) - _PUBLICAS - _TERMINALES - {("POST", "/api/v1/auth/refresh")}
+    )
     assert protegidas == set(ROLES_POR_RUTA)
 
 
-@pytest.mark.parametrize("ruta", sorted(set(_rutas_api()) - _PUBLICAS))
+@pytest.mark.parametrize("ruta", sorted(set(_rutas_api()) - _PUBLICAS - _TERMINALES))
 def test_toda_ruta_de_la_api_exige_sesion(client, eventos_auditados, ruta):
     metodo, path = ruta
 
@@ -265,6 +288,65 @@ def test_toda_ruta_de_la_api_exige_sesion(client, eventos_auditados, ruta):
         None,
     )
     assert evento.descripcion.startswith(f"401 {metodo} {_concreta(path)} trace=")
+
+
+def test_atm_registrado_exige_credencial_aun_con_sesion_workos(
+    client, eventos_auditados
+):
+    simular_sesion(app, USUARIO)
+    respuesta = client.post("https://testserver/api/v1/atm/auth")
+    assert respuesta.status_code == 401
+    assert _code(respuesta) == "TERMINAL_NO_AUTORIZADO"
+    assert eventos_auditados[-1].accion == "ACCESO_DENEGADO"
+    assert "/api/v1/atm/auth" in app.openapi()["paths"]
+
+
+def test_logout_exige_jwt_atm_aun_con_sesion_workos(client):
+    simular_sesion(app, USUARIO)
+    respuesta = client.post("https://testserver/api/v1/atm/logout")
+    assert respuesta.status_code == 401
+    assert _code(respuesta) == "SESION_ATM_INVALIDA"
+    assert (
+        app.openapi()["paths"]["/api/v1/atm/logout"]["post"]["operationId"] == "ATM09"
+    )
+
+
+@pytest.mark.parametrize("sesion_workos", [False, True])
+@pytest.mark.parametrize("authorization", [None, "Bearer no-es-un-jwt"])
+@pytest.mark.parametrize(
+    "ruta_atm",
+    ["consulta-saldo", "cambio-pin", "transferencias", "reversos", "retiros"],
+)
+def test_consulta_saldo_exige_sesion_atm_valida(
+    client, monkeypatch, sesion_workos, authorization, ruta_atm
+):
+    from unittest.mock import Mock
+
+    from cryptography.hazmat.primitives.asymmetric import rsa
+
+    from app.modules.atm import router as atm_router
+    from app.modules.atm import session as atm_session
+
+    if sesion_workos:
+        simular_sesion(app, USUARIO)
+    emisor = atm_session.EmisorSesionATM(
+        rsa.generate_private_key(public_exponent=65537, key_size=2048),
+        "atm-laboratorio",
+        "atm-laboratorio",
+    )
+    monkeypatch.setattr(atm_session, "preparar_emisor_atm", lambda: emisor)
+    base_de_datos = Mock(side_effect=AssertionError("No debe acceder a SQL"))
+    monkeypatch.setattr(atm_router, "get_engine", base_de_datos)
+    monkeypatch.setattr(atm_session, "get_engine", base_de_datos)
+    respuesta = client.post(
+        "https://testserver/api/v1/atm/" + ruta_atm,
+        headers={} if authorization is None else {"Authorization": authorization},
+        json={"idCuenta": 1, "registroUnico": "SALDOLAB0001"},
+    )
+    assert respuesta.status_code == 401
+    assert _code(respuesta) == "SESION_ATM_INVALIDA"
+    assert respuesta.headers["WWW-Authenticate"] == "Bearer"
+    base_de_datos.assert_not_called()
 
 
 @pytest.mark.parametrize(

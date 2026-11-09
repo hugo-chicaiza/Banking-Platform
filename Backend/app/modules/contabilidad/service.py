@@ -33,10 +33,14 @@ def resolver_id_fecha_contable(conn: Connection, fecha_hora: datetime) -> int:
 
     Punto de entrada para que otros módulos (caja, ATM, créditos) registren cada
     operación en el día contable correcto sin reimplementar la regla.
+    Una fecha sin zona ya representa hora local de Ecuador; si trae zona, se
+    convierte antes de pasarla al datetime2 de SQL Server.
 
     Raises:
         HTTPException 500 CALENDARIO_SIN_FECHA si el calendario no cubre el período.
     """
+    if fecha_hora.utcoffset() is not None:
+        fecha_hora = fecha_hora.astimezone(ZONA_ECUADOR).replace(tzinfo=None)
     id_fecha = repository.id_fecha_contable(conn, fecha_hora)
     if id_fecha is None:
         # Alerta operativa: hay que cargar más fechas en Contabilidad.FechaContable.

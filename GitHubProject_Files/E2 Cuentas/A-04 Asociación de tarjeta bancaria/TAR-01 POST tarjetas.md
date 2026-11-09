@@ -27,14 +27,14 @@ La implementación utiliza PAN ficticios y un HSM simulado durante el desarrollo
 
 | **Lee** | **Escribe** | **DB / Componente** |
 |---|---|---|
-| `Cuentas.Cuenta`, `ProductosFinancieros.Producto`, `Tarjeta.BIN` | `Tarjeta.Tarjeta`, `Tarjeta.EnviosTarjeta`, `Tarjeta.TarjetaHis`, repositorio aislado de PAN ficticios | `CooperativaDB`, repositorio de pruebas |
+| `Cuentas.Cuenta`, `ProductosFinancieros.Producto`, `ProductosFinancieros.SubProducto`, `Tarjeta.BIN` | `Tarjeta.Tarjeta`, `Tarjeta.EnviosTarjeta`, `Tarjeta.TarjetaHis`, repositorio aislado de PAN ficticios | `CooperativaDB`, repositorio de pruebas |
 
 **Validación adicional:** `Tarjeta.trg_Tarjeta_Reglas` (DB 52004).
 
 ## Reglas de negocio
 
 1. La cuenta debe estar `Activa` y pertenecer al cliente → `409 CUENTA_NO_ACTIVA`.
-2. El producto debe ser de tipo `Tarjeta` → `422 PRODUCTO_NO_ES_TARJETA`. El BIN debe corresponder al subproducto seleccionado, conforme a las reglas de la base de datos (DB 52004).
+2. El producto debe ser de tipo `Tarjeta` → `422 PRODUCTO_NO_ES_TARJETA`. El asesor elige el subproducto (p. ej. `TDB001-MC` Débito Mastercard o `TCR001-MC` Crédito Mastercard, listados en CAT-07 con `tipo=Tarjeta`): debe pertenecer al producto → `422 SUBPRODUCTO_NO_ENCONTRADO`, y estar activo con un BIN activo → `422 BIN_INVALIDO`. El `tipoTarjeta` debe coincidir con el del subproducto (`TDB…` = Débito, `TCR…` = Crédito, ver CAT-07) → `422 TIPO_TARJETA_NO_COINCIDE`. El BIN de la tarjeta es el del subproducto (DB 52004). El formulario pide primero el tipo y ofrece solo sus subproductos (`GET /catalogos/productos?tipoTarjeta=…`).
 3. El sistema generará un PAN ficticio con el BIN correspondiente y un dígito de control válido, calculado mediante el algoritmo de Luhn. Se utilizarán exclusivamente rangos de prueba autorizados; no se emitirán PAN de tarjetas bancarias reales.
 4. En `Tarjeta.Tarjeta` únicamente se almacenarán `TokenTarjeta`, `NumeroEnmascarado` y `HashNumeroTarjeta` (SHA-256) como representaciones del número de tarjeta. El PAN completo no se almacenará en esta tabla ni se devolverá en las respuestas.
 5. **Custodia del PAN para pruebas:** el PAN ficticio se conservará en un repositorio aislado de desarrollo y pruebas, asociado a `IdTarjeta`, con acceso restringido a los componentes autorizados. Este repositorio no estará habilitado en producción.
@@ -43,7 +43,7 @@ La implementación utiliza PAN ficticios y un HSM simulado durante el desarrollo
    - **ATM-01:** simulación de lectura de tarjeta, identificación de la tarjeta y verificación del PIN mediante IBM 3624 PIN Offset.
 7. El `TokenTarjeta` identificará la tarjeta dentro del sistema. No se asumirá que permite recuperar el PAN sin un mecanismo de correspondencia autorizado.
 8. Una tarjeta de extensión requiere una tarjeta titular válida → `422 EXTENSION_REQUIERE_TITULAR`.
-9. La tarjeta se generará con `PinAsignado = 0` y estado `Generada`. Si `requiereEnvio = true`, se creará un registro en `Tarjeta.EnviosTarjeta` con estado `PENDIENTE` y la dirección correspondiente.
+9. La tarjeta se registrará como solicitud: estado `Solicitada`, `PinAsignado = 0` y `FechaSolicitud` con la fecha actual. `FechaEmision` se registra provisionalmente con la fecha actual (la columna es obligatoria) y se actualiza al pasar a `Generada` (TAR-04). El PIN no se asigna aquí: se genera automáticamente al aprobar la tarjeta (TAR-04). Si `requiereEnvio = true`, se creará un registro en `Tarjeta.EnviosTarjeta` con estado `PENDIENTE` y la dirección correspondiente.
 10. Las claves criptográficas utilizadas para proteger el PIN Block y generar o verificar el PIN Offset serán independientes y estarán bajo responsabilidad del componente HSM, no de TAR-01.
 11. El PAN completo, el PIN, los PIN Blocks, las claves criptográficas y otros secretos no aparecerán en logs, URLs ni respuestas de la API.
 12. La emisión deberá garantizar la consistencia entre el registro de la tarjeta y el repositorio de PAN ficticios, evitando tarjetas emitidas sin un PAN recuperable para las pruebas y registros huérfanos.
@@ -53,7 +53,7 @@ La implementación utiliza PAN ficticios y un HSM simulado durante el desarrollo
 1. Validar la cuenta, el producto, el BIN y las condiciones de emisión.
 2. Generar un PAN ficticio utilizando un rango de prueba autorizado, el BIN correspondiente y un dígito de control válido.
 3. Generar `TokenTarjeta`, `NumeroEnmascarado` y `HashNumeroTarjeta` (SHA-256).
-4. Registrar la tarjeta con estado `Generada` y `PinAsignado = 0`.
+4. Registrar la tarjeta con estado `Solicitada`, `PinAsignado = 0` y `FechaSolicitud`.
 5. Registrar el envío, cuando corresponda, y el historial en `Tarjeta.TarjetaHis`.
 6. Asociar el PAN ficticio a `IdTarjeta` en el repositorio aislado de pruebas.
 7. Confirmar que la tarjeta y su PAN ficticio quedaron correctamente asociados. Ante un fallo parcial, aplicar el mecanismo de recuperación definido para evitar inconsistencias.
@@ -67,8 +67,9 @@ Body `TarjetaCreate`:
 |---|---|---|---|
 | idCuenta | integer | Sí | Cuenta activa del cliente |
 | idProducto | integer | Sí | Producto tipo Tarjeta |
+| idSubProducto | integer | Sí | Subproducto del producto (define el BIN): CAT-07 `subproductos` |
 | tipoTarjeta | Debito \| Credito | Sí | |
-| nombreTarjeta | string(50) | Sí | Nombre impreso |
+| nombreTarjeta | string(26) | Sí | Nombre impreso: lo que admite el grabado de la tarjeta física (`Tarjeta.NombreTarjeta varchar(26)`); letras, espacios, punto, guion y apóstrofo |
 | esExtension | boolean | No | |
 | idTarjetaTitular | integer | No | Obligatorio si `esExtension = true` |
 | requiereEnvio | boolean | No | |
@@ -78,7 +79,8 @@ Body `TarjetaCreate`:
 ```json
 {
   "idCuenta": 501,
-  "idProducto": 3,
+  "idProducto": 4,
+  "idSubProducto": 3,
   "tipoTarjeta": "Debito",
   "nombreTarjeta": "MARIA MENDOZA",
   "esExtension": false,
@@ -100,8 +102,10 @@ Body `TarjetaCreate`:
   "idCliente": 125,
   "idCuenta": 501,
   "idProducto": 3,
-  "estadoActual": "Generada",
+  "estadoActual": "Solicitada",
   "pinAsignado": false,
+  "fechaSolicitud": "2026-10-26",
+  "fechaResolucion": null,
   "fechaEmision": "2026-10-26",
   "fechaExpiracion": "2031-10-26"
 }
@@ -117,6 +121,9 @@ Formato ProblemDetails (ver F-04). Además de 400/401/403:
 |---|---|---|
 | 409 | `CUENTA_NO_ACTIVA` | La cuenta no está activa o no cumple las condiciones de emisión |
 | 422 | `PRODUCTO_NO_ES_TARJETA` | El producto no es de tipo Tarjeta |
+| 422 | `SUBPRODUCTO_NO_ENCONTRADO` | El subproducto no existe o no pertenece al producto |
+| 422 | `BIN_INVALIDO` | El subproducto está inactivo o no tiene un BIN activo |
+| 422 | `TIPO_TARJETA_NO_COINCIDE` | `tipoTarjeta` no corresponde al subproducto elegido |
 | 422 | `EXTENSION_REQUIERE_TITULAR` | Una extensión necesita una tarjeta titular válida |
 | 503 | `PAN_NO_DISPONIBLE` | No se pudo completar la generación o custodia del PAN ficticio |
 

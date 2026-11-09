@@ -15,6 +15,7 @@ from app.modules.caja.service import (
     orden_desde_texto,
     rango_fechas,
 )
+from app.modules.contabilidad.service import ahora_ecuador
 from app.modules.transacciones import repository as repo
 from app.modules.transacciones.dependencias import (
     DatosAsiento,
@@ -244,7 +245,8 @@ def reversar(
                     "La transacción no movió saldos.",
                 )
 
-            id_fecha = fecha_contable(conn)
+            fecha_hora = ahora_ecuador()
+            id_fecha = fecha_contable(conn, fecha_hora)
             monto = decimal(original["Monto"])
 
             numeracion = deps.numerar(
@@ -286,6 +288,7 @@ def reversar(
                     "estado": "Completada",
                     "creado_por": supervisor,
                     "id_fecha_contable": id_fecha,
+                    "fecha_hora": fecha_hora,
                 },
             )
 
