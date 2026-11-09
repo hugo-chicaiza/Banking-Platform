@@ -14,6 +14,7 @@ from app.core.api.errors import RESPUESTAS_ERROR, ProblemDetailsRoute, problema
 from app.core.database.db import get_engine
 from app.modules.atm import (
     cambio_pin_service,
+    reversos_service,
     saldo_service,
     service,
     session,
@@ -23,6 +24,7 @@ from app.modules.atm.schemas import (
     ATMAuthRequest,
     ATMAuthResponse,
     AtmCambioPinRequest,
+    AtmReversoRequest,
     AtmSaldoRequest,
     AtmSaldoResponse,
     AtmTransferenciaRequest,
@@ -377,5 +379,73 @@ def transferir_atm(
 ) -> Response:
     # No abrir CooperativaDB, numerar, calcular comisiones ni invocar escritores.
     transferencias_service.solicitar_transferencia(
+        solicitud.sesion, solicitud.terminal, solicitud.entrada, dependencias
+    )
+
+
+@dataclass(frozen=True, repr=False)
+class ReversoAutenticado:
+    sesion: session.SesionATM
+    terminal: TerminalAutenticado
+    entrada: AtmReversoRequest
+
+
+async def leer_reverso_atm(
+    request: Request,
+    sesion: Annotated[session.SesionATM, Depends(session.require_sesion_operativa)],
+    terminal: Annotated[TerminalAutenticado, Depends(require_terminal)],
+) -> ReversoAutenticado:
+    if request.query_params:
+        raise problema(400, "DATOS_INVALIDOS", "La solicitud no admite parámetros.")
+    if (
+        request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+        != "application/json"
+    ):
+        raise problema(415, "TIPO_CONTENIDO_INVALIDO", "Se requiere application/json.")
+    cuerpo = bytearray()
+    async for fragmento in request.stream():
+        if len(cuerpo) + len(fragmento) > _MAX_BODY_AUTH:
+            raise problema(
+                413, "SOLICITUD_DEMASIADO_GRANDE", "La solicitud es demasiado grande."
+            )
+        cuerpo.extend(fragmento)
+    try:
+        entrada = AtmReversoRequest.model_validate(
+            json.loads(cuerpo, object_pairs_hook=_objeto_sin_duplicados)
+        )
+    except (ValueError, ValidationError):
+        raise problema(
+            400, "DATOS_INVALIDOS", "La solicitud tiene datos inválidos."
+        ) from None
+    return ReversoAutenticado(sesion, terminal, entrada)
+
+
+@router.post(
+    "/reversos",
+    status_code=501,
+    response_class=Response,
+    operation_id="ATM08",
+    description="ATM-08 parcial: reversos financieros deshabilitados hasta resolver contabilidad, idempotencia y reglas de efectivo.",
+    openapi_extra={
+        "security": ({"SesionATM": [], "APIKeyHeader": []},),
+        "requestBody": {
+            "required": True,
+            "content": {
+                "application/json": {"schema": AtmReversoRequest.model_json_schema()}
+            },
+        },
+    },
+    responses={
+        501: {
+            "description": "Operación financiera no habilitada.",
+            "content": RESPUESTAS_ERROR[500]["content"],
+        }
+    },
+)
+def reversar_atm(
+    solicitud: Annotated[ReversoAutenticado, Depends(leer_reverso_atm)],
+    dependencias: Annotated[DependenciasOperacion, Depends(dependencias_operacion)],
+) -> Response:
+    reversos_service.solicitar_reverso(
         solicitud.sesion, solicitud.terminal, solicitud.entrada, dependencias
     )
