@@ -29,6 +29,7 @@ _TERMINALES = {
     ("POST", "/api/v1/atm/auth"),
     ("POST", "/api/v1/atm/logout"),
     ("POST", "/api/v1/atm/consulta-saldo"),
+    ("POST", "/api/v1/atm/cambio-pin"),
 }
 _VALORES_PATH = {"codigo_pais": "ECU", "fecha": "2026-11-04"}
 
@@ -303,8 +304,9 @@ def test_logout_exige_jwt_atm_aun_con_sesion_workos(client):
 
 @pytest.mark.parametrize("sesion_workos", [False, True])
 @pytest.mark.parametrize("authorization", [None, "Bearer no-es-un-jwt"])
+@pytest.mark.parametrize("ruta_atm", ["consulta-saldo", "cambio-pin"])
 def test_consulta_saldo_exige_sesion_atm_valida(
-    client, monkeypatch, sesion_workos, authorization
+    client, monkeypatch, sesion_workos, authorization, ruta_atm
 ):
     from unittest.mock import Mock
 
@@ -325,7 +327,7 @@ def test_consulta_saldo_exige_sesion_atm_valida(
     monkeypatch.setattr(atm_router, "get_engine", base_de_datos)
     monkeypatch.setattr(atm_session, "get_engine", base_de_datos)
     respuesta = client.post(
-        "https://testserver/api/v1/atm/consulta-saldo",
+        "https://testserver/api/v1/atm/" + ruta_atm,
         headers={} if authorization is None else {"Authorization": authorization},
         json={"idCuenta": 1, "registroUnico": "SALDOLAB0001"},
     )

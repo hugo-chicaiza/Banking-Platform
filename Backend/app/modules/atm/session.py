@@ -186,7 +186,9 @@ def require_sesion_pin_actual(
         or type(pendiente) is not bool
     ):
         raise problema(403, "OPERACION_NO_PERMITIDA", "El PIN no permite operar.")
-    if pendiente and not sesion.cambio_pin_requerido:
+    if (
+        pendiente or actual.get("coordinacion_pendiente", False)
+    ) and not sesion.cambio_pin_requerido:
         raise problema(
             403, "PIN_CAMBIO_REQUERIDO", "Debe cambiar el PIN antes de operar."
         )

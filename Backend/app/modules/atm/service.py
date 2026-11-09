@@ -391,6 +391,13 @@ async def autenticar_pin_ficticio_atm(
         estado_pin = _validar_estado_pin(
             repository.obtener_pin_para_verificacion(conn_pin, id_tarjeta)
         )
+        if estado_pin.get("coordinacion_pendiente", False):
+            # No consumir intentos de la asignacion que debe reconciliarse.
+            raise problema(
+                503,
+                "CAMBIO_PIN_PENDIENTE",
+                "El cambio de PIN requiere reconciliación antes de autenticar.",
+            )
         try:
             pin_version = version_desde_fecha(estado_pin.get("fecha_asignacion"))
         except PinVersionNoDisponible:

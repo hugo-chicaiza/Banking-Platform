@@ -179,11 +179,12 @@ def test_lector_http_rechaza_content_type_y_query(client):
     )
 
 
-def test_router_publica_auth_logout_y_consulta_saldo():
+def test_router_publica_auth_logout_consulta_saldo_y_cambio_pin():
     assert [cast(APIRoute, ruta).path for ruta in router.router.routes] == [
         "/atm/auth",
         "/atm/logout",
         "/atm/consulta-saldo",
+        "/atm/cambio-pin",
     ]
 
 

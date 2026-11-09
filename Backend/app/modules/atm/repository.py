@@ -308,6 +308,11 @@ def obtener_pin_para_verificacion(
             PINOffset AS pin_offset,
             ReferenciaClavePVK AS referencia_clave_pvk,
             FechaAsignacion AS fecha_asignacion,
+            CAST(CASE WHEN EXISTS (
+                SELECT 1 FROM Tarjetas.CambioPINATMOperacion op
+                WHERE op.ID_Tarjeta=TarjetaPIN.ID_Tarjeta
+                  AND op.FechaFinalizacionUTC IS NULL
+            ) THEN 1 ELSE 0 END AS bit) AS coordinacion_pendiente,
             RequiereCambio AS requiere_cambio
         FROM Tarjetas.TarjetaPIN WITH (UPDLOCK, ROWLOCK)
         WHERE ID_Tarjeta = :id_tarjeta
@@ -333,6 +338,11 @@ def obtener_asignacion_pin_actual(
         conn.execute(
             text("""
             SELECT FechaAsignacion AS fecha_asignacion,
+                   CAST(CASE WHEN EXISTS (
+                       SELECT 1 FROM Tarjetas.CambioPINATMOperacion op
+                       WHERE op.ID_Tarjeta=TarjetaPIN.ID_Tarjeta
+                         AND op.FechaFinalizacionUTC IS NULL
+                   ) THEN 1 ELSE 0 END AS bit) AS coordinacion_pendiente,
                    TienePINAsignado AS tiene_pin_asignado,
                    Estado AS estado_pin, IntentosFallidos AS intentos_fallidos,
                    RequiereCambio AS requiere_cambio

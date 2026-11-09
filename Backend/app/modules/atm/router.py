@@ -11,10 +11,11 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from app.core.api.errors import RESPUESTAS_ERROR, ProblemDetailsRoute, problema
 from app.core.database.db import get_engine
-from app.modules.atm import saldo_service, service, session
+from app.modules.atm import cambio_pin_service, saldo_service, service, session
 from app.modules.atm.schemas import (
     ATMAuthRequest,
     ATMAuthResponse,
+    AtmCambioPinRequest,
     AtmSaldoRequest,
     AtmSaldoResponse,
 )
@@ -204,3 +205,91 @@ def consultar_saldo_atm(
             )
     except SQLAlchemyError:
         raise saldo_service._no_disponible() from None
+
+
+@dataclass(frozen=True, repr=False)
+class CambioPinAutenticado:
+    sesion: session.SesionATM
+    terminal: TerminalAutenticado
+    entrada: AtmCambioPinRequest
+
+
+async def leer_cambio_pin_atm(
+    request: Request,
+    sesion: Annotated[session.SesionATM, Depends(session.require_sesion_atm)],
+    terminal: Annotated[TerminalAutenticado, Depends(require_terminal)],
+) -> CambioPinAutenticado:
+    # Validar sesión y credencial antes de consumir el cuerpo sensible.
+    if request.query_params:
+        raise problema(400, "DATOS_INVALIDOS", "La solicitud no admite parámetros.")
+    if (
+        request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+        != "application/json"
+    ):
+        raise problema(415, "TIPO_CONTENIDO_INVALIDO", "Se requiere application/json.")
+    cuerpo = bytearray()
+    async for fragmento in request.stream():
+        if len(cuerpo) + len(fragmento) > _MAX_BODY_AUTH:
+            raise problema(
+                413, "SOLICITUD_DEMASIADO_GRANDE", "La solicitud es demasiado grande."
+            )
+        cuerpo.extend(fragmento)
+    try:
+        entrada = AtmCambioPinRequest.model_validate(
+            json.loads(cuerpo, object_pairs_hook=_objeto_sin_duplicados)
+        )
+    except ValidationError as exc:
+        bloque_invalido = any(
+            error["type"] == "value_error"
+            and error["loc"]
+            in (("encryptedPinBlockActual",), ("encryptedPinBlockNuevo",))
+            for error in exc.errors(
+                include_input=False, include_context=False, include_url=False
+            )
+        )
+        raise problema(
+            422,
+            "PIN_BLOCK_INVALIDO" if bloque_invalido else "DATOS_INVALIDOS",
+            "El PIN Block no es válido."
+            if bloque_invalido
+            else "La solicitud tiene datos inválidos.",
+        ) from None
+    except ValueError:
+        raise problema(
+            422, "DATOS_INVALIDOS", "La solicitud tiene datos inválidos."
+        ) from None
+    return CambioPinAutenticado(sesion, terminal, entrada)
+
+
+@router.post(
+    "/cambio-pin",
+    status_code=204,
+    response_class=Response,
+    operation_id="ATM06",
+    openapi_extra={
+        "security": ({"SesionATM": [], "APIKeyHeader": []},),
+        "requestBody": {
+            "required": True,
+            "content": {
+                "application/json": {"schema": AtmCambioPinRequest.model_json_schema()}
+            },
+        },
+    },
+    responses={
+        503: {
+            "description": "Cambio no confirmado; requiere reconciliación.",
+            "content": RESPUESTAS_ERROR[500]["content"],
+        }
+    },
+)
+def cambiar_pin_atm(
+    request: Request,
+    solicitud: Annotated[CambioPinAutenticado, Depends(leer_cambio_pin_atm)],
+) -> Response:
+    cambio_pin_service.cambiar_pin(
+        solicitud.sesion,
+        solicitud.terminal,
+        solicitud.entrada,
+        request.client.host if request.client else None,
+    )
+    return Response(status_code=204)
