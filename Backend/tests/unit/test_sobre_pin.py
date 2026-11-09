@@ -225,7 +225,10 @@ def test_disco_guarda_el_contenido_cifrado(tmp_path: Path):
     assert "4821" not in archivo and "JVBERi" not in archivo  # "%PDF" en base64
     pdf = servicio.entregar(301, 7)
     assert "(4 8 2 1)" in texto_pdf(pdf)
-    assert "contenido" not in (tmp_path / "301.json").read_text(encoding="utf-8")
+    # Entregado: el sobre cifrado ya no existe; solo queda quién y cuándo
+    assert not (tmp_path / "301.json").exists()
+    entrega = (tmp_path / "301.entregado").read_text(encoding="utf-8")
+    assert '"entregadoPor": 7' in entrega and "contenido" not in entrega
 
 
 # --- Configuración ---------------------------------------------------------------

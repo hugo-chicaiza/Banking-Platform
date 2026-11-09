@@ -284,9 +284,12 @@ class AlmacenMongo:
 
 
 class AlmacenDisco:
-    """Mientras no hay MongoDB, solo fuera de producción: un JSON por tarjeta con el
-    contenido ya cifrado. Un candado de proceso hace atómica la entrega (un servidor de
-    desarrollo).
+    """Mientras no hay MongoDB, solo fuera de producción.
+
+    `{id}.json` guarda el sobre Pendiente con el contenido ya cifrado. Al entregarse se
+    borra y queda `{id}.entregado` con quién y cuándo, armado solo con datos de la
+    petición (nunca se reescribe lo leído del archivo). Un candado de proceso hace
+    atómica la entrega (un servidor de desarrollo).
     """
 
     _candado = threading.Lock()
@@ -316,11 +319,11 @@ class AlmacenDisco:
             return None
         return json.loads(ruta.read_text(encoding="utf-8"))
 
-    def _escribir(self, id_tarjeta: int, documento: dict[str, Any]) -> None:
+    def _escribir(self, id_tarjeta: int, extension: str, texto: str) -> None:
         self._carpeta.mkdir(parents=True, exist_ok=True)
         temporal = self._ruta(id_tarjeta, ".tmp")
-        temporal.write_text(json.dumps(documento), encoding="utf-8")
-        os.replace(temporal, self._ruta(id_tarjeta))
+        temporal.write_text(texto, encoding="utf-8")
+        os.replace(temporal, self._ruta(id_tarjeta, extension))
 
     def guardar(
         self,
@@ -337,7 +340,8 @@ class AlmacenDisco:
         documento["expiraEn"] = expira.isoformat()
         try:
             with self._candado:
-                self._escribir(id_tarjeta, documento)
+                self._escribir(id_tarjeta, ".json", json.dumps(documento))
+                self._ruta(id_tarjeta, ".entregado").unlink(missing_ok=True)
         except OSError as exc:
             raise AlmacenNoDisponible(type(exc).__name__) from None
 
@@ -348,23 +352,21 @@ class AlmacenDisco:
             with self._candado:
                 documento = self._leer(id_tarjeta)
                 if documento is None:
+                    if self._ruta(id_tarjeta, ".entregado").exists():
+                        raise SobreYaEntregado()
                     raise SobreNoDisponible()
-                if documento["estado"] == "Entregado":
-                    raise SobreYaEntregado()
                 if datetime.fromisoformat(documento["expiraEn"]) <= ahora:
                     self._ruta(id_tarjeta).unlink(missing_ok=True)
                     raise SobreNoDisponible()
-                contenido = base64.b64decode(documento.pop("contenido"))
-                documento.pop("expiraEn")
-                documento.update(
-                    estado="Entregado",
-                    entregadoEn=ahora.isoformat(),
-                    entregadoPor=usuario,
+                entregado = SobreEntregado(
+                    str(documento["idSobre"]), base64.b64decode(documento["contenido"])
                 )
-                self._escribir(id_tarjeta, documento)
+                entrega = {"entregadoEn": ahora.isoformat(), "entregadoPor": usuario}
+                self._escribir(id_tarjeta, ".entregado", json.dumps(entrega))
+                self._ruta(id_tarjeta).unlink()
         except (OSError, ValueError, KeyError) as exc:
             raise AlmacenNoDisponible(type(exc).__name__) from None
-        return SobreEntregado(documento["idSobre"], contenido)
+        return entregado
 
     def descartar(self, id_tarjeta: int, id_sobre: str) -> None:
         try:
