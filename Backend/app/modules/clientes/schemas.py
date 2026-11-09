@@ -1,11 +1,11 @@
 from datetime import date, datetime
-from typing import Literal
+from typing import Annotated, Any, Literal
 
-from pydantic import ConfigDict, Field, field_validator
+from pydantic import ConfigDict, Field, StringConstraints, field_validator
 from pydantic.json_schema import SkipJsonSchema
 
 from app.core.api.schemas import CamelModel, Money
-from app.modules.cuentas.schemas import MonedaUsd
+from app.modules.cuentas.schemas import EstadoCuenta, MonedaUsd
 from app.modules.tarjetas.schemas import Tarjeta
 
 TipoDocumento = Literal["C", "R", "P"]
@@ -17,6 +17,14 @@ EstadoCliente = Literal[
     "Pendiente", "Activo", "Bloqueado", "Inactivo", "Cerrado", "Eliminado", "Suspendido"
 ]
 EstadoDireccion = Literal["Activo", "Inactivo", "Eliminado"]
+
+TextoCliente = Annotated[
+    str, StringConstraints(min_length=1, max_length=250, pattern=r"\S")
+]
+EmailCliente = Annotated[
+    str, Field(min_length=5, max_length=150, pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+]
+CodigoPostal = Annotated[str, Field(min_length=6, max_length=6, pattern=r"^[0-9]{6}$")]
 
 # ---------------------------------------------------------------------------
 # CLI-01 · Validación de identificación
@@ -40,14 +48,16 @@ class ValidacionIdentificacion(CamelModel):
 class DireccionCreate(CamelModel):
     """Dirección principal enviada en el alta de cliente (CLI-02)."""
 
+    model_config = ConfigDict(extra="forbid")
+
     tipo_direccion: TipoDireccion = "Domicilio"
     codigo_pais: str = Field(default="ECU", min_length=3, max_length=3)
     id_ciudad: int
-    sector: str | None = None
-    calle_direccion: str = Field(min_length=1)
-    referencia_ubicacion: str = Field(min_length=1)
-    codigo_postal: str | None = Field(default=None, min_length=6, max_length=6)
-    es_principal: bool = True
+    sector: str | None = Field(default=None, max_length=50)
+    calle_direccion: TextoCliente
+    referencia_ubicacion: TextoCliente
+    codigo_postal: CodigoPostal | None = None
+    es_principal: Literal[True] = True
 
 
 class Direccion(CamelModel):
@@ -68,13 +78,17 @@ class Direccion(CamelModel):
 class ClienteCreate(CamelModel):
     """Body de POST /api/v1/clientes (CLI-02)."""
 
-    identificacion: str = Field(min_length=1, max_length=13)
+    model_config = ConfigDict(extra="forbid")
+
+    identificacion: Annotated[
+        str, StringConstraints(strip_whitespace=True, min_length=1, max_length=13)
+    ]
     tipo_documento: TipoDocumento
     tipo_cliente: TipoCliente
-    nombres: str = Field(min_length=1)
-    apellidos: str | None = None
-    razon_social: str | None = None
-    nombre_comercial: str | None = None
+    nombres: TextoCliente
+    apellidos: TextoCliente | None = None
+    razon_social: TextoCliente | None = None
+    nombre_comercial: TextoCliente | None = None
     id_actividad_economica: int | None = None
     fecha_nacimiento: date
     genero: Genero | None = None
@@ -82,7 +96,7 @@ class ClienteCreate(CamelModel):
     codigo_pais_nacionalidad: str = Field(default="ECU", min_length=3, max_length=3)
     telefono_convencional: str | None = Field(default=None, max_length=15)
     telefono_celular: str = Field(min_length=7, max_length=15)
-    email: str = Field(min_length=5, max_length=150)
+    email: EmailCliente
     consentimiento_datos: bool
     direccion: DireccionCreate
 
@@ -119,24 +133,17 @@ class ClienteUpdate(CamelModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    nombres: str | SkipJsonSchema[None] = Field(
-        default=None, min_length=1, max_length=250
-    )
-    apellidos: str | None = Field(default=None, min_length=1, max_length=250)
-    razon_social: str | None = Field(default=None, min_length=1, max_length=250)
-    nombre_comercial: str | None = Field(default=None, min_length=1, max_length=250)
+    nombres: TextoCliente | SkipJsonSchema[None] = None
+    apellidos: TextoCliente | None = None
+    razon_social: TextoCliente | None = None
+    nombre_comercial: TextoCliente | None = None
     id_actividad_economica: int | None = None
     estado_civil: EstadoCivil | None = None
     telefono_convencional: str | None = Field(default=None, max_length=15)
     telefono_celular: str | SkipJsonSchema[None] = Field(
         default=None, min_length=7, max_length=15
     )
-    email: str | SkipJsonSchema[None] = Field(
-        default=None,
-        min_length=5,
-        max_length=150,
-        pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$",
-    )
+    email: EmailCliente | SkipJsonSchema[None] = None
 
     @field_validator("nombres", "telefono_celular", "email", mode="before")
     @classmethod
@@ -177,15 +184,15 @@ class ClienteEstadoUpdate(CamelModel):
 class DireccionNueva(CamelModel):
     """Body de POST /api/v1/clientes/{idCliente}/direcciones (CLI-10)."""
 
+    model_config = ConfigDict(extra="forbid")
+
     tipo_direccion: TipoDireccion = "Domicilio"
     codigo_pais: str = Field(default="ECU", min_length=3, max_length=3)
     id_ciudad: int
-    sector: str | None = None
-    calle_direccion: str = Field(min_length=1)
-    referencia_ubicacion: str = Field(min_length=1)
-    codigo_postal: str | None = Field(
-        default=None, min_length=6, max_length=6, pattern=r"^\d{6}$"
-    )
+    sector: str | None = Field(default=None, max_length=50)
+    calle_direccion: TextoCliente
+    referencia_ubicacion: TextoCliente
+    codigo_postal: CodigoPostal | None = None
     es_principal: bool = False
 
 
@@ -195,16 +202,33 @@ class DireccionUpdate(CamelModel):
     Todos los campos son opcionales para soportar patch parcial.
     """
 
-    tipo_direccion: TipoDireccion | None = None
-    codigo_pais: str | None = Field(default=None, min_length=3, max_length=3)
-    id_ciudad: int | None = None
-    sector: str | None = None
-    calle_direccion: str | None = Field(default=None, min_length=1)
-    referencia_ubicacion: str | None = Field(default=None, min_length=1)
-    codigo_postal: str | None = Field(
-        default=None, min_length=6, max_length=6, pattern=r"^\d{6}$"
+    model_config = ConfigDict(extra="forbid")
+
+    tipo_direccion: TipoDireccion | SkipJsonSchema[None] = None
+    codigo_pais: str | SkipJsonSchema[None] = Field(
+        default=None, min_length=3, max_length=3
     )
-    es_principal: bool | None = None
+    id_ciudad: int | SkipJsonSchema[None] = None
+    sector: str | None = Field(default=None, max_length=50)
+    calle_direccion: TextoCliente | SkipJsonSchema[None] = None
+    referencia_ubicacion: TextoCliente | SkipJsonSchema[None] = None
+    codigo_postal: CodigoPostal | None = None
+    es_principal: bool | SkipJsonSchema[None] = None
+
+    @field_validator(
+        "tipo_direccion",
+        "codigo_pais",
+        "id_ciudad",
+        "calle_direccion",
+        "referencia_ubicacion",
+        "es_principal",
+        mode="before",
+    )
+    @classmethod
+    def no_anulable(cls, valor: Any) -> Any:
+        if valor is None:
+            raise ValueError("El campo no admite null.")
+        return valor
 
 
 # CLI-13 / CLI-14 · Evaluaciones de riesgo
@@ -277,10 +301,15 @@ class CuentaPerfil(CamelModel):
     saldo: Money
     saldo_retenido: Money
     saldo_disponible: Money
-    estado: str
+    estado: EstadoCuenta
     fecha_apertura: datetime
     fecha_ultimo_movimiento: datetime | None = None
     fecha_cierre: datetime | None = None
+
+    @field_validator("estado", mode="before")
+    @classmethod
+    def estado_publico(cls, valor: str) -> str:
+        return valor.upper()
 
 
 class TarjetaPerfil(Tarjeta):

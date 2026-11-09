@@ -777,7 +777,7 @@ def test_consultas_contrato_openapi_sin_sockets():
         Cuenta(**_cuenta_row()).model_dump(by_alias=True)
     )
     consultas = router._consultas_router.routes
-    assert len(consultas) == 3
+    assert len(consultas) == 4
     assert all(isinstance(r, ProblemDetailsRoute) for r in consultas)
     assert any(d.dependency is require_auth for d in router.router.dependencies)
     apertura = contrato["paths"]["/api/v1/cuentas"]["post"]
@@ -1021,7 +1021,12 @@ def _cambiar(
 @pytest.mark.parametrize("anterior", list(_ESTADO_BD))
 @pytest.mark.parametrize("nuevo", list(_ESTADO_BD))
 def test_cta05_matriz_completa(anterior, nuevo, eventos_auditados):
-    respuestas = [[_cuenta_bd_row(estado=_ESTADO_BD[anterior])]]
+    previas = (
+        [[{"id_cliente": 125}], [{"id_cliente": 125, "estado": "Activo"}], []]
+        if nuevo == "ACTIVA"
+        else []
+    )
+    respuestas = [*previas, [_cuenta_bd_row(estado=_ESTADO_BD[anterior])]]
     valida = (anterior, nuevo) in _PERMITIDAS
     if valida:
         if nuevo == "CERRADA":
@@ -1043,8 +1048,8 @@ def test_cta05_matriz_completa(anterior, nuevo, eventos_auditados):
             _cambiar(db, nuevo)
         _assert_http_error(exc, 409, "TRANSICION_INVALIDA")
         assert db.commits == 0 and db.rollbacks == 1
-        assert len(db.consultas) == 1
-    assert "WITH (XLOCK, HOLDLOCK)" in db.consultas[0][0]
+        assert len(db.consultas) == len(previas) + 1
+    assert "WITH (XLOCK, HOLDLOCK)" in db.consultas[len(previas)][0]
     (evento,) = eventos_auditados
     assert evento.usuario == 12 and evento.ip == "127.0.0.1"
     assert f"estadoAnterior={anterior}" in evento.descripcion
@@ -1768,3 +1773,316 @@ def test_cta08_trigger_rollback_y_error_http_sanitizado(
         for secreto in ("SQL_SECRETO", "DATO_PRIVADO", "mensaje privado")
     )
     assert db.commits == 0 and db.rollbacks == 1
+
+
+@pytest.mark.parametrize(
+    "estado", ["Pendiente", "Inactivo", "Bloqueado", "Suspendido", "Eliminado"]
+)
+def test_cta05_no_reactiva_cuenta_de_cliente_no_activo(estado):
+    db = _fake_conn([{"id_cliente": 125}], [{"id_cliente": 125, "estado": estado}])
+    with pytest.raises(HTTPException) as exc:
+        _cambiar(db, "ACTIVA")
+    _assert_http_error(exc, 409, "CLIENTE_NO_ACTIVO")
+    assert db.commits == 0 and db.rollbacks == 1
+    assert not any("UPDATE " in sql for sql, _ in db.consultas)
+
+
+def test_cta05_riesgo_rechazado_impide_reactivar_incluso_con_cliente_activo():
+    db = _fake_conn(
+        [{"id_cliente": 125}],
+        [{"id_cliente": 125, "estado": "Activo"}],
+        [{"resultado_evaluacion": "Rechazado"}],
+    )
+    with pytest.raises(HTTPException) as exc:
+        _cambiar(db, "ACTIVA")
+    _assert_http_error(exc, 409, "RIESGO_RECHAZADO")
+    assert db.commits == 0 and db.rollbacks == 1
+
+
+def test_cta05_reactivacion_serializa_cliente_antes_de_cuenta():
+    db = _fake_conn(
+        [{"id_cliente": 125}],
+        [{"id_cliente": 125, "estado": "Activo"}],
+        [],
+        [_cuenta_bd_row(estado="Inactiva")],
+        [],
+        [_cuenta_bd_row(estado="Activa")],
+    )
+    assert _cambiar(db, "ACTIVA").estado == "ACTIVA"
+    assert "Clientes.Cliente WITH (UPDLOCK, HOLDLOCK)" in db.consultas[1][0]
+    assert "Cuentas.Cuenta WITH (XLOCK, HOLDLOCK)" in db.consultas[3][0]
+    assert db.commits == 1 and db.rollbacks == 0
+
+
+def test_cta05_reactivacion_de_cuenta_inexistente():
+    db = _fake_conn([])
+    with pytest.raises(HTTPException) as exc:
+        _cambiar(db, "ACTIVA")
+    _assert_http_error(exc, 404, "CUENTA_NO_ENCONTRADA")
+    assert db.rollbacks == 1 and db.commits == 0
+
+
+def _movimiento_row(**cambios):
+    return {
+        "id_movimiento": 801,
+        "id_transaccion": 901,
+        "numero_comprobante": "COMP-901",
+        "tipo_transaccion": "TRANSFERENCIA",
+        "tipo_movimiento": "C",
+        "rol_cuenta": "Destino",
+        "monto": Decimal("50.25"),
+        "saldo_anterior": Decimal("100.00"),
+        "saldo_posterior": Decimal("150.25"),
+        "fecha_contable": date(2026, 11, 9),
+        "fecha_hora_sistema": datetime(2026, 11, 8, 20, 0),
+        "id_canal": 1,
+        "total": 1,
+        **cambios,
+    }
+
+
+def _movimientos(db, **cambios):
+    return service.listar_movimientos(
+        cast(Connection, db),
+        501,
+        **{
+            "desde": date(2026, 11, 1),
+            "hasta": date(2026, 11, 9),
+            **cambios,
+        },
+    )
+
+
+def test_cta06_usa_movimientos_propios_y_fecha_contable_con_saldos_historicos():
+    db = _fake_conn([_cuenta_bd_row(estado="Cerrada")], [_movimiento_row()])
+    resultado = _movimientos(db, tipo_transaccion="TRANSFERENCIA")
+    item = resultado.items[0]
+    assert (item.saldo_anterior, item.saldo_posterior) == (
+        Decimal("100.00"),
+        Decimal("150.25"),
+    )
+    assert item.fecha_contable == date(2026, 11, 9)
+    assert item.fecha_hora_sistema.utcoffset() == timedelta(hours=-5)
+    assert item.rol_cuenta == "Destino"
+    assert (
+        resultado.model_dump(mode="json", by_alias=True)["items"][0]["saldoPosterior"]
+        == 150.25
+    )
+    sql, params = db.consultas[1]
+    assert "m.IdCuenta=:id_cuenta" in sql
+    assert "m.SaldoAnterior" in sql and "m.SaldoPosterior" in sql
+    assert "f.Fecha>=:desde AND f.Fecha<=:hasta" in sql
+    assert "f.IdFechaContable=m.IdFechaContable" in sql
+    assert "t.IdCuenta=:id_cuenta" not in sql and "t.Estado" not in sql
+    assert params["tipo_transaccion"] == "TRANSFERENCIA"
+    assert params["campo"] == "FechaHoraSistema" and params["direccion"] == "desc"
+    assert db.commits == db.rollbacks == 0
+
+
+def test_cta06_reverso_se_muestra_junto_al_movimiento_original():
+    original = _movimiento_row(
+        tipo_movimiento="D",
+        rol_cuenta="Origen",
+        saldo_anterior=Decimal(100),
+        saldo_posterior=Decimal("49.75"),
+        total=2,
+    )
+    reverso = _movimiento_row(
+        id_movimiento=802,
+        id_transaccion=902,
+        saldo_anterior=Decimal("49.75"),
+        saldo_posterior=Decimal(100),
+        rol_cuenta="Origen",
+        total=2,
+    )
+    db = _fake_conn([_cuenta_bd_row()], [reverso, original])
+    resultado = _movimientos(db)
+    assert resultado.total == 2
+    assert [m.tipo_movimiento for m in resultado.items] == ["C", "D"]
+    assert [m.id_transaccion for m in resultado.items] == [902, 901]
+
+
+@pytest.mark.parametrize("total", [0, 8])
+def test_cta06_pagina_vacia_conserva_total(total):
+    db = _fake_conn([_cuenta_bd_row()], [{"id_movimiento": None, "total": total}])
+    resultado = _movimientos(db, page=3, page_size=5)
+    assert resultado.items == [] and resultado.total == total
+    assert resultado.page == 3 and resultado.page_size == 5
+    assert db.consultas[1][1]["offset"] == 10
+
+
+@pytest.mark.parametrize(
+    "cambios,code",
+    [
+        ({"desde": date(2026, 11, 10)}, "RANGO_FECHAS_INVALIDO"),
+        ({"page": 0}, "PAGINACION_INVALIDA"),
+        ({"page_size": 101}, "PAGINACION_INVALIDA"),
+        ({"sort": "monto; DROP TABLE Cuenta,asc"}, "SORT_INVALIDO"),
+        ({"sort": "idCuenta,desc"}, "SORT_INVALIDO"),
+    ],
+)
+def test_cta06_filtros_invalidos_no_consultan(cambios, code):
+    db = _fake_conn()
+    with pytest.raises(HTTPException) as exc:
+        _movimientos(db, **cambios)
+    _assert_http_error(exc, 400, code)
+    assert not db.consultas
+
+
+def test_cta06_cuenta_inexistente_no_parece_cuenta_sin_movimientos():
+    db = _fake_conn([])
+    with pytest.raises(HTTPException) as exc:
+        _movimientos(db)
+    _assert_http_error(exc, 404, "CUENTA_NO_ENCONTRADA")
+
+
+def test_cta06_tipo_transaccion_se_liga_como_valor():
+    db = _fake_conn([_cuenta_bd_row()], [{"id_movimiento": None, "total": 0}])
+    valor = "' OR 1=1 --"
+    _movimientos(db, tipo_transaccion=valor, sort="monto,asc")
+    sql, params = db.consultas[1]
+    assert valor not in sql and params["tipo_transaccion"] == valor
+    assert params["campo"] == "Monto" and "m.IdMovimiento DESC" in sql
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "",
+        "desde=2026-11-01",
+        "desde=no-fecha&hasta=2026-11-09",
+        "desde=2026-11-01&hasta=2026-11-09&pageSize=101",
+        "desde=2026-11-01&hasta=2026-11-09&desconocido=1",
+        "desde=2026-11-01&hasta=2026-11-09&desde=2026-11-02",
+    ],
+)
+def test_cta06_http_rechaza_fechas_ausentes_y_parametros_invalidos(
+    sesion_cuentas, query
+):
+    usuario, dependencia = sesion_cuentas
+    app.dependency_overrides[dependencia] = lambda: usuario
+    respuesta = asyncio.run(
+        _http_cuentas("GET", "/api/v1/cuentas/501/movimientos?" + query)
+    )
+    assert respuesta.status_code == 400
+    assert respuesta.headers["content-type"] == "application/problem+json"
+
+
+def test_cta06_http_propaga_aliases_y_rango_inclusivo(sesion_cuentas, monkeypatch):
+    usuario, dependencia = sesion_cuentas
+    app.dependency_overrides[dependencia] = lambda: usuario
+    recibidos = {}
+
+    def consultar(conn, id_cuenta, **kwargs):
+        recibidos.update(id_cuenta=id_cuenta, **kwargs)
+        return service.PageMovimientoCuenta(items=[], page=2, page_size=10, total=0)
+
+    monkeypatch.setattr(service, "listar_movimientos", consultar)
+    respuesta = asyncio.run(
+        _http_cuentas(
+            "GET",
+            "/api/v1/cuentas/501/movimientos?desde=2026-11-09&hasta=2026-11-09&tipoTransaccion=RETIRO&page=2&pageSize=10&sort=idMovimiento,asc",
+        )
+    )
+    assert respuesta.status_code == 200
+    assert recibidos == {
+        "id_cuenta": 501,
+        "desde": date(2026, 11, 9),
+        "hasta": date(2026, 11, 9),
+        "tipo_transaccion": "RETIRO",
+        "page": 2,
+        "page_size": 10,
+        "sort": "idMovimiento,asc",
+    }
+
+
+def test_cta06_openapi_publica_fechas_obligatorias_y_respuesta():
+    ruta = app.openapi()["paths"]["/api/v1/cuentas/{idCuenta}/movimientos"]["get"]
+    assert ruta["operationId"] == "CTA06"
+    assert ruta["x-roles"] == ["ASESOR", "CAJERO", "SUPERVISOR", "ADMIN"]
+    parametros = {p["name"]: p for p in ruta["parameters"]}
+    assert parametros["desde"]["required"] and parametros["hasta"]["required"]
+    assert ruta["responses"]["200"]["content"]["application/json"]["schema"][
+        "$ref"
+    ].endswith("/PageMovimientoCuenta")
+
+
+@pytest.mark.parametrize(
+    "cambios",
+    [
+        {"maxTransaccionesDia": 5, "fechaVigencia": "2027-01-01"},
+        {"maxTransaccionesDia": 10, "fechaVigencia": None},
+    ],
+)
+def test_cta08_conserva_configuracion_sin_ampliar_esquema_del_historial(cambios):
+    anterior = _cupo_row(fecha_vigencia=date(2026, 12, 31))
+    db = _db_actualizar_cupo(anterior)
+    _actualizar(db, **cambios)
+    _, guardados = db.consultas[4]
+    assert guardados["max_transacciones_dia"] == cambios["maxTransaccionesDia"]
+    assert guardados["fecha_vigencia"] == (
+        date.fromisoformat(cambios["fechaVigencia"])
+        if cambios["fechaVigencia"]
+        else None
+    )
+    sql, params = db.consultas[5]
+    assert "MaxTransaccionesDiaAnterior" not in sql and "FechaVigenciaNueva" not in sql
+    assert params["diario_anterior"] == anterior["cupo_diario"]
+    assert params["modificado_por"] == 12
+    assert db.commits == 1 and db.rollbacks == 0
+
+
+def test_cta08_primer_cupo_sigue_guardando_historial_original():
+    db = _db_actualizar_cupo()
+    _actualizar(db, maxTransaccionesDia=5, fechaVigencia="2027-01-01")
+    params = db.consultas[5][1]
+    assert (
+        params["diario_anterior"]
+        is params["mensual_anterior"]
+        is params["max_anterior"]
+        is None
+    )
+    assert params["cupo_diario"] == Decimal(400) and params["modificado_por"] == 12
+
+
+def test_cta09_devuelve_contrato_original_sin_columnas_retiradas():
+    fila = _historial_row()
+    db = _fake_conn([_cuenta_bd_row()], [{"id_canal": 1}], [fila])
+    respuesta = service.obtener_historial_cupo(cast(Connection, db), 501, 1)
+    item = respuesta.model_dump(mode="json", by_alias=True)["items"][0]
+    assert set(item) == {
+        "idCupoModHis",
+        "cupoDiarioAnterior",
+        "cupoDiarioNuevo",
+        "cupoMensualAnterior",
+        "cupoMensualNuevo",
+        "montoMaxTxAnterior",
+        "montoMaxTxNuevo",
+        "modificadoPor",
+        "fechaModificacion",
+    }
+    sql = db.consultas[2][0]
+    assert "MaxTransaccionesDia" not in sql and "FechaVigencia" not in sql
+
+
+def test_cta09_entradas_anteriores_conservan_importes_desconocidos_en_null():
+    fila = _historial_row()
+    db = _fake_conn([_cuenta_bd_row()], [{"id_canal": 1}], [fila])
+    item = service.obtener_historial_cupo(cast(Connection, db), 501, 1).items[0]
+    assert (
+        item.cupo_diario_anterior
+        is item.cupo_mensual_anterior
+        is item.monto_max_tx_anterior
+        is None
+    )
+
+
+def test_cta09_openapi_no_publica_columnas_retiradas():
+    propiedades = app.openapi()["components"]["schemas"]["CupoHistorial"]["properties"]
+    for nombre in (
+        "maxTransaccionesDiaAnterior",
+        "maxTransaccionesDiaNuevo",
+        "fechaVigenciaAnterior",
+        "fechaVigenciaNueva",
+    ):
+        assert nombre not in propiedades
