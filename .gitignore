@@ -87,3 +87,6 @@ desktop.ini
 PENDIENTES.md
 CONTEXTO_CLAUDE.md
 GUIA_LECTURA.md
+
+# Sobres de PIN cifrados mientras no hay MongoDB (TAR-07)
+.sobres_pin/

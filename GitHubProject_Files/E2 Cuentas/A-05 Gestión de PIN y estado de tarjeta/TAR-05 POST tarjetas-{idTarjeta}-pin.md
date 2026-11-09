@@ -36,7 +36,7 @@ Durante el desarrollo se utiliza un HSM simulado con claves ficticias. Se contem
 1. La tarjeta debe estar en `Aprobada`, `Generada`, `Activa`, `Inactiva` o `Bloqueada` → si no (`Solicitada` o un estado terminal), `409 PIN_NO_PERMITIDO`.
 2. El HSM genera un PIN aleatorio de 4 dígitos no trivial (sin repetidos ni secuencias) y calcula su **IBM 3624 PIN Offset**, con los mismos parámetros que ATM-01 (datos de validación, tabla de decimalización, longitud y PVK). El PIN no sale del HSM.
 3. El PAN ficticio se obtiene mediante el mecanismo controlado de pruebas definido en TAR-01.
-4. **Débito:** el PIN nuevo es temporal (`RequiereCambio = 1`) y se entrega impreso (canal no simulado). En el siguiente uso del ATM, ATM-01 abre una sesión restringida que solo permite cambiar el PIN (ATM-06).
+4. **Débito:** el PIN nuevo es temporal (`RequiereCambio = 1`) y se entrega en un sobre de PIN nuevo (PDF, TAR-07) que reemplaza al anterior; el sobre se guarda antes de confirmar el Offset (si el almacén configurado falla → `503 SOBRE_PIN_NO_GUARDADO` y no cambia nada). En el siguiente uso del ATM, ATM-01 abre una sesión restringida que solo permite cambiar el PIN (ATM-06).
 5. **Crédito:** el PIN se asigna sin entregarse (`RequiereCambio = 0`); el cliente lo pide al servicio al cliente (no simulado).
 6. Regenerar reemplaza el Offset anterior, reinicia `IntentosFallidos = 0`, deja el PIN en estado `Activo` y borra `FechaBloqueo`. **No cambia el estado de la tarjeta**: una tarjeta `Bloqueada` se desbloquea aparte con TAR-04.
 7. Se marca `PinAsignado = 1` y se inserta `TarjetaHis` (`CambioPin`, “Regeneración de PIN”) sin información sensible.
@@ -75,6 +75,7 @@ Formato ProblemDetails (ver F-04). Además de 400/401/403:
 | 503 | `HSM_NO_DISPONIBLE` | No se puede completar el procesamiento criptográfico |
 | 503 | `PAN_NO_DISPONIBLE` | No se puede obtener el PAN ficticio |
 | 503 | `PIN_ASIGNACION_NO_CONFIRMADA` | El PIN se guardó en `SeguridadDB` pero no se pudo registrar en `CooperativaDB` |
+| 503 | `SOBRE_PIN_NO_GUARDADO` | Débito: no se pudo guardar el sobre de PIN (TAR-07); no se cambió nada |
 
 ## Definición de terminado
 

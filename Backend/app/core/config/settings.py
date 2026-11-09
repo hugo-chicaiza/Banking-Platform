@@ -86,6 +86,19 @@ class Settings(BaseSettings):
     # La que usa el endpoint de pruebas que simula el PIN pad
     hsm_sim_referencia_pin_block: str = "TEST-KEY-01"
 
+    # Sobre de PIN de débito (TAR-07): PDF con el PIN temporal, cifrado en reposo y
+    # entregado una sola vez. Sin clave no se generan sobres.
+    sobre_pin_clave: SecretStr = SecretStr("")  # AES-256-GCM: 64 hex
+    sobre_pin_dias: Annotated[int, Field(ge=1, le=365)] = 30
+    # Carpeta local mientras no hay MongoDB (solo fuera de producción)
+    sobre_pin_dir: str = ".sobres_pin"
+    cooperativa_nombre: str = "EnquoCoop"
+    cooperativa_sitio_web: str = "www.coop.com.ec"
+
+    # MongoDB (Azure Cosmos DB for MongoDB o Atlas). Vacío = sin MongoDB
+    mongo_uri: SecretStr = SecretStr("")
+    mongo_db: str = "banking_platform"
+
     # Vínculos administrados por despliegue, nunca por el navegador ni por email.
     workos_audit_user_ids: dict[
         str, Annotated[int, Field(strict=True, ge=1, le=2147483647)]

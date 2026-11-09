@@ -31,3 +31,9 @@ httpx>=0.28,<1.0
 
 # Zona horaria de Ecuador (America/Guayaquil): Windows no trae la base IANA que usa zoneinfo
 tzdata>=2026.6
+
+# Sobre de PIN de débito (TAR-07): PDF de una página
+fpdf2>=2.8,<3.0
+
+# MongoDB (sobres de PIN, TAR-07): Azure Cosmos DB for MongoDB o Atlas. Sin MONGO_URI no se conecta
+pymongo>=4.10,<5.0

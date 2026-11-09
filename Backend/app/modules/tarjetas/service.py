@@ -22,7 +22,7 @@ from app.core.security.hsm import (
     obtener_hsm,
 )
 from app.modules.catalogos.subproductos import tipo_tarjeta_de
-from app.modules.tarjetas import repository
+from app.modules.tarjetas import repository, sobre_pin
 from app.modules.tarjetas.identificacion import hash_pan
 from app.modules.tarjetas.schemas import (
     DESCRIPCION_PIN_GENERADO,
@@ -471,17 +471,62 @@ def credito_cumple_plazo(conn: Connection, fecha_emision: date) -> bool:
     )
 
 
+def _sobre_no_guardado() -> HTTPException:
+    return problema(503, "SOBRE_PIN_NO_GUARDADO", "No se pudo guardar el sobre de PIN.")
+
+
+def _generar_offset_y_sobre(
+    hsm: Hsm, pan: str, id_tarjeta: int, origen: sobre_pin.OrigenSobre
+) -> tuple[str, str, tuple[sobre_pin.ServicioSobres, str] | None]:
+    """Débito: el PIN sale del HSM solo para armar el sobre de PIN (TAR-07), que se
+    guarda antes de confirmar el Offset. Sin almacén configurado no hay sobre.
+    """
+    servicio = sobre_pin.obtener_servicio()
+    if servicio is None:
+        logger.warning(
+            "tarjetas: sobre de PIN no disponible (sin almacén o sin clave) "
+            "id_tarjeta=%s",
+            id_tarjeta,
+        )
+        offset, referencia_pvk = hsm.generar_pin(pan)
+        return offset, referencia_pvk, None
+    offset, referencia_pvk, pin = hsm.generar_pin_para_sobre(pan)
+    try:
+        id_sobre = servicio.preparar(id_tarjeta, pin, origen)
+    except sobre_pin.AlmacenNoDisponible as exc:
+        logger.error(
+            "tarjetas: no se pudo guardar el sobre de PIN id_tarjeta=%s error=%s",
+            id_tarjeta,
+            exc,
+        )
+        raise _sobre_no_guardado() from None
+    finally:
+        del pin
+    return offset, referencia_pvk, (servicio, id_sobre)
+
+
 def _generar_pin(
-    conn_seguridad: Connection, id_tarjeta: int, tipo_tarjeta: str, hsm: Hsm
+    conn_seguridad: Connection,
+    id_tarjeta: int,
+    tipo_tarjeta: str,
+    hsm: Hsm,
+    origen: sobre_pin.OrigenSobre,
 ) -> None:
     """El HSM genera el PIN y solo se guarda su Offset, confirmado en SeguridadDB.
 
-    Débito: PIN temporal (RequiereCambio), llega impreso con la tarjeta.
+    Débito: PIN temporal (RequiereCambio) que llega en el sobre de PIN (TAR-07).
     Crédito: PIN asignado que no se entrega; el cliente lo pide al servicio al cliente.
     """
+    debito = tipo_tarjeta == "Debito"
+    sobre: tuple[sobre_pin.ServicioSobres, str] | None = None
     pan = pan_de_prueba(conn_seguridad, id_tarjeta, hsm)
     try:
-        offset, referencia_pvk = hsm.generar_pin(pan)
+        if debito:
+            offset, referencia_pvk, sobre = _generar_offset_y_sobre(
+                hsm, pan, id_tarjeta, origen
+            )
+        else:
+            offset, referencia_pvk = hsm.generar_pin(pan)
     except ErrorHsm as exc:
         raise _error_hsm(exc, "HSM_NO_DISPONIBLE") from None
     finally:
@@ -492,11 +537,14 @@ def _generar_pin(
             id_tarjeta,
             offset,
             referencia_pvk,
-            requiere_cambio=tipo_tarjeta == "Debito",
+            requiere_cambio=debito,
         )
         conn_seguridad.commit()
     except DBAPIError as exc:
         conn_seguridad.rollback()
+        # El PIN del sobre no quedó vigente: el sobre no debe entregarse
+        if sobre is not None:
+            sobre[0].descartar(id_tarjeta, sobre[1])
         raise traducir_error_bd(exc) from None
 
 
@@ -554,6 +602,7 @@ def cambiar_estado(
                 id_tarjeta,
                 actual["tipo_tarjeta"],
                 _hsm("HSM_NO_DISPONIBLE"),
+                "Aprobacion",
             )
         repository.actualizar_estado(
             conn,
@@ -636,6 +685,7 @@ def regenerar_pin(
                 id_tarjeta,
                 actual["tipo_tarjeta"],
                 _hsm("HSM_NO_DISPONIBLE"),
+                "Regeneracion",
             )
         except DBAPIError as exc:
             _rollback(conn_seguridad, conn)
@@ -671,6 +721,63 @@ def regenerar_pin(
     logger.info(
         "tarjetas: pin regenerado id_tarjeta=%s usuario=%s", id_tarjeta, usuario
     )
+
+
+# TAR-07
+
+
+def entregar_sobre_pin(
+    conn: Connection, id_tarjeta: int, usuario: int, ip: str | None
+) -> bytes:
+    """Entrega el sobre de PIN una sola vez: queda Entregado y sin contenido."""
+    with _auditado(
+        "SELECT",
+        "Tarjeta.Tarjeta",
+        "TAR-07 Entrega de sobre de PIN",
+        id_tarjeta,
+        usuario,
+        ip,
+    ):
+        if not repository.existe_tarjeta(conn, id_tarjeta):
+            raise _tarjeta_no_encontrada()
+        servicio = sobre_pin.obtener_servicio()
+        if servicio is None:
+            raise problema(
+                503,
+                "SOBRE_PIN_ALMACEN_NO_DISPONIBLE",
+                "El almacén de sobres de PIN no está disponible.",
+            )
+        try:
+            pdf = servicio.entregar(id_tarjeta, usuario)
+        except sobre_pin.SobreYaEntregado:
+            raise problema(
+                409,
+                "SOBRE_PIN_ENTREGADO",
+                "El sobre de PIN ya se entregó; regenere el PIN para emitir otro.",
+            ) from None
+        except sobre_pin.SobreNoDisponible:
+            raise problema(
+                404,
+                "SOBRE_PIN_NO_DISPONIBLE",
+                "La tarjeta no tiene un sobre de PIN pendiente.",
+            ) from None
+        except sobre_pin.AlmacenNoDisponible as exc:
+            logger.error(
+                "tarjetas: almacén de sobres no disponible id_tarjeta=%s error=%s",
+                id_tarjeta,
+                exc,
+            )
+            raise problema(
+                503,
+                "SOBRE_PIN_ALMACEN_NO_DISPONIBLE",
+                "El almacén de sobres de PIN no está disponible.",
+            ) from None
+    logger.info(
+        "tarjetas: sobre de PIN entregado id_tarjeta=%s usuario=%s",
+        id_tarjeta,
+        usuario,
+    )
+    return pdf
 
 
 def construir_pin_block_prueba(
