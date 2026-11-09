@@ -30,6 +30,7 @@ _TERMINALES = {
     ("POST", "/api/v1/atm/logout"),
     ("POST", "/api/v1/atm/consulta-saldo"),
     ("POST", "/api/v1/atm/cambio-pin"),
+    ("POST", "/api/v1/atm/transferencias"),
 }
 _VALORES_PATH = {"codigo_pais": "ECU", "fecha": "2026-11-04"}
 
@@ -304,7 +305,7 @@ def test_logout_exige_jwt_atm_aun_con_sesion_workos(client):
 
 @pytest.mark.parametrize("sesion_workos", [False, True])
 @pytest.mark.parametrize("authorization", [None, "Bearer no-es-un-jwt"])
-@pytest.mark.parametrize("ruta_atm", ["consulta-saldo", "cambio-pin"])
+@pytest.mark.parametrize("ruta_atm", ["consulta-saldo", "cambio-pin", "transferencias"])
 def test_consulta_saldo_exige_sesion_atm_valida(
     client, monkeypatch, sesion_workos, authorization, ruta_atm
 ):
