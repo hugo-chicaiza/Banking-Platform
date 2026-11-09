@@ -18,7 +18,7 @@ from app.core.database.db import cooperativa
 from app.core.security.auth import ROLES
 from app.core.security.hsm import HsmNoDisponible, es_pin_debil
 from app.main import app
-from app.modules.tarjetas import repository, router, service
+from app.modules.tarjetas import repository, router, schemas, service
 from tests.sesion import simular_sesion, usuario_con_roles
 from tests.tarjetas_hsm import HSM, PAN, instalar, pin_generado, pin_valido
 
@@ -1110,8 +1110,44 @@ def test_historial_200_desc_con_zona_y_sin_datos_internos(client, monkeypatch):
     assert bloqueo["motivo"] == "Extravío"
     assert bloqueo["fechaCambio"] == "2026-10-26T15:30:00-05:00"
     assert pin["resultado"] == "COMPLETADO"
+    assert pin["origen"] == "Generacion"
     assert "motivo" not in pin and "estadoNuevo" not in pin
+    assert "origen" not in bloqueo
     assert "direccionIP" not in r.text and "idCanal" not in r.text
+
+
+@pytest.mark.parametrize(
+    ("descripcion", "origen"),
+    [
+        ("PIN generado automáticamente", "Generacion"),
+        ("Asignación de PIN inicial", "Generacion"),
+        ("Regeneración de PIN", "Regeneracion"),
+        ("Cambio de PIN en ATM", "Cliente"),
+        ("Texto desconocido", None),
+        (None, None),
+    ],
+)
+def test_historial_cambio_pin_indica_quien_fijo_el_pin(
+    client, monkeypatch, descripcion, origen
+):
+    evento = {**EVENTOS[1], "descripcion": descripcion}
+    monkeypatch.setattr(repository, "existe_tarjeta", lambda c, i: True)
+    monkeypatch.setattr(repository, "listar_historial", lambda *a: ([evento], 1))
+
+    r = client.get(f"{BASE}/301/historial")
+
+    assert r.status_code == 200
+    (pin,) = r.json()["items"]
+    assert pin["resultado"] == "COMPLETADO"
+    assert pin.get("origen") == origen
+    assert "motivo" not in pin
+
+
+def test_historial_usa_las_descripciones_que_escriben_tar04_y_tar05():
+    # Si cambia el texto que se guarda, TAR-06 dejaría de reconocer el origen
+    assert schemas.ORIGEN_PIN[schemas.DESCRIPCION_PIN_GENERADO] == "Generacion"
+    assert schemas.ORIGEN_PIN[schemas.DESCRIPCION_PIN_REGENERADO] == "Regeneracion"
+    assert schemas.ORIGEN_PIN[schemas.DESCRIPCION_PIN_CLIENTE] == "Cliente"
 
 
 def test_historial_pasa_el_filtro_de_fechas(client, monkeypatch):
@@ -1220,3 +1256,11 @@ def test_openapi_documenta_las_seis_rutas_y_el_pin_sin_body():
     # TAR-05: el PIN lo genera el HSM; el cliente nunca lo envía
     assert "requestBody" not in rutas[f"{BASE}/{{idTarjeta}}/pin"]["post"]
     assert "post" in rutas["/api/v1/pruebas/pin-block"]
+
+
+def test_openapi_tar04_trae_un_motivo_de_ejemplo_legible():
+    # Sin ejemplo, Swagger arma uno aleatorio desde el patrón y termina en TarjetaHis
+    esquema = app.openapi()["components"]["schemas"]["TarjetaEstadoUpdate"]
+    assert esquema["properties"]["motivo"]["examples"] == [
+        "Solicitud del cliente aprobada"
+    ]

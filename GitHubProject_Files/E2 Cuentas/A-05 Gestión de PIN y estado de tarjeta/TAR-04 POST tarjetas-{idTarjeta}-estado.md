@@ -55,7 +55,7 @@ Cambia el estado de la tarjeta (aprobar, rechazar, generar, bloquear, cancelar�
    - **Débito:** con el primer cambio de PIN en el ATM (ATM-01 abre una sesión restringida y ATM-06 activa la tarjeta).
    - **Crédito:** a los 3 días laborables desde `FechaEmision`, según `Contabilidad.FechaContable.EsDiaContable` (ATM-01 la activa al usarla; ver Pendiente).
 6. Volver a `Activa` desde `Bloqueada` o `Inactiva` exige PIN asignado (`PinAsignado = 1`) → si no, `409 PIN_NO_ASIGNADO`.
-7. `motivo` obligatorio; `TarjetaHis` guarda estado anterior, nuevo, usuario, canal e IP.
+7. `motivo` obligatorio; `TarjetaHis` guarda estado anterior, nuevo, usuario, canal e IP. Es texto legible que se muestra en TAR-06: el OpenAPI trae un ejemplo real (`Solicitud del cliente aprobada`) para que Swagger no proponga texto aleatorio generado desde el patrón.
 8. Bloquear la tarjeta no bloquea la cuenta.
 9. El PIN, el PAN y el PIN Offset nunca aparecen en respuestas, logs ni errores.
 

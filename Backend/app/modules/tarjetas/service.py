@@ -25,6 +25,9 @@ from app.modules.catalogos.subproductos import tipo_tarjeta_de
 from app.modules.tarjetas import repository
 from app.modules.tarjetas.identificacion import hash_pan
 from app.modules.tarjetas.schemas import (
+    DESCRIPCION_PIN_GENERADO,
+    DESCRIPCION_PIN_REGENERADO,
+    ORIGEN_PIN,
     PageTarjeta,
     PageTarjetaHistorial,
     PinBlockPrueba,
@@ -577,7 +580,7 @@ def cambiar_estado(
                 "CambioPin",
                 None,
                 None,
-                "PIN generado automáticamente",
+                DESCRIPCION_PIN_GENERADO,
                 usuario,
                 ip,
             )
@@ -649,7 +652,7 @@ def regenerar_pin(
                 "CambioPin",
                 None,
                 None,
-                "Regeneración de PIN",
+                DESCRIPCION_PIN_REGENERADO,
                 usuario,
                 ip,
             )
@@ -691,7 +694,7 @@ def construir_pin_block_prueba(
 
 
 def _evento(fila: dict[str, Any]) -> TarjetaHistorial:
-    """En CambioPin la respuesta lleva resultado en lugar de motivo."""
+    """En CambioPin la respuesta lleva resultado y origen en lugar de motivo."""
     es_pin = fila["tipo_evento"] == "CambioPin"
     return TarjetaHistorial(
         id_historial=fila["id_historial"],
@@ -701,6 +704,7 @@ def _evento(fila: dict[str, Any]) -> TarjetaHistorial:
         estado_nuevo=fila["estado_nuevo"],
         motivo=None if es_pin else fila["descripcion"],
         resultado="COMPLETADO" if es_pin else None,
+        origen=ORIGEN_PIN.get(fila["descripcion"] or "") if es_pin else None,
         fecha_cambio=fila["fecha_evento"].replace(tzinfo=_ZONA_BD),
         realizado_por=fila["realizado_por"],
     )
