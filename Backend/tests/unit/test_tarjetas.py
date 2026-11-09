@@ -1320,7 +1320,10 @@ def test_aprobar_debito_genera_sobre_con_el_pin_vigente(
     pin = _pin_del_sobre(sobre.content)
     # El PIN impreso es el que verifica el Offset guardado
     assert pin == pin_generado(seg) and pin_valido(seg, pin)
-    assert pin not in caplog.text and pin not in r.text
+    # Un PIN de 4 dígitos puede coincidir por azar con fechas o ids del texto: se
+    # busca como lo imprime el sobre y como campo de la respuesta
+    assert " ".join(pin) not in caplog.text
+    assert not {"pin", "pinGenerado"} & set(r.json())
 
 
 def test_sobre_se_entrega_una_sola_vez(client, monkeypatch, seg, sobres):

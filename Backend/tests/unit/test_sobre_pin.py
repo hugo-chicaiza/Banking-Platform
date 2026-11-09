@@ -294,3 +294,12 @@ def test_servicio_descartar_no_falla_si_el_almacen_cae():
     servicio = ServicioSobres(almacen, Cifrador(CLAVE), "c", "s", 30)  # type: ignore[arg-type]
 
     servicio.descartar(301, "s1")
+
+
+@pytest.mark.parametrize("id_tarjeta", [0, -1, True])
+def test_disco_rechaza_ids_que_no_son_enteros_positivos(tmp_path: Path, id_tarjeta):
+    almacen = AlmacenDisco(tmp_path)
+
+    with pytest.raises(AlmacenNoDisponible):
+        almacen.guardar(id_tarjeta, "s1", b"x", "Aprobacion", AHORA, VENCE)
+    assert list(tmp_path.iterdir()) == []

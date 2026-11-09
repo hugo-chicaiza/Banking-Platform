@@ -294,8 +294,21 @@ class AlmacenDisco:
     def __init__(self, carpeta: Path) -> None:
         self._carpeta = carpeta
 
-    def _ruta(self, id_tarjeta: int) -> Path:
-        return self._carpeta / f"{id_tarjeta}.json"
+    def _ruta(self, id_tarjeta: int, extension: str = ".json") -> Path:
+        """Archivo de la tarjeta, siempre dentro de la carpeta de sobres: el nombre
+        sale solo de un entero positivo y la ruta resuelta se verifica.
+        """
+        if (
+            not isinstance(id_tarjeta, int)
+            or isinstance(id_tarjeta, bool)
+            or id_tarjeta <= 0
+        ):
+            raise AlmacenNoDisponible("Id de tarjeta inválido")
+        carpeta = os.path.realpath(self._carpeta)
+        ruta = os.path.realpath(os.path.join(carpeta, f"{id_tarjeta:d}{extension}"))
+        if os.path.commonpath([carpeta, ruta]) != carpeta:
+            raise AlmacenNoDisponible("Ruta fuera de la carpeta de sobres")
+        return Path(ruta)
 
     def _leer(self, id_tarjeta: int) -> dict[str, Any] | None:
         ruta = self._ruta(id_tarjeta)
@@ -305,7 +318,7 @@ class AlmacenDisco:
 
     def _escribir(self, id_tarjeta: int, documento: dict[str, Any]) -> None:
         self._carpeta.mkdir(parents=True, exist_ok=True)
-        temporal = self._ruta(id_tarjeta).with_suffix(".tmp")
+        temporal = self._ruta(id_tarjeta, ".tmp")
         temporal.write_text(json.dumps(documento), encoding="utf-8")
         os.replace(temporal, self._ruta(id_tarjeta))
 
