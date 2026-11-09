@@ -79,6 +79,17 @@ class AtmSaldoRequest(CamelModel):
     registro_unico: str = Field(pattern=r"^[A-Za-z0-9]{12}$")
 
 
+class AtmReversoRequest(CamelModel):
+    """ATM-08: no agregar registroUnico mientras no lo defina el contrato."""
+
+    model_config = ConfigDict(extra="forbid", strict=True, validate_by_name=False)
+
+    id_transaccion: int = Field(gt=0, le=9223372036854775807)
+    motivo: Literal[
+        "FALLA_DISPENSADOR", "TIMEOUT", "CLIENTE_NO_RETIRO_EFECTIVO", "OTRO"
+    ]
+
+
 class AtmTransferenciaRequest(CamelModel):
     """ATM-05: contrato de entrada; no habilita la operacion financiera.
 
