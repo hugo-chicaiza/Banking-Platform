@@ -1,5 +1,6 @@
 """SQL de Transacciones. Solo consultas parametrizadas con fragmentos fijos."""
 
+from datetime import datetime
 from typing import Any
 
 from sqlalchemy import Connection, text
@@ -198,12 +199,12 @@ def autorizar_operacion(
     id_canal: int,
     tipo: str,
     monto: Any,
+    *,
+    fecha_hora: datetime | None = None,
 ) -> Fila:
     """Ejecuta Transacciones.usp_AutorizarOperacion."""
 
-    return ejecutar_con_salidas(
-        conn,
-        """
+    lote = """
         SET NOCOUNT ON;
 
         DECLARE
@@ -226,9 +227,12 @@ def autorizar_operacion(
             @CodigoRespuesta AS CodigoRespuesta,
             @Mensaje AS Mensaje,
             @Comision AS Comision;
-        """,
-        (id_cuenta, id_canal, tipo, monto),
-    )
+        """
+    parametros: tuple[Any, ...] = (id_cuenta, id_canal, tipo, monto)
+    if fecha_hora is not None:
+        lote = lote.replace("@Ahora datetime2 = GETDATE();", "@Ahora datetime2 = ?;")
+        parametros = (fecha_hora, *parametros)
+    return ejecutar_con_salidas(conn, lote, parametros)
 
 
 def insertar_transaccion(

@@ -1,7 +1,7 @@
 import logging
 import secrets
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from datetime import date, timedelta, timezone
 from typing import Any
@@ -21,9 +21,17 @@ from app.core.security.hsm import (
     PinDebil,
     obtener_hsm,
 )
+from app.core.security.pin_version import PinVersionNoDisponible
 from app.modules.catalogos.subproductos import tipo_tarjeta_de
 from app.modules.tarjetas import repository, sobre_pin
 from app.modules.tarjetas.identificacion import hash_pan
+from app.modules.tarjetas.pin_sql import (
+    ERRORES_SQL,
+    descartar_conexion,
+    error_asignacion,
+    limitar_sql_pin,
+    rollback_seguro,
+)
 from app.modules.tarjetas.schemas import (
     DESCRIPCION_PIN_GENERADO,
     DESCRIPCION_PIN_REGENERADO,
@@ -51,20 +59,30 @@ _ZONA_BD = timezone(timedelta(hours=-5))
 
 
 @contextmanager
-def _transaccion(*conexiones: Connection) -> Iterator[None]:
+def _transaccion(
+    *conexiones: Connection, asignacion_pin: bool = False
+) -> Iterator[None]:
     """Hace commit en el orden recibido y rollback de todas si algo falla."""
+    confirmando = False
     try:
         yield
+        confirmando = True
         for conn in conexiones:
             conn.commit()
     except DBAPIError as exc:
         for conn in conexiones:
-            conn.rollback()
+            rollback_seguro(conn) if asignacion_pin else conn.rollback()
         # from None para que la traza no arrastre los parámetros de la consulta
-        raise traducir_error_bd(exc) from None
-    except Exception:
+        raise (
+            error_asignacion(exc, ambiguo=confirmando)
+            if asignacion_pin
+            else traducir_error_bd(exc)
+        ) from None
+    except Exception as exc:
         for conn in conexiones:
-            conn.rollback()
+            rollback_seguro(conn) if asignacion_pin else conn.rollback()
+        if asignacion_pin and isinstance(exc, ERRORES_SQL):
+            raise error_asignacion(exc, ambiguo=confirmando) from None
         raise
 
 
@@ -171,7 +189,7 @@ def pan_de_prueba(conn_seguridad: Connection, id_tarjeta: int, hsm: Hsm) -> str:
 
 def _rollback(*conexiones: Connection) -> None:
     for conn in conexiones:
-        conn.rollback()
+        rollback_seguro(conn)
 
 
 # TAR-01
@@ -512,40 +530,48 @@ def _generar_pin(
     hsm: Hsm,
     origen: sobre_pin.OrigenSobre,
 ) -> None:
-    """El HSM genera el PIN y solo se guarda su Offset, confirmado en SeguridadDB.
-
-    Débito: PIN temporal (RequiereCambio) que llega en el sobre de PIN (TAR-07).
-    Crédito: PIN asignado que no se entrega; el cliente lo pide al servicio al cliente.
-    """
-    debito = tipo_tarjeta == "Debito"
+    """Asigna el PIN con limites SQL; conserva el sobre original de TAR-07."""
+    confirmando = False
     sobre: tuple[sobre_pin.ServicioSobres, str] | None = None
-    pan = pan_de_prueba(conn_seguridad, id_tarjeta, hsm)
-    try:
-        if debito:
-            offset, referencia_pvk, sobre = _generar_offset_y_sobre(
-                hsm, pan, id_tarjeta, origen
+    with limitar_sql_pin(conn_seguridad):
+        try:
+            pan = pan_de_prueba(conn_seguridad, id_tarjeta, hsm)
+            try:
+                if tipo_tarjeta == "Debito":
+                    offset, referencia_pvk, sobre = _generar_offset_y_sobre(
+                        hsm, pan, id_tarjeta, origen
+                    )
+                else:
+                    offset, referencia_pvk = hsm.generar_pin(pan)
+            except ErrorHsm as exc:
+                raise _error_hsm(exc, "HSM_NO_DISPONIBLE") from None
+            finally:
+                del pan
+            repository.guardar_pin_generado(
+                conn_seguridad,
+                id_tarjeta,
+                offset,
+                referencia_pvk,
+                requiere_cambio=tipo_tarjeta == "Debito",
             )
-        else:
-            offset, referencia_pvk = hsm.generar_pin(pan)
-    except ErrorHsm as exc:
-        raise _error_hsm(exc, "HSM_NO_DISPONIBLE") from None
-    finally:
-        del pan
-    try:
-        repository.guardar_pin_generado(
-            conn_seguridad,
-            id_tarjeta,
-            offset,
-            referencia_pvk,
-            requiere_cambio=debito,
-        )
-        conn_seguridad.commit()
-    except DBAPIError as exc:
-        conn_seguridad.rollback()
-        # El PIN del sobre no quedó vigente: el sobre no debe entregarse
-        if sobre is not None:
-            sobre[0].descartar(id_tarjeta, sobre[1])
-        raise traducir_error_bd(exc) from None
+            confirmando = True
+            conn_seguridad.commit()
+        except PinVersionNoDisponible:
+            rollback_seguro(conn_seguridad)
+            if sobre is not None:
+                sobre[0].descartar(id_tarjeta, sobre[1])
+            raise error_asignacion() from None
+        except ERRORES_SQL as exc:
+            rollback_seguro(conn_seguridad)
+            if sobre is not None:
+                # Compensacion original de TAR-07; no confirma el resultado SQL.
+                sobre[0].descartar(id_tarjeta, sobre[1])
+            if confirmando:
+                descartar_conexion(conn_seguridad)
+            raise error_asignacion(exc, ambiguo=confirmando) from None
+        except BaseException:
+            rollback_seguro(conn_seguridad)
+            raise
 
 
 def cambiar_estado(
@@ -572,7 +598,8 @@ def cambiar_estado(
             usuario,
             ip,
         ),
-        _transaccion(conn),
+        limitar_sql_pin(conn) if destino == "Aprobada" else nullcontext(),
+        _transaccion(conn, asignacion_pin=destino == "Aprobada"),
     ):
         actual = repository.obtener_tarjeta(conn, id_tarjeta, bloquear=True)
         if actual is None:
@@ -662,13 +689,16 @@ def regenerar_pin(
     El Offset se confirma primero en SeguridadDB; si luego falla CooperativaDB, el PIN
     nuevo ya rige y se puede repetir la operación.
     """
-    with _auditado(
-        "UPDATE",
-        "Tarjeta.Tarjeta",
-        "TAR-05 Regeneración de PIN",
-        id_tarjeta,
-        usuario,
-        ip,
+    with (
+        _auditado(
+            "UPDATE",
+            "Tarjeta.Tarjeta",
+            "TAR-05 Regeneración de PIN",
+            id_tarjeta,
+            usuario,
+            ip,
+        ),
+        limitar_sql_pin(conn),
     ):
         try:
             actual = repository.obtener_tarjeta(conn, id_tarjeta, bloquear=True)
@@ -687,9 +717,9 @@ def regenerar_pin(
                 _hsm("HSM_NO_DISPONIBLE"),
                 "Regeneracion",
             )
-        except DBAPIError as exc:
+        except ERRORES_SQL as exc:
             _rollback(conn_seguridad, conn)
-            raise traducir_error_bd(exc) from None
+            raise error_asignacion(exc) from None
         except BaseException:
             _rollback(conn_seguridad, conn)
             raise
@@ -707,15 +737,17 @@ def regenerar_pin(
                 ip,
             )
             conn.commit()
-        except DBAPIError:
-            conn.rollback()
+        except ERRORES_SQL:
+            rollback_seguro(conn)
             logger.error(
-                "tarjetas: pin regenerado sin historial id_tarjeta=%s", id_tarjeta
+                "tarjetas: registro de regeneracion no confirmado id_tarjeta=%s",
+                id_tarjeta,
             )
             raise problema(
                 503,
                 "PIN_ASIGNACION_NO_CONFIRMADA",
-                "No se pudo confirmar la regeneración del PIN.",
+                "El PIN se confirmó en SeguridadDB, pero no se pudo confirmar "
+                "el registro asociado. Requiere reconciliación.",
             ) from None
 
     logger.info(

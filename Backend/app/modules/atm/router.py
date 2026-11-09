@@ -7,11 +7,17 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Request, Response
 from pydantic import ValidationError
+from sqlalchemy.exc import SQLAlchemyError
 
 from app.core.api.errors import RESPUESTAS_ERROR, ProblemDetailsRoute, problema
 from app.core.database.db import get_engine
-from app.modules.atm import service, session
-from app.modules.atm.schemas import ATMAuthRequest, ATMAuthResponse
+from app.modules.atm import saldo_service, service, session
+from app.modules.atm.schemas import (
+    ATMAuthRequest,
+    ATMAuthResponse,
+    AtmSaldoRequest,
+    AtmSaldoResponse,
+)
 from app.modules.atm.terminal_auth import (
     TerminalAutenticado,
     require_terminal,
@@ -163,3 +169,38 @@ def cerrar_sesion_atm(
     # Un JWT ya revocado sigue siendo válido para repetir logout mientras no venza.
     session.revocar_sesion_atm(sesion)
     return Response(status_code=204)
+
+
+@router.post(
+    "/consulta-saldo",
+    response_model=AtmSaldoResponse,
+    operation_id="ATM02",
+    # Tupla para reemplazar (no concatenar) las alternativas generadas por FastAPI.
+    # Un único objeto expresa AND: sesión y credencial del terminal.
+    openapi_extra={"security": ({"SesionATM": [], "APIKeyHeader": []},)},
+    responses={
+        503: {
+            "description": "No se pudo confirmar la consulta de saldo.",
+            "content": RESPUESTAS_ERROR[500]["content"],
+        }
+    },
+)
+def consultar_saldo_atm(
+    request: Request,
+    sesion: Annotated[session.SesionATM, Depends(session.require_sesion_operativa)],
+    terminal: Annotated[TerminalAutenticado, Depends(require_terminal)],
+    entrada: AtmSaldoRequest,
+) -> AtmSaldoResponse:
+    if request.query_params:
+        raise problema(400, "DATOS_INVALIDOS", "La solicitud no admite parámetros.")
+    try:
+        with get_engine("cooperativa").connect() as conn:
+            return saldo_service.consultar_saldo(
+                conn,
+                sesion,
+                terminal,
+                entrada,
+                request.client.host if request.client else None,
+            )
+    except SQLAlchemyError:
+        raise saldo_service._no_disponible() from None

@@ -292,19 +292,36 @@ def test_generada_sin_tipo_conocido_no_opera():
     assert error.value.status_code == 409
 
 
-def test_activar_credito_sql_idempotente_con_historial():
+@pytest.mark.parametrize("nocount", [False, True])
+@pytest.mark.parametrize("activadas", [0, 1])
+def test_activar_credito_sql_idempotente_con_historial(nocount, activadas):
     from app.modules.atm import repository
 
     conn = MagicMock()
-    conn.execute.return_value.rowcount = 1
-    repository.activar_tarjeta_credito(conn, 301, 4, 900, "10.0.0.1")
-    (update, _), (insert, params) = (c.args for c in conn.execute.call_args_list)
-    assert "Estado = 'Generada'" in str(update) and "'Credito'" in str(update)
-    assert "'Activacion'" in str(insert)
-    assert params == {"id": 301, "canal": 4, "usuario": 900, "ip": "10.0.0.1"}
+    cursor = conn.connection.cursor.return_value
+    # Con NOCOUNT OFF hay contadores sin columnas antes del SELECT final.
+    descripciones = ([] if nocount else [None, None]) + [[("Activadas",)]]
+    cursor.description = descripciones[0]
+    cursor.fetchall.return_value = [(activadas,)]
+    pendientes = iter(descripciones[1:])
 
-    # Otra petición ya la activó: no se duplica el historial
-    conn = MagicMock()
-    conn.execute.return_value.rowcount = 0
-    repository.activar_tarjeta_credito(conn, 301, 4, 900, None)
-    assert conn.execute.call_count == 1
+    def nextset():
+        try:
+            cursor.description = next(pendientes)
+            return True
+        except StopIteration:
+            return False
+
+    cursor.nextset.side_effect = nextset
+    repository.activar_tarjeta_credito(conn, 301, 4, 900, "10.0.0.1")
+    cursor.execute.assert_called_once()
+    batch, params = cursor.execute.call_args.args
+    assert "Estado = 'Generada'" in str(batch) and "'Credito'" in str(batch)
+    assert "OUTPUT INSERTED.IdTarjeta INTO @activadas" in str(batch)
+    assert "FROM @activadas" in str(batch)
+    assert "'Activacion'" in str(batch)
+    assert "SET NOCOUNT" not in str(batch)
+    assert params == (301, 4, 900, "10.0.0.1")
+    assert cursor.nextset.call_count == len(descripciones)
+    cursor.close.assert_called_once()
+    conn.execute.assert_not_called()

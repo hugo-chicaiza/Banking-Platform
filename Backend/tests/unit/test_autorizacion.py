@@ -24,8 +24,12 @@ _PUBLICAS = {
     ("GET", "/api/v1/auth/callback"),
     ("POST", "/api/v1/auth/logout"),  # AUT-03: idempotente, sin sesión responde 200
 }
-# ATM usa credencial de terminal en auth y JWT en logout, sin sesión WorkOS.
-_TERMINALES = {("POST", "/api/v1/atm/auth"), ("POST", "/api/v1/atm/logout")}
+# ATM usa credencial de terminal y/o JWT propios, sin sesión WorkOS.
+_TERMINALES = {
+    ("POST", "/api/v1/atm/auth"),
+    ("POST", "/api/v1/atm/logout"),
+    ("POST", "/api/v1/atm/consulta-saldo"),
+}
 _VALORES_PATH = {"codigo_pais": "ECU", "fecha": "2026-11-04"}
 
 # Roles de cada tarea (GitHubProject_Files)
@@ -295,6 +299,40 @@ def test_logout_exige_jwt_atm_aun_con_sesion_workos(client):
     assert (
         app.openapi()["paths"]["/api/v1/atm/logout"]["post"]["operationId"] == "ATM09"
     )
+
+
+@pytest.mark.parametrize("sesion_workos", [False, True])
+@pytest.mark.parametrize("authorization", [None, "Bearer no-es-un-jwt"])
+def test_consulta_saldo_exige_sesion_atm_valida(
+    client, monkeypatch, sesion_workos, authorization
+):
+    from unittest.mock import Mock
+
+    from cryptography.hazmat.primitives.asymmetric import rsa
+
+    from app.modules.atm import router as atm_router
+    from app.modules.atm import session as atm_session
+
+    if sesion_workos:
+        simular_sesion(app, USUARIO)
+    emisor = atm_session.EmisorSesionATM(
+        rsa.generate_private_key(public_exponent=65537, key_size=2048),
+        "atm-laboratorio",
+        "atm-laboratorio",
+    )
+    monkeypatch.setattr(atm_session, "preparar_emisor_atm", lambda: emisor)
+    base_de_datos = Mock(side_effect=AssertionError("No debe acceder a SQL"))
+    monkeypatch.setattr(atm_router, "get_engine", base_de_datos)
+    monkeypatch.setattr(atm_session, "get_engine", base_de_datos)
+    respuesta = client.post(
+        "https://testserver/api/v1/atm/consulta-saldo",
+        headers={} if authorization is None else {"Authorization": authorization},
+        json={"idCuenta": 1, "registroUnico": "SALDOLAB0001"},
+    )
+    assert respuesta.status_code == 401
+    assert _code(respuesta) == "SESION_ATM_INVALIDA"
+    assert respuesta.headers["WWW-Authenticate"] == "Bearer"
+    base_de_datos.assert_not_called()
 
 
 @pytest.mark.parametrize(

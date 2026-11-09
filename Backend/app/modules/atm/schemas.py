@@ -1,4 +1,5 @@
 import re
+from datetime import datetime
 from typing import Annotated, Literal
 
 from pydantic import (
@@ -10,7 +11,7 @@ from pydantic import (
     field_validator,
 )
 
-from app.core.api.schemas import CamelModel
+from app.core.api.schemas import CamelModel, Money
 
 CodigoATM = Annotated[
     str,
@@ -67,3 +68,25 @@ class ATMAuthRequest(CamelModel):
         if not isinstance(valor, str) or re.fullmatch(patron, valor) is None:
             raise ValueError("Campo sensible inválido")
         return valor
+
+
+class AtmSaldoRequest(CamelModel):
+    model_config = ConfigDict(extra="forbid", strict=True, validate_by_name=False)
+
+    id_cuenta: int = Field(gt=0, le=2147483647)
+    registro_unico: str = Field(pattern=r"^[A-Za-z0-9]{12}$")
+
+
+class AtmSaldoResponse(CamelModel):
+    id_transaccion: int
+    numero_comprobante: str
+    tipo_transaccion: Literal["Consulta"] = "Consulta"
+    estado: Literal["Completada"] = "Completada"
+    codigo_respuesta: Literal["00"] = "00"
+    comision: Money
+    saldo_contable: Money
+    saldo_retenido: Money
+    saldo_disponible: Money
+    fecha_hora_sistema: datetime
+    fecha_consulta_saldo: datetime
+    es_reintento: bool

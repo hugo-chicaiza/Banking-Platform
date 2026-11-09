@@ -3,6 +3,8 @@ from typing import Any
 
 from sqlalchemy import Connection, text
 
+from app.core.security.pin_version import PinVersionNoDisponible, version_desde_fecha
+
 _COLUMNAS_TARJETA = """
     IdTarjeta AS id_tarjeta,
     TokenTarjeta AS token_tarjeta,
@@ -436,41 +438,61 @@ def guardar_pin_generado(
     Reemplaza el anterior: reinicia los intentos y desbloquea el PIN (SEC-ATM-02).
     RequiereCambio = 1 marca un PIN temporal (débito): ATM-01 solo permite cambiarlo.
     """
+    if type(id_tarjeta) is not int or id_tarjeta <= 0:
+        raise PinVersionNoDisponible("Identificador de asignación no disponible")
     params = {
         "id_tarjeta": id_tarjeta,
         "offset": offset,
         "pvk": referencia_pvk,
         "requiere_cambio": requiere_cambio,
     }
-    actualizada = conn_seguridad.execute(
+    fecha = conn_seguridad.execute(
         text(
             """
-            UPDATE Tarjetas.TarjetaPIN
-            SET PINOffset = :offset, ReferenciaClavePVK = :pvk, TienePINAsignado = 1,
-                Estado = 'Activo', IntentosFallidos = 0, FechaBloqueo = NULL,
-                RequiereCambio = :requiere_cambio,
-                FechaAsignacion = CONVERT(datetime, SYSDATETIMEOFFSET() AT TIME ZONE 'SA Pacific Standard Time')
-            WHERE ID_Tarjeta = :id_tarjeta
+            SET NOCOUNT ON;
+            DECLARE @Existe bit = 0, @Anterior datetime, @Asignado bit,
+                    @Ahora datetime;
+            SELECT @Existe = 1, @Anterior = FechaAsignacion,
+                   @Asignado = TienePINAsignado
+            FROM Tarjetas.TarjetaPIN WITH (UPDLOCK, HOLDLOCK)
+            WHERE ID_Tarjeta = :id_tarjeta AND ID_Tarjeta IS NOT NULL;
+
+            -- Capturar DESPUÉS de adquirir el bloqueo, con precisión datetime.
+            SET @Ahora = CONVERT(datetime,
+                SYSDATETIMEOFFSET() AT TIME ZONE 'SA Pacific Standard Time');
+            IF @Ahora IS NULL OR (@Existe = 1 AND (
+                @Ahora <= @Anterior OR (@Anterior IS NULL AND @Asignado = 1)))
+            BEGIN
+                SELECT CAST(NULL AS datetime) AS FechaAsignacion;
+                RETURN;
+            END;
+
+            IF @Existe = 1
+                UPDATE Tarjetas.TarjetaPIN
+                SET PINOffset = :offset, ReferenciaClavePVK = :pvk,
+                    TienePINAsignado = 1, Estado = 'Activo', IntentosFallidos = 0,
+                    FechaBloqueo = NULL, RequiereCambio = :requiere_cambio,
+                    FechaAsignacion = @Ahora
+                WHERE ID_Tarjeta = :id_tarjeta;
+            ELSE
+                INSERT INTO Tarjetas.TarjetaPIN (
+                    ID_Tarjeta, TienePINAsignado, FechaAsignacion,
+                    IntentosFallidos, Estado, PINOffset,
+                    ReferenciaClavePVK, RequiereCambio
+                ) VALUES (
+                    :id_tarjeta, 1, @Ahora, 0, 'Activo', :offset,
+                    :pvk, :requiere_cambio
+                );
+
+            SELECT FechaAsignacion FROM Tarjetas.TarjetaPIN
+            WHERE ID_Tarjeta = :id_tarjeta;
             """
         ),
         params,
-    )
-    if actualizada.rowcount == 0:
-        conn_seguridad.execute(
-            text(
-                """
-                INSERT INTO Tarjetas.TarjetaPIN (
-                    ID_Tarjeta, TienePINAsignado, FechaAsignacion, IntentosFallidos,
-                    Estado, PINOffset, ReferenciaClavePVK, RequiereCambio
-                )
-                VALUES (
-                    :id_tarjeta, 1, CONVERT(datetime, SYSDATETIMEOFFSET() AT TIME ZONE 'SA Pacific Standard Time'), 0,
-                    'Activo', :offset, :pvk, :requiere_cambio
-                )
-                """
-            ),
-            params,
-        )
+    ).scalar_one()
+    if fecha is None:
+        raise PinVersionNoDisponible("La fecha de asignación no puede avanzar")
+    version_desde_fecha(fecha)
 
 
 # TAR-06

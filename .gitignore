@@ -90,3 +90,4 @@ GUIA_LECTURA.md
 
 # Sobres de PIN cifrados mientras no hay MongoDB (TAR-07)
 .sobres_pin/
+/.local-labs/atm02-sql/

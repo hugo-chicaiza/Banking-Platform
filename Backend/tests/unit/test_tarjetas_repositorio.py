@@ -4,6 +4,7 @@ from datetime import date
 from unittest.mock import MagicMock
 
 from app.modules.tarjetas import repository
+from tests.pin_version import FECHA_PIN
 
 
 def test_actualizar_estado_sql_fijo_con_marcas_como_parametros():
@@ -37,12 +38,18 @@ def test_emision_inserta_solicitada_con_fecha_de_solicitud():
 
 def test_guardar_pin_generado_actualiza_o_inserta_habilitado():
     conn = MagicMock()
-    conn.execute.return_value.rowcount = 1
+    conn.execute.return_value.scalar_one.return_value = FECHA_PIN
     repository.guardar_pin_generado(conn, 301, "0042", "SIM-PVK-01", True)
     sql, params = conn.execute.call_args.args
     assert conn.execute.call_count == 1
     assert "Estado = 'Activo'" in str(sql) and "IntentosFallidos = 0" in str(sql)
     assert "FechaBloqueo = NULL" in str(sql)
+    assert "WITH (UPDLOCK, HOLDLOCK)" in str(sql)
+    assert "@Ahora <= @Anterior" in str(sql)
+    assert str(sql).index("WITH (UPDLOCK, HOLDLOCK)") < str(sql).index("SET @Ahora")
+    assert str(sql).index("@Ahora <= @Anterior") < str(sql).index(
+        "UPDATE Tarjetas.TarjetaPIN"
+    )
     assert params == {
         "id_tarjeta": 301,
         "offset": "0042",
@@ -51,9 +58,9 @@ def test_guardar_pin_generado_actualiza_o_inserta_habilitado():
     }
 
     conn = MagicMock()
-    conn.execute.return_value.rowcount = 0
+    conn.execute.return_value.scalar_one.return_value = FECHA_PIN
     repository.guardar_pin_generado(conn, 301, "0042", "SIM-PVK-01", False)
-    assert conn.execute.call_count == 2
+    assert conn.execute.call_count == 1
     assert "INSERT INTO Tarjetas.TarjetaPIN" in str(conn.execute.call_args.args[0])
 
 

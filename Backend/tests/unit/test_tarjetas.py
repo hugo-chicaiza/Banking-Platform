@@ -20,6 +20,7 @@ from app.core.security.auth import ROLES
 from app.core.security.hsm import HsmNoDisponible, es_pin_debil
 from app.main import app
 from app.modules.tarjetas import repository, router, schemas, service
+from tests.pin_version import DriverLimitesSQL
 from tests.sesion import simular_sesion, usuario_con_roles
 from tests.tarjetas_hsm import HSM, PAN, instalar, pin_generado, pin_valido
 
@@ -69,9 +70,14 @@ SUBPRODUCTO = {
 
 class _Conn:
     def __init__(self) -> None:
+        self.connection = SimpleNamespace(driver_connection=DriverLimitesSQL())
+        self.invalidated = False
         self.commits = 0
         self.rollbacks = 0
         self.falla_commit: Exception | None = None
+
+    def invalidate(self) -> None:
+        self.invalidated = True
 
     def commit(self) -> None:
         if self.falla_commit is not None:
@@ -725,7 +731,7 @@ def test_aprobar_si_falla_cooperativa_la_tarjeta_sigue_solicitada_y_se_reintenta
 
     r = client.post(f"{BASE}/301/estado", json={"estado": "Aprobada", "motivo": "x"})
 
-    assert r.status_code == 500 and _code(r) == "ERROR_INTERNO"
+    assert r.status_code == 503 and _code(r) == "PIN_ASIGNACION_NO_CONFIRMADA"
     assert conns.coop.rollbacks == 1
     primer_offset = seg.pin()["offset"]
 
@@ -943,6 +949,62 @@ def test_regenerar_pin_falla_cooperativa_503_pero_el_pin_nuevo_rige(
     assert r.status_code == 503 and _code(r) == "PIN_ASIGNACION_NO_CONFIRMADA"
     assert conns.seg.commits == 1 and conns.coop.rollbacks == 1
     assert pin_valido(seg, pin_generado(seg))
+    assert "Requiere reconciliación" in r.json()["detail"]
+
+
+@pytest.mark.parametrize("aprobar", [True, False])
+def test_asignacion_pin_limita_ambas_bases_y_restaura(
+    client, conns, monkeypatch, seg, aprobar
+):
+    if aprobar:
+        _estado(monkeypatch, FILA)
+        seg.custodiar()
+    else:
+        _pin(monkeypatch, seg)
+    original = repository.obtener_tarjeta
+    guardar = repository.guardar_pin_generado
+
+    def leer(conn, *args, **kwargs):
+        driver = conn.connection.driver_connection
+        assert (driver.timeout, driver.lock_timeout) == (15, 5000)
+        return original(conn, *args, **kwargs)
+
+    def asignar(conn, *args, **kwargs):
+        for conexion in (conns.coop, conn):
+            driver = conexion.connection.driver_connection
+            assert (driver.timeout, driver.lock_timeout) == (15, 5000)
+        return guardar(conn, *args, **kwargs)
+
+    monkeypatch.setattr(repository, "obtener_tarjeta", leer)
+    monkeypatch.setattr(repository, "guardar_pin_generado", asignar)
+    respuesta = (
+        client.post(f"{BASE}/301/estado", json={"estado": "Aprobada", "motivo": "lab"})
+        if aprobar
+        else client.post(f"{BASE}/301/pin")
+    )
+    assert respuesta.status_code == (200 if aprobar else 204)
+    for conexion in (conns.coop, conns.seg):
+        driver = conexion.connection.driver_connection
+        assert (driver.timeout, driver.lock_timeout) == (0, -1)
+
+
+@pytest.mark.parametrize("aprobar", [True, False])
+def test_asignacion_pin_timeout_tarjeta_no_llega_a_seguridad(
+    client, conns, monkeypatch, aprobar
+):
+    def bloqueada(*args, **kwargs):
+        raise DBAPIError("lab", {}, Exception("lock (1222) (SQLExecDirectW)"))
+
+    monkeypatch.setattr(repository, "obtener_tarjeta", bloqueada)
+    respuesta = (
+        client.post(f"{BASE}/301/estado", json={"estado": "Aprobada", "motivo": "lab"})
+        if aprobar
+        else client.post(f"{BASE}/301/pin")
+    )
+    assert respuesta.status_code == 503
+    assert _code(respuesta) == "PIN_ASIGNACION_NO_CONFIRMADA"
+    assert conns.coop.rollbacks >= 1
+    assert conns.coop.commits == conns.seg.commits == 0
 
 
 def test_regenerar_pin_ni_pin_ni_offset_aparecen_en_logs(
@@ -971,7 +1033,7 @@ def test_regenerar_pin_fallo_de_bd_revierte_ambas_y_no_filtra_nada(
 
     r = client.post(f"{BASE}/301/pin")
 
-    assert r.status_code == 500 and _code(r) == "ERROR_INTERNO"
+    assert r.status_code == 503 and _code(r) == "PIN_ASIGNACION_NO_CONFIRMADA"
     assert conns.coop.rollbacks >= 1 and conns.seg.rollbacks >= 1
     assert conns.coop.commits == 0 and conns.seg.commits == 0
     for texto in (r.text, caplog.text):
@@ -1454,3 +1516,45 @@ def test_sobre_pin_se_audita_sin_el_pin(
     assert evento.descripcion == "TAR-07 Entrega de sobre de PIN"
     assert evento.resultado == "Exitoso" and evento.accion == "SELECT"
     assert pin_generado(seg) not in str(eventos_auditados)
+
+
+@pytest.mark.parametrize("aprobar", [False, True])
+def test_fecha_pin_no_avanza_conserva_compensacion_original_del_sobre(
+    client, conns, monkeypatch, seg, sobres, aprobar
+):
+    from app.core.security.pin_version import PinVersionNoDisponible
+
+    _estado(monkeypatch, FILA) if aprobar else _pin(monkeypatch, seg)
+    seg.custodiar()
+
+    def no_avanza(*args, **kwargs):
+        raise PinVersionNoDisponible()
+
+    monkeypatch.setattr(repository, "guardar_pin_generado", no_avanza)
+    respuesta = (
+        client.post(f"{BASE}/301/estado", json={"estado": "Aprobada", "motivo": "lab"})
+        if aprobar
+        else client.post(f"{BASE}/301/pin")
+    )
+    assert respuesta.status_code == 503
+    assert conns.seg.commits == conns.coop.commits == 0
+    assert conns.seg.rollbacks >= 1
+    assert not (sobres / "301.json").exists()
+
+
+def test_commit_ambiguo_con_sobre_exige_reconciliar_sin_reintento(
+    client, conns, monkeypatch, seg, sobres
+):
+    from unittest.mock import Mock
+
+    _pin(monkeypatch, seg)
+    guardar = Mock(wraps=repository.guardar_pin_generado)
+    monkeypatch.setattr(repository, "guardar_pin_generado", guardar)
+    conns.seg.falla_commit = DBAPIError("LAB", {}, Exception("resultado incierto"))
+    respuesta = client.post(f"{BASE}/301/pin")
+    assert respuesta.status_code == 503 and "reconcili" in respuesta.text
+    guardar.assert_called_once()
+    assert conns.seg.invalidated is True
+    assert conns.coop.commits == 0
+    # Conserva el descarte original de TAR-07; no implica que SQL haya revertido.
+    assert not (sobres / "301.json").exists()

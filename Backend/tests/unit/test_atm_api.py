@@ -24,6 +24,7 @@ from app.modules.tarjetas import repository as tarjetas_repository
 from app.modules.tarjetas import service as tarjetas_service
 from app.modules.tarjetas.identificacion import hash_pan
 from app.modules.tarjetas.schemas import TarjetaCreate, TarjetaEstadoUpdate
+from tests.pin_version import FECHA_PIN, DriverLimitesSQL
 from tests.tarjetas_hsm import HSM, PAN, instalar, pin_generado
 from tests.unit.test_tarjetas import CUENTA, FILA, PAYLOAD, SUBPRODUCTO
 
@@ -85,6 +86,7 @@ def api(tmp_path, monkeypatch):
                 tipo_cuenta="Ahorro",
             ),
         ],
+        pin_version="2026-11-01T10:00:00.000000",
     )
     e.service = AsyncMock(return_value=e.acceso)
     monkeypatch.setattr(service, "validar_acceso_atm", e.service)
@@ -245,6 +247,7 @@ def cadena(api, monkeypatch):
         "estado_pin": "Activo",
         "intentos_fallidos": 0,
         "tiene_pin_asignado": True,
+        "fecha_asignacion": FECHA_PIN,
         "pin_offset": offset,
         "referencia_clave_pvk": pvk,
     }
@@ -424,6 +427,9 @@ def test_tar01_tar04_atm01_comparten_pan_y_pin_generado(api, monkeypatch, tipo, 
     monkeypatch.setattr(service, "obtener_hsm", lambda: HSM)
     fila = {**FILA, "tipo_tarjeta": tipo}
     cooperativa, seguridad = MagicMock(), MagicMock()
+    for conexion in (cooperativa, seguridad):
+        conexion.connection.driver_connection = DriverLimitesSQL()
+        conexion.invalidated = False
     capturado = {}
 
     def insertar(_conn, datos):
@@ -486,6 +492,7 @@ def test_tar01_tar04_atm01_comparten_pan_y_pin_generado(api, monkeypatch, tipo, 
             "estado_pin": pin["estado"],
             "intentos_fallidos": 0,
             "tiene_pin_asignado": True,
+            "fecha_asignacion": FECHA_PIN,
             "pin_offset": pin["offset"],
             "referencia_clave_pvk": pin["pvk"],
             "requiere_cambio": pin["requiere_cambio"],
