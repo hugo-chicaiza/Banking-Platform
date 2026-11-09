@@ -894,37 +894,29 @@ def actualizar_direccion(
     if cambios.get("es_principal"):
         _desmarcar_principal(conn, id_cliente)
 
-    params: dict[str, Any] = {
-        "id_direccion": id_direccion,
-        "id_cliente": id_cliente,
-        "tipo_direccion": cambios.get(
-            "tipo_direccion", valores_anteriores["tipo_direccion"]
-        ),
-        "codigo_pais": cambios.get("codigo_pais", valores_anteriores["codigo_pais"]),
-        "id_ciudad": cambios.get("id_ciudad", valores_anteriores["id_ciudad"]),
-        "sector": cambios.get("sector", valores_anteriores.get("sector")),
-        "calle_direccion": cambios.get(
-            "calle_direccion", valores_anteriores["calle_direccion"]
-        ),
-        "referencia_ubicacion": cambios.get(
-            "referencia_ubicacion", valores_anteriores["referencia_ubicacion"]
-        ),
-        "codigo_postal": cambios.get(
-            "codigo_postal", valores_anteriores.get("codigo_postal")
-        ),
-        "es_principal": cambios.get("es_principal", valores_anteriores["es_principal"]),
-    }
-
+    params: dict[str, Any] = {"id_direccion": id_direccion, "id_cliente": id_cliente}
+    for campo in (
+        "tipo_direccion",
+        "id_ciudad",
+        "sector",
+        "calle_direccion",
+        "referencia_ubicacion",
+        "codigo_postal",
+        "es_principal",
+    ):
+        params[campo] = cambios.get(campo)
+        params["enviado_" + campo] = campo in cambios
+    # Para los campos omitidos se conserva la columna actual, nunca el snapshot anterior.
     sql = """
         SET NOCOUNT ON;
         UPDATE Clientes.Direcciones
-        SET TipoDireccion = :tipo_direccion,
-            IdCiudad = :id_ciudad,
-            Sector = :sector,
-            CalleDireccion = :calle_direccion,
-            ReferenciaUbicacion = :referencia_ubicacion,
-            CodigoPostal = :codigo_postal,
-            EsPrincipal = :es_principal
+        SET TipoDireccion = CASE WHEN :enviado_tipo_direccion = 1 THEN :tipo_direccion ELSE TipoDireccion END,
+            IdCiudad = CASE WHEN :enviado_id_ciudad = 1 THEN :id_ciudad ELSE IdCiudad END,
+            Sector = CASE WHEN :enviado_sector = 1 THEN :sector ELSE Sector END,
+            CalleDireccion = CASE WHEN :enviado_calle_direccion = 1 THEN :calle_direccion ELSE CalleDireccion END,
+            ReferenciaUbicacion = CASE WHEN :enviado_referencia_ubicacion = 1 THEN :referencia_ubicacion ELSE ReferenciaUbicacion END,
+            CodigoPostal = CASE WHEN :enviado_codigo_postal = 1 THEN :codigo_postal ELSE CodigoPostal END,
+            EsPrincipal = CASE WHEN :enviado_es_principal = 1 THEN :es_principal ELSE EsPrincipal END
         WHERE IdDireccion = :id_direccion AND IdCliente = :id_cliente;
 
         SELECT IdDireccion          AS id_direccion,
@@ -963,9 +955,18 @@ def actualizar_direccion(
 
 
 def eliminar_direccion_logica(
-    conn: Connection, id_cliente: int, id_direccion: int
+    conn: Connection,
+    id_cliente: int,
+    id_direccion: int,
+    *,
+    modificado_por: int,
+    direccion_ip: str,
+    estado_anterior: str,
 ) -> None:
-    """Baja lógica: Estado = 'Eliminado' (CLI-12)."""
+    """El llamador bloquea el cliente; baja e historial comparten su transacción."""
+    observaciones = observaciones_cambio(
+        estado_anterior, "Eliminado", f"Baja lógica de dirección {id_direccion}"
+    )
     conn.execute(
         text("""
             UPDATE Clientes.Direcciones
@@ -974,6 +975,15 @@ def eliminar_direccion_logica(
               AND IdCliente = :id_cliente
         """),
         {"id_direccion": id_direccion, "id_cliente": id_cliente},
+    )
+    insertar_historial_cliente(
+        conn,
+        id_cliente=id_cliente,
+        tipo_operacion="D",
+        campo="DIRECCION.estado",
+        modificado_por=modificado_por,
+        direccion_ip=direccion_ip,
+        observaciones=observaciones,
     )
 
 

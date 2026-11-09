@@ -54,12 +54,12 @@ Movimientos de la cuenta.
 | Parámetro | En | Tipo | Req. | Regla |
 |---|---|---|---|---|
 | idCuenta | path | integer | Sí |  |
-| desde | query | string | No | Fecha contable desde |
-| hasta | query | string | No | Fecha contable hasta |
+| desde | query | string(date) | Sí | Fecha contable desde, inclusiva |
+| hasta | query | string(date) | Sí | Fecha contable hasta, inclusiva |
 | tipoTransaccion | query | string | No | Tipo |
 | page | query | integer | No | Página (desde 1) |
 | pageSize | query | integer | No | Tamaño (máx. 100) |
-| sort | query | string | No | Campo,asc/desc |
+| sort | query | string | No | fechaHoraSistema, fechaContable, idMovimiento o monto; seguido de ,asc o ,desc |
 
 ## Response `200`
 
@@ -106,6 +106,20 @@ Movimientos de la cuenta.
 ## Errores
 
 Formato ProblemDetails (ver F-04). Solo 400/401/403/404.
+
+- `400 DATOS_INVALIDOS`: faltan fechas, formato inválido o paginación fuera del contrato.
+- `400 RANGO_FECHAS_INVALIDO`: desde > hasta.
+- `400 SORT_INVALIDO`: orden desconocido.
+- `400 PARAMETRO_INVALIDO`: parámetros desconocidos o repetidos.
+- `404 CUENTA_NO_ENCONTRADA`: se distingue de una cuenta existente sin movimientos.
+
+## Implementación
+
+- Consulta `MovimientoTransaccion.IdCuenta`, incluyendo el lado destino de transferencias y los reversos. No filtra por el estado actual de la transacción original ni recalcula saldos.
+- Los saldos y la fecha/hora salen del movimiento; la fecha contable sale del calendario unido por `MovimientoTransaccion.IdFechaContable`. Horas SQL locales se publican con UTC-05:00.
+- Orden predeterminado: fechaHoraSistema descendente, con IdMovimiento descendente como desempate. El total se conserva aunque la página solicitada esté vacía.
+- Se permite consultar cuentas en cualquier estado, con el mismo alcance por roles que CTA-02/03/04. No se introduce una restricción por agencia distinta a las demás consultas de cuentas.
+- Consulta de solo lectura. Las operaciones sin movimiento registrado no se fabrican a partir del saldo actual.
 
 ## Definición de terminado
 
