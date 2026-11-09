@@ -1,9 +1,6 @@
 """ATM-03 opt-in: lecturas/locks SQL locales, sin retiros o reservas financieras."""
 
 import os
-import time
-from concurrent.futures import ThreadPoolExecutor
-from threading import Event
 from uuid import uuid4
 
 import pytest
@@ -18,6 +15,7 @@ from tests.integration.atm_cambio_pin_sql_lab import (
     identificador,
     motor,
 )
+from tests.integration.atm_sql_concurrency import comprobar_serializacion
 
 
 @pytest.fixture(scope="module")
@@ -100,8 +98,6 @@ def test_registro_parametrizado_reutiliza_lectura_atm02(engine):
 
 @pytest.mark.parametrize("registro", [False, True])
 def test_concurrencia_serializa_lecturas_y_revierte(engine, registro):
-    listo, intentado, liberar = Event(), Event(), Event()
-
     def bloquear(c):
         c.exec_driver_sql("SET LOCK_TIMEOUT 4000")
         if registro:
@@ -109,35 +105,7 @@ def test_concurrencia_serializa_lecturas_y_revierte(engine, registro):
         else:
             assert len(repo.leer_gavetas(c, 10)) == 2
 
-    def primero():
-        with engine.connect() as c:
-            tx = c.begin()
-            try:
-                bloquear(c)
-                listo.set()
-                assert liberar.wait(4)
-            finally:
-                tx.rollback()
-
-    def segundo():
-        assert listo.wait(4)
-        with engine.connect() as c:
-            tx = c.begin()
-            try:
-                intentado.set()
-                bloquear(c)
-            finally:
-                tx.rollback()
-
-    with ThreadPoolExecutor(2) as pool:
-        a, b = pool.submit(primero), pool.submit(segundo)
-        assert intentado.wait(4)
-        time.sleep(0.25)
-        solapamiento = not b.done()
-        liberar.set()
-        a.result(timeout=6)
-        b.result(timeout=6)
-    assert solapamiento
+    comprobar_serializacion(engine, bloquear)
     with engine.begin() as c:
         assert c.scalar(text("SELECT SUM(CantidadActual) FROM ATM.Gaveta")) == 4
         assert c.scalar(text("SELECT COUNT(*) FROM Transacciones.Transaccion")) == 1

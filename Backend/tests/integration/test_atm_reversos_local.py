@@ -1,15 +1,13 @@
 """ATM-08 HTTP con JWT y credencial sinteticos; ninguna conexion SQL real."""
 
-from datetime import UTC, datetime
 from unittest.mock import MagicMock
 
-import jwt
 import pytest
 
 from app.modules.atm import reversos_service as svc
-from app.modules.atm import session
 from app.modules.transacciones import service as trx_service
 from app.modules.transacciones.dependencias import dependencias_operacion
+from tests.integration.atm_http_scenarios import preparar_fallo_autenticacion
 from tests.integration.test_atm_transferencias_local import http  # noqa: F401 -- fixture sin SQL y con spies financieros.
 from tests.unit.test_atm_api import api  # noqa: F401 -- fixture RSA y credencial efimeras.
 
@@ -61,30 +59,7 @@ def test_deps_de_otro_modulo_no_habilitan(cliente):
     ],
 )
 def test_sesion_y_terminal_validos_son_obligatorios(cliente, caso):
-    h = dict(cliente.headers)
-    if caso == "ausente":
-        h.pop("Authorization")
-    elif caso == "invalido":
-        h["Authorization"] = "Bearer falso"
-    elif caso == "expirado":
-        claims = jwt.decode(cliente.token, options={"verify_signature": False})
-        claims["iat"] = int(datetime.now(UTC).timestamp()) - 600
-        claims["exp"] = claims["iat"] + 300
-        h["Authorization"] = "Bearer " + jwt.encode(
-            claims, session.preparar_emisor_atm().clave, algorithm="RS256"
-        )
-    elif caso == "revocado":
-        cliente.revocada = True
-    elif caso == "version":
-        cliente.pin["fecha_asignacion"] = datetime(2026, 11, 2)
-    elif caso == "restringido":
-        cliente.pin["requiere_cambio"] = True
-    elif caso == "bloqueado":
-        cliente.pin["estado_pin"] = "Bloqueado"
-    elif caso == "coordinacion":
-        cliente.pin["coordinacion_pendiente"] = True
-    else:
-        h.pop("X-ATM-Credential")
+    h = preparar_fallo_autenticacion(cliente, caso)
     r = cliente.client.post(URL, json=BODY, headers=h)
     assert r.status_code in (401, 403)
     cliente.prohibido.assert_not_called()
