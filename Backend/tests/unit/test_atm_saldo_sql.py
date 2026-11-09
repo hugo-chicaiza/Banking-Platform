@@ -160,19 +160,22 @@ def test_contexto_bloquea_terminal_y_tarjeta_en_orden_fijo():
 
 
 @pytest.mark.parametrize("ahora", [None, datetime(2026, 11, 8, 23, 59)])
-def test_autorizador_reutilizado_con_reloj_opcional_sin_cambiar_llamadas_previas(
-    monkeypatch, ahora
-):
+def test_autorizador_reutilizado_con_reloj_opcional_de_ecuador(monkeypatch, ahora):
     ejecutar = MagicMock(return_value={"CodigoRespuesta": "00", "Comision": 0})
     monkeypatch.setattr(transacciones_repo, "ejecutar_con_salidas", ejecutar)
+    hora_ecuador = datetime(2026, 11, 6, 19)
+    monkeypatch.setattr(transacciones_repo, "ahora_ecuador", lambda: hora_ecuador)
     conn = MagicMock()
     transacciones_repo.autorizar_operacion(
         conn, 501, 2, "Consulta", 0, fecha_hora=ahora
     )
     conexion, sql, parametros = ejecutar.call_args.args
     assert conexion is conn
-    if ahora is None:
-        assert parametros == (501, 2, "Consulta", 0) and "GETDATE()" in sql
-    else:
-        assert parametros == (ahora, 501, 2, "Consulta", 0)
-        assert "@Ahora datetime2 = ?;" in sql and "GETDATE()" not in sql
+    assert parametros == (
+        ahora if ahora is not None else hora_ecuador,
+        501,
+        2,
+        "Consulta",
+        0,
+    )
+    assert "@Ahora datetime2 = ?;" in sql and "GETDATE()" not in sql
