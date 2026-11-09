@@ -38,6 +38,7 @@ from app.modules.caja.schemas import (
     PageMovimientoCaja,
     SeriesBilletesRequest,
 )
+from app.modules.contabilidad.service import ahora_ecuador
 from app.modules.transacciones import repository as trx_repo
 from app.modules.transacciones.dependencias import (
     DatosAsiento,
@@ -718,8 +719,12 @@ def desglose_json(desglose: list[Desglose]) -> str:
     )
 
 
-def fecha_contable(conn: Connection) -> int:
-    id_fecha = repo.id_fecha_contable(conn)
+def fecha_contable(conn: Connection, fecha_hora: datetime | None = None) -> int:
+    id_fecha = (
+        repo.id_fecha_contable(conn)
+        if fecha_hora is None
+        else repo.id_fecha_contable(conn, fecha_hora)
+    )
 
     if id_fecha is None:
         raise problema(
@@ -1522,6 +1527,7 @@ def operacion_ventanilla(
             id_canal = deps.id_canal_ventanilla
             comision = Decimal(0)
             descripcion = "Aprobada"
+            fecha_hora = ahora_ecuador()
 
             if tipo == "Retiro":
                 autorizacion = trx_repo.autorizar_operacion(
@@ -1530,6 +1536,7 @@ def operacion_ventanilla(
                     id_canal,
                     tipo,
                     datos.monto,
+                    fecha_hora=fecha_hora,
                 )
 
                 codigo = str(autorizacion["CodigoRespuesta"] or "").strip()
@@ -1566,7 +1573,7 @@ def operacion_ventanilla(
                         "La caja no tiene efectivo para el retiro.",
                     )
 
-            id_fecha = fecha_contable(conn)
+            id_fecha = fecha_contable(conn, fecha_hora)
 
             numeracion = deps.numerar(
                 conn,
@@ -1600,6 +1607,7 @@ def operacion_ventanilla(
                     "estado": "Completada",
                     "creado_por": cajero,
                     "id_fecha_contable": id_fecha,
+                    "fecha_hora": fecha_hora,
                 },
             )
 

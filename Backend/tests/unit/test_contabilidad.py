@@ -189,3 +189,25 @@ def test_resolver_id_fecha_contable_devuelve_el_id(monkeypatch):
     conn = Mock(spec=Connection)
     fecha_hora = datetime.fromisoformat("2026-01-07T09:00:00")
     assert service.resolver_id_fecha_contable(conn, fecha_hora) == 7
+
+
+@pytest.mark.parametrize(
+    ("instante", "hora_ecuador"),
+    [
+        ("2026-01-02T23:59:59+00:00", "2026-01-02T18:59:59"),
+        ("2026-01-03T00:00:00+00:00", "2026-01-02T19:00:00"),
+        ("2026-01-02T19:00:00-05:00", "2026-01-02T19:00:00"),
+        ("2026-01-02T19:00:00", "2026-01-02T19:00:00"),
+    ],
+)
+def test_resolver_envia_a_sql_la_hora_local_del_corte(
+    monkeypatch, instante, hora_ecuador
+):
+    consulta = Mock(return_value=5)
+    monkeypatch.setattr(repository, "id_fecha_contable", consulta)
+    conn = Mock(spec=Connection)
+
+    assert (
+        service.resolver_id_fecha_contable(conn, datetime.fromisoformat(instante)) == 5
+    )
+    consulta.assert_called_once_with(conn, datetime.fromisoformat(hora_ecuador))

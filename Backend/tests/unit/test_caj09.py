@@ -1,11 +1,14 @@
 """CAJ-09 · POST /api/v1/caja/jornadas/{idJornada}/depositos (pruebas sin BD)."""
 
 from collections.abc import Iterator
+from datetime import datetime
 from decimal import Decimal
 from typing import Any
+from unittest.mock import Mock
 
 import pytest
 
+from app.modules.caja import service
 from app.modules.caja.router import router
 from app.modules.transacciones import repository as trx_repo
 from app.modules.transacciones.dependencias import DatosAsiento
@@ -61,6 +64,24 @@ def test_caj09_deposito_completo(ctx: Contexto) -> None:
     assert deps.asientos[0].tipo_transaccion == "Deposito"
     assert ctx.llamadas["id_tipo_movimiento_caja"] == [("DEP_I",)]
     assert ctx.llamadas["insertar_movimiento_caja"][0][6] == 777  # id del asiento
+
+
+@pytest.mark.parametrize("hora", ["18:59:59", "19:00:00"])
+def test_deposito_comparte_instante_con_el_calendario(
+    ctx: Contexto, monkeypatch: pytest.MonkeyPatch, hora: str
+) -> None:
+    preparar_ventanilla(ctx)
+    instante = datetime.fromisoformat(f"2026-11-06T{hora}")
+    reloj = Mock(side_effect=[instante, AssertionError("Se volvió a leer el reloj")])
+    monkeypatch.setattr(service, "ahora_ecuador", reloj)
+
+    r = ctx.cliente.post(f"{BASE}/jornadas/55/depositos", json=CUERPO_DEPOSITO)
+
+    assert r.status_code == 201, r.text
+    reloj.assert_called_once_with()
+    assert ctx.llamadas["id_fecha_contable"] == [(instante,)]
+    datos = ctx.llamadas["insertar_transaccion"][0][0]
+    assert datos["fecha_hora"] == instante
 
 
 def test_caj09_reintento_idempotente_200(ctx: Contexto) -> None:

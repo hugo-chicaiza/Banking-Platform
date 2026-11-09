@@ -10,6 +10,7 @@ import pytest
 
 from app.modules.caja import repository as caja_repo
 from app.modules.transacciones import repository as repo
+from app.modules.transacciones import service
 from app.modules.transacciones.dependencias import (
     DatosAsiento,
     Numeracion,
@@ -188,6 +189,22 @@ def solicitar_reverso(
         f"{BASE}/{ID_ORIGINAL}/reverso",
         json=datos,
     )
+
+
+def test_reverso_comparte_instante_con_el_calendario(
+    ctx: Contexto, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    preparar_reverso(ctx)
+    instante = datetime(2026, 11, 6, 19)
+    reloj = Mock(side_effect=[instante, AssertionError("Se volvió a leer el reloj")])
+    monkeypatch.setattr(service, "ahora_ecuador", reloj)
+
+    respuesta = solicitar_reverso(ctx)
+
+    assert respuesta.status_code == 201, respuesta.text
+    reloj.assert_called_once_with()
+    assert ctx.llamadas["id_fecha_contable"] == [(instante,)]
+    assert ctx.llamadas["insertar_transaccion"][0][0]["fecha_hora"] == instante
 
 
 def test_trx03_sin_configuracion_501(ctx: Contexto) -> None:
