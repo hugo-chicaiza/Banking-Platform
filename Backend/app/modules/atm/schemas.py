@@ -1,5 +1,6 @@
 import re
 from datetime import datetime
+from decimal import Decimal
 from typing import Annotated, Literal
 
 from pydantic import (
@@ -12,6 +13,7 @@ from pydantic import (
 )
 
 from app.core.api.schemas import CamelModel, Money
+from app.modules.caja.schemas import MontoPositivo, RegistroUnico
 
 CodigoATM = Annotated[
     str,
@@ -75,6 +77,42 @@ class AtmSaldoRequest(CamelModel):
 
     id_cuenta: int = Field(gt=0, le=2147483647)
     registro_unico: str = Field(pattern=r"^[A-Za-z0-9]{12}$")
+
+
+class AtmTransferenciaRequest(CamelModel):
+    """ATM-05: contrato de entrada; no habilita la operacion financiera.
+
+    Moneda global USD del modulo Cuentas. No se incorpora un campo nuevo ni una
+    politica de conversion. El destino admite formatos existentes, incluido AH/CC.
+    """
+
+    model_config = ConfigDict(extra="forbid", strict=True, validate_by_name=False)
+
+    id_cuenta_origen: int = Field(gt=0, le=2147483647)
+    numero_cuenta_destino: SecretStr = Field(
+        repr=False, json_schema_extra={"minLength": 1, "maxLength": 20}
+    )
+    monto: MontoPositivo
+    registro_unico: RegistroUnico
+
+    @field_validator("numero_cuenta_destino", mode="before")
+    @classmethod
+    def _numero_destino(cls, valor: object) -> str:
+        if (
+            not isinstance(valor, str)
+            or not 1 <= len(valor) <= 20
+            or valor != valor.strip()
+            or any(ord(c) < 32 or ord(c) == 127 for c in valor)
+        ):
+            raise ValueError("Numero de cuenta invalido")
+        return valor
+
+    @field_validator("monto", mode="before", json_schema_input_type=int | float)
+    @classmethod
+    def _numero_monetario(cls, valor: object) -> Decimal:
+        if isinstance(valor, bool) or not isinstance(valor, (int, float, Decimal)):
+            raise ValueError("El monto debe ser numerico")  # noqa: TRY004 -- Pydantic debe tratarlo como error de validacion.
+        return Decimal(str(valor))
 
 
 class AtmCambioPinRequest(CamelModel):

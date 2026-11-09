@@ -185,6 +185,7 @@ def test_router_publica_auth_logout_consulta_saldo_y_cambio_pin():
         "/atm/logout",
         "/atm/consulta-saldo",
         "/atm/cambio-pin",
+        "/atm/transferencias",
     ]
 
 

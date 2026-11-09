@@ -3,6 +3,7 @@
 import asyncio
 import json
 from dataclasses import dataclass
+from decimal import Decimal
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Request, Response
@@ -11,18 +12,29 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from app.core.api.errors import RESPUESTAS_ERROR, ProblemDetailsRoute, problema
 from app.core.database.db import get_engine
-from app.modules.atm import cambio_pin_service, saldo_service, service, session
+from app.modules.atm import (
+    cambio_pin_service,
+    saldo_service,
+    service,
+    session,
+    transferencias_service,
+)
 from app.modules.atm.schemas import (
     ATMAuthRequest,
     ATMAuthResponse,
     AtmCambioPinRequest,
     AtmSaldoRequest,
     AtmSaldoResponse,
+    AtmTransferenciaRequest,
 )
 from app.modules.atm.terminal_auth import (
     TerminalAutenticado,
     require_terminal,
     revalidar_terminal,
+)
+from app.modules.transacciones.dependencias import (
+    DependenciasOperacion,
+    dependencias_operacion,
 )
 
 _MAX_BODY_AUTH = 2048
@@ -293,3 +305,77 @@ def cambiar_pin_atm(
         request.client.host if request.client else None,
     )
     return Response(status_code=204)
+
+
+@dataclass(frozen=True, repr=False)
+class TransferenciaAutenticada:
+    sesion: session.SesionATM
+    terminal: TerminalAutenticado
+    entrada: AtmTransferenciaRequest
+
+
+async def leer_transferencia_atm(
+    request: Request,
+    sesion: Annotated[session.SesionATM, Depends(session.require_sesion_operativa)],
+    terminal: Annotated[TerminalAutenticado, Depends(require_terminal)],
+) -> TransferenciaAutenticada:
+    if request.query_params:
+        raise problema(400, "DATOS_INVALIDOS", "La solicitud no admite parámetros.")
+    if (
+        request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+        != "application/json"
+    ):
+        raise problema(415, "TIPO_CONTENIDO_INVALIDO", "Se requiere application/json.")
+    cuerpo = bytearray()
+    async for fragmento in request.stream():
+        if len(cuerpo) + len(fragmento) > _MAX_BODY_AUTH:
+            raise problema(
+                413, "SOLICITUD_DEMASIADO_GRANDE", "La solicitud es demasiado grande."
+            )
+        cuerpo.extend(fragmento)
+    try:
+        # Evitar convertir primero a float y perder centavos en importes grandes.
+        entrada = AtmTransferenciaRequest.model_validate(
+            json.loads(
+                cuerpo, parse_float=Decimal, object_pairs_hook=_objeto_sin_duplicados
+            )
+        )
+    except (ValueError, ValidationError):
+        raise problema(
+            400, "DATOS_INVALIDOS", "La solicitud tiene datos inválidos."
+        ) from None
+    return TransferenciaAutenticada(sesion, terminal, entrada)
+
+
+@router.post(
+    "/transferencias",
+    status_code=501,
+    response_class=Response,
+    operation_id="ATM05",
+    description="Implementación parcial. Operación financiera deshabilitada hasta integrar G-06/AC-01 y resolver sus contratos pendientes.",
+    openapi_extra={
+        "security": ({"SesionATM": [], "APIKeyHeader": []},),
+        "requestBody": {
+            "required": True,
+            "content": {
+                "application/json": {
+                    "schema": AtmTransferenciaRequest.model_json_schema()
+                }
+            },
+        },
+    },
+    responses={
+        501: {
+            "description": "Operación financiera no habilitada.",
+            "content": RESPUESTAS_ERROR[500]["content"],
+        }
+    },
+)
+def transferir_atm(
+    solicitud: Annotated[TransferenciaAutenticada, Depends(leer_transferencia_atm)],
+    dependencias: Annotated[DependenciasOperacion, Depends(dependencias_operacion)],
+) -> Response:
+    # No abrir CooperativaDB, numerar, calcular comisiones ni invocar escritores.
+    transferencias_service.solicitar_transferencia(
+        solicitud.sesion, solicitud.terminal, solicitud.entrada, dependencias
+    )
