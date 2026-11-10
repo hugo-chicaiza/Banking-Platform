@@ -88,6 +88,11 @@ def preparar_ventanilla(ctx: Contexto, tipo: str = "Deposito") -> DependenciasFa
         },
         trx_repo,
     )
+    ctx.fake(
+        "restricciones_cuenta",
+        {"EstadoCliente": "Activo", "PermiteOperacionesPresenciales": True},
+        trx_repo,
+    )
     ctx.fake("id_fecha_contable", 20261104)
     ctx.fake("insertar_transaccion", 5001, trx_repo)
     ctx.fake("aplicar_movimiento_cuenta", 1, trx_repo)

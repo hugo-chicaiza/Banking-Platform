@@ -1,10 +1,15 @@
+import logging
 from datetime import date, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import Connection, bindparam, text
+from sqlalchemy.exc import SQLAlchemyError
 
+from app.core.database.db import get_engine
 from app.core.database.procedimientos import ejecutar_con_salidas
 from app.modules.contabilidad import service as contabilidad
+
+logger = logging.getLogger(__name__)
 
 Fila = dict[str, Any]
 
@@ -554,6 +559,34 @@ def id_fecha_contable(conn: Connection, fecha_hora: datetime | None = None) -> i
     )
 
 
+def autorizador_vigente(id_usuario: int) -> bool:
+    """True si `id_usuario` está Activo y su último rol de WorkOS incluye SUPERVISOR.
+
+    Organizacion.Usuarios vive en SeguridadDB (la misma tabla que usa auth para el
+    vínculo KeyUsuario). RolesWorkOS es la copia que auth guarda en cada inicio de
+    sesión de ese usuario: un supervisor que nunca inició sesión no autoriza.
+    Falla cerrada: sin fila, sin roles o con la base caída, devuelve False.
+    No reemplaza la autenticación del supervisor (D-11).
+    """
+    try:
+        with get_engine("seguridad").connect() as conn:
+            roles = conn.execute(
+                text(
+                    "SELECT RolesWorkOS FROM Organizacion.Usuarios "
+                    "WHERE UsuarioID = :id AND Estado = 'Activo'"
+                ),
+                {"id": id_usuario},
+            ).scalar()
+    except SQLAlchemyError as exc:
+        logger.warning(
+            "caja: no se pudo validar el autorizador error=%s", type(exc).__name__
+        )
+        return False
+    if not isinstance(roles, str):
+        return False
+    return "SUPERVISOR" in {rol.strip().upper() for rol in roles.split(",")}
+
+
 def registrar_dotacion(
     conn: Connection,
     id_jornada: int,
@@ -720,7 +753,12 @@ def insertar_cuadre(
             VALUES (
                 :id_jornada,
                 :id_usuario,
-                GETDATE(),
+                -- Hora de Ecuador como el resto de Caja: en Azure SQL GETDATE() es UTC
+                CAST(
+                    SYSDATETIMEOFFSET()
+                    AT TIME ZONE 'SA Pacific Standard Time'
+                    AS datetime2
+                ),
                 :saldo_inicial,
                 :total_dotaciones,
                 :total_depositos,
@@ -949,7 +987,12 @@ def cerrar_jornada(conn: Connection, id_jornada: int) -> bool:
             """
             UPDATE Caja.JornadasCaja
             SET Estado = 'CERRADA',
-                FechaHoraCierre = GETDATE()
+                -- Hora de Ecuador como la apertura: en Azure SQL GETDATE() es UTC
+                FechaHoraCierre = CAST(
+                    SYSDATETIMEOFFSET()
+                    AT TIME ZONE 'SA Pacific Standard Time'
+                    AS datetime2
+                )
             WHERE IdJornadaCaja = :id
               AND Estado = 'ABIERTA'
             """

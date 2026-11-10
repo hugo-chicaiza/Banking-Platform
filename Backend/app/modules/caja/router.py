@@ -148,7 +148,7 @@ def consultar_jornadas(
     id_agencia: CodigoAgencia = None,
     id_usuario: Annotated[
         int | None,
-        Query(alias="idUsuario", ge=1),
+        Query(alias="idUsuario", ge=1, le=INT32_MAX),
     ] = None,
     estado: Literal["ABIERTA", "CERRADA", "CANCELADA"] | None = None,
     desde: date | None = None,

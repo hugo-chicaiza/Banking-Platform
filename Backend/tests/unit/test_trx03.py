@@ -19,6 +19,7 @@ from app.modules.transacciones.dependencias import (
 from app.modules.transacciones.router import router
 from tests.caja_contexto import (
     ID_SUPERVISOR,
+    TOTALES,
     Contexto,
     code,
     crear_contexto,
@@ -167,8 +168,20 @@ def preparar_reverso(
     for metodo, respuesta in respuestas.items():
         ctx.fake(metodo, respuesta)
 
+    ctx.fake(
+        "obtener_cuenta",
+        {
+            "IdCuenta": 501,
+            "IdAgencia": "001",
+            "Saldo": Decimal("1000.00"),
+            "SaldoRetenido": Decimal("0.00"),
+            "Estado": "Activa",
+        },
+    )
+
     for metodo, respuesta in (
         ("id_fecha_contable", FECHA),
+        ("calcular_totales", TOTALES),
         ("obtener_jornada", {"Estado": "ABIERTA"}),
         ("obtener_cuadre_de_jornada", None),
     ):
