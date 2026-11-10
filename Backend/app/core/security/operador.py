@@ -51,9 +51,20 @@ def exigir_agencia(usuario: Usuario) -> str:
 
 @dataclass
 class RegistroAuditado:
-    """Lo completa la operación cuando conoce el id del registro creado."""
+    """Lo completa la operación cuando conoce el id del registro creado.
+
+    `detalle` agrega datos que solo se conocen dentro de la operación (por ejemplo,
+    el valor anterior de un campo que se reescribe). Mismas reglas que `detalle` de
+    auditar(): ids, estados y montos; nunca datos personales.
+    """
 
     id_registro: str | None = None
+    detalle: str = ""
+
+
+def _descripcion(usuario: Usuario, detalle: str, registro: RegistroAuditado) -> str:
+    extra = f" {registro.detalle}" if registro.detalle else ""
+    return f"usuario={usuario.id_usuario} {detalle}{extra}"
 
 
 def _codigo_fallo(exc: BaseException) -> str:
@@ -92,7 +103,8 @@ def auditar(
                 usuario=None,
                 ip=ip,
                 descripcion=(
-                    f"usuario={usuario.id_usuario} {detalle} motivo={_codigo_fallo(exc)}"
+                    f"{_descripcion(usuario, detalle, registro)}"
+                    f" motivo={_codigo_fallo(exc)}"
                 ),
                 roles=usuario.roles_texto(),
             )
@@ -106,7 +118,7 @@ def auditar(
             resultado="Exitoso",
             usuario=None,
             ip=ip,
-            descripcion=f"usuario={usuario.id_usuario} {detalle}",
+            descripcion=_descripcion(usuario, detalle, registro),
             roles=usuario.roles_texto(),
         )
     )

@@ -1,6 +1,7 @@
 """CAJ-07 · POST /api/v1/caja/jornadas/{idJornada}/dotaciones (pruebas sin BD)."""
 
 from collections.abc import Iterator
+from decimal import Decimal
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -42,6 +43,9 @@ CUERPO_DOTACION = {
 
 def preparar_dotacion(ctx: Contexto) -> None:
     ctx.fake("obtener_jornada", JORNADA)
+    # 10 x 10.05 = 100.50 = DineroInicial de JORNADA (la INICIAL debe coincidir)
+    ctx.fake("valores_denominaciones", {1: Decimal("10.05")})
+    ctx.fake("autorizador_vigente", True)
     ctx.fake("id_fecha_contable", 20261104)
     ctx.fake(
         "registrar_dotacion",
