@@ -1,6 +1,7 @@
 """AUT-01..04 y core/security.py (patrón BFF) sin red: WorkOS simulado."""
 
 import base64
+import hashlib
 from types import SimpleNamespace
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
@@ -219,7 +220,7 @@ def _callback(client: TestClient, cookie_state: str | None, **params: str):
 # --- AUT-01 GET /auth/login --------------------------------------------------------
 
 
-def test_login_redirige_al_hosted_ui_con_state(client, workos):
+def test_login_redirige_al_hosted_ui_con_state_y_pkce(client, workos):
     r = client.get(f"{BASE}/login", params={"return_to": "/clientes?page=2"})
 
     assert r.status_code == 302
@@ -231,8 +232,15 @@ def test_login_redirige_al_hosted_ui_con_state(client, workos):
     cookie = _cookies(r)[COOKIE_STATE]
     for atributo in ("HttpOnly", "Secure", "SameSite=lax", "Path=/", "Max-Age=600"):
         assert atributo in cookie
-    state, destino = cookie.split(";")[0].split("=", 1)[1].split(".", 1)
+    state, verificador, destino = cookie.split(";")[0].split("=", 1)[1].split(".")
     assert state == argumentos["state"] and len(state) >= 43
+    assert len(verificador) == 43
+    assert verificador != state
+    resumen = hashlib.sha256(verificador.encode("ascii")).digest()
+    assert argumentos["code_challenge"] == base64.urlsafe_b64encode(
+        resumen
+    ).decode().rstrip("=")
+    assert verificador not in r.headers["location"]
     assert _ruta(destino) == "/clientes?page=2"
 
 
@@ -243,7 +251,7 @@ def test_login_redirige_al_hosted_ui_con_state(client, workos):
 def test_login_return_to_externo_vuelve_al_inicio(client, workos, return_to):
     _, cookie = _iniciar(client, return_to)
 
-    assert _ruta(cookie.split(".", 1)[1]) == "/"
+    assert _ruta(cookie.split(".", 2)[2]) == "/"
 
 
 # --- AUT-01 GET /auth/callback -----------------------------------------------------
@@ -267,6 +275,7 @@ def test_callback_crea_la_sesion_y_vuelve_a_return_to(
     assert "Max-Age=0" in cookies[COOKIE_STATE]
     argumentos = workos.llamadas[-1][1]
     assert argumentos["code"] == "code-1"
+    assert argumentos["code_verifier"] == cookie.split(".", 2)[1]
     assert argumentos["session"]["seal_session"] is True
     assert eventos_auditados[-1].resultado == "Exitoso"
 
@@ -283,6 +292,25 @@ def test_callback_state_invalido_no_crea_sesion(
     assert COOKIE_SESION not in _cookies(r)
     assert [metodo for metodo, _ in workos.llamadas] == ["authorize"]
     assert eventos_auditados[-1].resultado == "Fallido"
+
+
+@pytest.mark.parametrize("verificador", [None, "", "invalido"])
+def test_callback_sin_verificador_valido_no_canjea_el_codigo(
+    client, workos, verificador
+):
+    state, cookie = _iniciar(client)
+    destino = cookie.split(".", 2)[2]
+    cookie = (
+        f"{state}.{destino}"
+        if verificador is None
+        else f"{state}.{verificador}.{destino}"
+    )
+
+    r = _callback(client, cookie, code="code-1", state=state)
+
+    assert r.headers["location"] == f"{FRONT}/login?error=SOLICITUD_INVALIDA"
+    assert COOKIE_SESION not in _cookies(r)
+    assert [metodo for metodo, _ in workos.llamadas] == ["authorize"]
 
 
 def test_callback_usuario_cancelo(client, workos):
