@@ -5,13 +5,15 @@ semana, 5-ene lunes. Se omite si no hay BD configurada (por ejemplo en el CI).
 """
 
 from datetime import date, datetime
+from os import getenv
 
 import pytest
 from sqlalchemy import Connection
 
 from app.core.config.settings import get_settings
 from app.core.database.db import get_engine
-from app.modules.contabilidad import repository
+from app.modules.contabilidad import repository, service
+from app.modules.transacciones.repository import obtener_transaccion
 
 pytestmark = pytest.mark.skipif(
     not get_settings().cooperativa_db_server, reason="CooperativaDB no configurada"
@@ -76,3 +78,30 @@ def test_feriado_pasa_al_siguiente_dia_contable(conn):
 def test_calendario_sin_la_fecha_devuelve_none(conn):
     fecha_hora = datetime.fromisoformat("2099-01-01T10:00:00")
     assert repository.id_fecha_contable(conn, fecha_hora) is None
+
+
+def test_transaccion_registrada_despues_del_corte(conn):
+    """Contrasta un registro real con el día que SQL Server asigna a su hora."""
+    id_transaccion = getenv("AC02_ID_TRANSACCION_PRUEBA")
+    if not id_transaccion:
+        pytest.skip(
+            "Indique AC02_ID_TRANSACCION_PRUEBA para comprobar un registro real"
+        )
+
+    transaccion = obtener_transaccion(conn, int(id_transaccion))
+    assert transaccion is not None, "La transacción de prueba no existe"
+    fecha_hora = transaccion["FechaHoraSistema"]
+    assert isinstance(fecha_hora, datetime)
+    dia_operacion = _fila(conn, fecha_hora.date())
+    assert dia_operacion["es_dia_contable"], "Use una operación de un día hábil"
+    assert fecha_hora.time() >= dia_operacion["hora_corte"], (
+        "Use una operación registrada a partir de la hora de corte"
+    )
+
+    id_esperado = service.resolver_id_fecha_contable(conn, fecha_hora)
+    dia_esperado = repository.obtener_por_id(conn, id_esperado)
+    assert dia_esperado is not None and dia_esperado["fecha"] > fecha_hora.date()
+    assert transaccion["IdFechaContable"] == id_esperado, (
+        f"La transacción guardó {transaccion['IdFechaContable']}; "
+        f"el calendario devuelve {id_esperado} ({dia_esperado['fecha']})"
+    )

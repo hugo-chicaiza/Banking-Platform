@@ -35,6 +35,7 @@ CUERPO_DEVOLUCION = {
 
 def preparar_devolucion(ctx: Contexto) -> None:
     ctx.fake("obtener_jornada", JORNADA)
+    ctx.fake("autorizador_vigente", True)
     ctx.fake(
         "obtener_cuadre_de_jornada",
         cuadre(SaldoFinalFisico=Decimal("150.00"), DiferenciaDinero=Decimal(0)),

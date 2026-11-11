@@ -84,6 +84,7 @@ def acceso():
                 tipo_cuenta="Corriente",
             ),
         ],
+        pin_version="2026-11-01T10:00:00.000000",
     )
 
 
@@ -118,6 +119,7 @@ def test_rs256_firma_verificable_claims_y_vigencia(configuracion, clave_rsa, acc
         "idTarjeta",
         "cuentas",
         "cambioPinRequerido",
+        "pinVersion",
     }
     assert claims["cambioPinRequerido"] is False
     assert claims["iss"] == ISSUER

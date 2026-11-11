@@ -1,3 +1,4 @@
+from datetime import date
 from decimal import Decimal
 from typing import Any
 
@@ -140,6 +141,67 @@ def obtener_cuenta_por_id(conn: Connection, id_cuenta: int) -> dict[str, Any] | 
     return _cuenta_desde_bd(fila) if fila is not None else None
 
 
+def consultar_movimientos(
+    conn: Connection,
+    id_cuenta: int,
+    *,
+    desde: date,
+    hasta: date,
+    tipo_transaccion: str | None,
+    page: int,
+    page_size: int,
+    campo: str,
+    direccion: str,
+) -> tuple[list[dict[str, Any]], int]:
+    """Cada fila pertenece a la cuenta, incluso al recibir transferencias o reversos."""
+    filas = _rows(
+        conn,
+        """
+        WITH Movimientos AS (
+            SELECT m.IdMovimiento AS id_movimiento, m.IdTransaccion AS id_transaccion,
+                   t.NumeroComprobante AS numero_comprobante,
+                   t.TipoTransaccion AS tipo_transaccion, m.TipoMovimiento AS tipo_movimiento,
+                   m.RolCuenta AS rol_cuenta, m.Monto AS monto,
+                   m.SaldoAnterior AS saldo_anterior, m.SaldoPosterior AS saldo_posterior,
+                   f.Fecha AS fecha_contable, m.FechaHoraSistema AS fecha_hora_sistema,
+                   t.IdCanal AS id_canal,
+                   ROW_NUMBER() OVER (ORDER BY
+                     CASE WHEN :campo='FechaHoraSistema' AND :direccion='asc' THEN m.FechaHoraSistema END ASC,
+                     CASE WHEN :campo='FechaHoraSistema' AND :direccion='desc' THEN m.FechaHoraSistema END DESC,
+                     CASE WHEN :campo='FechaContable' AND :direccion='asc' THEN f.Fecha END ASC,
+                     CASE WHEN :campo='FechaContable' AND :direccion='desc' THEN f.Fecha END DESC,
+                     CASE WHEN :campo='IdMovimiento' AND :direccion='asc' THEN m.IdMovimiento END ASC,
+                     CASE WHEN :campo='IdMovimiento' AND :direccion='desc' THEN m.IdMovimiento END DESC,
+                     CASE WHEN :campo='Monto' AND :direccion='asc' THEN m.Monto END ASC,
+                     CASE WHEN :campo='Monto' AND :direccion='desc' THEN m.Monto END DESC,
+                     m.IdMovimiento DESC
+                   ) AS numero_fila
+            FROM Cuentas.MovimientoTransaccion AS m
+            JOIN Transacciones.Transaccion AS t ON t.IdTransaccion=m.IdTransaccion
+            JOIN Contabilidad.FechaContable AS f ON f.IdFechaContable=m.IdFechaContable
+            WHERE m.IdCuenta=:id_cuenta AND f.Fecha>=:desde AND f.Fecha<=:hasta
+              AND (:tipo_transaccion IS NULL OR t.TipoTransaccion=:tipo_transaccion)
+        )
+        SELECT p.*, t.total
+        FROM (SELECT COUNT(*) AS total FROM Movimientos) AS t
+        LEFT JOIN Movimientos AS p ON p.numero_fila>:offset AND p.numero_fila<=:limite
+        ORDER BY p.numero_fila
+    """,
+        {
+            "id_cuenta": id_cuenta,
+            "desde": desde,
+            "hasta": hasta,
+            "tipo_transaccion": tipo_transaccion,
+            "campo": campo,
+            "direccion": direccion,
+            "offset": (page - 1) * page_size,
+            "limite": page * page_size,
+        },
+    )
+    total = int(filas[0]["total"]) if filas else 0
+    return [fila for fila in filas if fila["id_movimiento"] is not None], total
+
+
 # Validar cliente, riesgo, producto y agencia.
 
 
@@ -256,6 +318,15 @@ def abrir_cuenta(
 
 
 # CTA-05: XLOCK protege estado/saldos y la clave referenciada por los desembolsos.
+def obtener_titular_cuenta(conn: Connection, id_cuenta: int) -> int | None:
+    fila = _one(
+        conn,
+        "SELECT IdCliente AS id_cliente FROM Cuentas.Cuenta WHERE IdCuenta = :id_cuenta",
+        {"id_cuenta": id_cuenta},
+    )
+    return int(fila["id_cliente"]) if fila is not None else None
+
+
 def bloquear_cuenta(conn: Connection, id_cuenta: int) -> dict[str, Any] | None:
     fila = _one(
         conn,

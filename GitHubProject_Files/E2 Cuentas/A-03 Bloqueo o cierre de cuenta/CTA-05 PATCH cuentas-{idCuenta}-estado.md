@@ -33,6 +33,7 @@ Cambia el estado (bloquear, inactivar, cerrar, reactivar).
 2. Cerrar exige `Saldo = 0` y `SaldoRetenido = 0` (`CK` de la DB) → `409 CUENTA_CON_SALDO`; y sin desembolsos PENDIENTE ni deuda verificable de créditos DESEMBOLSADO vinculados por IdCuentaDesembolso → `409 CUENTA_CON_CREDITO_VIGENTE`. Fija `FechaCierre`.
 3. `motivo` obligatorio, sin blancos ni controles, máximo 300 caracteres; usuario interno de la sesión mediante UsuarioAuditoria. Se rechazan campos extra.
 4. Bloquear la cuenta no cambia sus tarjetas, pero solo una cuenta `Activa` puede debitarse (DB 52002).
+5. Reactivar requiere titular `Activo` y riesgo vigente no `Rechazado`: `409 CLIENTE_NO_ACTIVO` o `409 RIESGO_RECHAZADO`. Se bloquea primero el cliente y después la cuenta, en el mismo orden que la baja del cliente. Las evaluaciones de riesgo usan el mismo bloqueo del titular.
 
 ## Flujo
 
@@ -90,6 +91,8 @@ Formato ProblemDetails (ver F-04). Además de 400/401/403:
 | 409 | `CUENTA_CON_SALDO` | La cuenta tiene saldo o saldo retenido |
 | 409 | `CUENTA_CON_CREDITO_VIGENTE` | Hay un desembolso pendiente o deuda vigente vinculada a la cuenta de desembolso |
 | 409 | `TRANSICION_INVALIDA` | El cambio de estado no está permitido |
+| 409 | `CLIENTE_NO_ACTIVO` | Se intenta reactivar una cuenta cuyo titular no está Activo |
+| 409 | `RIESGO_RECHAZADO` | Se intenta reactivar una cuenta cuyo titular conserva un riesgo vigente rechazado |
 
 ## Definición de terminado
 

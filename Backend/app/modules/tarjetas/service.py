@@ -1,7 +1,7 @@
 import logging
 import secrets
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from datetime import date, timedelta, timezone
 from typing import Any
@@ -21,10 +21,21 @@ from app.core.security.hsm import (
     PinDebil,
     obtener_hsm,
 )
+from app.core.security.pin_version import PinVersionNoDisponible
 from app.modules.catalogos.subproductos import tipo_tarjeta_de
-from app.modules.tarjetas import repository
+from app.modules.tarjetas import repository, sobre_pin
 from app.modules.tarjetas.identificacion import hash_pan
+from app.modules.tarjetas.pin_sql import (
+    ERRORES_SQL,
+    descartar_conexion,
+    error_asignacion,
+    limitar_sql_pin,
+    rollback_seguro,
+)
 from app.modules.tarjetas.schemas import (
+    DESCRIPCION_PIN_GENERADO,
+    DESCRIPCION_PIN_REGENERADO,
+    ORIGEN_PIN,
     PageTarjeta,
     PageTarjetaHistorial,
     PinBlockPrueba,
@@ -48,20 +59,30 @@ _ZONA_BD = timezone(timedelta(hours=-5))
 
 
 @contextmanager
-def _transaccion(*conexiones: Connection) -> Iterator[None]:
+def _transaccion(
+    *conexiones: Connection, asignacion_pin: bool = False
+) -> Iterator[None]:
     """Hace commit en el orden recibido y rollback de todas si algo falla."""
+    confirmando = False
     try:
         yield
+        confirmando = True
         for conn in conexiones:
             conn.commit()
     except DBAPIError as exc:
         for conn in conexiones:
-            conn.rollback()
+            rollback_seguro(conn) if asignacion_pin else conn.rollback()
         # from None para que la traza no arrastre los parámetros de la consulta
-        raise traducir_error_bd(exc) from None
-    except Exception:
+        raise (
+            error_asignacion(exc, ambiguo=confirmando)
+            if asignacion_pin
+            else traducir_error_bd(exc)
+        ) from None
+    except Exception as exc:
         for conn in conexiones:
-            conn.rollback()
+            rollback_seguro(conn) if asignacion_pin else conn.rollback()
+        if asignacion_pin and isinstance(exc, ERRORES_SQL):
+            raise error_asignacion(exc, ambiguo=confirmando) from None
         raise
 
 
@@ -168,7 +189,7 @@ def pan_de_prueba(conn_seguridad: Connection, id_tarjeta: int, hsm: Hsm) -> str:
 
 def _rollback(*conexiones: Connection) -> None:
     for conn in conexiones:
-        conn.rollback()
+        rollback_seguro(conn)
 
 
 # TAR-01
@@ -468,33 +489,89 @@ def credito_cumple_plazo(conn: Connection, fecha_emision: date) -> bool:
     )
 
 
-def _generar_pin(
-    conn_seguridad: Connection, id_tarjeta: int, tipo_tarjeta: str, hsm: Hsm
-) -> None:
-    """El HSM genera el PIN y solo se guarda su Offset, confirmado en SeguridadDB.
+def _sobre_no_guardado() -> HTTPException:
+    return problema(503, "SOBRE_PIN_NO_GUARDADO", "No se pudo guardar el sobre de PIN.")
 
-    Débito: PIN temporal (RequiereCambio), llega impreso con la tarjeta.
-    Crédito: PIN asignado que no se entrega; el cliente lo pide al servicio al cliente.
+
+def _generar_offset_y_sobre(
+    hsm: Hsm, pan: str, id_tarjeta: int, origen: sobre_pin.OrigenSobre
+) -> tuple[str, str, tuple[sobre_pin.ServicioSobres, str] | None]:
+    """Débito: el PIN sale del HSM solo para armar el sobre de PIN (TAR-07), que se
+    guarda antes de confirmar el Offset. Sin almacén configurado no hay sobre.
     """
-    pan = pan_de_prueba(conn_seguridad, id_tarjeta, hsm)
-    try:
-        offset, referencia_pvk = hsm.generar_pin(pan)
-    except ErrorHsm as exc:
-        raise _error_hsm(exc, "HSM_NO_DISPONIBLE") from None
-    finally:
-        del pan
-    try:
-        repository.guardar_pin_generado(
-            conn_seguridad,
+    servicio = sobre_pin.obtener_servicio()
+    if servicio is None:
+        logger.warning(
+            "tarjetas: sobre de PIN no disponible (sin almacén o sin clave) "
+            "id_tarjeta=%s",
             id_tarjeta,
-            offset,
-            referencia_pvk,
-            requiere_cambio=tipo_tarjeta == "Debito",
         )
-        conn_seguridad.commit()
-    except DBAPIError as exc:
-        conn_seguridad.rollback()
-        raise traducir_error_bd(exc) from None
+        offset, referencia_pvk = hsm.generar_pin(pan)
+        return offset, referencia_pvk, None
+    offset, referencia_pvk, pin = hsm.generar_pin_para_sobre(pan)
+    try:
+        id_sobre = servicio.preparar(id_tarjeta, pin, origen)
+    except sobre_pin.AlmacenNoDisponible as exc:
+        logger.error(
+            "tarjetas: no se pudo guardar el sobre de PIN id_tarjeta=%s error=%s",
+            id_tarjeta,
+            exc,
+        )
+        raise _sobre_no_guardado() from None
+    finally:
+        del pin
+    return offset, referencia_pvk, (servicio, id_sobre)
+
+
+def _generar_pin(
+    conn_seguridad: Connection,
+    id_tarjeta: int,
+    tipo_tarjeta: str,
+    hsm: Hsm,
+    origen: sobre_pin.OrigenSobre,
+) -> None:
+    """Asigna el PIN con limites SQL; conserva el sobre original de TAR-07."""
+    confirmando = False
+    sobre: tuple[sobre_pin.ServicioSobres, str] | None = None
+    with limitar_sql_pin(conn_seguridad):
+        try:
+            pan = pan_de_prueba(conn_seguridad, id_tarjeta, hsm)
+            try:
+                if tipo_tarjeta == "Debito":
+                    offset, referencia_pvk, sobre = _generar_offset_y_sobre(
+                        hsm, pan, id_tarjeta, origen
+                    )
+                else:
+                    offset, referencia_pvk = hsm.generar_pin(pan)
+            except ErrorHsm as exc:
+                raise _error_hsm(exc, "HSM_NO_DISPONIBLE") from None
+            finally:
+                del pan
+            repository.guardar_pin_generado(
+                conn_seguridad,
+                id_tarjeta,
+                offset,
+                referencia_pvk,
+                requiere_cambio=tipo_tarjeta == "Debito",
+            )
+            confirmando = True
+            conn_seguridad.commit()
+        except PinVersionNoDisponible:
+            rollback_seguro(conn_seguridad)
+            if sobre is not None:
+                sobre[0].descartar(id_tarjeta, sobre[1])
+            raise error_asignacion() from None
+        except ERRORES_SQL as exc:
+            rollback_seguro(conn_seguridad)
+            if sobre is not None:
+                # Compensacion original de TAR-07; no confirma el resultado SQL.
+                sobre[0].descartar(id_tarjeta, sobre[1])
+            if confirmando:
+                descartar_conexion(conn_seguridad)
+            raise error_asignacion(exc, ambiguo=confirmando) from None
+        except BaseException:
+            rollback_seguro(conn_seguridad)
+            raise
 
 
 def cambiar_estado(
@@ -521,7 +598,8 @@ def cambiar_estado(
             usuario,
             ip,
         ),
-        _transaccion(conn),
+        limitar_sql_pin(conn) if destino == "Aprobada" else nullcontext(),
+        _transaccion(conn, asignacion_pin=destino == "Aprobada"),
     ):
         actual = repository.obtener_tarjeta(conn, id_tarjeta, bloquear=True)
         if actual is None:
@@ -551,6 +629,7 @@ def cambiar_estado(
                 id_tarjeta,
                 actual["tipo_tarjeta"],
                 _hsm("HSM_NO_DISPONIBLE"),
+                "Aprobacion",
             )
         repository.actualizar_estado(
             conn,
@@ -577,7 +656,7 @@ def cambiar_estado(
                 "CambioPin",
                 None,
                 None,
-                "PIN generado automáticamente",
+                DESCRIPCION_PIN_GENERADO,
                 usuario,
                 ip,
             )
@@ -610,13 +689,16 @@ def regenerar_pin(
     El Offset se confirma primero en SeguridadDB; si luego falla CooperativaDB, el PIN
     nuevo ya rige y se puede repetir la operación.
     """
-    with _auditado(
-        "UPDATE",
-        "Tarjeta.Tarjeta",
-        "TAR-05 Regeneración de PIN",
-        id_tarjeta,
-        usuario,
-        ip,
+    with (
+        _auditado(
+            "UPDATE",
+            "Tarjeta.Tarjeta",
+            "TAR-05 Regeneración de PIN",
+            id_tarjeta,
+            usuario,
+            ip,
+        ),
+        limitar_sql_pin(conn),
     ):
         try:
             actual = repository.obtener_tarjeta(conn, id_tarjeta, bloquear=True)
@@ -633,10 +715,11 @@ def regenerar_pin(
                 id_tarjeta,
                 actual["tipo_tarjeta"],
                 _hsm("HSM_NO_DISPONIBLE"),
+                "Regeneracion",
             )
-        except DBAPIError as exc:
+        except ERRORES_SQL as exc:
             _rollback(conn_seguridad, conn)
-            raise traducir_error_bd(exc) from None
+            raise error_asignacion(exc) from None
         except BaseException:
             _rollback(conn_seguridad, conn)
             raise
@@ -649,25 +732,84 @@ def regenerar_pin(
                 "CambioPin",
                 None,
                 None,
-                "Regeneración de PIN",
+                DESCRIPCION_PIN_REGENERADO,
                 usuario,
                 ip,
             )
             conn.commit()
-        except DBAPIError:
-            conn.rollback()
+        except ERRORES_SQL:
+            rollback_seguro(conn)
             logger.error(
-                "tarjetas: pin regenerado sin historial id_tarjeta=%s", id_tarjeta
+                "tarjetas: registro de regeneracion no confirmado id_tarjeta=%s",
+                id_tarjeta,
             )
             raise problema(
                 503,
                 "PIN_ASIGNACION_NO_CONFIRMADA",
-                "No se pudo confirmar la regeneración del PIN.",
+                "El PIN se confirmó en SeguridadDB, pero no se pudo confirmar "
+                "el registro asociado. Requiere reconciliación.",
             ) from None
 
     logger.info(
         "tarjetas: pin regenerado id_tarjeta=%s usuario=%s", id_tarjeta, usuario
     )
+
+
+# TAR-07
+
+
+def entregar_sobre_pin(
+    conn: Connection, id_tarjeta: int, usuario: int, ip: str | None
+) -> bytes:
+    """Entrega el sobre de PIN una sola vez: queda Entregado y sin contenido."""
+    with _auditado(
+        "SELECT",
+        "Tarjeta.Tarjeta",
+        "TAR-07 Entrega de sobre de PIN",
+        id_tarjeta,
+        usuario,
+        ip,
+    ):
+        if not repository.existe_tarjeta(conn, id_tarjeta):
+            raise _tarjeta_no_encontrada()
+        servicio = sobre_pin.obtener_servicio()
+        if servicio is None:
+            raise problema(
+                503,
+                "SOBRE_PIN_ALMACEN_NO_DISPONIBLE",
+                "El almacén de sobres de PIN no está disponible.",
+            )
+        try:
+            pdf = servicio.entregar(id_tarjeta, usuario)
+        except sobre_pin.SobreYaEntregado:
+            raise problema(
+                409,
+                "SOBRE_PIN_ENTREGADO",
+                "El sobre de PIN ya se entregó; regenere el PIN para emitir otro.",
+            ) from None
+        except sobre_pin.SobreNoDisponible:
+            raise problema(
+                404,
+                "SOBRE_PIN_NO_DISPONIBLE",
+                "La tarjeta no tiene un sobre de PIN pendiente.",
+            ) from None
+        except sobre_pin.AlmacenNoDisponible as exc:
+            logger.error(
+                "tarjetas: almacén de sobres no disponible id_tarjeta=%s error=%s",
+                id_tarjeta,
+                exc,
+            )
+            raise problema(
+                503,
+                "SOBRE_PIN_ALMACEN_NO_DISPONIBLE",
+                "El almacén de sobres de PIN no está disponible.",
+            ) from None
+    logger.info(
+        "tarjetas: sobre de PIN entregado id_tarjeta=%s usuario=%s",
+        id_tarjeta,
+        usuario,
+    )
+    return pdf
 
 
 def construir_pin_block_prueba(
@@ -691,7 +833,7 @@ def construir_pin_block_prueba(
 
 
 def _evento(fila: dict[str, Any]) -> TarjetaHistorial:
-    """En CambioPin la respuesta lleva resultado en lugar de motivo."""
+    """En CambioPin la respuesta lleva resultado y origen en lugar de motivo."""
     es_pin = fila["tipo_evento"] == "CambioPin"
     return TarjetaHistorial(
         id_historial=fila["id_historial"],
@@ -701,6 +843,7 @@ def _evento(fila: dict[str, Any]) -> TarjetaHistorial:
         estado_nuevo=fila["estado_nuevo"],
         motivo=None if es_pin else fila["descripcion"],
         resultado="COMPLETADO" if es_pin else None,
+        origen=ORIGEN_PIN.get(fila["descripcion"] or "") if es_pin else None,
         fecha_cambio=fila["fecha_evento"].replace(tzinfo=_ZONA_BD),
         realizado_por=fila["realizado_por"],
     )

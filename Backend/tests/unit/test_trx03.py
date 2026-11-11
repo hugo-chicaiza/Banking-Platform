@@ -10,6 +10,7 @@ import pytest
 
 from app.modules.caja import repository as caja_repo
 from app.modules.transacciones import repository as repo
+from app.modules.transacciones import service
 from app.modules.transacciones.dependencias import (
     DatosAsiento,
     Numeracion,
@@ -18,6 +19,7 @@ from app.modules.transacciones.dependencias import (
 from app.modules.transacciones.router import router
 from tests.caja_contexto import (
     ID_SUPERVISOR,
+    TOTALES,
     Contexto,
     code,
     crear_contexto,
@@ -166,8 +168,20 @@ def preparar_reverso(
     for metodo, respuesta in respuestas.items():
         ctx.fake(metodo, respuesta)
 
+    ctx.fake(
+        "obtener_cuenta",
+        {
+            "IdCuenta": 501,
+            "IdAgencia": "001",
+            "Saldo": Decimal("1000.00"),
+            "SaldoRetenido": Decimal("0.00"),
+            "Estado": "Activa",
+        },
+    )
+
     for metodo, respuesta in (
         ("id_fecha_contable", FECHA),
+        ("calcular_totales", TOTALES),
         ("obtener_jornada", {"Estado": "ABIERTA"}),
         ("obtener_cuadre_de_jornada", None),
     ):
@@ -188,6 +202,22 @@ def solicitar_reverso(
         f"{BASE}/{ID_ORIGINAL}/reverso",
         json=datos,
     )
+
+
+def test_reverso_comparte_instante_con_el_calendario(
+    ctx: Contexto, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    preparar_reverso(ctx)
+    instante = datetime(2026, 11, 6, 19)
+    reloj = Mock(side_effect=[instante, AssertionError("Se volvió a leer el reloj")])
+    monkeypatch.setattr(service, "ahora_ecuador", reloj)
+
+    respuesta = solicitar_reverso(ctx)
+
+    assert respuesta.status_code == 201, respuesta.text
+    reloj.assert_called_once_with()
+    assert ctx.llamadas["id_fecha_contable"] == [(instante,)]
+    assert ctx.llamadas["insertar_transaccion"][0][0]["fecha_hora"] == instante
 
 
 def test_trx03_sin_configuracion_501(ctx: Contexto) -> None:

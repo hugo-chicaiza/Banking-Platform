@@ -131,6 +131,7 @@ def entorno(monkeypatch, clave):
                     tipo_cuenta="Ahorro",
                 )
             ],
+            pin_version="2026-11-01T10:00:00.000000",
         )
     ).session_token
     e.claims = jwt.decode(

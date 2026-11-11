@@ -38,6 +38,7 @@ from app.modules.caja.schemas import (
     PageMovimientoCaja,
     SeriesBilletesRequest,
 )
+from app.modules.contabilidad.service import ahora_ecuador
 from app.modules.transacciones import repository as trx_repo
 from app.modules.transacciones.dependencias import (
     DatosAsiento,
@@ -718,8 +719,12 @@ def desglose_json(desglose: list[Desglose]) -> str:
     )
 
 
-def fecha_contable(conn: Connection) -> int:
-    id_fecha = repo.id_fecha_contable(conn)
+def fecha_contable(conn: Connection, fecha_hora: datetime | None = None) -> int:
+    id_fecha = (
+        repo.id_fecha_contable(conn)
+        if fecha_hora is None
+        else repo.id_fecha_contable(conn, fecha_hora)
+    )
 
     if id_fecha is None:
         raise problema(
@@ -750,6 +755,38 @@ def validar_custodia(
             "AUTORIZADOR_NO_COINCIDE",
             "autorizadoPor debe ser el usuario que autoriza.",
         )
+
+
+def verificar_autorizador(modo: str, autorizado_por: int) -> None:
+    """Con el cajero como actor, autorizadoPor llega en el cuerpo (D-11): al menos
+    debe ser un supervisor Activo. Con el supervisor como actor ya coincide con él.
+    """
+    if modo == "CAJERO" and not repo.autorizador_vigente(autorizado_por):
+        raise problema(
+            422,
+            "AUTORIZADOR_NO_VALIDO",
+            "autorizadoPor no corresponde a un supervisor activo.",
+        )
+
+
+def monto_de_desglose(conn: Connection, desglose: list[Desglose]) -> Decimal:
+    """Suma valor facial x cantidad; 422 si alguna denominación no existe."""
+    valores = repo.valores_denominaciones(
+        conn,
+        [d.id_denominacion for d in desglose],
+    )
+
+    if len(valores) != len(desglose):
+        raise problema(
+            422,
+            "DENOMINACION_NO_ENCONTRADA",
+            "Una denominación no existe.",
+        )
+
+    return sum(
+        (decimal(valores[d.id_denominacion]) * d.cantidad for d in desglose),
+        Decimal(0),
+    )
 
 
 def registrar_dotacion(
@@ -792,6 +829,20 @@ def registrar_dotacion(
                 datos.autorizado_por,
                 jornada["IdUsuario"],
             )
+
+            verificar_autorizador(modo, datos.autorizado_por)
+
+            # El cuadre toma SaldoInicial = DineroInicial (FK CuadreCaja ->
+            # JornadasCaja) y no suma la INICIAL: si difieren, el efectivo real
+            # nunca cuadraría. Con la jornada aún sin actividad, se puede cancelar.
+            if datos.tipo_dotacion == "INICIAL" and monto_de_desglose(
+                conn, datos.desglose
+            ) != decimal(jornada["DineroInicial"]):
+                raise problema(
+                    422,
+                    "DOTACION_INICIAL_NO_COINCIDE",
+                    "La dotación INICIAL debe ser igual al dinero inicial de la jornada.",
+                )
 
             salida = repo.registrar_dotacion(
                 conn,
@@ -974,6 +1025,13 @@ def registrar_conteo(
 
             diferencia = fisico - saldo_esperado(totales)
 
+            # CuadreCaja guarda solo el último conteo: el anterior queda en la
+            # auditoría para que una reescritura no borre el rastro (A-15).
+            registro.detalle = (
+                f"conteoAnterior={cuadre['SaldoFinalFisico']}"
+                f" conteo={fisico} diferencia={diferencia}"
+            )
+
             if not repo.registrar_conteo(
                 conn,
                 cuadre["IdCuadreCaja"],
@@ -1075,6 +1133,8 @@ def registrar_devolucion(
                 jornada["IdUsuario"],
             )
 
+            verificar_autorizador(modo, datos.autorizado_por)
+
             salida = repo.registrar_devolucion(
                 conn,
                 id_jornada,
@@ -1108,6 +1168,21 @@ def registrar_devolucion(
 
 
 # --- CAJ-17: autorización del cuadre ----------
+
+
+def exigir_conteo_vigente(conn: Connection, id_jornada: int, cuadre: Fila) -> None:
+    """409 si los totales cambiaron después del último conteo físico.
+
+    Una devolución o una dotación posterior al conteo cambia el saldo esperado.
+    Autorizar ese conteo dejaría la jornada sin salida: CAJ-18 lo rechaza por
+    desactualizado y CAJ-16 ya no admite un conteo nuevo sobre un cuadre autorizado.
+    """
+    if saldo_esperado(_totales(conn, id_jornada)) != saldo_esperado(cuadre):
+        raise problema(
+            409,
+            "CUADRE_DESACTUALIZADO",
+            "Hubo movimientos después del conteo; registre el conteo otra vez.",
+        )
 
 
 def autorizar_cuadre(
@@ -1176,6 +1251,8 @@ def autorizar_cuadre(
                     "CUADRE_YA_AUTORIZADO",
                     "El cuadre ya fue autorizado.",
                 )
+
+            exigir_conteo_vigente(conn, id_jornada, cuadre)
 
             if (
                 cuadre["EstadoCuadre"] in ("SOBRANTE", "FALTANTE")
@@ -1272,14 +1349,7 @@ def cerrar_jornada(
 
             # Comprobar que los totales no cambiaron
             # después del conteo físico.
-            totales_actuales = _totales(conn, id_jornada)
-
-            if saldo_esperado(totales_actuales) != saldo_esperado(cuadre):
-                raise problema(
-                    409,
-                    "CUADRE_DESACTUALIZADO",
-                    "Hubo movimientos después del conteo; registre el conteo otra vez.",
-                )
+            exigir_conteo_vigente(conn, id_jornada, cuadre)
 
             # Si existe diferencia, exigir autorización.
             if (
@@ -1322,24 +1392,7 @@ def _validar_desglose(
             )
         return
 
-    valores = repo.valores_denominaciones(
-        conn,
-        [d.id_denominacion for d in datos.desglose],
-    )
-
-    if len(valores) != len(datos.desglose):
-        raise problema(
-            422,
-            "DENOMINACION_NO_ENCONTRADA",
-            "Una denominación no existe.",
-        )
-
-    total = sum(
-        (decimal(valores[d.id_denominacion]) * d.cantidad for d in datos.desglose),
-        Decimal(0),
-    )
-
-    if total != datos.monto:
+    if monto_de_desglose(conn, datos.desglose) != datos.monto:
         raise problema(
             422,
             "DESGLOSE_NO_COINCIDE_CON_MONTO",
@@ -1399,6 +1452,28 @@ def _validar_repeticion(
             409,
             "REGISTRO_UNICO_REUTILIZADO",
             "El registroUnico ya se usó en otra operación.",
+        )
+
+
+def verificar_operable_en_ventanilla(conn: Connection, id_cuenta: int) -> None:
+    """Titular Activo y producto que admite operaciones presenciales.
+
+    Falla cerrada: sin datos del titular o del producto, la operación no sigue.
+    """
+    restricciones = trx_repo.restricciones_cuenta(conn, id_cuenta) or {}
+
+    if restricciones.get("EstadoCliente") != "Activo":
+        raise problema(
+            409,
+            "CLIENTE_NO_ACTIVO",
+            "El cliente no está Activo.",
+        )
+
+    if not restricciones.get("PermiteOperacionesPresenciales"):
+        raise problema(
+            409,
+            "PRODUCTO_SIN_OPERACION_PRESENCIAL",
+            "El producto de la cuenta no admite operaciones en ventanilla.",
         )
 
 
@@ -1519,9 +1594,12 @@ def operacion_ventanilla(
                     "La cuenta no está Activa.",
                 )
 
+            verificar_operable_en_ventanilla(conn, datos.id_cuenta)
+
             id_canal = deps.id_canal_ventanilla
             comision = Decimal(0)
             descripcion = "Aprobada"
+            fecha_hora = ahora_ecuador()
 
             if tipo == "Retiro":
                 autorizacion = trx_repo.autorizar_operacion(
@@ -1530,6 +1608,7 @@ def operacion_ventanilla(
                     id_canal,
                     tipo,
                     datos.monto,
+                    fecha_hora=fecha_hora,
                 )
 
                 codigo = str(autorizacion["CodigoRespuesta"] or "").strip()
@@ -1566,7 +1645,7 @@ def operacion_ventanilla(
                         "La caja no tiene efectivo para el retiro.",
                     )
 
-            id_fecha = fecha_contable(conn)
+            id_fecha = fecha_contable(conn, fecha_hora)
 
             numeracion = deps.numerar(
                 conn,
@@ -1600,6 +1679,7 @@ def operacion_ventanilla(
                     "estado": "Completada",
                     "creado_por": cajero,
                     "id_fecha_contable": id_fecha,
+                    "fecha_hora": fecha_hora,
                 },
             )
 

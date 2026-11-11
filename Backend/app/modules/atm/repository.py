@@ -3,6 +3,8 @@ from typing import Any
 
 from sqlalchemy import Connection, text
 
+from app.core.database.procedimientos import ejecutar_con_salidas
+
 
 def sesion_atm_revocada(conn: Connection, jti: str) -> bool:
     """Leer siempre del primario, sin caché ni lecturas sucias."""
@@ -209,29 +211,31 @@ def activar_tarjeta_credito(
     """A-05: Generada → Activa al cumplir el plazo, con TarjetaHis, en la transacción
     del llamador. Idempotente: si otra petición ya la activó, no hace nada.
     """
-    activada = conn.execute(
-        text(
-            """
+    # Consumir todos los resultados evita depender de los contadores intermedios
+    # del driver cuando NOCOUNT está desactivado.
+    ejecutar_con_salidas(
+        conn,
+        """
+            DECLARE @id int = ?, @canal int = ?, @usuario int = ?;
+            DECLARE @ip varchar(45) = ?;
+            DECLARE @activadas TABLE (IdTarjeta int);
+
             UPDATE Tarjeta.Tarjeta SET Estado = 'Activa'
-            WHERE IdTarjeta = :id AND Estado = 'Generada' AND TipoTarjeta = 'Credito'
-            """
-        ),
-        {"id": id_tarjeta},
-    )
-    if activada.rowcount != 1:
-        return
-    conn.execute(
-        text("""
+            OUTPUT INSERTED.IdTarjeta INTO @activadas
+            WHERE IdTarjeta = @id AND Estado = 'Generada' AND TipoTarjeta = 'Credito';
+
             INSERT INTO Tarjeta.TarjetaHis (
                 IdTarjeta, TipoEvento, EstadoAnterior, EstadoActual, Descripcion,
                 IdCanal, RealizadoPor, DireccionIP
-            ) VALUES (
-                :id, 'Activacion', 'Generada', 'Activa',
+            ) SELECT
+                IdTarjeta, 'Activacion', 'Generada', 'Activa',
                 'Activación automática: 3 días laborables desde la emisión',
-                :canal, :usuario, :ip
-            )
-        """),
-        {"id": id_tarjeta, "canal": id_canal, "usuario": usuario, "ip": ip},
+                @canal, @usuario, @ip
+            FROM @activadas;
+
+            SELECT COUNT(*) AS Activadas FROM @activadas;
+        """,
+        (id_tarjeta, id_canal, usuario, ip),
     )
 
 
@@ -303,6 +307,12 @@ def obtener_pin_para_verificacion(
             Estado AS estado_pin,
             PINOffset AS pin_offset,
             ReferenciaClavePVK AS referencia_clave_pvk,
+            FechaAsignacion AS fecha_asignacion,
+            CAST(CASE WHEN EXISTS (
+                SELECT 1 FROM Tarjetas.CambioPINATMOperacion op
+                WHERE op.ID_Tarjeta=TarjetaPIN.ID_Tarjeta
+                  AND op.FechaFinalizacionUTC IS NULL
+            ) THEN 1 ELSE 0 END AS bit) AS coordinacion_pendiente,
             RequiereCambio AS requiere_cambio
         FROM Tarjetas.TarjetaPIN WITH (UPDLOCK, ROWLOCK)
         WHERE ID_Tarjeta = :id_tarjeta
@@ -317,4 +327,30 @@ def obtener_pin_para_verificacion(
         .first()
     )
 
+    return dict(fila) if fila is not None else None
+
+
+def obtener_asignacion_pin_actual(
+    conn: Connection, id_tarjeta: int
+) -> dict[str, Any] | None:
+    """Solo estado de autorización; no recuperar material criptográfico."""
+    fila = (
+        conn.execute(
+            text("""
+            SELECT FechaAsignacion AS fecha_asignacion,
+                   CAST(CASE WHEN EXISTS (
+                       SELECT 1 FROM Tarjetas.CambioPINATMOperacion op
+                       WHERE op.ID_Tarjeta=TarjetaPIN.ID_Tarjeta
+                         AND op.FechaFinalizacionUTC IS NULL
+                   ) THEN 1 ELSE 0 END AS bit) AS coordinacion_pendiente,
+                   TienePINAsignado AS tiene_pin_asignado,
+                   Estado AS estado_pin, IntentosFallidos AS intentos_fallidos,
+                   RequiereCambio AS requiere_cambio
+            FROM Tarjetas.TarjetaPIN WHERE ID_Tarjeta = :id_tarjeta
+        """),
+            {"id_tarjeta": id_tarjeta},
+        )
+        .mappings()
+        .one_or_none()
+    )
     return dict(fila) if fila is not None else None

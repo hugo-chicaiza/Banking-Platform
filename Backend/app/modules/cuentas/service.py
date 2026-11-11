@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 
 from sqlalchemy import Connection
@@ -19,8 +19,10 @@ from app.modules.cuentas.schemas import (
     CupoHistorial,
     CupoUpdate,
     EstadoCuenta,
+    MovimientoCuenta,
     PageCuenta,
     PageCupoHistorial,
+    PageMovimientoCuenta,
     SaldoCuenta,
 )
 
@@ -105,6 +107,75 @@ def obtener_saldo(conn: Connection, id_cuenta: int) -> SaldoCuenta:
         saldo_disponible=saldo - retenido,
         id_moneda=cuenta.id_moneda,
         fecha_consulta=datetime.now(UTC),
+    )
+
+
+def listar_movimientos(
+    conn: Connection,
+    id_cuenta: int,
+    *,
+    desde: date,
+    hasta: date,
+    tipo_transaccion: str | None = None,
+    page: int = 1,
+    page_size: int = 20,
+    sort: str | None = None,
+) -> PageMovimientoCuenta:
+    if desde > hasta:
+        raise problema(
+            400, "RANGO_FECHAS_INVALIDO", "desde debe ser anterior o igual a hasta."
+        )
+    if page < 1 or not 1 <= page_size <= 100:
+        raise problema(400, "PAGINACION_INVALIDA", "La paginación no es válida.")
+    campo, direccion = "FechaHoraSistema", "desc"
+    if sort is not None:
+        partes = sort.split(",")
+        campos = {
+            "fechaHoraSistema": "FechaHoraSistema",
+            "fechaContable": "FechaContable",
+            "idMovimiento": "IdMovimiento",
+            "monto": "Monto",
+        }
+        if (
+            len(partes) != 2
+            or partes[0] not in campos
+            or partes[1] not in ("asc", "desc")
+        ):
+            raise problema(
+                400,
+                "SORT_INVALIDO",
+                "Use un campo permitido y la dirección asc o desc.",
+            )
+        campo, direccion = campos[partes[0]], partes[1]
+    obtener_cuenta(conn, id_cuenta)
+    filas, total = repository.consultar_movimientos(
+        conn,
+        id_cuenta,
+        desde=desde,
+        hasta=hasta,
+        tipo_transaccion=tipo_transaccion,
+        page=page,
+        page_size=page_size,
+        campo=campo,
+        direccion=direccion,
+    )
+    return PageMovimientoCuenta(
+        items=[
+            MovimientoCuenta(
+                **{
+                    **fila,
+                    "fecha_hora_sistema": (
+                        fila["fecha_hora_sistema"].replace(tzinfo=ZONA_ECUADOR)
+                        if fila["fecha_hora_sistema"].tzinfo is None
+                        else fila["fecha_hora_sistema"]
+                    ),
+                }
+            )
+            for fila in filas
+        ],
+        page=page,
+        page_size=page_size,
+        total=total,
     )
 
 
@@ -261,6 +332,12 @@ def cambiar_estado_cuenta(
         )
 
     try:
+        if payload.estado == "ACTIVA":
+            # Mismo orden que CLI-06: cliente -> cuenta. El titular es inmutable en la API.
+            id_cliente = repository.obtener_titular_cuenta(conn, id_cuenta)
+            if id_cliente is None:
+                raise problema(404, "CUENTA_NO_ENCONTRADA", "La cuenta no existe.")
+            clientes_service.validar_activacion_cuenta(conn, id_cliente)
         actual = repository.bloquear_cuenta(conn, id_cuenta)
         if actual is None:
             raise problema(404, "CUENTA_NO_ENCONTRADA", "La cuenta no existe.")

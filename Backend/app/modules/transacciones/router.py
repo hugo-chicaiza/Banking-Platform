@@ -9,7 +9,7 @@ from sqlalchemy import Connection
 from app.core.api.errors import RESPUESTAS_ERROR, ProblemDetailsRoute, solo_parametros
 from app.core.api.middleware import ip_cliente
 from app.core.database.db import cooperativa
-from app.core.security.auth import Usuario, require_roles
+from app.core.security.auth import Usuario, require_auth, require_roles
 from app.core.security.operador import IdInterno
 from app.modules.caja.schemas import INT32_MAX, ReversoRequest
 from app.modules.transacciones import service
@@ -30,7 +30,9 @@ router = APIRouter(
     tags=["Transacciones"],
     route_class=ProblemDetailsRoute,
     responses=RESPUESTAS_ERROR,
-    dependencies=[Depends(_sin_cache)],
+    # Igual que el resto de routers: sin usuario registrado y Activo en
+    # Organizacion.Usuarios (KeyUsuario), 403 antes de consultar transacciones.
+    dependencies=[Depends(require_auth), Depends(_sin_cache)],
 )
 
 Conexion = Annotated[Connection, Depends(cooperativa)]

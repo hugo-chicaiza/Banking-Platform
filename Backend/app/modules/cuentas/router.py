@@ -1,3 +1,4 @@
+from datetime import date
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Path, Query, Request
@@ -22,6 +23,7 @@ from app.modules.cuentas.schemas import (
     EstadoCuenta,
     PageCuenta,
     PageCupoHistorial,
+    PageMovimientoCuenta,
     SaldoCuenta,
 )
 
@@ -124,6 +126,44 @@ def obtener_saldo(idCuenta: int, conn: Db) -> SaldoCuenta:
     `idMoneda` es siempre 840 porque la cooperativa opera exclusivamente en USD.
     """
     return service.obtener_saldo(conn, idCuenta)
+
+
+@_consultas_router.get(
+    "/{idCuenta}/movimientos",
+    operation_id="CTA06",
+    response_model=PageMovimientoCuenta,
+    dependencies=[
+        Depends(
+            solo_parametros(
+                "desde", "hasta", "tipoTransaccion", "page", "pageSize", "sort"
+            )
+        )
+    ],
+    openapi_extra={"x-roles": _ROLES_CONSULTA},
+)
+def listar_movimientos(
+    idCuenta: Annotated[int, Path(gt=0, le=2147483647)],
+    conn: Db,
+    desde: date,
+    hasta: date,
+    tipo_transaccion: Annotated[
+        str | None, Query(alias="tipoTransaccion", min_length=1, max_length=30)
+    ] = None,
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(alias="pageSize", ge=1, le=100)] = 20,
+    sort: Annotated[str | None, Query(max_length=40)] = None,
+) -> PageMovimientoCuenta:
+    """Movimientos propios de la cuenta, por fecha contable inclusiva (CTA-06)."""
+    return service.listar_movimientos(
+        conn,
+        idCuenta,
+        desde=desde,
+        hasta=hasta,
+        tipo_transaccion=tipo_transaccion,
+        page=page,
+        page_size=page_size,
+        sort=sort,
+    )
 
 
 router.include_router(_apertura_router, prefix="/cuentas")

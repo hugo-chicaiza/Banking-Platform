@@ -35,6 +35,9 @@ Registra un cliente (Natural o Jurídico) con dirección principal.
 4. `fechaNacimiento` debe ser anterior a hoy.
 5. El cliente se crea en `Pendiente`: pasa a `Activo` cuando su evaluación de riesgo queda `Aprobado` (CLI-13).
 6. `CreadoPor` sale del token; la IP (`X-Forwarded-For`) va a `ClientesHis`.
+7. Alta y edición comparten validación de email y de nombres/apellidos/razón social/nombre comercial: máximo 250 caracteres, sin textos compuestos solo de espacios. Se rechazan campos desconocidos.
+8. La dirección inicial siempre es principal. Calle y referencia admiten hasta 250 caracteres y no solo espacios; sector hasta 50; código postal exactamente seis dígitos ASCII.
+9. Los errores de validación son `400 DATOS_INVALIDOS` en ProblemDetails; los conflictos y errores de negocio mantienen sus códigos propios.
 
 ## Flujo
 

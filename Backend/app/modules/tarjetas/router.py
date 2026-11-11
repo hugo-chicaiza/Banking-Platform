@@ -223,6 +223,42 @@ def regenerar_pin(
     service.regenerar_pin(conn, conn_seguridad, id_tarjeta, usuario, _ip(request))
 
 
+# TAR-07. Roles: ASESOR, SUPERVISOR, ADMIN
+@router.get(
+    "/{idTarjeta}/sobre-pin",
+    response_class=Response,
+    responses={
+        200: {
+            "content": {"application/pdf": {}},
+            "description": "Sobre de PIN (PDF). Se entrega una sola vez.",
+        }
+    },
+    dependencies=[
+        Depends(require_roles("ASESOR", "SUPERVISOR", "ADMIN")),
+        Depends(solo_parametros()),
+    ],
+)
+def sobre_pin(
+    id_tarjeta: IdTarjetaPath,
+    request: Request,
+    usuario: UsuarioAuditoria,
+    conn: Db,
+) -> Response:
+    """Descarga, una sola vez, el sobre de PIN de una tarjeta de débito: PDF con el PIN
+    temporal para entregar al cliente con la tarjeta. Luego queda Entregado.
+    """
+    pdf = service.entregar_sobre_pin(conn, id_tarjeta, usuario, _ip(request))
+    return Response(
+        content=pdf,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'attachment; filename="sobre-pin-{id_tarjeta}.pdf"',
+            "Cache-Control": "no-store",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
 # TAR-06. Roles: SUPERVISOR, AUDITOR, ADMIN
 @router.get(
     "/{idTarjeta}/historial",

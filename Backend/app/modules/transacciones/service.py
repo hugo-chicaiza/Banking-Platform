@@ -1,6 +1,7 @@
 """Consulta y reverso supervisado de transacciones."""
 
 from datetime import date
+from decimal import Decimal
 
 from sqlalchemy import Connection
 
@@ -14,7 +15,9 @@ from app.modules.caja.service import (
     fecha_contable,
     orden_desde_texto,
     rango_fechas,
+    saldo_esperado,
 )
+from app.modules.contabilidad.service import ahora_ecuador
 from app.modules.transacciones import repository as repo
 from app.modules.transacciones.dependencias import (
     DatosAsiento,
@@ -141,6 +144,100 @@ def obtener_transaccion(
 
 _OPUESTO = {"C": "D", "D": "C"}
 
+# Lo único que TRX-03 sabe deshacer por completo: movimiento de cuenta, comisión,
+# asiento y efectivo de caja. Transferencias, créditos, tarjetas y ATM tienen
+# efectos en otras tablas (cuenta destino, cuotas, gavetas) que este reverso no toca.
+_TIPOS_REVERSABLES = frozenset({"Deposito", "Retiro"})
+
+_LARGO_OBSERVACION_CAJA = 300  # Caja.MovimientosCaja.Observacion varchar(300)
+
+
+def verificar_reverso_soportado(original: Fila, supervisor: int) -> None:
+    """409 si el reverso dejaría efectos sin deshacer o si se autoaprueba."""
+    if (
+        original["TipoTransaccion"] not in _TIPOS_REVERSABLES
+        or original["IdTerminal"] is not None
+        or original["IdTarjeta"] is not None
+        or original["IdCuentaDestino"] is not None
+    ):
+        raise problema(
+            409,
+            "REVERSO_NO_SOPORTADO",
+            "Esta transacción se reversa por su canal o módulo de origen.",
+        )
+
+    if original["CreadoPor"] == supervisor:
+        raise problema(
+            409,
+            "AUTORREVERSO_NO_PERMITIDO",
+            "Quien reversa debe ser distinto de quien registró la transacción.",
+        )
+
+
+def verificar_cuentas_del_reverso(conn: Connection, movimientos: list[Fila]) -> None:
+    """Bloquea cada cuenta afectada y comprueba que admita el movimiento contrario.
+
+    Un crédito original se reversa con un débito: el disponible (Saldo -
+    SaldoRetenido) debe cubrirlo, o el reverso dejaría la cuenta en negativo.
+    """
+    debitos: dict[int, Decimal] = {}
+    for movimiento in movimientos:
+        id_cuenta = int(movimiento["IdCuenta"])
+        debito = (
+            decimal(movimiento["Monto"])
+            if _OPUESTO[str(movimiento["TipoMovimiento"]).strip()] == "D"
+            else Decimal(0)
+        )
+        debitos[id_cuenta] = debitos.get(id_cuenta, Decimal(0)) + debito
+
+    # Orden fijo de bloqueo para que dos reversos no se crucen
+    for id_cuenta in sorted(debitos):
+        cuenta = repo.obtener_cuenta(conn, id_cuenta)
+
+        if cuenta is None or cuenta["Estado"] != "Activa":
+            raise problema(
+                409,
+                "CUENTA_NO_ACTIVA",
+                "La cuenta no está Activa.",
+            )
+
+        disponible = decimal(cuenta["Saldo"]) - decimal(cuenta["SaldoRetenido"])
+
+        if debitos[id_cuenta] > disponible:
+            raise problema(
+                422,
+                "FONDOS_INSUFICIENTES",
+                "El disponible de la cuenta no cubre el reverso.",
+            )
+
+
+def verificar_efectivo_del_reverso(
+    conn: Connection, id_jornada: int, caja: Fila | None
+) -> None:
+    """Reversar un depósito saca efectivo de la caja: debe existir.
+
+    Un depósito o retiro de ventanilla sin Caja.MovimientosCaja es una anomalía
+    (C06): reversarlo movería la cuenta sin mover el efectivo. Se detiene.
+    """
+    if caja is None:
+        raise problema(
+            409,
+            "TRANSACCION_INCONSISTENTE",
+            "La transacción de ventanilla no tiene movimiento de caja.",
+        )
+
+    if caja["Naturaleza"] != "I":
+        return
+
+    totales = caja_repo.calcular_totales(conn, id_jornada)
+
+    if totales is None or saldo_esperado(totales) < decimal(caja["Monto"]):
+        raise problema(
+            409,
+            "EFECTIVO_INSUFICIENTE_EN_CAJA",
+            "La caja no tiene efectivo para el reverso.",
+        )
+
 
 def reversar(
     conn: Connection,
@@ -203,7 +300,10 @@ def reversar(
                     "La transacción no se puede reversar.",
                 )
 
+            verificar_reverso_soportado(original, supervisor)
+
             id_jornada = original["IdJornadaCaja"]
+            caja = None
 
             if id_jornada is not None:
                 jornada = caja_repo.obtener_jornada(
@@ -232,6 +332,13 @@ def reversar(
                         "La jornada ya tiene cuadre; no admite operaciones.",
                     )
 
+                caja = repo.movimiento_caja_de_transaccion(
+                    conn,
+                    id_transaccion,
+                )
+
+                verificar_efectivo_del_reverso(conn, id_jornada, caja)
+
             movimientos = repo.movimientos_de_transaccion(
                 conn,
                 id_transaccion,
@@ -244,7 +351,10 @@ def reversar(
                     "La transacción no movió saldos.",
                 )
 
-            id_fecha = fecha_contable(conn)
+            verificar_cuentas_del_reverso(conn, movimientos)
+
+            fecha_hora = ahora_ecuador()
+            id_fecha = fecha_contable(conn, fecha_hora)
             monto = decimal(original["Monto"])
 
             numeracion = deps.numerar(
@@ -286,6 +396,7 @@ def reversar(
                     "estado": "Completada",
                     "creado_por": supervisor,
                     "id_fecha_contable": id_fecha,
+                    "fecha_hora": fecha_hora,
                 },
             )
 
@@ -321,41 +432,37 @@ def reversar(
                 ),
             )
 
-            if id_jornada is not None:
-                caja = repo.movimiento_caja_de_transaccion(
+            if id_jornada is not None and caja is not None:
+                naturaleza = "E" if caja["Naturaleza"] == "I" else "I"
+
+                id_tipo = repo.id_tipo_movimiento_caja(
                     conn,
-                    id_transaccion,
+                    deps.codigo_tipo_movimiento_caja(
+                        original["TipoTransaccion"],
+                        naturaleza,
+                    ),
                 )
 
-                if caja is not None:
-                    naturaleza = "E" if caja["Naturaleza"] == "I" else "I"
-
-                    id_tipo = repo.id_tipo_movimiento_caja(
-                        conn,
-                        deps.codigo_tipo_movimiento_caja(
-                            original["TipoTransaccion"],
-                            naturaleza,
-                        ),
+                if id_tipo is None:
+                    raise problema(
+                        500,
+                        "CONFIGURACION_INCOMPLETA",
+                        "Falta configurar el tipo de movimiento de caja.",
                     )
 
-                    if id_tipo is None:
-                        raise problema(
-                            500,
-                            "CONFIGURACION_INCOMPLETA",
-                            "Falta configurar el tipo de movimiento de caja.",
-                        )
-
-                    repo.insertar_movimiento_caja(
-                        conn,
-                        id_reverso,
-                        id_jornada,
-                        caja["IdAgencia"],
-                        id_tipo,
-                        caja["Monto"],
-                        "Reverso",
-                        id_asiento,
-                        id_fecha,
-                    )
+                repo.insertar_movimiento_caja(
+                    conn,
+                    id_reverso,
+                    id_jornada,
+                    caja["IdAgencia"],
+                    id_tipo,
+                    caja["Monto"],
+                    # El motivo queda también en una tabla financiera, no solo
+                    # en la auditoría best-effort (M-05/M-46)
+                    f"Reverso: {motivo}"[:_LARGO_OBSERVACION_CAJA],
+                    id_asiento,
+                    id_fecha,
+                )
 
             if not repo.marcar_reversada(
                 conn,

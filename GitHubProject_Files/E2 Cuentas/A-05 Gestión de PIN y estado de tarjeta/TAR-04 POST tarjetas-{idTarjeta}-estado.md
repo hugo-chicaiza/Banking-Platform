@@ -55,14 +55,16 @@ Cambia el estado de la tarjeta (aprobar, rechazar, generar, bloquear, cancelar�
    - **Débito:** con el primer cambio de PIN en el ATM (ATM-01 abre una sesión restringida y ATM-06 activa la tarjeta).
    - **Crédito:** a los 3 días laborables desde `FechaEmision`, según `Contabilidad.FechaContable.EsDiaContable` (ATM-01 la activa al usarla; ver Pendiente).
 6. Volver a `Activa` desde `Bloqueada` o `Inactiva` exige PIN asignado (`PinAsignado = 1`) → si no, `409 PIN_NO_ASIGNADO`.
-7. `motivo` obligatorio; `TarjetaHis` guarda estado anterior, nuevo, usuario, canal e IP.
+7. `motivo` obligatorio; `TarjetaHis` guarda estado anterior, nuevo, usuario, canal e IP. Es texto legible que se muestra en TAR-06: el OpenAPI trae un ejemplo real (`Solicitud del cliente aprobada`) para que Swagger no proponga texto aleatorio generado desde el patrón.
 8. Bloquear la tarjeta no bloquea la cuenta.
 9. El PIN, el PAN y el PIN Offset nunca aparecen en respuestas, logs ni errores.
+10. **Sobre de PIN (débito):** al aprobar, el HSM entrega el PIN generado solo para armar el sobre de PIN (PDF de bienvenida con el PIN centrado), que se guarda cifrado y se descarga una sola vez con TAR-07. El sobre se guarda **antes** de confirmar el Offset: si no se puede guardar (almacén configurado que falla), la aprobación se revierte con `503 SOBRE_PIN_NO_GUARDADO` para que no quede un PIN que nadie conoce. Si no hay almacén configurado (producción sin `MONGO_URI` o sin `SOBRE_PIN_CLAVE`), se aprueba sin sobre y queda un aviso en el log. Crédito no tiene sobre.
 
 ## Flujo
 
 1. Bloquear la fila de la tarjeta y validar la transición contra `TransicionEstado` y las reglas 5 y 6.
 2. Si el destino es `Aprobada`: obtener el PAN ficticio, pedir al HSM el PIN y su Offset, y guardar el Offset en `SeguridadDB` (confirmado antes de seguir). Si CooperativaDB falla después, la tarjeta sigue en `Solicitada` y no se puede usar; repetir la aprobación genera un PIN nuevo que reemplaza al anterior.
+   - Si es débito, armar el sobre de PIN y guardarlo cifrado antes de confirmar el Offset (TAR-07).
 3. En una transacción de CooperativaDB: actualizar `Estado` (y `PinAsignado`, `FechaResolucion` o `FechaEmision`/`FechaExpiracion` según el destino) e insertar `TarjetaHis`.
 4. Responder 200.
 
@@ -121,6 +123,7 @@ Formato ProblemDetails (ver F-04). Además de 400/401/403:
 | 409 | `PIN_NO_ASIGNADO` | Se intenta reactivar una tarjeta sin PIN |
 | 503 | `HSM_NO_DISPONIBLE` | No se pudo generar el PIN al aprobar |
 | 503 | `PAN_NO_DISPONIBLE` | No se pudo obtener el PAN ficticio para generar el PIN |
+| 503 | `SOBRE_PIN_NO_GUARDADO` | Débito: no se pudo guardar el sobre de PIN (TAR-07); no se cambió nada |
 
 ## Definición de terminado
 

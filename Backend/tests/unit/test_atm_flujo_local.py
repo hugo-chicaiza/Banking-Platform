@@ -26,6 +26,7 @@ from app.core.security import hsm as modulo_hsm
 from app.modules.atm import repository, router, service, session, terminal_auth
 from app.modules.tarjetas import repository as tarjetas_repository
 from app.modules.tarjetas.identificacion import hash_pan
+from tests.pin_version import FECHA_PIN
 
 PAN_FICTICIO = "5000001234567896"
 PIN_LAB = "7392"
@@ -156,6 +157,7 @@ def laboratorio(tmp_path, monkeypatch, eventos_auditados, caplog):
         "estado_pin": "Activo",
         "tiene_pin_asignado": True,
         "intentos_fallidos": 0,
+        "fecha_asignacion": FECHA_PIN,
         "pin_offset": offset,
         "referencia_clave_pvk": pvk,
     }
