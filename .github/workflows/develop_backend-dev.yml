@@ -2,75 +2,78 @@
 # More GitHub Actions for Azure: https://github.com/Azure/actions
 # More info on Python, GitHub Actions, and Azure App Service: https://aka.ms/python-webapps-actions
 
-name: Build and deploy Python app to Azure Web App - backend-dev
+name: Deploy backend (desarrollo)
 
 on:
   push:
-    branches:
-      - 'develop'
+    branches: [develop]
+    paths:
+      - 'Backend/**'
+      - '.github/workflows/develop_backend-dev.yml'
   workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Nunca se cancela un despliegue en curso
+concurrency:
+  group: deploy-backend-dev
+  cancel-in-progress: false
 
 jobs:
   build:
+    name: Verificar dependencias y empaquetar
     runs-on: ubuntu-latest
-    permissions:
-      contents: read #This is required for actions/checkout
-
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
-      - name: Set up Python version
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '3.14'
 
-      # 🛠️ Local Build Section (Optional)
-      # The following section in your workflow is designed to catch build issues early on the client side, before deployment. This can be helpful for debugging and validation. However, if this step significantly increases deployment time and early detection is not critical for your workflow, you may remove this section to streamline the deployment process.
-      - name: Create and Start virtual environment and Install dependencies
+      - name: Instalar dependencias (con hashes)
+        working-directory: Backend
         run: |
           python -m venv antenv
           source antenv/bin/activate
-          pip install -r requirements.txt
-                
-      # By default, when you enable GitHub CI/CD integration through the Azure portal, the platform automatically sets the SCM_DO_BUILD_DURING_DEPLOYMENT application setting to true. This triggers the use of Oryx, a build engine that handles application compilation and dependency installation (e.g., pip install) directly on the platform during deployment. Hence, we exclude the antenv virtual environment directory from the deployment artifact to reduce the payload size. 
-      - name: Upload artifact for deployment jobs
-        uses: actions/upload-artifact@v4
+          pip install --require-hashes --only-binary :all: -r requirements.txt
+
+      - name: Subir paquete
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: python-app
           path: |
-            .
-            !antenv/
-
-      # 🚫 Opting Out of Oryx Build
-      # If you prefer to disable the Oryx build process during deployment, follow these steps:
-      # 1. Remove the SCM_DO_BUILD_DURING_DEPLOYMENT app setting from your Azure App Service Environment variables.
-      # 2. Refer to sample workflows for alternative deployment strategies: https://github.com/Azure/actions-workflow-samples/tree/master/AppService
-      
+            Backend/
+            !Backend/antenv/
+            !Backend/tests/
+          retention-days: 1
 
   deploy:
+    name: Desplegar a Azure (desarrollo)
     runs-on: ubuntu-latest
     needs: build
+    timeout-minutes: 15
     permissions:
-      id-token: write #This is required for requesting the JWT
-      contents: read #This is required for actions/checkout
-
+      id-token: write # necesario para OpenID Connect con Azure
+      contents: read
     steps:
-      - name: Download artifact from build job
-        uses: actions/download-artifact@v4
+      - name: Descargar paquete
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: python-app
-      
-      - name: Login to Azure
-        uses: azure/login@v2
+
+      - name: Iniciar sesión en Azure (OIDC)
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
         with:
           client-id: ${{ secrets.AZUREAPPSERVICE_CLIENTID_5769855C78C44FA798C2BEAAC67773A8 }}
           tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_3ED80B0E825E4C2BA2CDD1A01AA83F5E }}
           subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_5DBED6A2C4A34333A97D033402FFD8F2 }}
 
-      - name: 'Deploy to Azure Web App'
-        uses: azure/webapps-deploy@v3
-        id: deploy-to-webapp
+      - name: Desplegar al Web App
+        uses: azure/webapps-deploy@02a81bead70021f5284939794bcec79c271ab383 # v3
         with:
           app-name: 'backend-dev'
-          slot-name: 'Production'
-          
+          package: .
