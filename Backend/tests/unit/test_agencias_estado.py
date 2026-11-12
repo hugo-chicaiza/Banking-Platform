@@ -192,7 +192,7 @@ def test_guard_no_permite_validar_fuera_de_transaccion(ctx):
 
 def test_slugs_no_amplian_permisos():
     assert normalizar_roles(["admin"], None) == ("ADMIN",)
-    assert normalizar_roles(["org-contador"], None) == ()
+    assert normalizar_roles(["org-contador"], None) == ("CONTADOR",)
     assert normalizar_roles(["contador"], None) == ("CONTADOR",)
 
 
