@@ -17,6 +17,7 @@ from app.modules.clientes.router import router as clientes_router
 from app.modules.contabilidad.router import router as contabilidad_router
 from app.modules.creditos.router import router as creditos_router
 from app.modules.cuentas.router import router as cuentas_router
+from app.modules.organizacion.router import router as organizacion_router
 from app.modules.tarjetas.router import router as tarjetas_router
 from app.modules.tarjetas.router import router_pruebas as tarjetas_pruebas_router
 from app.modules.transacciones.router import router as transacciones_router
@@ -58,6 +59,7 @@ app.include_router(clientes_router, prefix=API_V1)
 app.include_router(contabilidad_router, prefix=API_V1)
 app.include_router(creditos_router, prefix=API_V1)
 app.include_router(cuentas_router, prefix=API_V1)
+app.include_router(organizacion_router, prefix=API_V1)
 app.include_router(tarjetas_router, prefix=API_V1)
 app.include_router(caja_router, prefix=API_V1)
 app.include_router(transacciones_router, prefix=API_V1)
