@@ -34,7 +34,11 @@ _TERMINALES = {
     ("POST", "/api/v1/atm/reversos"),
     ("POST", "/api/v1/atm/retiros"),
 }
-_VALORES_PATH = {"codigo_pais": "ECU", "fecha": "2026-11-04"}
+_VALORES_PATH = {
+    "codigo_pais": "ECU",
+    "fecha": "2026-11-04",
+    "id_agencia": "002",
+}
 
 # Roles de cada tarea (GitHubProject_Files)
 ROLES_POR_RUTA: dict[tuple[str, str], tuple[str, ...]] = {
@@ -218,6 +222,9 @@ ROLES_POR_RUTA: dict[tuple[str, str], tuple[str, ...]] = {
     ("POST", "/api/v1/caja/jornadas/{idJornada}/retiros"): ("CAJERO",),
     # TRX - 03
     ("POST", "/api/v1/transacciones/{idTransaccion}/reverso"): ("SUPERVISOR",),
+    # Agencias
+    ("POST", "/api/v1/agencias"): ("ADMIN",),
+    ("PATCH", "/api/v1/agencias/{id_agencia}"): ("ADMIN",),
 }
 
 
