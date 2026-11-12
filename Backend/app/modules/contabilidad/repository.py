@@ -62,3 +62,40 @@ def id_fecha_contable(conn: Connection, fecha_hora: datetime) -> int | None:
         {"fecha_hora": fecha_hora},
     )
     return fila["id_fecha_contable"] if fila else None
+
+
+def listar_cuentas_contables(
+    conn: Connection, q: str | None, imputable: bool | None
+) -> list[dict[str, Any]]:
+    """Plan de cuentas (CON-03) ordenado por código; filtros opcionales.
+
+    `q` busca por código o nombre (sin distinguir mayúsculas; % y _ se toman
+    literales). TipoCuenta es una columna calculada de CuentasContables a partir
+    de Contabilidad.ElementoCUC, por eso no hace falta el JOIN.
+    """
+    sql = """
+        SELECT IdCuentaContable AS id_cuenta_contable,
+               CodigoCuenta     AS codigo_cuenta,
+               NombreCuenta     AS nombre_cuenta,
+               Naturaleza       AS naturaleza,
+               TipoCuenta       AS tipo_cuenta,
+               IdCuentaSuperior AS id_cuenta_superior,
+               EsImputable      AS es_imputable,
+               Saldo            AS saldo,
+               Estado           AS estado
+        FROM Contabilidad.CuentasContables
+        WHERE 1 = 1
+    """
+    params: dict[str, Any] = {}
+    if q is not None:
+        sql += """
+          AND (CodigoCuenta LIKE :patron ESCAPE '\\'
+               OR NombreCuenta LIKE :patron ESCAPE '\\')
+        """
+        escapado = q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        params["patron"] = f"%{escapado}%"
+    if imputable is not None:
+        sql += " AND EsImputable = :imputable"
+        params["imputable"] = 1 if imputable else 0
+    sql += " ORDER BY CodigoCuenta"
+    return [dict(f) for f in conn.execute(text(sql), params).mappings().all()]

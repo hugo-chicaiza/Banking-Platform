@@ -98,3 +98,17 @@ def obtener_fecha_contable_actual(conn: Connection) -> dict[str, Any]:
             "El calendario contable no tiene fechas cargadas para este período",
         )
     return fila
+
+
+def listar_cuentas_contables(
+    conn: Connection, q: str | None, imputable: bool | None
+) -> list[dict[str, Any]]:
+    """CON-03: plan de cuentas con filtro por texto (código o nombre) y por imputable.
+
+    La jerarquía se expresa con idCuentaSuperior; el front arma el árbol. El estado
+    de la DB (bit) se publica como "Activo"/"Inactivo".
+    """
+    return [
+        {**fila, "estado": "Activo" if fila["estado"] else "Inactivo"}
+        for fila in repository.listar_cuentas_contables(conn, q, imputable)
+    ]
