@@ -657,3 +657,55 @@ def test_dependencias_devuelve_las_que_tienen_filas() -> None:
         "jornadas abiertas",
         "ATM activos",
     ]
+
+
+@pytest.mark.parametrize("estado", ["A", "I", "C"])
+def test_consulta_agencia_para_edicion(cliente, bd, conn, monkeypatch, estado):
+    from unittest.mock import Mock
+
+    bd.agencias["002"].update(
+        Telefono="022345678", Direccion="Av. Central", IdCiudad=2, Estado=estado
+    )
+    leer = Mock(side_effect=bd.leer)
+    monkeypatch.setattr(repo, "obtener_agencia", leer)
+    r = cliente.get(f"{BASE}/002")
+    assert r.status_code == 200, r.text
+    assert r.json()["telefono"] == "022345678"
+    assert r.json()["direccion"] == "Av. Central"
+    assert r.json()["idCiudad"] == 2
+    leer.assert_called_once_with(conn, "002", bloquear=False)
+    conn.commit.assert_not_called()
+    assert bd.actualizaciones == []
+
+
+@pytest.mark.parametrize("valor", [None, "", "   "])
+def test_consulta_agencia_campos_vacios_son_null(cliente, bd, valor):
+    bd.agencias["002"].update(Telefono=valor, Direccion=valor)
+    r = cliente.get(f"{BASE}/002")
+    assert r.status_code == 200
+    assert r.json()["telefono"] is None
+    assert r.json()["direccion"] is None
+    assert r.json()["idCiudad"] == 1
+
+
+def test_consulta_agencia_inexistente(cliente, bd):
+    r = cliente.get(f"{BASE}/999")
+    assert r.status_code == 404
+    assert _codigo_json(r) == "AGENCIA_NO_ENCONTRADA"
+
+
+def test_consulta_agencia_exige_admin(cliente, app, bd, monkeypatch):
+    from unittest.mock import Mock
+
+    leer = Mock(side_effect=AssertionError("No debe consultar la agencia"))
+    monkeypatch.setattr(repo, "obtener_agencia", leer)
+    simular_sesion(app, usuario_con_roles("ASESOR"))
+    r = cliente.get(f"{BASE}/002")
+    assert r.status_code == 403
+    assert _codigo_json(r) == "SIN_PERMISO"
+    leer.assert_not_called()
+
+
+@pytest.mark.parametrize("id_agencia", ["01", "0001", "abc", "A-1"])
+def test_consulta_agencia_valida_id_como_patch(cliente, bd, id_agencia):
+    assert cliente.get(f"{BASE}/{id_agencia}").status_code == 400
