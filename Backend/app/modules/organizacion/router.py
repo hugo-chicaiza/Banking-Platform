@@ -101,7 +101,7 @@ def _sin_cache(response: Response) -> None:
 
 
 @router.patch(
-    "/{id_agencia}/estado",
+    "/agencias/{id_agencia}/estado",
     response_model=AgenciaEstado,
     operation_id="AgenciaCambiarEstado",
     openapi_extra={"x-roles": ["ADMIN"]},
@@ -123,6 +123,66 @@ def cambiar_estado(
             ip_cliente(request.scope),
             f"estado_anterior={anterior} estado_nuevo={resultado.estado}",
             id_agencia,
+        ):
+            pass
+    return resultado
+
+
+@router.get(
+    "/organizacion/entidad",
+    response_model=Entidad,
+    operation_id="EntidadObtener",
+    summary="Obtener la entidad",
+    openapi_extra={"x-roles": ["ASESOR", "ADMIN"]},
+    dependencies=[
+        Depends(require_roles("ASESOR", "ADMIN")),
+        Depends(solo_parametros()),
+    ],
+)
+def obtener_entidad(conn: Db) -> Entidad:
+    """Devuelve la entidad con IdEntidad = 1, incluso si está inactiva.
+
+    Requiere sesión y rol ASESOR o ADMIN. Si falta el registro, responde
+    404 ENTIDAD_NO_ENCONTRADA.
+    """
+    return service.obtener_entidad(conn)
+
+
+@router.patch(
+    "/organizacion/entidad",
+    response_model=Entidad,
+    operation_id="EntidadEditar",
+    summary="Editar parcialmente la entidad",
+    openapi_extra={"x-roles": ["ADMIN"]},
+    dependencies=[Depends(solo_parametros())],
+)
+def editar_entidad(
+    datos: EntidadUpdate,
+    conn: Db,
+    request: Request,
+    modificado_por: UsuarioAuditoria,
+    usuario: Annotated[Usuario, Depends(require_roles("ADMIN"))],
+) -> Entidad:
+    """Actualiza IdEntidad = 1 y devuelve todos sus datos persistidos.
+
+    Requiere ADMIN. Envíe al menos un campo editable. Omitir un campo conserva
+    su valor y null vacía los campos anulables. Los campos idEntidad,
+    fechaRegistro y modificadoPor son administrados por el backend.
+    ModificadoPor se obtiene de la sesión. Un cuerpo inválido responde
+    400 DATOS_INVALIDOS. Una entidad inexistente responde
+    404 ENTIDAD_NO_ENCONTRADA. Repetir los valores actuales devuelve 200
+    sin otra escritura de auditoría. Los cambios efectivos se auditan
+    después del commit mediante el mecanismo best-effort existente.
+    """
+    resultado, campos = service.editar_entidad(conn, datos, modificado_por)
+    if campos:
+        with auditar(
+            "EDITAR_ENTIDAD",
+            "Organizacion.Entidad",
+            usuario,
+            ip_cliente(request.scope),
+            "campos=" + ",".join(campos),
+            str(resultado.id_entidad),
         ):
             pass
     return resultado
