@@ -60,6 +60,11 @@ ROLES_POR_RUTA: dict[tuple[str, str], tuple[str, ...]] = {
     },
     ("GET", "/api/v1/contabilidad/fechas-contables/actual"): AUTH,
     ("GET", "/api/v1/contabilidad/fechas-contables/{fecha}"): AUTH,
+    ("GET", "/api/v1/contabilidad/cuentas-contables"): (
+        "CONTADOR",
+        "AUDITOR",
+        "ADMIN",
+    ),
     ("PATCH", "/api/v1/agencias/{id_agencia}/estado"): ("ADMIN",),
     ("GET", "/api/v1/organizacion/entidad"): ("ASESOR", "ADMIN"),
     ("PATCH", "/api/v1/organizacion/entidad"): ("ADMIN",),
