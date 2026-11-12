@@ -28,6 +28,8 @@ from app.modules.organizacion.schemas import (
     AgenciaCreate,
     AgenciaEstado,
     AgenciaUpdate,
+    Entidad,
+    EntidadUpdate,
     EstadoAgencia,
 )
 
@@ -421,7 +423,7 @@ def exigir_agencia_destino_activa(conn: Connection, id_agencia: str) -> AgenciaE
 
 
 def obtener_entidad(conn: Connection, *, bloquear: bool = False) -> Entidad:
-    fila = repository.obtener_entidad(conn, bloquear=bloquear)
+    fila = repo.obtener_entidad(conn, bloquear=bloquear)
     if fila is None:
         raise problema(404, "ENTIDAD_NO_ENCONTRADA", "No se encontró la entidad.")
     return Entidad(**fila)
@@ -440,6 +442,6 @@ def editar_entidad(
         }
         if not cambios:
             return actual, []
-        repository.actualizar_entidad(conn, cambios, modificado_por)
+        repo.actualizar_entidad(conn, cambios, modificado_por)
         resultado = obtener_entidad(conn)
         return resultado, list(cambios)
