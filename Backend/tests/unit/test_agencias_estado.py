@@ -27,6 +27,16 @@ def ctx(monkeypatch):
     escribir = Mock(return_value=True)
     auditoria = Mock()
     monkeypatch.setattr(repository, "bloquear_agencia", leer)
+    monkeypatch.setattr(
+        repository,
+        "obtener_agencia",
+        Mock(return_value={"TipoAgencia": "Sucursal"}),
+    )
+    monkeypatch.setattr(
+        repository,
+        "dependencias_activas",
+        Mock(return_value=[]),
+    )
     monkeypatch.setattr(repository, "actualizar_estado", escribir)
     monkeypatch.setattr(audit, "registrar", auditoria)
     with TestClient(app) as cliente:
@@ -184,3 +194,37 @@ def test_slugs_no_amplian_permisos():
     assert normalizar_roles(["admin"], None) == ("ADMIN",)
     assert normalizar_roles(["org-contador"], None) == ()
     assert normalizar_roles(["contador"], None) == ("CONTADOR",)
+
+
+def test_no_desactivar_matriz(ctx, monkeypatch):
+    _, cliente, _, _, escribir, auditoria = ctx
+
+    monkeypatch.setattr(
+        repository,
+        "obtener_agencia",
+        Mock(return_value={"TipoAgencia": "Matriz"}),
+    )
+
+    respuesta = cliente.patch(RUTA, json={"estado": "I"})
+
+    assert respuesta.status_code == 409
+    assert respuesta.json()["code"] == "MATRIZ_NO_DESACTIVABLE"
+    escribir.assert_not_called()
+    auditoria.assert_not_called()
+
+
+def test_no_desactivar_agencia_con_actividad(ctx, monkeypatch):
+    _, cliente, _, _, escribir, auditoria = ctx
+
+    monkeypatch.setattr(
+        repository,
+        "dependencias_activas",
+        Mock(return_value=["Caja.JornadasCaja"]),
+    )
+
+    respuesta = cliente.patch(RUTA, json={"estado": "I"})
+
+    assert respuesta.status_code == 409
+    assert respuesta.json()["code"] == "AGENCIA_CON_ACTIVIDAD"
+    escribir.assert_not_called()
+    auditoria.assert_not_called()
