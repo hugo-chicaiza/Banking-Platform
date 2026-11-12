@@ -229,7 +229,11 @@ def normalizar_roles(roles: Sequence[str] | None, rol: str | None) -> tuple[str,
     for crudo in crudos:
         if not isinstance(crudo, str):
             continue
-        nombre = crudo.strip().upper().replace("-", "_")
+        nombre = (
+            "CONTADOR"
+            if crudo.strip().lower() == "org-contador"
+            else crudo.strip().upper().replace("-", "_")
+        )
         if nombre in ROLES and nombre not in resultado:
             resultado.append(nombre)
     return tuple(resultado)
