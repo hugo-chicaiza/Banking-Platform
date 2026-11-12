@@ -32,6 +32,7 @@ Db = Annotated[Connection, Depends(cooperativa)]
     response_model=AgenciaEstado,
     operation_id="AgenciaCambiarEstado",
     openapi_extra={"x-roles": ["ADMIN"]},
+    dependencies=[Depends(solo_parametros())],
 )
 def cambiar_estado(
     id_agencia: Annotated[str, Path(min_length=3, max_length=3)],
@@ -40,7 +41,6 @@ def cambiar_estado(
     request: Request,
     usuario: Annotated[Usuario, Depends(require_roles("ADMIN"))],
 ):
-    solo_parametros(request, ())
     resultado, anterior = service.cambiar_estado(conn, id_agencia, datos.estado)
     # Un replay no repite UPDATE ni genera una segunda escritura de auditoría.
     # Registrar solo cambios confirmados, con el mecanismo best-effort existente.
@@ -49,7 +49,7 @@ def cambiar_estado(
             "CAMBIAR_ESTADO_AGENCIA",
             "Organizacion.Agencia",
             usuario,
-            ip_cliente(request),
+            ip_cliente(request.scope),
             f"estado_anterior={anterior} estado_nuevo={resultado.estado}",
             id_agencia,
         ):

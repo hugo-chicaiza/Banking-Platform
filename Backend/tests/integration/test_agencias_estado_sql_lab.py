@@ -35,7 +35,7 @@ def conectar():
     )
     try:
         fila = raw.execute("SELECT @@SERVERNAME, DB_NAME()").fetchone()
-        if tuple(fila) != (SERVER, DATABASE):
+        if fila is None or tuple(fila) != (SERVER, DATABASE):
             raise RuntimeError("Destino distinto del laboratorio permitido")
         raw.rollback()
     except BaseException:
