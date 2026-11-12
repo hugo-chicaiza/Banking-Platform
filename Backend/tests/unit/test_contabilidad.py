@@ -4,6 +4,7 @@ No requieren base de datos: se monkeypatcha el repositorio.
 """
 
 from datetime import date, datetime, time
+from decimal import Decimal
 from unittest.mock import Mock
 
 import pytest
@@ -211,3 +212,170 @@ def test_resolver_envia_a_sql_la_hora_local_del_corte(
         service.resolver_id_fecha_contable(conn, datetime.fromisoformat(instante)) == 5
     )
     consulta.assert_called_once_with(conn, datetime.fromisoformat(hora_ecuador))
+
+
+# ---------------------------------------------------------------------------
+# CON-03 · GET /contabilidad/cuentas-contables (API Contract Ready)
+# ---------------------------------------------------------------------------
+
+_CUENTAS = "/api/v1/contabilidad/cuentas-contables"
+
+
+def test_con03_contrato_en_el_openapi():
+    spec = app.openapi()
+    operacion = spec["paths"][_CUENTAS]["get"]
+
+    assert operacion["operationId"] == "CON03"
+    assert operacion["x-roles"] == ["CONTADOR", "AUDITOR", "ADMIN"]
+    parametros = {p["name"]: p for p in operacion["parameters"]}
+    assert set(parametros) == {"q", "imputable"}
+    assert not parametros["q"]["required"]
+    assert not parametros["imputable"]["required"]
+    esquema = operacion["responses"]["200"]["content"]["application/json"]["schema"]
+    assert esquema["type"] == "array"
+    assert esquema["items"]["$ref"].endswith("/CuentaContable")
+    propiedades = spec["components"]["schemas"]["CuentaContable"]["properties"]
+    assert set(propiedades) == {
+        "idCuentaContable",
+        "codigoCuenta",
+        "nombreCuenta",
+        "naturaleza",
+        "tipoCuenta",
+        "idCuentaSuperior",
+        "esImputable",
+        "saldo",
+        "estado",
+    }
+
+
+def test_con03_cuenta_se_serializa_como_el_contrato():
+    from app.modules.contabilidad.schemas import CuentaContable
+
+    cuenta = CuentaContable(
+        id_cuenta_contable=1,
+        codigo_cuenta="COD01",
+        nombre_cuenta="nombreCuenta",
+        naturaleza="DEUDORA",
+        tipo_cuenta="Ahorros",
+        id_cuenta_superior=None,
+        es_imputable=True,
+        saldo=Decimal("150.00"),
+        estado="Activo",
+    )
+
+    assert cuenta.model_dump(mode="json", by_alias=True) == {
+        "idCuentaContable": 1,
+        "codigoCuenta": "COD01",
+        "nombreCuenta": "nombreCuenta",
+        "naturaleza": "DEUDORA",
+        "tipoCuenta": "Ahorros",
+        "idCuentaSuperior": None,
+        "esImputable": True,
+        "saldo": 150.0,
+        "estado": "Activo",
+    }
+
+
+def _cuenta(**cambios):
+    fila = {
+        "id_cuenta_contable": 1,
+        "codigo_cuenta": "1",
+        "nombre_cuenta": "ACTIVO",
+        "naturaleza": "DEUDORA",
+        "tipo_cuenta": "ACTIVO",
+        "id_cuenta_superior": None,
+        "es_imputable": False,
+        "saldo": Decimal("150.00"),
+        "estado": True,
+    }
+    return {**fila, **cambios}
+
+
+@pytest.mark.parametrize("rol", ["CONTADOR", "AUDITOR", "ADMIN"])
+def test_con03_roles_permitidos_reciben_el_plan_de_cuentas(client, monkeypatch, rol):
+    from tests.sesion import usuario_con_roles
+
+    simular_sesion(app, usuario_con_roles(rol))
+    monkeypatch.setattr(
+        repository, "listar_cuentas_contables", lambda conn, q, i: [_cuenta()]
+    )
+
+    r = client.get(_CUENTAS)
+
+    assert r.status_code == 200
+    assert r.json() == [
+        {
+            "idCuentaContable": 1,
+            "codigoCuenta": "1",
+            "nombreCuenta": "ACTIVO",
+            "naturaleza": "DEUDORA",
+            "tipoCuenta": "ACTIVO",
+            "idCuentaSuperior": None,
+            "esImputable": False,
+            "saldo": 150.0,
+            "estado": "Activo",
+        }
+    ]
+
+
+def test_con03_estado_inactivo_y_filtros_llegan_al_repositorio(client, monkeypatch):
+    recibido = {}
+
+    def _fn(conn, q, imputable):
+        recibido.update(q=q, imputable=imputable)
+        return [_cuenta(estado=False, es_imputable=True, id_cuenta_superior=1)]
+
+    monkeypatch.setattr(repository, "listar_cuentas_contables", _fn)
+
+    r = client.get(_CUENTAS, params={"q": "caja", "imputable": "true"})
+
+    assert recibido == {"q": "caja", "imputable": True}
+    assert r.status_code == 200
+    assert r.json()[0]["estado"] == "Inactivo"
+    assert r.json()[0]["idCuentaSuperior"] == 1
+
+
+def test_con03_sin_filtros_y_sin_resultados_devuelve_lista_vacia(client, monkeypatch):
+    recibido = {}
+
+    def _fn(conn, q, imputable):
+        recibido.update(q=q, imputable=imputable)
+        return []
+
+    monkeypatch.setattr(repository, "listar_cuentas_contables", _fn)
+
+    r = client.get(_CUENTAS)
+
+    assert recibido == {"q": None, "imputable": None}
+    assert r.status_code == 200
+    assert r.json() == []
+
+
+def test_con03_rol_fuera_de_la_tarea_recibe_403(client):
+    from tests.sesion import usuario_con_roles
+
+    simular_sesion(app, usuario_con_roles("ASESOR"))
+
+    r = client.get(_CUENTAS)
+
+    assert r.status_code == 403
+    assert r.json()["code"] == "SIN_PERMISO"
+
+
+def test_con03_parametro_desconocido_o_repetido_es_400(client):
+    desconocido = client.get(_CUENTAS, params={"nivel": "1"})
+    repetido = client.get(f"{_CUENTAS}?q=a&q=b")
+
+    for r in (desconocido, repetido):
+        assert r.status_code == 400
+        assert r.json()["code"] == "PARAMETRO_INVALIDO"
+
+
+@pytest.mark.parametrize(
+    "consulta",
+    ["q=", f"q={'x' * 101}", "imputable=quizas"],
+)
+def test_con03_valores_invalidos_son_400(client, consulta):
+    r = client.get(f"{_CUENTAS}?{consulta}")
+
+    assert r.status_code == 400
