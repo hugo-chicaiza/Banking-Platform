@@ -112,6 +112,21 @@ def a_respuesta(fila: dict[str, Any]) -> Agencia:
     )
 
 
+def obtener_agencia(conn: Connection, id_agencia: str) -> Agencia:
+    fila = repo.obtener_agencia(conn, id_agencia, bloquear=False)
+    if fila is None:
+        raise problema(404, "AGENCIA_NO_ENCONTRADA", "La agencia no existe.")
+    return a_respuesta(
+        {
+            **fila,
+            "Telefono": fila["Telefono"] if (fila["Telefono"] or "").strip() else None,
+            "Direccion": fila["Direccion"]
+            if (fila["Direccion"] or "").strip()
+            else None,
+        }
+    )
+
+
 def _verificar_ciudad(conn: Connection, id_ciudad: int) -> None:
     if not repo.existe_ciudad(conn, id_ciudad):
         raise _error("FK_Agencia_Ciudad")

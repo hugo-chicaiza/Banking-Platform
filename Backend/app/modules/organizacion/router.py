@@ -69,6 +69,18 @@ def crear_agencia(
     )
 
 
+@router.get(
+    "/agencias/{id_agencia}",
+    tags=["organizacion"],
+    operation_id="AgenciaObtener",
+    response_model=Agencia,
+    dependencies=[Depends(solo_parametros()), Depends(require_roles(*_ROLES))],
+    openapi_extra={"x-roles": _ROLES},
+)
+def obtener_agencia(id_agencia: IdAgenciaPath, conn: Db) -> Agencia:
+    return service.obtener_agencia(conn, id_agencia)
+
+
 @router.patch(
     "/agencias/{id_agencia}",
     tags=["organizacion"],

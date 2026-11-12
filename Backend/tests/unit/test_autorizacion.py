@@ -226,6 +226,7 @@ ROLES_POR_RUTA: dict[tuple[str, str], tuple[str, ...]] = {
     ("POST", "/api/v1/transacciones/{idTransaccion}/reverso"): ("SUPERVISOR",),
     # Agencias
     ("POST", "/api/v1/agencias"): ("ADMIN",),
+    ("GET", "/api/v1/agencias/{id_agencia}"): ("ADMIN",),
     ("PATCH", "/api/v1/agencias/{id_agencia}"): ("ADMIN",),
 }
 
