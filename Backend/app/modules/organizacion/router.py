@@ -27,16 +27,16 @@ from app.modules.organizacion.schemas import (
     AgenciaEstado,
     AgenciaEstadoUpdate,
     AgenciaUpdate,
+    Entidad,
+    EntidadUpdate,
 )
 
 _ROLES = ["ADMIN"]
 
 router = APIRouter(
-    prefix="/agencias",
-    tags=["organizacion"],
     route_class=ProblemDetailsRoute,
     responses=RESPUESTAS_ERROR,
-    dependencies=[Depends(require_auth), Depends(require_roles(*_ROLES))],
+    dependencies=[Depends(require_auth)],
 )
 
 Db = Annotated[Connection, Depends(cooperativa)]
@@ -44,11 +44,12 @@ IdAgenciaPath = Annotated[str, Path(pattern=r"^[0-9A-Z]{3}$")]
 
 
 @router.post(
-    "",
+    "/agencias",
+    tags=["organizacion"],
     operation_id="ORG01",
     response_model=Agencia,
     status_code=201,
-    dependencies=[Depends(solo_parametros())],
+    dependencies=[Depends(solo_parametros()), Depends(require_roles(*_ROLES))],
     openapi_extra={"x-roles": _ROLES},
 )
 def crear_agencia(
@@ -69,10 +70,11 @@ def crear_agencia(
 
 
 @router.patch(
-    "/{id_agencia}",
+    "/agencias/{id_agencia}",
+    tags=["organizacion"],
     operation_id="ORG02",
     response_model=Agencia,
-    dependencies=[Depends(solo_parametros())],
+    dependencies=[Depends(solo_parametros()), Depends(require_roles(*_ROLES))],
     openapi_extra={"x-roles": _ROLES},
 )
 def actualizar_agencia(
@@ -103,6 +105,7 @@ def _sin_cache(response: Response) -> None:
 @router.patch(
     "/agencias/{id_agencia}/estado",
     response_model=AgenciaEstado,
+    tags=["organizacion"],
     operation_id="AgenciaCambiarEstado",
     openapi_extra={"x-roles": ["ADMIN"]},
     dependencies=[Depends(solo_parametros()), Depends(_sin_cache)],
@@ -130,11 +133,13 @@ def cambiar_estado(
 
 @router.get(
     "/organizacion/entidad",
+    tags=["Organización"],
     response_model=Entidad,
     operation_id="EntidadObtener",
     summary="Obtener la entidad",
     openapi_extra={"x-roles": ["ASESOR", "ADMIN"]},
     dependencies=[
+        Depends(_sin_cache),
         Depends(require_roles("ASESOR", "ADMIN")),
         Depends(solo_parametros()),
     ],
@@ -150,11 +155,12 @@ def obtener_entidad(conn: Db) -> Entidad:
 
 @router.patch(
     "/organizacion/entidad",
+    tags=["Organización"],
     response_model=Entidad,
     operation_id="EntidadEditar",
     summary="Editar parcialmente la entidad",
     openapi_extra={"x-roles": ["ADMIN"]},
-    dependencies=[Depends(solo_parametros())],
+    dependencies=[Depends(solo_parametros()), Depends(_sin_cache)],
 )
 def editar_entidad(
     datos: EntidadUpdate,

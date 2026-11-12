@@ -7,8 +7,8 @@ Direccion varchar(250) NULL, FechaCreacion datetime2 (default SQL), IdCiudad int
 Catalogo.Ciudad), KeyAgencia varchar(64) NULL (único si no es NULL).
 """
 
-from datetime import datetime
-from typing import Annotated, Literal
+from datetime import date, datetime
+from typing import Annotated, Literal, Self
 from zoneinfo import ZoneInfo
 
 from pydantic import (
@@ -16,8 +16,10 @@ from pydantic import (
     ConfigDict,
     Field,
     StringConstraints,
+    field_validator,
     model_validator,
 )
+from pydantic.json_schema import SkipJsonSchema
 
 from app.core.api.schemas import CamelModel
 
