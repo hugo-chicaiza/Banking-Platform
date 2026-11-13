@@ -8,7 +8,7 @@ La entidad representa a la cooperativa y corresponde a la fila con
 | Método | Ruta | Roles | Respuesta exitosa |
 | --- | --- | --- | --- |
 | GET | `/api/v1/organizacion/entidad` | `ASESOR`, `ADMIN` | 200 con la entidad completa |
-| PUT | `/api/v1/organizacion/entidad` | `ADMIN` | 201 con la entidad creada |
+| POST | `/api/v1/organizacion/entidad` | `ADMIN` | 201 con la entidad creada |
 | PATCH | `/api/v1/organizacion/entidad` | `ADMIN` | 200 con la entidad completa después de editar |
 
 Todas las operaciones requieren la sesión existente del backend. La autenticación,
@@ -18,13 +18,13 @@ de errores utilizan los mecanismos compartidos del proyecto.
 La clave primaria y `CK_Entidad_UnaFila` permiten como máximo una entidad.
 Cuando la tabla está vacía, GET y PATCH responden
 `404 ENTIDAD_NO_ENCONTRADA`. Un administrador puede crear el registro inicial
-mediante PUT.
+mediante POST.
 
 El GET también devuelve la entidad cuando su estado es `I`.
 
-## Creación mediante PUT
+## Creación mediante POST
 
-`PUT /api/v1/organizacion/entidad` requiere exclusivamente el rol `ADMIN`.
+`POST /api/v1/organizacion/entidad` requiere exclusivamente el rol `ADMIN`.
 Crea la fila con `IdEntidad = 1` y devuelve `201` con los 16 campos persistidos.
 El cuerpo mínimo contiene los siguientes datos ficticios.
 
@@ -53,9 +53,9 @@ administrador mediante `UsuarioAuditoria`. SQL Server asigna `fechaRegistro`
 con el DEFAULT de la tabla en hora de Ecuador. Enviar estos tres campos en el
 cuerpo produce `400 DATOS_INVALIDOS`.
 
-Si la fila ya existe, PUT responde `409 ENTIDAD_YA_EXISTE`, incluso cuando se
+Si la fila ya existe, POST responde `409 ENTIDAD_YA_EXISTE`, incluso cuando se
 repite el mismo cuerpo. La edición del registro existente se realiza mediante
-PATCH. Dos PUT simultáneos se serializan mediante un bloqueo de rango sobre
+PATCH. Dos POST simultáneos se serializan mediante un bloqueo de rango sobre
 la clave `1`, incluyendo el caso en que la tabla está vacía. Una solicitud crea
 el registro y la otra recibe el conflicto al comprobar que ya existe.
 
@@ -109,7 +109,7 @@ actualiza el nombre comercial y vacía el teléfono.
 | Todos los valores enviados coinciden con los actuales | Devuelve 200 con los datos actuales |
 
 Los campos `idEntidad`, `fechaRegistro` y `modificadoPor` son administrados por
-el backend. Enviarlos en PUT o PATCH produce `400 DATOS_INVALIDOS`.
+el backend. Enviarlos en POST o PATCH produce `400 DATOS_INVALIDOS`.
 `ModificadoPor` se obtiene del identificador interno del usuario autenticado
 mediante `UsuarioAuditoria` y se actualiza cuando hay cambios efectivos.
 Repetir los valores actuales conserva el autor de la última modificación.
@@ -140,8 +140,8 @@ Las validaciones de teléfono, email y sitio web corresponden a las longitudes
 de sus columnas. Los textos opcionales también admiten una cadena vacía.
 El estado permite los cambios `A` → `I` e `I` → `A`.
 
-PUT y PATCH aceptan sus datos en el cuerpo de la solicitud. Cualquier parámetro
-de consulta en GET, PUT o PATCH produce `400 PARAMETRO_INVALIDO`.
+POST y PATCH aceptan sus datos en el cuerpo de la solicitud. Cualquier parámetro
+de consulta en GET, POST o PATCH produce `400 PARAMETRO_INVALIDO`.
 
 ## Transacción y auditoría
 
@@ -184,7 +184,7 @@ el campo y el motivo.
 | 403 | `USUARIO_SIN_VINCULO_AUDITORIA` | Falta el vínculo interno requerido por `UsuarioAuditoria` |
 | 403 | `ORIGEN_NO_PERMITIDO` | El origen de la escritura incumple la validación existente |
 | 404 | `ENTIDAD_NO_ENCONTRADA` | Falta la fila con `IdEntidad = 1` |
-| 409 | `ENTIDAD_YA_EXISTE` | El PUT encuentra la entidad ya registrada |
+| 409 | `ENTIDAD_YA_EXISTE` | El POST encuentra la entidad ya registrada |
 | 500 | `ERROR_INTERNO` | Fallo inesperado de persistencia o del servidor |
 
 También se aplican las respuestas de autenticación, límites y traducción SQL
@@ -198,12 +198,12 @@ definidas por los componentes compartidos del backend.
 3. Buscar la etiqueta **Organización**. Aparecen **Crear la entidad**,
    **Obtener la entidad** y **Editar parcialmente la entidad**, con sus modelos,
    ejemplos y errores.
-4. Si la tabla está vacía, con `ADMIN` ejecutar el PUT con el cuerpo mínimo de
+4. Si la tabla está vacía, con `ADMIN` ejecutar el POST con el cuerpo mínimo de
    creación. Comprobar la respuesta 201 y que repetirlo devuelve 409.
 5. Ejecutar el GET con un usuario `ASESOR` o `ADMIN`.
 6. Con `ADMIN`, ejecutar el PATCH usando el cuerpo de ejemplo y consultar
    nuevamente el GET para comprobar el resultado.
-7. Con `ASESOR`, comprobar que PUT y PATCH responden `403 SIN_PERMISO`.
+7. Con `ASESOR`, comprobar que POST y PATCH responden `403 SIN_PERMISO`.
 
 La configuración de `app/main.py` habilita `/api/docs` y `/api/openapi.json`
 cuando `APP_ENV` tiene un valor distinto de `production`.

@@ -328,13 +328,14 @@ def test_error_commit_evitar_auditoria_de_exito(ctx, eventos_auditados):
 def test_openapi_documenta_roles_contrato_y_etiqueta(ctx):
     documento = ctx.app.openapi()
     rutas = documento["paths"][RUTA]
+    assert set(rutas) == {"get", "post", "patch"}
     assert rutas["get"]["x-roles"] == ["ASESOR", "ADMIN"]
     assert rutas["patch"]["x-roles"] == ["ADMIN"]
-    assert rutas["put"]["x-roles"] == ["ADMIN"]
+    assert rutas["post"]["x-roles"] == ["ADMIN"]
     assert rutas["get"]["operationId"] == "EntidadObtener"
     assert rutas["patch"]["operationId"] == "EntidadEditar"
-    assert rutas["put"]["operationId"] == "EntidadCrear"
-    assert "201" in rutas["put"]["responses"]
+    assert rutas["post"]["operationId"] == "EntidadCrear"
+    assert "201" in rutas["post"]["responses"]
     for operacion in rutas.values():
         assert operacion["tags"] == ["Organización"]
         assert operacion["security"]
@@ -358,13 +359,15 @@ def test_openapi_documenta_roles_contrato_y_etiqueta(ctx):
     )
 
 
-def test_put_admin_crea_con_defaults_y_autor_de_sesion(ctx_creacion, eventos_auditados):
+def test_post_admin_crea_con_defaults_y_autor_de_sesion(
+    ctx_creacion, eventos_auditados
+):
     ctx = ctx_creacion
     ctx.app.dependency_overrides.pop(id_usuario_auditoria)
     usuario = replace(usuario_con_roles("ADMIN"), id_interno=47)
     ctx.app.dependency_overrides[usuario_actual] = lambda: usuario
 
-    r = ctx.cliente.put(RUTA, json=DATOS_CREACION)
+    r = ctx.cliente.post(RUTA, json=DATOS_CREACION)
 
     assert r.status_code == 201, r.text
     respuesta = r.json()
@@ -400,7 +403,7 @@ def test_put_admin_crea_con_defaults_y_autor_de_sesion(ctx_creacion, eventos_aud
     assert DATOS_CREACION["representanteLegal"] not in evento.descripcion
 
 
-def test_put_admite_campos_opcionales_y_estado_inactivo(ctx_creacion):
+def test_post_admite_campos_opcionales_y_estado_inactivo(ctx_creacion):
     datos = DATOS_CREACION | {
         "nombreComercial": "Nueva marca",
         "tipoOrganizacion": "Otra organización",
@@ -411,7 +414,7 @@ def test_put_admite_campos_opcionales_y_estado_inactivo(ctx_creacion):
         "sitioWeb": None,
         "estado": "I",
     }
-    r = ctx_creacion.cliente.put(RUTA, json=datos)
+    r = ctx_creacion.cliente.post(RUTA, json=datos)
     assert r.status_code == 201, r.text
     assert {campo: r.json()[campo] for campo in datos} == datos
 
@@ -419,13 +422,13 @@ def test_put_admite_campos_opcionales_y_estado_inactivo(ctx_creacion):
 @pytest.mark.parametrize(
     "rol", [None, "ASESOR", "CAJERO", "SUPERVISOR", "CONTADOR", "AUDITOR", ""]
 )
-def test_put_exclusivo_admin(ctx_creacion, rol):
+def test_post_exclusivo_admin(ctx_creacion, rol):
     ctx = ctx_creacion
     if rol is None:
         ctx.app.dependency_overrides.pop(usuario_actual)
     else:
         simular_sesion(ctx.app, usuario_con_roles(rol))
-    r = ctx.cliente.put(RUTA, json=DATOS_CREACION)
+    r = ctx.cliente.post(RUTA, json=DATOS_CREACION)
     assert r.status_code == (401 if rol is None else 403)
     ctx.leer.assert_not_called()
     ctx.insertar.assert_not_called()
@@ -433,11 +436,11 @@ def test_put_exclusivo_admin(ctx_creacion, rol):
 
 
 @pytest.mark.parametrize("campo", list(DATOS_CREACION))
-def test_put_exige_campos_obligatorios(ctx_creacion, campo):
+def test_post_exige_campos_obligatorios(ctx_creacion, campo):
     datos = {
         nombre: valor for nombre, valor in DATOS_CREACION.items() if nombre != campo
     }
-    r = ctx_creacion.cliente.put(RUTA, json=datos)
+    r = ctx_creacion.cliente.post(RUTA, json=datos)
     assert r.status_code == 400 and r.json()["code"] == "DATOS_INVALIDOS"
     assert any(error["field"] == campo for error in r.json()["errors"])
     ctx_creacion.insertar.assert_not_called()
@@ -472,20 +475,20 @@ def test_put_exige_campos_obligatorios(ctx_creacion, campo):
     ]
     + [(campo, None) for campo in (*DATOS_CREACION, "tipoOrganizacion", "estado")],
 )
-def test_put_valida_contrato_antes_de_sql(ctx_creacion, campo, valor):
-    r = ctx_creacion.cliente.put(RUTA, json=DATOS_CREACION | {campo: valor})
+def test_post_valida_contrato_antes_de_sql(ctx_creacion, campo, valor):
+    r = ctx_creacion.cliente.post(RUTA, json=DATOS_CREACION | {campo: valor})
     assert r.status_code == 400 and r.json()["code"] == "DATOS_INVALIDOS", r.text
     assert any(error["field"] == campo for error in r.json()["errors"])
     ctx_creacion.leer.assert_not_called()
     ctx_creacion.insertar.assert_not_called()
 
 
-def test_put_repetido_o_existente_responde_conflicto(ctx_creacion, eventos_auditados):
+def test_post_repetido_o_existente_responde_conflicto(ctx_creacion, eventos_auditados):
     ctx = ctx_creacion
-    primero = ctx.cliente.put(RUTA, json=DATOS_CREACION)
+    primero = ctx.cliente.post(RUTA, json=DATOS_CREACION)
     assert primero.status_code == 201
     for datos in (DATOS_CREACION, DATOS_CREACION | {"razonSocial": "Otra entidad"}):
-        r = ctx.cliente.put(RUTA, json=datos)
+        r = ctx.cliente.post(RUTA, json=datos)
         assert r.status_code == 409 and r.json()["code"] == "ENTIDAD_YA_EXISTE"
     assert ctx.cliente.get(RUTA).json() == primero.json()
     ctx.insertar.assert_called_once()
@@ -493,7 +496,7 @@ def test_put_repetido_o_existente_responde_conflicto(ctx_creacion, eventos_audit
 
 
 @pytest.mark.parametrize("fallo", ["insertar", "commit"])
-def test_put_fallido_revierte_y_evitar_auditoria_de_exito(
+def test_post_fallido_revierte_y_evitar_auditoria_de_exito(
     ctx_creacion, eventos_auditados, fallo
 ):
     ctx = ctx_creacion
@@ -503,14 +506,21 @@ def test_put_fallido_revierte_y_evitar_auditoria_de_exito(
         ctx.conn.begin.return_value.__exit__.side_effect = SQLAlchemyError(
             "fallo commit"
         )
-    r = ctx.cliente.put(RUTA, json=DATOS_CREACION)
+    r = ctx.cliente.post(RUTA, json=DATOS_CREACION)
     assert r.status_code == 500 and r.json()["code"] == "ERROR_INTERNO"
     assert eventos_auditados == []
     ctx.conn.begin.return_value.__exit__.assert_called_once()
 
 
-def test_put_rechaza_parametros_de_consulta(ctx_creacion):
-    r = ctx_creacion.cliente.put(RUTA + "?idEntidad=1", json=DATOS_CREACION)
+def test_post_rechaza_parametros_de_consulta(ctx_creacion):
+    r = ctx_creacion.cliente.post(RUTA + "?idEntidad=1", json=DATOS_CREACION)
     assert r.status_code == 400 and r.json()["code"] == "PARAMETRO_INVALIDO"
+    ctx_creacion.leer.assert_not_called()
+    ctx_creacion.insertar.assert_not_called()
+
+
+def test_metodo_anterior_de_creacion_responde_405(ctx_creacion):
+    r = ctx_creacion.cliente.request("PUT", RUTA, json=DATOS_CREACION)
+    assert r.status_code == 405
     ctx_creacion.leer.assert_not_called()
     ctx_creacion.insertar.assert_not_called()

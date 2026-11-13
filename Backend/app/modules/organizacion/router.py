@@ -166,7 +166,7 @@ def obtener_entidad(conn: Db) -> Entidad:
     return service.obtener_entidad(conn)
 
 
-@router.put(
+@router.post(
     "/organizacion/entidad",
     tags=["Organización"],
     response_model=Entidad,
