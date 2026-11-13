@@ -92,7 +92,7 @@ def existe_ciudad(conn: Connection, id_ciudad: int) -> bool:
 def conflictos_de_unicidad(
     conn: Connection,
     *,
-    id_agencia: str,
+    id_agencia: str | None,
     codigo: str | None,
     key_agencia: str | None,
     matriz: bool,
@@ -108,15 +108,15 @@ def conflictos_de_unicidad(
         SELECT
             CAST(CASE WHEN :codigo IS NOT NULL AND EXISTS (
                 SELECT 1 FROM Organizacion.Agencia WITH (UPDLOCK, HOLDLOCK)
-                WHERE Codigo = :codigo AND IdAgencia <> :id) THEN 1 ELSE 0 END AS bit)
+                WHERE Codigo = :codigo AND (:id IS NULL OR IdAgencia <> :id)) THEN 1 ELSE 0 END AS bit)
                 AS Codigo,
             CAST(CASE WHEN :key IS NOT NULL AND EXISTS (
                 SELECT 1 FROM Organizacion.Agencia WITH (UPDLOCK, HOLDLOCK)
-                WHERE KeyAgencia = :key AND IdAgencia <> :id) THEN 1 ELSE 0 END AS bit)
+                WHERE KeyAgencia = :key AND (:id IS NULL OR IdAgencia <> :id)) THEN 1 ELSE 0 END AS bit)
                 AS KeyAgencia,
             CAST(CASE WHEN :matriz = 1 AND EXISTS (
                 SELECT 1 FROM Organizacion.Agencia WITH (UPDLOCK, HOLDLOCK)
-                WHERE TipoAgencia = 'Matriz' AND IdAgencia <> :id) THEN 1 ELSE 0 END
+                WHERE TipoAgencia = 'Matriz' AND (:id IS NULL OR IdAgencia <> :id)) THEN 1 ELSE 0 END
                 AS bit) AS Matriz
         """,
         {"id": id_agencia, "codigo": codigo, "key": key_agencia, "matriz": int(matriz)},
@@ -124,23 +124,47 @@ def conflictos_de_unicidad(
     return {nombre for nombre, valor in (fila or {}).items() if valor}
 
 
-def insertar_agencia(conn: Connection, datos: dict[str, Any]) -> None:
-    """Estado y FechaCreacion quedan con los defaults de la tabla."""
+def insertar_agencia(conn: Connection, datos: dict[str, Any]) -> str:
+    """Genera un ID secuencial y crea la agencia en la transacción actual."""
+
+    numero = conn.execute(
+        text("SELECT NEXT VALUE FOR Organizacion.SeqAgenciaId")
+    ).scalar_one()
+
+    id_agencia = f"{int(numero):03d}"
+
+    parametros = {
+        **datos,
+        "id_agencia": id_agencia,
+    }
+
     conn.execute(
         text(
             """
             INSERT INTO Organizacion.Agencia (
-                IdAgencia, Codigo, TipoAgencia, IdCiudad, Telefono, Direccion,
+                IdAgencia,
+                Codigo,
+                TipoAgencia,
+                IdCiudad,
+                Telefono,
+                Direccion,
                 KeyAgencia
             )
             VALUES (
-                :id_agencia, :codigo, :tipo_agencia, :id_ciudad, :telefono,
-                :direccion, :key_agencia
+                :id_agencia,
+                :codigo,
+                :tipo_agencia,
+                :id_ciudad,
+                :telefono,
+                :direccion,
+                :key_agencia
             )
             """
         ),
-        datos,
+        parametros,
     )
+
+    return id_agencia
 
 
 _UPDATE_AGENCIA = text(

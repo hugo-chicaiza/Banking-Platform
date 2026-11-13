@@ -60,7 +60,7 @@ def crear_agencia(
     creado_por: UsuarioAuditoria,
     conn: Db,
 ) -> Agencia:
-    """Crea una agencia en Estado 'A'. idAgencia lo envía el cliente y no cambia."""
+    """Crea una agencia en Estado 'A'. SQL genera idAgencia automáticamente."""
     return service.crear_agencia(
         conn,
         payload,
