@@ -298,7 +298,9 @@ class _MotorFalso:
     [
         ("CAJERO,SUPERVISOR", True),
         ("SUPERVISOR", True),
+        ("org-supervisor", True),
         ("CAJERO", False),
+        ("org-cajero", False),
         ("SUPERVISORA", False),
         (None, False),
         (OperationalError("SELECT", None, Exception("caida")), False),

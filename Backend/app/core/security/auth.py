@@ -37,7 +37,9 @@ from workos.types.user_management.session import (
 )
 
 from app.core.api.errors import problema
+from app.core.config.settings import get_settings
 from app.core.database.db import DbName, get_engine
+from app.core.security.origen import resolver_origen_front
 from app.integrations.workos_client import (
     get_cookie_password,
     get_frontend_url,
@@ -46,8 +48,9 @@ from app.integrations.workos_client import (
 
 logger = logging.getLogger(__name__)
 
-# Roles del sistema. En WorkOS se crean con estos slugs (en minúsculas también sirve:
-# "cajero" o "aprobador-credito" se leen como CAJERO y APROBADOR_CREDITO).
+# Roles del sistema. En WorkOS son roles de organización con slug "org-" + el rol en
+# minúsculas y con guiones: org-cajero -> CAJERO, org-aprobador-credito ->
+# APROBADOR_CREDITO (también se leen sin el prefijo "org-").
 ROLES = (
     "ADMIN",
     "ASESOR",
@@ -60,6 +63,8 @@ ROLES = (
 
 # __Host-: el navegador exige Secure y Path=/ y no permite Domain, así un subdominio
 # no puede plantar ni pisar la cookie.
+_PREFIJO_ROL = "ORG_"
+
 COOKIE_SESION = "__Host-session"
 DURACION_SESION = 8 * 60 * 60  # AUT-01: 8 h. Igualar a la sesión configurada en WorkOS
 
@@ -111,7 +116,7 @@ class Usuario:
         return ",".join(self.roles) or None
 
     def agencia(self) -> str | None:
-        """IdAgencia cuya KeyAgencia es la organización de WorkOS de la sesión."""
+        """IdAgencia del usuario (Organizacion.Usuarios.AgenciaID)."""
         if self.cargar_agencia is None:
             return self.id_agencia
         if "agencia" not in self._leidos:
@@ -196,8 +201,9 @@ def verificar_origen(request: Request) -> None:
     """Protección CSRF de las peticiones que modifican datos.
 
     Como la sesión va en una cookie, el navegador la manda sola. Un POST que no viene
-    de FRONTEND_URL se rechaza con 403. Sin Origin ni Sec-Fetch-Site no es un
-    navegador (Postman, curl), y ahí no hay CSRF posible.
+    de FRONTEND_URL (o, en backend-dev, de la preview que resolvió el Worker) se
+    rechaza con 403. Sin Origin ni Sec-Fetch-Site no es un navegador (Postman, curl),
+    y ahí no hay CSRF posible.
     """
     if request.method in _METODOS_SEGUROS:
         return
@@ -206,6 +212,13 @@ def verificar_origen(request: Request) -> None:
     if origen is None and (sitio is None or sitio in _SITIOS_PROPIOS):
         return
     if origen == get_frontend_url():
+        return
+    # Solo backend-dev: el origen de la preview que resolvió el Worker
+    if (
+        origen is not None
+        and get_settings().frontend_origin_regex
+        and origen == resolver_origen_front(request)
+    ):
         return
     logger.warning("auth: origen rechazado origin=%s sec_fetch_site=%s", origen, sitio)
     raise HTTPException(
@@ -229,14 +242,17 @@ def normalizar_roles(roles: Sequence[str] | None, rol: str | None) -> tuple[str,
     for crudo in crudos:
         if not isinstance(crudo, str):
             continue
-        nombre = (
-            "CONTADOR"
-            if crudo.strip().lower() == "org-contador"
-            else crudo.strip().upper().replace("-", "_")
-        )
+        nombre = crudo.strip().upper().replace("-", "_").removeprefix(_PREFIJO_ROL)
         if nombre in ROLES and nombre not in resultado:
             resultado.append(nombre)
     return tuple(resultado)
+
+
+def slug_rol(rol: str) -> str:
+    """Slug del rol en WorkOS: CAJERO -> org-cajero."""
+    if rol not in ROLES:
+        raise ValueError(f"Rol no válido: {rol}")
+    return "org-" + rol.lower().replace("_", "-")
 
 
 def _vinculo(base: DbName, consulta: str, llave: str) -> Any:
@@ -258,8 +274,8 @@ def _vinculo(base: DbName, consulta: str, llave: str) -> Any:
 def _id_interno_db(id_workos: str, roles: str | None) -> int | None:
     """Organizacion.Usuarios.KeyUsuario = id del usuario en WorkOS; solo activos.
 
-    Guarda en RolesWorkOS los roles que dio WorkOS (solo si cambiaron), para comparar
-    con sus grupos de la base. None si no hay vínculo o la base falla (403).
+    Guarda en RolesWorkOS los roles que dio WorkOS (solo si cambiaron): es la copia
+    que usan AUT-05..09 y caja. None si no hay vínculo o la base falla (403).
     """
     try:
         with get_engine("seguridad").begin() as conn:
@@ -289,23 +305,50 @@ def _id_interno_db(id_workos: str, roles: str | None) -> int | None:
         return None
 
 
-def _agencia_db(id_organizacion: str | None) -> str | None:
-    """Organizacion.Agencia.KeyAgencia = organización de WorkOS; solo activas."""
-    if not id_organizacion:
-        return None
-    valor = _vinculo(
-        "cooperativa",
-        "SELECT IdAgencia FROM Organizacion.Agencia "
-        "WHERE KeyAgencia = :llave AND Estado = 'A'",
-        id_organizacion,
+def codigo_agencia(agencia_id: object) -> str | None:
+    """Organizacion.Usuarios.AgenciaID es int; Organizacion.Agencia.IdAgencia es
+    char(3): 1 -> "001".
+    """
+    if isinstance(agencia_id, int) and 0 < agencia_id < 1000:
+        return f"{agencia_id:03d}"
+    return None
+
+
+def _agencia_db(id_workos: str) -> str | None:
+    """Agencia del usuario: Organizacion.Usuarios.AgenciaID del usuario Activo cuya
+    KeyUsuario es el id de WorkOS.
+    """
+    return codigo_agencia(
+        _vinculo(
+            "seguridad",
+            "SELECT AgenciaID FROM Organizacion.Usuarios "
+            "WHERE KeyUsuario = :llave AND Estado = 'Activo'",
+            id_workos,
+        )
     )
-    return valor if isinstance(valor, str) else None
+
+
+def _roles_de_la_sesion(sesion: Exito) -> tuple[str, ...]:
+    """Roles solo si la sesión es de la organización de la cooperativa (EnquoCoop).
+
+    Una sesión de otra organización del mismo entorno de WorkOS no da roles: falla
+    cerrado. Sin WORKOS_ORGANIZATION_ID configurado no se compara.
+    """
+    organizacion = get_settings().workos_organization_id
+    if organizacion and sesion.organization_id != organizacion:
+        logger.warning(
+            "auth: sesión de otra organización usuario=%s organizacion=%s",
+            sesion.user.id,
+            sesion.organization_id,
+        )
+        return ()
+    return normalizar_roles(sesion.roles, sesion.role)
 
 
 def _usuario(sesion: Exito) -> Usuario:
     datos = sesion.user
     nombre = " ".join(p for p in (datos.first_name, datos.last_name) if p)
-    roles = normalizar_roles(sesion.roles, sesion.role)
+    roles = _roles_de_la_sesion(sesion)
     return Usuario(
         id_usuario=datos.id,
         id_sesion=sesion.session_id,
@@ -314,7 +357,7 @@ def _usuario(sesion: Exito) -> Usuario:
         email=datos.email,
         roles=roles,
         permisos=tuple(sesion.permissions or ()),
-        cargar_agencia=lambda: _agencia_db(sesion.organization_id),
+        cargar_agencia=lambda: _agencia_db(datos.id),
         cargar_interno=lambda: _id_interno_db(datos.id, ",".join(roles) or None),
     )
 

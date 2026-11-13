@@ -50,6 +50,7 @@ Inicia sesión con el Hosted UI de WorkOS AuthKit (authorization code, patrón B
 | `SOLICITUD_INVALIDA` | Falta `code`/`state` o no coincide con la cookie |
 | `CREDENCIALES_INVALIDAS` | WorkOS rechaza el `code` (vencido, usado, usuario bloqueado) |
 | `AUTENTICACION_NO_DISPONIBLE` | WorkOS no responde |
+| `USUARIO_NO_HABILITADO` | WorkOS autenticó, pero el usuario no está vinculado y `Activo` en `Organizacion.Usuarios` (bloqueado o inactivo) o la sesión no es de EnquoCoop (membresía inactiva). No se crea la cookie y la sesión se revoca en WorkOS |
 
 ## Configuración
 

@@ -21,63 +21,64 @@ url: https://github.com/hugo-chicaiza/Banking-Platform/issues/189
 
 `GET /api/v1/usuarios` · **Roles:** ADMIN · **Historia:** C-05 (#48) · **OpenAPI:** `AUT05`
 
-Lista usuarios del sistema.
+Lista los usuarios internos. Sale de la base: WorkOS no busca por nombre, no filtra por estado ni da el total.
 
-| Lee | Escribe | DB |
+| Lee | Escribe | Externo |
 |---|---|---|
-| `Organizacion.Usuarios`, `Seguridad.GruposUsuarios`, `Seguridad.Grupos` | — | — |
+| `Organizacion.Usuarios` (SeguridadDB) | — | — |
 
 ## Reglas de negocio
 
-1. `q` busca por `NombreUsuario`, nombres o apellidos; `estado` filtra `Activo` | `Inactivo` | `Bloqueado`.
-2. Paginado `{ items, page, pageSize, total }`, `pageSize` máx. 100.
-3. Nunca devuelve `IntentosFallidos`.
+1. `q` busca en username, nombres, apellidos y email (sin comodines del usuario).
+2. `rol` filtra sobre `RolesWorkOS` (copia del rol de la membresía en EnquoCoop).
+3. `vinculado` = tiene `KeyUsuario`: aceptó la invitación e inició sesión.
+4. `sort`: `username|nombres|apellidos|email|estado|fechaCreacion` + `,asc|,desc`. Por defecto `fechaCreacion,desc`.
+5. Nunca devuelve `IntentosFallidos` ni la cédula (está en AUT-07).
 
 ## Request
 
-| Parámetro | En | Tipo | Req. | Regla |
-|---|---|---|---|---|
-| q | query | string | No | Nombre o username |
-| estado | query | string | No | Activo/Inactivo/Bloqueado |
-| page | query | integer | No | Página (desde 1) |
-| pageSize | query | integer | No | Tamaño (máx. 100) |
-| sort | query | string | No | Campo,asc/desc |
+| Parámetro | Tipo | Regla |
+|---|---|---|
+| q | string | ≤ 100 |
+| estado | string | `Activo` \| `Inactivo` \| `Bloqueado` |
+| idAgencia | string | 3 dígitos |
+| rol | string | ADMIN, ASESOR, CAJERO, SUPERVISOR, APROBADOR_CREDITO, CONTADOR, AUDITOR |
+| vinculado | boolean | |
+| page / pageSize | integer | desde 1 / ≤ 100 (20) |
+| sort | string | ver regla 4 |
 
 ## Response `200`
-
-`PageUsuario`
 
 ```json
 {
   "items": [
     {
-      "idUsuario": 1,
-      "username": "mlopez",
-      "nombre": "María López",
-      "email": "maria.lopez@correo.ec",
-      "roles": [
-        "CAJERO"
-      ],
+      "idUsuario": 4,
+      "username": "jperez",
+      "nombres": "Juan",
+      "apellidos": "Pérez",
+      "email": "juan.perez@correo.ec",
+      "rol": "CAJERO",
       "estado": "Activo",
-      "fechaCreacion": "2026-11-04T10:15:00-05:00"
+      "idAgencia": "002",
+      "vinculado": false,
+      "fechaCreacion": "2026-11-08T10:00:00"
     }
   ],
-  "page": 12,
-  "pageSize": 12,
-  "total": 12
+  "page": 1,
+  "pageSize": 20,
+  "total": 1
 }
 ```
 
 ## Errores
 
-Formato ProblemDetails (ver F-04). Solo 400/401/403.
+Formato ProblemDetails (ver F-04).
+
+| HTTP | `code` | Cuándo |
+|---|---|---|
+| 400 | `DATOS_INVALIDOS` / `PARAMETRO_INVALIDO` / `SORT_INVALIDO` | Parámetro inválido, desconocido o repetido |
 
 ## Definición de terminado
 
-- [ ] Coincide con `openapi.yaml` (request, response y errores)
-- [ ] Prueba del caso feliz y de cada error de la tabla
-- [ ] Sin PAN, PIN, contraseñas ni tokens en logs
-
-## Pendiente
-
-- Contrato dice `Seguridad.Usuario/UsuarioRol`; la DB usa `Organizacion.Usuarios` y `Seguridad.Grupos/GruposUsuarios` (SeguridadDB). Actualizar `openapi.yaml`.
+- [x] Paginado, filtros, parámetros inválidos (`tests/unit/test_usuarios.py`)

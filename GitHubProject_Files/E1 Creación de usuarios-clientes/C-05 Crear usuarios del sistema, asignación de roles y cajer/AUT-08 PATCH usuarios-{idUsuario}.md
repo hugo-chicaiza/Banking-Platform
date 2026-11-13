@@ -21,71 +21,54 @@ url: https://github.com/hugo-chicaiza/Banking-Platform/issues/192
 
 `PATCH /api/v1/usuarios/{idUsuario}` · **Roles:** ADMIN · **Historia:** C-05 (#48) · **OpenAPI:** `AUT08`
 
-Edita datos o estado del usuario.
+Edita datos, estado o agencia. `username` y `cedula` no se editan.
 
-| Lee | Escribe | DB |
+| Lee | Escribe | Externo |
 |---|---|---|
-| — | `Organizacion.Usuarios`, `Seguridad.Bloqueos` | — |
+| `Organizacion.Usuarios`, `Organizacion.Agencia` | `Organizacion.Usuarios`, `Seguridad.Bloqueos`, `Caja.CajerosAsignadosAgencia`, `Auditoria.Auditoria` (ACTUALIZAR) | WorkOS (membresía, sesiones, usuario, invitaciones) |
 
 ## Reglas de negocio
 
-1. Solo cambia `nombre`, `email` y `estado`; `username` no se edita.
-2. Pasar a `Bloqueado` inserta en `Seguridad.Bloqueos` con `BloqueadoPor` del token; pasar de `Bloqueado` a `Activo` cierra el bloqueo (`FechaDesbloqueo`, `DesbloqueadoPor`) y reinicia `IntentosFallidos`.
-3. Un ADMIN no puede bloquearse ni desactivarse a sí mismo → 409.
-4. Email duplicado → `409 USUARIO_DUPLICADO`.
+**Sin `KeyUsuario`** se busca el email en WorkOS antes de tocar nada:
 
-## Flujo
+| En WorkOS | Qué se hace |
+|---|---|
+| Ni usuario ni miembro | Invitación pendiente: se revoca y se reinvita |
+| Usuario sin membresía en EnquoCoop | `409 USUARIO_WORKOS_SIN_MEMBRESIA` (no se reinvita) |
+| Miembro de EnquoCoop | Se trata como vinculado. Si WorkOS verificó su email (`email_verified`), se guarda su `KeyUsuario` en la misma transacción |
+| Su id ya es `KeyUsuario` de otra fila | `409 VINCULO_EN_CONFLICTO` |
 
-1. Cargar el usuario (404 si no existe).
-2. Aplicar los cambios y, si cambia el estado, registrar o cerrar el bloqueo, en una transacción.
-3. Responder 200 con el usuario.
+1. Omitir un campo lo conserva. Sin cambios o con campos no editables → 400.
+2. **A `Bloqueado` o `Inactivo`:** desactiva la membresía en WorkOS y revoca sus sesiones vivas (no espera las 8 h). `Bloqueado` exige `motivo` (≤ 30) y abre un registro en `Seguridad.Bloqueos` (`BloqueadoPor` = admin). Si la invitación está pendiente, se revoca.
+3. **A `Activo`:** reactiva la membresía; si venía de `Bloqueado`, cierra el bloqueo (`FechaDesbloqueo`, `DesbloqueadoPor`) y reinicia `IntentosFallidos`. Si la invitación está pendiente, se reenvía.
+4. **Email:** vinculado → `update_user` en WorkOS; pendiente → se revoca la invitación y se envía al nuevo email. Duplicado → 409.
+5. **Agencia:** actualiza `AgenciaID` (agencia activa → si no, 422). Si es CAJERO, cierra su asignación vigente y abre una en la nueva agencia.
+6. Un ADMIN no se bloquea ni desactiva a sí mismo → `409 OPERACION_SOBRE_SI_MISMO`. No se desactiva al último ADMIN → `409 ULTIMO_ADMIN` (ver AUT-09).
+7. WorkOS falla → la base se revierte (`503`) y lo que WorkOS ya aplicó se deshace.
 
-## Request
-
-| Parámetro | En | Tipo | Req. | Regla |
-|---|---|---|---|---|
-| idUsuario | path | integer | Sí |  |
-
-Body `UsuarioUpdate`:
-
-| Campo | Tipo | Req. | Regla |
-|---|---|---|---|
-| nombre | string | No |  |
-| email | string | No |  |
-| estado | Activo \| Inactivo \| Bloqueado | No |  |
+## Request · `UsuarioUpdate`
 
 ```json
-{
-  "nombre": "María López",
-  "email": "maria.lopez@correo.ec",
-  "estado": "Activo"
-}
+{ "estado": "Bloqueado", "motivo": "Fraude", "observaciones": "Caso 12" }
 ```
+
+Campos: `nombres`, `apellidos`, `email`, `estado` (`Activo`\|`Inactivo`\|`Bloqueado`), `motivo` (solo al bloquear), `observaciones` (≤ 300), `idAgencia`.
 
 ## Response `200`
 
-`Usuario`
-
-```json
-{
-  "idUsuario": 1,
-  "username": "mlopez",
-  "nombre": "María López",
-  "email": "maria.lopez@correo.ec",
-  "roles": [
-    "CAJERO"
-  ],
-  "estado": "Activo",
-  "fechaCreacion": "2026-11-04T10:15:00-05:00"
-}
-```
+`UsuarioDetalle` (ver AUT-07).
 
 ## Errores
 
-Formato ProblemDetails (ver F-04). Solo 400/401/403/404.
+| HTTP | `code` | Cuándo |
+|---|---|---|
+| 400 | `DATOS_INVALIDOS` | Sin cambios, campo no editable, bloqueo sin motivo |
+| 404 | `USUARIO_NO_ENCONTRADO` | No existe |
+| 409 | `USUARIO_DUPLICADO` / `OPERACION_SOBRE_SI_MISMO` / `ULTIMO_ADMIN` / `USUARIO_WORKOS_SIN_MEMBRESIA` / `VINCULO_EN_CONFLICTO` | Ver reglas |
+| 422 | `AGENCIA_INVALIDA` / `WORKOS_RECHAZO` | Agencia inactiva / WorkOS rechazó (el `detail` trae su código, p. ej. `user_already_organization_member`) |
+| 503 | `WORKOS_NO_DISPONIBLE` | WorkOS caído (no cambia nada) |
 
 ## Definición de terminado
 
-- [ ] Coincide con `openapi.yaml` (request, response y errores)
-- [ ] Prueba del caso feliz y de cada error de la tabla
-- [ ] Sin PAN, PIN, contraseñas ni tokens en logs
+- [x] Bloqueo y desbloqueo con sesiones revocadas, email vinculado y pendiente, agencia de cajero, auto-bloqueo, último ADMIN, WorkOS caído (`tests/unit/test_usuarios.py`)
+- [x] Miembro sin `KeyUsuario`: bloqueo y email sin reinvitar, vínculo revertido si WorkOS falla

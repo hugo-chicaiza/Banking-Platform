@@ -1,8 +1,9 @@
+import re
 from functools import lru_cache
 from typing import Annotated, Literal
 from urllib.parse import urlsplit
 
-from pydantic import Field, SecretStr, field_validator
+from pydantic import Field, SecretStr, ValidationInfo, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Única excepción a HTTPS: el FE y el callback locales (Vite) en la máquina del dev
@@ -16,6 +17,57 @@ def _exigir_https(nombre: str, valor: str) -> None:
     ):
         return
     raise ValueError(f"{nombre} debe usar https:// (http:// solo para localhost)")
+
+
+# Prefijo de las API keys del entorno Staging de WorkOS (las de producción: sk_live_)
+_PREFIJO_CLAVE_STAGING = "sk_test_"
+
+
+def _validar_regex_origen(regex: str, frontend_url: str | None, clave: str) -> None:
+    """FRONTEND_ORIGIN_REGEX solo en backend-dev: WorkOS Staging y hosts hermanos de
+    FRONTEND_URL (misma cuenta de Cloudflare). Si no se cumple, falla el arranque.
+    """
+    if not clave.startswith(_PREFIJO_CLAVE_STAGING):
+        raise ValueError(
+            "FRONTEND_ORIGIN_REGEX solo se permite con la API key de WorkOS Staging "
+            f"({_PREFIJO_CLAVE_STAGING}...)"
+        )
+    if not regex.startswith("^https://") or not regex.endswith("$"):
+        raise ValueError(
+            "FRONTEND_ORIGIN_REGEX debe empezar con ^https:// y terminar en $"
+        )
+    try:
+        patron = re.compile(regex)
+    except re.error as exc:
+        raise ValueError(
+            f"FRONTEND_ORIGIN_REGEX no es una regex válida: {exc}"
+        ) from None
+    host = urlsplit(frontend_url or "").hostname or ""
+    dominio = host.partition(".")[2]
+    if "." not in dominio:
+        raise ValueError(
+            "FRONTEND_ORIGIN_REGEX requiere un FRONTEND_URL con dominio propio "
+            "(p. ej. https://app.cuenta.workers.dev)"
+        )
+    # Debe terminar en el dominio de FRONTEND_URL escapado: \.cuenta\.workers\.dev$
+    sufijos = (
+        "\\." + dominio.replace(".", "\\.") + "$",
+        re.escape("." + dominio) + "$",
+    )
+    if not regex.endswith(sufijos):
+        raise ValueError(
+            f"FRONTEND_ORIGIN_REGEX debe terminar en {sufijos[0]} (dominio de "
+            "FRONTEND_URL)"
+        )
+    # Errores típicos (alternativas sin agrupar, comodines): no deben aceptar otro sitio.
+    # Sin control de http: el chequeo de ^https:// de arriba ya lo descarta
+    controles = (
+        "https://evil.com",
+        f"https://{host}.evil.com",
+        f"https://x.{dominio}.evil.com",
+    )
+    if any(patron.fullmatch(control) for control in controles):
+        raise ValueError("FRONTEND_ORIGIN_REGEX acepta hosts fuera de FRONTEND_URL")
 
 
 class Settings(BaseSettings):
@@ -85,6 +137,13 @@ class Settings(BaseSettings):
     workos_redirect_uri: str = ""
     # Origen del FE (esquema://host[:puerto], sin ruta): redirecciones y control CSRF
     frontend_url: str = ""
+    # Organización de WorkOS de la cooperativa (EnquoCoop): todos los usuarios internos
+    # son miembros de ella y su rol vive en esa membresía (C-05)
+    workos_organization_id: str = ""
+    # Solo backend-dev, nunca producción: orígenes extra del FE (previews de PR de
+    # Cloudflare), aceptados si llegan en X-Forwarded-Host desde el Worker. Ejemplo:
+    # ^https://[a-z0-9-]+-banking-platform-front\.cuenta\.workers\.dev$
+    frontend_origin_regex: str = ""
 
     # HSM simulado de tarjetas (app/core/security/hsm.py): claves ficticias en hex.
     # Vacías = HSM no disponible (503). En producción nunca se usan. Deben ser las
@@ -148,6 +207,19 @@ class Settings(BaseSettings):
             if not urlsplit(valor).netloc:
                 raise ValueError("WORKOS_REDIRECT_URI debe ser una URL completa")
             _exigir_https("WORKOS_REDIRECT_URI", valor)
+        return valor
+
+    # De campo y no de modelo: el error de Pydantic muestra solo este valor y no vuelca
+    # al log de arranque el resto de la configuración (claves y contraseñas).
+    # Va después de workos_api_key y frontend_url, que ya están en info.data.
+    @field_validator("frontend_origin_regex")
+    @classmethod
+    def _regex_origen(cls, valor: str, info: ValidationInfo) -> str:
+        if valor:
+            clave = info.data.get("workos_api_key") or SecretStr("")
+            _validar_regex_origen(
+                valor, info.data.get("frontend_url"), clave.get_secret_value()
+            )
         return valor
 
     def odbc_connection_string(self, db: Literal["cooperativa", "seguridad"]) -> str:

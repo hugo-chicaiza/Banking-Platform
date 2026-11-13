@@ -21,7 +21,7 @@ url: https://github.com/hugo-chicaiza/Banking-Platform/issues/17
 
 > Como **usuario del sistema**, quiero **iniciar sesión con JWT y tener roles** para **acceder solo a lo que me corresponde**.
 
-**Etapa:** 2 · **QA:** 0 d · **Tablas:** `Organizacion.Usuarios`, `Seguridad.Grupos`, `Seguridad.GruposUsuarios`, `Seguridad.Sesiones`, `Seguridad.Bloqueos` (SeguridadDB) · `Caja.CajerosAsignadosAgencia`
+**Etapa:** 2 · **QA:** 0 d · **Tablas:** `Organizacion.Usuarios`, `Seguridad.Sesiones`, `Seguridad.Bloqueos` (SeguridadDB) · `Caja.CajerosAsignadosAgencia`
 
 ## Criterios de aceptación
 
@@ -37,7 +37,8 @@ url: https://github.com/hugo-chicaiza/Banking-Platform/issues/17
 
 - Las contraseñas las gestiona WorkOS: la base no guarda contraseñas ni hashes (`ClaveHash` eliminada el 2026-11-07); nunca en texto plano ni en logs.
 - El JWT lleva `sub` = IdUsuario, `roles[]` e `idAgencia`; todo `CreadoPor`/`RegistradoPor` sale del token.
-- Los roles son los `Seguridad.Grupos` asignados en `GruposUsuarios` con `Estado = 'Activo'`.
+- Un rol por usuario: el de su membresía en la organización EnquoCoop de WorkOS (slug `org-<rol>`, p. ej. `org-aprobador-credito` → `APROBADOR_CREDITO`), copiado en `Organizacion.Usuarios.RolesWorkOS`. No se usan `Seguridad.Grupos` ni `GruposUsuarios` (C-05).
+- La agencia del usuario es `Organizacion.Usuarios.AgenciaID` (ya no `Agencia.KeyAgencia`).
 
 ## Dependencias
 

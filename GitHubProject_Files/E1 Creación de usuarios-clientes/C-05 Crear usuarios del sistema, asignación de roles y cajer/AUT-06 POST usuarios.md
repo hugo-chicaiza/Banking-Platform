@@ -21,81 +21,58 @@ url: https://github.com/hugo-chicaiza/Banking-Platform/issues/190
 
 `POST /api/v1/usuarios` · **Roles:** ADMIN · **Historia:** C-05 (#48) · **OpenAPI:** `AUT06`
 
-Crea un usuario del sistema.
+Crea un usuario interno y lo invita a la organización EnquoCoop de WorkOS con su rol. La contraseña la define el usuario al aceptar la invitación: no viaja ni se guarda.
 
-| Lee | Escribe | DB |
+| Lee | Escribe | Externo |
 |---|---|---|
-| `Organizacion.Usuarios`, `Seguridad.Grupos` | `Organizacion.Usuarios`, `Seguridad.GruposUsuarios` | — |
+| `Organizacion.Usuarios`, `Organizacion.Agencia` | `Organizacion.Usuarios`, `Auditoria.Auditoria` (CREAR) | WorkOS `send_invitation` |
 
 ## Reglas de negocio
 
-1. `NombreUsuario`, `Email` y `Cedula` (10 dígitos) son únicos → `409 USUARIO_DUPLICADO`.
-2. La contraseña la gestiona WorkOS: `passwordTemporal` nunca se guarda en la base (`ClaveHash` eliminada el 2026-11-07). Pendiente decidir si se envía a WorkOS al crear el usuario o si se quita del request.
-3. Todos los `roles` deben existir y estar `Activo` en `Seguridad.Grupos` → si no, 400.
-4. Se crea con `Estado = 'Activo'` e `IntentosFallidos = 0`; `AsignadoPor` sale del token.
+1. `username`, `email` y `cedula` son únicos → `409 USUARIO_DUPLICADO`.
+2. Un solo `rol` por usuario; va a WorkOS como `org-<rol>` (`APROBADOR_CREDITO` → `org-aprobador-credito`).
+3. La agencia debe existir y estar activa (`Estado = 'A'`) → si no, `422 AGENCIA_INVALIDA`. Se guarda en `AgenciaID` (int: `"002"` → `2`).
+4. Se crea `Activo`, `IntentosFallidos = 0`, `KeyUsuario = NULL` y `RolesWorkOS = rol`.
+5. **Vínculo:** en su primer login (AUT-01) se guarda `KeyUsuario` buscando por email, solo si WorkOS lo verificó. Hasta entonces `vinculado = false` y la API le responde `403 USUARIO_NO_REGISTRADO`.
+6. Crear un CAJERO no lo asigna a caja: eso es AUT-11.
 
 ## Flujo
 
-1. Validar unicidad y roles.
-2. Insertar el usuario y una fila en `GruposUsuarios` por rol, en una transacción.
-3. Responder 201 con el usuario (sin hash).
+1. Validar agencia, unicidad y datos.
+2. Transacción: INSERT → `send_invitation(organization_id = WORKOS_ORGANIZATION_ID, role_slug)` → commit.
+3. WorkOS falla → rollback y `503`. Falla el commit después de invitar → se revoca la invitación.
 
 ## Request
 
-Body `UsuarioCreate`:
-
-| Campo | Tipo | Req. | Regla |
-|---|---|---|---|
-| username | string | Sí |  |
-| nombre | string | Sí |  |
-| email | string | Sí |  |
-| passwordTemporal | string | Sí |  |
-| roles | string[] | Sí |  |
-
 ```json
 {
-  "username": "mlopez",
-  "nombre": "María López",
-  "email": "maria.lopez@correo.ec",
-  "passwordTemporal": "Temporal2026*",
-  "roles": [
-    "CAJERO"
-  ]
+  "username": "jperez",
+  "nombres": "Juan",
+  "apellidos": "Pérez",
+  "email": "juan.perez@correo.ec",
+  "cedula": "1710034065",
+  "idAgencia": "002",
+  "rol": "CAJERO"
 }
 ```
+
+`username` 3-50 (`A-Z a-z 0-9 . _ -`), `nombres`/`apellidos` ≤ 100, `email` ≤ 100 (se guarda en minúsculas), `cedula` 10 dígitos. Campos extra → 400.
 
 ## Response `201`
 
-`Usuario`
-
-```json
-{
-  "idUsuario": 1,
-  "username": "mlopez",
-  "nombre": "María López",
-  "email": "maria.lopez@correo.ec",
-  "roles": [
-    "CAJERO"
-  ],
-  "estado": "Activo",
-  "fechaCreacion": "2026-11-04T10:15:00-05:00"
-}
-```
+`UsuarioDetalle` (ver AUT-07) con `vinculado: false` y `estadoInvitacion: "pending"`.
 
 ## Errores
 
-Formato ProblemDetails (ver F-04). Además de 400/401/403:
-
 | HTTP | `code` | Cuándo |
 |---|---|---|
-| 409 | `USUARIO_DUPLICADO` | Ya existe el `username`, el email o la cédula |
+| 400 | `DATOS_INVALIDOS` | Formato, rol inexistente o campos extra |
+| 409 | `USUARIO_DUPLICADO` | username, email o cédula ya existen |
+| 422 | `AGENCIA_INVALIDA` | Agencia inexistente o inactiva |
+| 422 | `WORKOS_RECHAZO` | WorkOS rechazó la invitación |
+| 503 | `WORKOS_NO_DISPONIBLE` | WorkOS caído (no se crea nada) |
 
 ## Definición de terminado
 
-- [ ] Coincide con `openapi.yaml` (request, response y errores)
-- [ ] Prueba del caso feliz y de cada error de la tabla
-- [ ] Sin PAN, PIN, contraseñas ni tokens en logs
-
-## Pendiente
-
-- Contrato dice `Seguridad.Usuario/UsuarioRol`; la DB usa `Organizacion.Usuarios` y `Seguridad.GruposUsuarios`. `UsuarioCreate` no trae `cedula`, que la DB exige: agregarla al contrato.
+- [x] Alta, duplicados, datos inválidos, agencia inactiva, WorkOS caído, falla de commit con revocación (`tests/unit/test_usuarios.py`)
+- [ ] Probado contra WorkOS Staging (invitación → aceptar → `vinculado = true`)

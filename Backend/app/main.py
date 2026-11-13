@@ -11,6 +11,7 @@ from app.core.config.settings import get_settings
 from app.core.security.audit import AccesoDenegadoMiddleware
 from app.modules.atm.router import router as atm_router
 from app.modules.auth.router import router as auth_router
+from app.modules.auth.router import router_usuarios
 from app.modules.caja.router import router as caja_router
 from app.modules.catalogos.router import router as catalogos_router
 from app.modules.clientes.router import router as clientes_router
@@ -54,6 +55,7 @@ app.add_middleware(TraceIdMiddleware)
 
 API_V1 = "/api/v1"
 app.include_router(auth_router, prefix=API_V1)
+app.include_router(router_usuarios, prefix=API_V1)
 app.include_router(catalogos_router, prefix=API_V1)
 app.include_router(clientes_router, prefix=API_V1)
 app.include_router(contabilidad_router, prefix=API_V1)
