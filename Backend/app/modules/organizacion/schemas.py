@@ -155,6 +155,20 @@ class AgenciaEstado(CamelModel):
 
 EstadoEntidad = Literal["A", "I"]
 
+RucEntidad = Annotated[
+    str, StringConstraints(min_length=13, max_length=13, pattern=r"^[0-9]{10}001$")
+]
+TextoEntidad = Annotated[
+    str, StringConstraints(min_length=1, max_length=250, pattern=r"\S")
+]
+TipoOrganizacionEntidad = Annotated[
+    str, StringConstraints(min_length=1, max_length=60, pattern=r"\S")
+]
+IdentificacionRepresentanteEntidad = Annotated[
+    str, StringConstraints(min_length=5, max_length=13, pattern=r"^[0-9A-Z]{5,13}$")
+]
+SegmentoEntidad = Annotated[int, Field(strict=True, ge=1, le=5)]
+
 
 class Entidad(CamelModel):
     """Datos persistidos de la única entidad, incluidos los campos de auditoría."""
@@ -177,6 +191,39 @@ class Entidad(CamelModel):
     modificado_por: int
 
 
+class EntidadCreate(CamelModel):
+    """Datos del alta inicial. Identificador, fecha y autor se asignan en el backend."""
+
+    model_config = ConfigDict(
+        extra="forbid",
+        json_schema_extra={
+            "examples": [
+                {
+                    "ruc": "1790000000001",
+                    "razonSocial": "Cooperativa de prueba",
+                    "fechaConstitucion": "2000-01-01",
+                    "representanteLegal": "Representante de prueba",
+                    "identificacionRepresentante": "AB12345",
+                }
+            ]
+        },
+    )
+
+    ruc: RucEntidad
+    razon_social: TextoEntidad
+    nombre_comercial: str | None = Field(default=None, max_length=150)
+    tipo_organizacion: TipoOrganizacionEntidad = "Cooperativa de Ahorro y Credito"
+    segmento: SegmentoEntidad | None = None
+    numero_resolucion_seps: str | None = Field(default=None, max_length=60)
+    fecha_constitucion: date
+    representante_legal: TextoEntidad
+    identificacion_representante: IdentificacionRepresentanteEntidad
+    telefono: str | None = Field(default=None, max_length=15)
+    email: str | None = Field(default=None, max_length=150)
+    sitio_web: str | None = Field(default=None, max_length=150)
+    estado: EstadoEntidad = "A"
+
+
 class EntidadUpdate(CamelModel):
     """Omitir conserva el valor. null vacía exclusivamente columnas anulables."""
 
@@ -190,25 +237,17 @@ class EntidadUpdate(CamelModel):
         },
     )
 
-    ruc: str | SkipJsonSchema[None] = Field(
-        default=None, min_length=13, max_length=13, pattern=r"^[0-9]{10}001$"
-    )
-    razon_social: str | SkipJsonSchema[None] = Field(
-        default=None, min_length=1, max_length=250, pattern=r"\S"
-    )
+    ruc: RucEntidad | SkipJsonSchema[None] = None
+    razon_social: TextoEntidad | SkipJsonSchema[None] = None
     nombre_comercial: str | None = Field(default=None, max_length=150)
-    tipo_organizacion: str | SkipJsonSchema[None] = Field(
-        default=None, min_length=1, max_length=60, pattern=r"\S"
-    )
-    segmento: int | None = Field(default=None, strict=True, ge=1, le=5)
+    tipo_organizacion: TipoOrganizacionEntidad | SkipJsonSchema[None] = None
+    segmento: SegmentoEntidad | None = None
     numero_resolucion_seps: str | None = Field(default=None, max_length=60)
     fecha_constitucion: date | SkipJsonSchema[None] = None
-    representante_legal: str | SkipJsonSchema[None] = Field(
-        default=None, min_length=1, max_length=250, pattern=r"\S"
-    )
-    identificacion_representante: str | SkipJsonSchema[None] = Field(
-        default=None, min_length=5, max_length=13, pattern=r"^[0-9A-Z]{5,13}$"
-    )
+    representante_legal: TextoEntidad | SkipJsonSchema[None] = None
+    identificacion_representante: (
+        IdentificacionRepresentanteEntidad | SkipJsonSchema[None]
+    ) = None
     telefono: str | None = Field(default=None, max_length=15)
     email: str | None = Field(default=None, max_length=150)
     sitio_web: str | None = Field(default=None, max_length=150)

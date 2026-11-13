@@ -6,7 +6,7 @@ la petición.
 
 from typing import Any
 
-from sqlalchemy import Connection, column, select, table, text, update
+from sqlalchemy import Connection, column, insert, select, table, text, update
 
 _COLUMNAS_ENTIDAD = {
     "id_entidad": "IdEntidad",
@@ -31,6 +31,11 @@ _TABLA_ENTIDAD = table(
     *(column(nombre) for nombre in _COLUMNAS_ENTIDAD.values()),
     schema="Organizacion",
 )
+_CAMPOS_EDITABLES_ENTIDAD = _COLUMNAS_ENTIDAD.keys() - {
+    "id_entidad",
+    "fecha_registro",
+    "modificado_por",
+}
 
 Fila = dict[str, Any]
 
@@ -267,17 +272,26 @@ def actualizar_entidad(
     conn: Connection, cambios: dict[str, Any], modificado_por: int
 ) -> None:
     """Actualiza únicamente columnas permitidas mediante parámetros de SQLAlchemy."""
-    editables = _COLUMNAS_ENTIDAD.keys() - {
-        "id_entidad",
-        "fecha_registro",
-        "modificado_por",
-    }
     valores = {
         _COLUMNAS_ENTIDAD[campo]: valor
         for campo, valor in cambios.items()
-        if campo in editables
+        if campo in _CAMPOS_EDITABLES_ENTIDAD
     }
     valores["ModificadoPor"] = modificado_por
     conn.execute(
         update(_TABLA_ENTIDAD).where(_TABLA_ENTIDAD.c.IdEntidad == 1).values(valores)
     )
+
+
+def insertar_entidad(
+    conn: Connection, datos: dict[str, Any], modificado_por: int
+) -> None:
+    """El ID es fijo y FechaRegistro se obtiene del DEFAULT de SQL Server."""
+    valores = {
+        _COLUMNAS_ENTIDAD[campo]: valor
+        for campo, valor in datos.items()
+        if campo in _CAMPOS_EDITABLES_ENTIDAD
+    }
+    valores["IdEntidad"] = 1
+    valores["ModificadoPor"] = modificado_por
+    conn.execute(insert(_TABLA_ENTIDAD).values(valores))
