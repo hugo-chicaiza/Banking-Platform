@@ -157,6 +157,7 @@ def test_regex_exige_clave_de_staging(clave):
     [
         (r"https://[a-z0-9-]+\.diegosebastia94\.workers\.dev$", "empezar"),
         (r"^http://[a-z0-9-]+\.diegosebastia94\.workers\.dev$", "empezar"),
+        (r"^https?://[a-z0-9-]+\.diegosebastia94\.workers\.dev$", "empezar"),
         (r"^https://[a-z0-9-]+\.diegosebastia94\.workers\.dev", "terminar en \\$"),
         (r"^https://([a-z\.diegosebastia94\.workers\.dev$", "regex válida"),
         (r"^https://.*$", "dominio de FRONTEND_URL"),

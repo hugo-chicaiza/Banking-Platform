@@ -59,12 +59,12 @@ def _validar_regex_origen(regex: str, frontend_url: str | None, clave: str) -> N
             f"FRONTEND_ORIGIN_REGEX debe terminar en {sufijos[0]} (dominio de "
             "FRONTEND_URL)"
         )
-    # Errores típicos (alternativas sin agrupar, comodines): no deben aceptar otro sitio
+    # Errores típicos (alternativas sin agrupar, comodines): no deben aceptar otro sitio.
+    # Sin control de http: el chequeo de ^https:// de arriba ya lo descarta
     controles = (
         "https://evil.com",
         f"https://{host}.evil.com",
         f"https://x.{dominio}.evil.com",
-        f"http://{host}",
     )
     if any(patron.fullmatch(control) for control in controles):
         raise ValueError("FRONTEND_ORIGIN_REGEX acepta hosts fuera de FRONTEND_URL")
