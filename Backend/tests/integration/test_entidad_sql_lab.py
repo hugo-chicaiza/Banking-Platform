@@ -8,11 +8,14 @@ La fixture crea y elimina su propia base con un nombre generado por UUID.
 import os
 import re
 import socket
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
+from threading import Barrier
 from uuid import uuid4
 
 import pyodbc
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import DBAPIError
@@ -21,7 +24,7 @@ from sqlalchemy.pool import NullPool
 from app.core.database.db import cooperativa
 from app.modules.organizacion import repository, service
 from app.modules.organizacion.router import router
-from app.modules.organizacion.schemas import EntidadUpdate
+from app.modules.organizacion.schemas import EntidadCreate, EntidadUpdate
 from tests.sesion import simular_sesion, usuario_con_roles
 
 pytestmark = pytest.mark.skipif(
@@ -29,6 +32,13 @@ pytestmark = pytest.mark.skipif(
     reason="Requiere ENTIDAD_LOCAL_SQL_ENABLED=1 y SQL Server local",
 )
 RUTA = "/api/v1/organizacion/entidad"
+DATOS_CREACION = {
+    "ruc": "1790000000001",
+    "razonSocial": "Entidad SQL de prueba",
+    "fechaConstitucion": "2000-01-01",
+    "representanteLegal": "Representante SQL",
+    "identificacionRepresentante": "AB12345",
+}
 
 # DDL de la tabla compartido para esta funcionalidad. Los índices usan las
 # opciones predeterminadas de SQL Server, conservando PK, UNIQUE y CHECK.
@@ -143,6 +153,13 @@ def sql_app(engine):
     simular_sesion(app, usuario_con_roles("ADMIN"))
     with TestClient(app) as cliente:
         yield app, cliente
+
+
+@pytest.fixture
+def entidad_vacia(engine, sql_app):
+    with engine.begin() as conn:
+        conn.execute(text("DELETE FROM Organizacion.Entidad"))
+    return sql_app
 
 
 @pytest.mark.parametrize("rol", ["ASESOR", "ADMIN"])
@@ -295,3 +312,148 @@ def test_ddl_impide_segunda_entidad(engine, sql_app):
                         'Representante', 'AB12345', 1)
             """)
         )
+
+
+def test_put_http_crea_con_defaults_y_fecha_sql(
+    engine, entidad_vacia, eventos_auditados
+):
+    _, cliente = entidad_vacia
+    with engine.connect() as conn:
+        antes = conn.exec_driver_sql(
+            "SELECT CONVERT(datetime2, sysdatetimeoffset() AT TIME ZONE 'SA Pacific Standard Time')"
+        ).scalar_one()
+    r = cliente.put(RUTA, json=DATOS_CREACION)
+    assert r.status_code == 201, r.text
+    datos = r.json()
+    with engine.connect() as conn:
+        despues = conn.exec_driver_sql(
+            "SELECT CONVERT(datetime2, sysdatetimeoffset() AT TIME ZONE 'SA Pacific Standard Time')"
+        ).scalar_one()
+        persistido = service.obtener_entidad(conn).model_dump(
+            mode="json", by_alias=True
+        )
+    assert datos == persistido
+    assert datos["idEntidad"] == 1 and datos["modificadoPor"] == 1
+    assert datos["tipoOrganizacion"] == "Cooperativa de Ahorro y Credito"
+    assert datos["estado"] == "A"
+    assert antes <= datetime.fromisoformat(datos["fechaRegistro"]) <= despues
+    for campo in (
+        "nombreComercial",
+        "segmento",
+        "numeroResolucionSeps",
+        "telefono",
+        "email",
+        "sitioWeb",
+    ):
+        assert datos[campo] is None
+    assert (
+        len(eventos_auditados) == 1 and eventos_auditados[0].accion == "CREAR_ENTIDAD"
+    )
+    for payload in (DATOS_CREACION, DATOS_CREACION | {"razonSocial": "Otra entidad"}):
+        repetido = cliente.put(RUTA, json=payload)
+        assert (
+            repetido.status_code == 409
+            and repetido.json()["code"] == "ENTIDAD_YA_EXISTE"
+        )
+    assert cliente.get(RUTA).json() == datos
+    assert len(eventos_auditados) == 1
+
+
+def test_put_http_crea_con_todos_los_campos(entidad_vacia):
+    _, cliente = entidad_vacia
+    datos = DATOS_CREACION | {
+        "nombreComercial": "Nombre comercial SQL",
+        "tipoOrganizacion": "Otra organización",
+        "segmento": 5,
+        "numeroResolucionSeps": "SEPS-ALTA",
+        "telefono": "0991111111",
+        "email": "alta@example.com",
+        "sitioWeb": "https://example.org",
+        "estado": "I",
+    }
+    r = cliente.put(RUTA, json=datos)
+    assert r.status_code == 201, r.text
+    assert {campo: r.json()[campo] for campo in datos} == datos
+    assert cliente.get(RUTA).json() == r.json()
+
+
+@pytest.mark.parametrize("nocount", ["ON", "OFF"])
+def test_put_servicio_admite_nocount(engine, entidad_vacia, nocount):
+    with engine.connect() as conn:
+        conn.exec_driver_sql("SET NOCOUNT " + nocount)
+        conn.commit()
+        resultado = service.crear_entidad(
+            conn, EntidadCreate.model_validate(DATOS_CREACION), 47
+        )
+        assert resultado.id_entidad == 1 and resultado.modificado_por == 47
+
+
+def test_put_fallo_sql_revierte_insercion(
+    engine, entidad_vacia, monkeypatch, eventos_auditados
+):
+    _, cliente = entidad_vacia
+    original = repository.insertar_entidad
+
+    def insertar_y_fallar(conn, datos, autor):
+        original(conn, datos, autor)
+        conn.execute(
+            text("UPDATE Organizacion.Entidad SET Segmento = 0 WHERE IdEntidad = 1")
+        )
+
+    monkeypatch.setattr(repository, "insertar_entidad", insertar_y_fallar)
+    r = cliente.put(RUTA, json=DATOS_CREACION)
+    assert r.status_code == 500, r.text
+    with engine.connect() as conn:
+        assert (
+            conn.execute(text("SELECT COUNT(*) FROM Organizacion.Entidad")).scalar_one()
+            == 0
+        )
+    assert eventos_auditados == []
+
+
+def test_put_bloquea_rango_antes_de_crear_primera_fila(engine, entidad_vacia):
+    with engine.connect() as primera, primera.begin():
+        assert repository.obtener_entidad(primera, bloquear=True) is None
+        with engine.connect() as segunda:
+            segunda.exec_driver_sql("SET LOCK_TIMEOUT 250")
+            segunda.commit()
+            with pytest.raises(DBAPIError, match="1222"):
+                service.crear_entidad(
+                    segunda, EntidadCreate.model_validate(DATOS_CREACION), 48
+                )
+            assert not segunda.in_transaction()
+        repository.insertar_entidad(
+            primera, EntidadCreate.model_validate(DATOS_CREACION).model_dump(), 47
+        )
+    with engine.connect() as segunda:
+        with pytest.raises(HTTPException, match="ENTIDAD_YA_EXISTE") as error:
+            service.crear_entidad(
+                segunda, EntidadCreate.model_validate(DATOS_CREACION), 48
+            )
+        assert error.value.status_code == 409
+        assert service.obtener_entidad(segunda).modificado_por == 47
+
+
+def test_dos_put_simultaneos_crean_una_sola_entidad(
+    engine, entidad_vacia, eventos_auditados
+):
+    _, cliente = entidad_vacia
+    barrera = Barrier(2, timeout=5)
+
+    def crear():
+        barrera.wait()
+        return cliente.put(RUTA, json=DATOS_CREACION)
+
+    with ThreadPoolExecutor(max_workers=2) as ejecutor:
+        resultados = list(ejecutor.map(lambda _: crear(), range(2)))
+    assert sorted(r.status_code for r in resultados) == [201, 409]
+    conflicto = next(r for r in resultados if r.status_code == 409)
+    assert conflicto.json()["code"] == "ENTIDAD_YA_EXISTE"
+    with engine.connect() as conn:
+        assert (
+            conn.execute(text("SELECT COUNT(*) FROM Organizacion.Entidad")).scalar_one()
+            == 1
+        )
+    assert (
+        len(eventos_auditados) == 1 and eventos_auditados[0].accion == "CREAR_ENTIDAD"
+    )

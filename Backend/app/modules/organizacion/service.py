@@ -29,6 +29,7 @@ from app.modules.organizacion.schemas import (
     AgenciaEstado,
     AgenciaUpdate,
     Entidad,
+    EntidadCreate,
     EntidadUpdate,
     EstadoAgencia,
 )
@@ -442,6 +443,17 @@ def obtener_entidad(conn: Connection, *, bloquear: bool = False) -> Entidad:
     if fila is None:
         raise problema(404, "ENTIDAD_NO_ENCONTRADA", "No se encontró la entidad.")
     return Entidad(**fila)
+
+
+def crear_entidad(
+    conn: Connection, datos: EntidadCreate, modificado_por: int
+) -> Entidad:
+    """El bloqueo de rango serializa las altas simultáneas de la única entidad."""
+    with conn.begin():
+        if repo.obtener_entidad(conn, bloquear=True) is not None:
+            raise problema(409, "ENTIDAD_YA_EXISTE", "La entidad ya está registrada.")
+        repo.insertar_entidad(conn, datos.model_dump(), modificado_por)
+        return obtener_entidad(conn)
 
 
 def editar_entidad(

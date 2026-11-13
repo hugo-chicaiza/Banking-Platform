@@ -28,6 +28,7 @@ from app.modules.organizacion.schemas import (
     AgenciaEstadoUpdate,
     AgenciaUpdate,
     Entidad,
+    EntidadCreate,
     EntidadUpdate,
 )
 
@@ -163,6 +164,47 @@ def obtener_entidad(conn: Db) -> Entidad:
     404 ENTIDAD_NO_ENCONTRADA.
     """
     return service.obtener_entidad(conn)
+
+
+@router.put(
+    "/organizacion/entidad",
+    tags=["Organización"],
+    response_model=Entidad,
+    status_code=201,
+    operation_id="EntidadCrear",
+    summary="Crear la entidad",
+    openapi_extra={"x-roles": ["ADMIN"]},
+    dependencies=[Depends(solo_parametros()), Depends(_sin_cache)],
+)
+def crear_entidad(
+    datos: EntidadCreate,
+    conn: Db,
+    request: Request,
+    modificado_por: UsuarioAuditoria,
+    usuario: Annotated[Usuario, Depends(require_roles("ADMIN"))],
+) -> Entidad:
+    """Crea el registro inicial con IdEntidad = 1. Requiere ADMIN.
+
+    Devuelve 201 con la entidad persistida. Si el registro ya existe, responde
+    409 ENTIDAD_YA_EXISTE. Los campos idEntidad, fechaRegistro y modificadoPor
+    son administrados por el backend. SQL Server asigna FechaRegistro y
+    ModificadoPor se obtiene de la sesión. El contrato exige ruc, razonSocial,
+    fechaConstitucion, representanteLegal e identificacionRepresentante.
+    TipoOrganizacion toma 'Cooperativa de Ahorro y Credito' y Estado toma 'A'
+    cuando se omiten. Los campos anulables omitidos se guardan como NULL.
+    La creación se audita después del commit.
+    """
+    resultado = service.crear_entidad(conn, datos, modificado_por)
+    with auditar(
+        "CREAR_ENTIDAD",
+        "Organizacion.Entidad",
+        usuario,
+        ip_cliente(request.scope),
+        "alta",
+        str(resultado.id_entidad),
+    ):
+        pass
+    return resultado
 
 
 @router.patch(

@@ -17,6 +17,13 @@ from app.modules.organizacion.router import router
 from tests.sesion import simular_sesion, usuario_con_roles
 
 RUTA = "/api/v1/organizacion/entidad"
+DATOS_CREACION = {
+    "ruc": "1790000000001",
+    "razonSocial": "Cooperativa de prueba",
+    "fechaConstitucion": "2000-01-01",
+    "representanteLegal": "Representante de prueba",
+    "identificacionRepresentante": "AB12345",
+}
 
 
 @pytest.fixture
@@ -56,6 +63,22 @@ def ctx(monkeypatch):
         yield SimpleNamespace(
             app=app, cliente=cliente, conn=conn, fila=fila, leer=leer, escribir=escribir
         )
+
+
+@pytest.fixture
+def ctx_creacion(ctx, monkeypatch):
+    ctx.existe = False
+    ctx.leer.side_effect = lambda *args, **kwargs: (
+        dict(ctx.fila) if ctx.existe else None
+    )
+
+    def insertar(conexion, datos, autor):
+        ctx.fila.update(datos, modificado_por=autor)
+        ctx.existe = True
+
+    ctx.insertar = Mock(side_effect=insertar)
+    monkeypatch.setattr(repository, "insertar_entidad", ctx.insertar)
+    return ctx
 
 
 @pytest.mark.parametrize("rol", ["ASESOR", "ADMIN"])
@@ -307,8 +330,11 @@ def test_openapi_documenta_roles_contrato_y_etiqueta(ctx):
     rutas = documento["paths"][RUTA]
     assert rutas["get"]["x-roles"] == ["ASESOR", "ADMIN"]
     assert rutas["patch"]["x-roles"] == ["ADMIN"]
+    assert rutas["put"]["x-roles"] == ["ADMIN"]
     assert rutas["get"]["operationId"] == "EntidadObtener"
     assert rutas["patch"]["operationId"] == "EntidadEditar"
+    assert rutas["put"]["operationId"] == "EntidadCrear"
+    assert "201" in rutas["put"]["responses"]
     for operacion in rutas.values():
         assert operacion["tags"] == ["Organización"]
         assert operacion["security"]
@@ -323,3 +349,168 @@ def test_openapi_documenta_roles_contrato_y_etiqueta(ctx):
     assert esquema["properties"]["razonSocial"]["type"] == "string"
     assert esquema["properties"]["segmento"]["anyOf"][1]["type"] == "null"
     assert "/api/v1/agencias/{id_agencia}/estado" in documento["paths"]
+    creacion = documento["components"]["schemas"]["EntidadCreate"]
+    assert set(creacion["required"]) == set(DATOS_CREACION)
+    assert creacion["additionalProperties"] is False
+    assert (
+        not {"idEntidad", "fechaRegistro", "modificadoPor"}
+        & creacion["properties"].keys()
+    )
+
+
+def test_put_admin_crea_con_defaults_y_autor_de_sesion(ctx_creacion, eventos_auditados):
+    ctx = ctx_creacion
+    ctx.app.dependency_overrides.pop(id_usuario_auditoria)
+    usuario = replace(usuario_con_roles("ADMIN"), id_interno=47)
+    ctx.app.dependency_overrides[usuario_actual] = lambda: usuario
+
+    r = ctx.cliente.put(RUTA, json=DATOS_CREACION)
+
+    assert r.status_code == 201, r.text
+    respuesta = r.json()
+    assert respuesta["idEntidad"] == 1 and respuesta["modificadoPor"] == 47
+    assert respuesta["tipoOrganizacion"] == "Cooperativa de Ahorro y Credito"
+    assert respuesta["estado"] == "A"
+    for campo in (
+        "nombreComercial",
+        "segmento",
+        "numeroResolucionSeps",
+        "telefono",
+        "email",
+        "sitioWeb",
+    ):
+        assert respuesta[campo] is None
+    assert {campo: respuesta[campo] for campo in DATOS_CREACION} == DATOS_CREACION
+    assert r.headers["cache-control"] == "no-store"
+    assert r.headers["x-content-type-options"] == "nosniff"
+    ctx.insertar.assert_called_once()
+    assert ctx.insertar.call_args.args[2] == 47
+    assert ctx.insertar.call_args.args[1]["fecha_constitucion"] == date(2000, 1, 1)
+    assert (
+        not {"id_entidad", "fecha_registro", "modificado_por"}
+        & ctx.insertar.call_args.args[1].keys()
+    )
+    assert ctx.leer.call_args_list[0].kwargs == {"bloquear": True}
+    ctx.conn.begin.return_value.__exit__.assert_called_once_with(None, None, None)
+    assert len(eventos_auditados) == 1
+    evento = eventos_auditados[0]
+    assert evento.accion == "CREAR_ENTIDAD" and evento.id_registro == "1"
+    assert evento.resultado == "Exitoso"
+    assert DATOS_CREACION["ruc"] not in evento.descripcion
+    assert DATOS_CREACION["representanteLegal"] not in evento.descripcion
+
+
+def test_put_admite_campos_opcionales_y_estado_inactivo(ctx_creacion):
+    datos = DATOS_CREACION | {
+        "nombreComercial": "Nueva marca",
+        "tipoOrganizacion": "Otra organización",
+        "segmento": 5,
+        "numeroResolucionSeps": "SEPS-PRUEBA",
+        "telefono": "0999999999",
+        "email": "nueva@example.com",
+        "sitioWeb": None,
+        "estado": "I",
+    }
+    r = ctx_creacion.cliente.put(RUTA, json=datos)
+    assert r.status_code == 201, r.text
+    assert {campo: r.json()[campo] for campo in datos} == datos
+
+
+@pytest.mark.parametrize(
+    "rol", [None, "ASESOR", "CAJERO", "SUPERVISOR", "CONTADOR", "AUDITOR", ""]
+)
+def test_put_exclusivo_admin(ctx_creacion, rol):
+    ctx = ctx_creacion
+    if rol is None:
+        ctx.app.dependency_overrides.pop(usuario_actual)
+    else:
+        simular_sesion(ctx.app, usuario_con_roles(rol))
+    r = ctx.cliente.put(RUTA, json=DATOS_CREACION)
+    assert r.status_code == (401 if rol is None else 403)
+    ctx.leer.assert_not_called()
+    ctx.insertar.assert_not_called()
+    ctx.conn.begin.assert_not_called()
+
+
+@pytest.mark.parametrize("campo", list(DATOS_CREACION))
+def test_put_exige_campos_obligatorios(ctx_creacion, campo):
+    datos = {
+        nombre: valor for nombre, valor in DATOS_CREACION.items() if nombre != campo
+    }
+    r = ctx_creacion.cliente.put(RUTA, json=datos)
+    assert r.status_code == 400 and r.json()["code"] == "DATOS_INVALIDOS"
+    assert any(error["field"] == campo for error in r.json()["errors"])
+    ctx_creacion.insertar.assert_not_called()
+    ctx_creacion.leer.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "campo,valor",
+    [
+        ("ruc", "1790000000002"),
+        ("ruc", "A790000000001"),
+        ("razonSocial", "   "),
+        ("razonSocial", "X" * 251),
+        ("representanteLegal", ""),
+        ("representanteLegal", "X" * 251),
+        ("identificacionRepresentante", "ab123"),
+        ("identificacionRepresentante", "AB12"),
+        ("nombreComercial", "X" * 151),
+        ("tipoOrganizacion", "X" * 61),
+        ("segmento", 0),
+        ("segmento", 6),
+        ("segmento", True),
+        ("numeroResolucionSeps", "X" * 61),
+        ("telefono", "X" * 16),
+        ("email", "X" * 151),
+        ("sitioWeb", "X" * 151),
+        ("fechaConstitucion", "2026-02-30"),
+        ("estado", "C"),
+        ("idEntidad", 1),
+        ("fechaRegistro", "2026-01-01T00:00:00"),
+        ("modificadoPor", 47),
+    ]
+    + [(campo, None) for campo in (*DATOS_CREACION, "tipoOrganizacion", "estado")],
+)
+def test_put_valida_contrato_antes_de_sql(ctx_creacion, campo, valor):
+    r = ctx_creacion.cliente.put(RUTA, json=DATOS_CREACION | {campo: valor})
+    assert r.status_code == 400 and r.json()["code"] == "DATOS_INVALIDOS", r.text
+    assert any(error["field"] == campo for error in r.json()["errors"])
+    ctx_creacion.leer.assert_not_called()
+    ctx_creacion.insertar.assert_not_called()
+
+
+def test_put_repetido_o_existente_responde_conflicto(ctx_creacion, eventos_auditados):
+    ctx = ctx_creacion
+    primero = ctx.cliente.put(RUTA, json=DATOS_CREACION)
+    assert primero.status_code == 201
+    for datos in (DATOS_CREACION, DATOS_CREACION | {"razonSocial": "Otra entidad"}):
+        r = ctx.cliente.put(RUTA, json=datos)
+        assert r.status_code == 409 and r.json()["code"] == "ENTIDAD_YA_EXISTE"
+    assert ctx.cliente.get(RUTA).json() == primero.json()
+    ctx.insertar.assert_called_once()
+    assert len(eventos_auditados) == 1
+
+
+@pytest.mark.parametrize("fallo", ["insertar", "commit"])
+def test_put_fallido_revierte_y_evitar_auditoria_de_exito(
+    ctx_creacion, eventos_auditados, fallo
+):
+    ctx = ctx_creacion
+    if fallo == "insertar":
+        ctx.insertar.side_effect = SQLAlchemyError("fallo INSERT")
+    else:
+        ctx.conn.begin.return_value.__exit__.side_effect = SQLAlchemyError(
+            "fallo commit"
+        )
+    r = ctx.cliente.put(RUTA, json=DATOS_CREACION)
+    assert r.status_code == 500 and r.json()["code"] == "ERROR_INTERNO"
+    assert eventos_auditados == []
+    ctx.conn.begin.return_value.__exit__.assert_called_once()
+
+
+def test_put_rechaza_parametros_de_consulta(ctx_creacion):
+    r = ctx_creacion.cliente.put(RUTA + "?idEntidad=1", json=DATOS_CREACION)
+    assert r.status_code == 400 and r.json()["code"] == "PARAMETRO_INVALIDO"
+    ctx_creacion.leer.assert_not_called()
+    ctx_creacion.insertar.assert_not_called()
