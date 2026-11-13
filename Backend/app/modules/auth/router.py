@@ -21,6 +21,7 @@ from app.core.api.middleware import ip_cliente
 from app.core.database.db import cooperativa, seguridad
 from app.core.security.auth import (
     COOKIE_SESION,
+    Rol,
     Usuario,
     UsuarioAuditoria,
     borrar_cookie_sesion,
@@ -36,7 +37,6 @@ from app.modules.auth.schemas import (
     EstadoUsuario,
     LogoutResponse,
     PageUsuario,
-    Rol,
     RolUpdate,
     UsuarioCreate,
     UsuarioDetalle,

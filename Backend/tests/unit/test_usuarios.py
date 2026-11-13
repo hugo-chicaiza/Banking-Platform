@@ -63,7 +63,7 @@ class _Base:
     def __init__(self) -> None:
         self.usuarios: dict[int, dict[str, Any]] = {
             1: _fila(1, RolesWorkOS="ADMIN"),  # el admin de la sesión (ID_AUDITORIA)
-            2: _fila(2),  # cajero vinculado
+            2: _fila(2, Cedula="0926687856"),  # cajero vinculado
             3: _fila(3, KeyUsuario=None, RolesWorkOS="ASESOR"),  # invitación pendiente
         }
         self.bloqueos: list[dict[str, Any]] = []
@@ -492,7 +492,7 @@ def test_crear_usuario_duplicado(client, base, workos, campo):
     existente = {
         "username": "usuario2",
         "email": "u2@correo.ec",
-        "cedula": "0000000002",
+        "cedula": "0926687856",
     }
 
     r = client.post(BASE, json={**NUEVO, campo: existente[campo]})
@@ -516,6 +516,9 @@ def test_crear_usuario_agencia_inactiva(client, workos):
     [
         {"rol": "GERENTE"},
         {"cedula": "17100340"},
+        {"cedula": "1710034064"},  # dígito verificador
+        {"cedula": "2510034065"},  # provincia
+        {"cedula": "1760034065"},  # tercer dígito
         {"email": "sin-arroba"},
         {"password": "Temporal2026*"},
         {"rol": None},
@@ -584,7 +587,7 @@ def test_detalle_de_usuario_vinculado_no_consulta_invitaciones(client, workos):
 
     assert r.status_code == 200
     cuerpo = r.json()
-    assert (cuerpo["cedula"], cuerpo["vinculado"]) == ("0000000002", True)
+    assert (cuerpo["cedula"], cuerpo["vinculado"]) == ("0926687856", True)
     assert cuerpo["estadoInvitacion"] is None and cuerpo["ultimoAcceso"] is None
     assert workos.llamadas == []
 
