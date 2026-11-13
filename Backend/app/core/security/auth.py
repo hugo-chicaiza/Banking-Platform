@@ -274,8 +274,8 @@ def _vinculo(base: DbName, consulta: str, llave: str) -> Any:
 def _id_interno_db(id_workos: str, roles: str | None) -> int | None:
     """Organizacion.Usuarios.KeyUsuario = id del usuario en WorkOS; solo activos.
 
-    Guarda en RolesWorkOS los roles que dio WorkOS (solo si cambiaron), para comparar
-    con sus grupos de la base. None si no hay vínculo o la base falla (403).
+    Guarda en RolesWorkOS los roles que dio WorkOS (solo si cambiaron): es la copia
+    que usan AUT-05..09 y caja. None si no hay vínculo o la base falla (403).
     """
     try:
         with get_engine("seguridad").begin() as conn:

@@ -58,8 +58,8 @@ Direccion = Annotated[
     ),
 ]
 IdCiudad = Annotated[int, Field(ge=1, le=INT32_MAX)]
-# Organización de WorkOS: auth la usa para resolver la agencia de la sesión
-# (core/security/auth.py, _agencia_db). Formato de los ids de WorkOS: org_<alfanumérico>.
+# Organización de WorkOS vinculada a la agencia. auth ya no la usa: la agencia del usuario
+# sale de Organizacion.Usuarios.AgenciaID (C-05). Formato de los ids: org_<alfanumérico>.
 KeyAgencia = Annotated[
     str,
     StringConstraints(

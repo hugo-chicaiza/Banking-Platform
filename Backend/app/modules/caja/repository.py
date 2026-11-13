@@ -7,6 +7,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from app.core.database.db import get_engine
 from app.core.database.procedimientos import ejecutar_con_salidas
+from app.core.security.auth import normalizar_roles
 from app.modules.contabilidad import service as contabilidad
 
 logger = logging.getLogger(__name__)
@@ -584,7 +585,8 @@ def autorizador_vigente(id_usuario: int) -> bool:
         return False
     if not isinstance(roles, str):
         return False
-    return "SUPERVISOR" in {rol.strip().upper() for rol in roles.split(",")}
+    # Misma lectura que la sesión: org-supervisor o supervisor también cuentan
+    return "SUPERVISOR" in normalizar_roles(roles.split(","), None)
 
 
 def registrar_dotacion(

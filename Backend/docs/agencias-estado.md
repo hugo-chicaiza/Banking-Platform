@@ -64,10 +64,10 @@ solo para lecturas. No se imprimieron claves, tokens, correos ni nombres de usua
   esta configuración. No se atribuye a un usuario/organización de prueba ni se
   presupone que el entorno del Dashboard sea el mismo. Debe revisarse ese vínculo
   y confirmar otra configuración si allí se esperaba `org-contador`.
-- `normalizar_roles` convierte mayúsculas y guiones a `_` y acepta solo los
+- `normalizar_roles` convierte mayúsculas y guiones a `_`, quita el prefijo
+  opcional `org-` (C-05: los roles de WorkOS son `org-<rol>`) y acepta solo los
   nombres canónicos del backend. `admin` → `ADMIN`, `member` se ignora y
-  `org-contador` se convertiría en `ORG_CONTADOR`, que se ignora. `contador` sí
-  normaliza a `CONTADOR`, pero ese rol no tiene permiso para el PATCH.
+  `org-contador` o `contador` → `CONTADOR`, que no tiene permiso para el PATCH.
 
 No se añadieron aliases ni se ampliaron permisos. El backend declara más roles
 que los presentes en el catálogo WorkOS visible; su configuración no se sincronizó.
