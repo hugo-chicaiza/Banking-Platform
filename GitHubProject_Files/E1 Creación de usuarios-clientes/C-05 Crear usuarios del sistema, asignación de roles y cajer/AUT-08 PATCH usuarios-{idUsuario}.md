@@ -29,9 +29,18 @@ Edita datos, estado o agencia. `username` y `cedula` no se editan.
 
 ## Reglas de negocio
 
+**Sin `KeyUsuario`** se busca el email en WorkOS antes de tocar nada:
+
+| En WorkOS | Qué se hace |
+|---|---|
+| Ni usuario ni miembro | Invitación pendiente: se revoca y se reinvita |
+| Usuario sin membresía en EnquoCoop | `409 USUARIO_WORKOS_SIN_MEMBRESIA` (no se reinvita) |
+| Miembro de EnquoCoop | Se trata como vinculado. Si WorkOS verificó su email (`email_verified`), se guarda su `KeyUsuario` en la misma transacción |
+| Su id ya es `KeyUsuario` de otra fila | `409 VINCULO_EN_CONFLICTO` |
+
 1. Omitir un campo lo conserva. Sin cambios o con campos no editables → 400.
-2. **A `Bloqueado` o `Inactivo`:** desactiva la membresía en WorkOS y revoca sus sesiones vivas (no espera las 8 h). `Bloqueado` exige `motivo` (≤ 30) y abre un registro en `Seguridad.Bloqueos` (`BloqueadoPor` = admin). Si está pendiente, se revoca la invitación.
-3. **A `Activo`:** reactiva la membresía; si venía de `Bloqueado`, cierra el bloqueo (`FechaDesbloqueo`, `DesbloqueadoPor`) y reinicia `IntentosFallidos`. Si está pendiente, se reenvía la invitación.
+2. **A `Bloqueado` o `Inactivo`:** desactiva la membresía en WorkOS y revoca sus sesiones vivas (no espera las 8 h). `Bloqueado` exige `motivo` (≤ 30) y abre un registro en `Seguridad.Bloqueos` (`BloqueadoPor` = admin). Si la invitación está pendiente, se revoca.
+3. **A `Activo`:** reactiva la membresía; si venía de `Bloqueado`, cierra el bloqueo (`FechaDesbloqueo`, `DesbloqueadoPor`) y reinicia `IntentosFallidos`. Si la invitación está pendiente, se reenvía.
 4. **Email:** vinculado → `update_user` en WorkOS; pendiente → se revoca la invitación y se envía al nuevo email. Duplicado → 409.
 5. **Agencia:** actualiza `AgenciaID` (agencia activa → si no, 422). Si es CAJERO, cierra su asignación vigente y abre una en la nueva agencia.
 6. Un ADMIN no se bloquea ni desactiva a sí mismo → `409 OPERACION_SOBRE_SI_MISMO`. No se desactiva al último ADMIN → `409 ULTIMO_ADMIN` (ver AUT-09).
@@ -55,10 +64,11 @@ Campos: `nombres`, `apellidos`, `email`, `estado` (`Activo`\|`Inactivo`\|`Bloque
 |---|---|---|
 | 400 | `DATOS_INVALIDOS` | Sin cambios, campo no editable, bloqueo sin motivo |
 | 404 | `USUARIO_NO_ENCONTRADO` | No existe |
-| 409 | `USUARIO_DUPLICADO` / `OPERACION_SOBRE_SI_MISMO` / `ULTIMO_ADMIN` | Ver reglas |
-| 422 | `AGENCIA_INVALIDA` / `WORKOS_RECHAZO` | Agencia inactiva / WorkOS rechazó |
+| 409 | `USUARIO_DUPLICADO` / `OPERACION_SOBRE_SI_MISMO` / `ULTIMO_ADMIN` / `USUARIO_WORKOS_SIN_MEMBRESIA` / `VINCULO_EN_CONFLICTO` | Ver reglas |
+| 422 | `AGENCIA_INVALIDA` / `WORKOS_RECHAZO` | Agencia inactiva / WorkOS rechazó (el `detail` trae su código, p. ej. `user_already_organization_member`) |
 | 503 | `WORKOS_NO_DISPONIBLE` | WorkOS caído (no cambia nada) |
 
 ## Definición de terminado
 
 - [x] Bloqueo y desbloqueo con sesiones revocadas, email vinculado y pendiente, agencia de cajero, auto-bloqueo, último ADMIN, WorkOS caído (`tests/unit/test_usuarios.py`)
+- [x] Miembro sin `KeyUsuario`: bloqueo y email sin reinvitar, vínculo revertido si WorkOS falla

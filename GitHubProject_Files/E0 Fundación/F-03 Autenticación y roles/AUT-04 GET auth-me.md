@@ -56,6 +56,7 @@ Formato ProblemDetails (ver F-04).
 | HTTP | `code` | Cuándo |
 |---|---|---|
 | 401 | `NO_AUTENTICADO` | Sin sesión o sesión que no se pudo renovar (se borra la cookie); el FE va a `/auth/login` |
+| 403 | `USUARIO_NO_REGISTRADO` | La sesión es válida, pero el usuario no está vinculado o no está `Activo` (por ejemplo, se bloqueó con la sesión abierta) |
 | 503 | `AUTENTICACION_NO_DISPONIBLE` | No se pudieron descargar las llaves de WorkOS |
 
 ## Definición de terminado
