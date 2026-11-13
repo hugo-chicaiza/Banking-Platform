@@ -21,7 +21,7 @@ import threading
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal, get_args
 
 from fastapi import Depends, HTTPException, Request, Response
 from fastapi.security import APIKeyCookie
@@ -51,7 +51,8 @@ logger = logging.getLogger(__name__)
 # Roles del sistema. En WorkOS son roles de organización con slug "org-" + el rol en
 # minúsculas y con guiones: org-cajero -> CAJERO, org-aprobador-credito ->
 # APROBADOR_CREDITO (también se leen sin el prefijo "org-").
-ROLES = (
+# Única fuente: los schemas (AUT-05..09) usan `Rol` y la autorización `ROLES`.
+Rol = Literal[
     "ADMIN",
     "ASESOR",
     "CAJERO",
@@ -59,7 +60,8 @@ ROLES = (
     "APROBADOR_CREDITO",
     "CONTADOR",
     "AUDITOR",
-)
+]
+ROLES: tuple[Rol, ...] = get_args(Rol)
 
 # __Host-: el navegador exige Secure y Path=/ y no permite Domain, así un subdominio
 # no puede plantar ni pisar la cookie.

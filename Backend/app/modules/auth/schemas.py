@@ -1,10 +1,12 @@
 from datetime import datetime
 from typing import Annotated, Literal, Self
 
-from pydantic import ConfigDict, StringConstraints, model_validator
+from pydantic import AfterValidator, ConfigDict, StringConstraints, model_validator
 from pydantic.json_schema import SkipJsonSchema
 
 from app.core.api.schemas import CamelModel
+from app.core.security.auth import Rol
+from app.modules.clientes.service import validar_cedula_ecuatoriana
 
 
 class UsuarioSesion(CamelModel):
@@ -31,15 +33,6 @@ class LogoutResponse(CamelModel):
 
 # --- AUT-05..09: usuarios internos (C-05) --------------------------------------------
 
-Rol = Literal[
-    "ADMIN",
-    "ASESOR",
-    "CAJERO",
-    "SUPERVISOR",
-    "APROBADOR_CREDITO",
-    "CONTADOR",
-    "AUDITOR",
-]
 EstadoUsuario = Literal["Activo", "Inactivo", "Bloqueado"]
 EstadoInvitacion = Literal["pending", "accepted", "expired", "revoked"]
 
@@ -55,6 +48,17 @@ Email = Annotated[
     ),
 ]
 CodigoAgencia = Annotated[str, StringConstraints(pattern=r"^\d{3}$")]
+
+
+def _cedula_valida(cedula: str) -> str:
+    """Cédula ecuatoriana: provincia, tercer dígito y Módulo 10 (CLI-01)."""
+    valida, motivo = validar_cedula_ecuatoriana(cedula)
+    if not valida:
+        raise ValueError(motivo)
+    return cedula
+
+
+Cedula = Annotated[str, AfterValidator(_cedula_valida)]
 
 
 class BloqueoVigente(CamelModel):
@@ -114,7 +118,7 @@ class UsuarioCreate(CamelModel):
     nombres: Nombre
     apellidos: Nombre
     email: Email
-    cedula: Annotated[str, StringConstraints(pattern=r"^\d{10}$")]
+    cedula: Cedula
     id_agencia: CodigoAgencia
     rol: Rol
 
