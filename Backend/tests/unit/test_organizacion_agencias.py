@@ -61,6 +61,7 @@ class BdFalsa:
     activas: dict[str, list[str]] = field(default_factory=dict)
     actualizaciones: list[dict[str, Any]] = field(default_factory=list)
     error_en_escritura: Exception | None = None
+    siguiente_id: int = 5
 
     def leer(self, _conn: Any, id_agencia: str, *, bloquear: bool = False) -> Any:
         fila = self.agencias.get(id_agencia)
@@ -75,7 +76,7 @@ class BdFalsa:
         self,
         _conn: Any,
         *,
-        id_agencia: str,
+        id_agencia: str | None,
         codigo: Any,
         key_agencia: Any,
         matriz: bool,
@@ -92,11 +93,13 @@ class BdFalsa:
             resultado.add("Matriz")
         return resultado
 
-    def insertar(self, _conn: Any, datos: dict[str, Any]) -> None:
+    def insertar(self, _conn: Any, datos: dict[str, Any]) -> str:
         if self.error_en_escritura is not None:
             raise self.error_en_escritura
-        self.agencias[datos["id_agencia"]] = _fila(
-            datos["id_agencia"],
+        id_agencia = f"{self.siguiente_id:03d}"
+        self.siguiente_id += 1
+        self.agencias[id_agencia] = _fila(
+            id_agencia,
             datos["codigo"],
             datos["tipo_agencia"],
             IdCiudad=datos["id_ciudad"],
@@ -104,6 +107,7 @@ class BdFalsa:
             Direccion=datos["direccion"],
             KeyAgencia=datos["key_agencia"],
         )
+        return id_agencia
 
     def actualizar(self, _conn: Any, id_agencia: str, cambios: dict[str, Any]) -> int:
         if self.error_en_escritura is not None:
@@ -166,7 +170,6 @@ def eventos(monkeypatch: pytest.MonkeyPatch) -> list[audit.EventoAuditoria]:
 
 
 NUEVA = {
-    "idAgencia": "005",
     "codigo": "SUC-AMB",
     "tipoAgencia": "Sucursal",
     "idCiudad": 2,
@@ -211,7 +214,6 @@ def test_campos_opcionales_pueden_omitirse(cliente, bd) -> None:
     r = cliente.post(
         BASE,
         json={
-            "idAgencia": "006",
             "codigo": "SUC-LOJ",
             "tipoAgencia": "Sucursal",
             "idCiudad": 1,
@@ -219,6 +221,7 @@ def test_campos_opcionales_pueden_omitirse(cliente, bd) -> None:
     )
 
     assert r.status_code == 201, r.text
+    assert r.json()["idAgencia"] == "005"
     assert r.json()["telefono"] is None
     assert r.json()["vinculadaWorkos"] is False
 
@@ -226,7 +229,6 @@ def test_campos_opcionales_pueden_omitirse(cliente, bd) -> None:
 @pytest.mark.parametrize(
     ("cambios", "codigo"),
     [
-        ({"idAgencia": "002"}, "AGENCIA_YA_EXISTE"),
         ({"codigo": "SUC-SGQ"}, "CODIGO_DUPLICADO"),
         ({"keyAgencia": "org_SGQ"}, "KEY_AGENCIA_DUPLICADA"),
         ({"tipoAgencia": "Matriz"}, "MATRIZ_YA_EXISTE"),
@@ -253,6 +255,7 @@ def test_ciudad_inexistente_422(cliente, bd) -> None:
 @pytest.mark.parametrize(
     "cambios",
     [
+        {"idAgencia": "005"},
         {"idAgencia": "05"},
         {"idAgencia": "0055"},
         {"idAgencia": "a05"},
@@ -281,7 +284,7 @@ def test_crear_con_datos_invalidos_400(cliente, bd, cambios) -> None:
     assert "005" not in bd.agencias and "007" not in bd.agencias
 
 
-@pytest.mark.parametrize("campo", ["idAgencia", "codigo", "tipoAgencia", "idCiudad"])
+@pytest.mark.parametrize("campo", ["codigo", "tipoAgencia", "idCiudad"])
 def test_crear_sin_obligatorio_400(cliente, bd, campo) -> None:
     cuerpo = {k: v for k, v in NUEVA.items() if k != campo}
 
@@ -302,6 +305,44 @@ def test_carrera_perdida_en_el_indice_devuelve_409(cliente, bd) -> None:
     assert r.status_code == 409
     assert r.json()["code"] == "MATRIZ_YA_EXISTE"
     assert "Matriz)" not in r.text
+
+
+def test_ids_generados_en_orden(cliente, bd) -> None:
+    primero = cliente.post(BASE, json=NUEVA)
+    segundo = cliente.post(BASE, json={**NUEVA, "codigo": "SUC-LOJ"})
+    assert primero.status_code == 201, primero.text
+    assert segundo.status_code == 201, segundo.text
+    assert primero.json()["idAgencia"] == "005"
+    assert segundo.json()["idAgencia"] == "006"
+    assert "005" in bd.agencias and "006" in bd.agencias
+
+
+def test_repositorio_inserta_id_generado_por_secuencia() -> None:
+    conexion = MagicMock()
+    conexion.execute.return_value.scalar_one.return_value = 3
+    datos = {
+        "codigo": "SUC-AMB",
+        "tipo_agencia": "Sucursal",
+        "id_ciudad": 2,
+        "telefono": None,
+        "direccion": None,
+        "key_agencia": None,
+    }
+    assert repo.insertar_agencia(conexion, datos) == "003"
+    assert conexion.execute.call_count == 2
+    sentencia_secuencia = conexion.execute.call_args_list[0].args[0]
+    assert "NEXT VALUE FOR Organizacion.SeqAgenciaId" in str(sentencia_secuencia)
+    sentencia_insert, parametros = conexion.execute.call_args_list[1].args
+    assert "INSERT INTO Organizacion.Agencia" in str(sentencia_insert)
+    assert parametros["id_agencia"] == "003"
+    assert "id_agencia" not in datos
+
+
+def test_id_enviado_por_cliente_es_rechazado(cliente, bd) -> None:
+    respuesta = cliente.post(BASE, json={**NUEVA, "idAgencia": "007"})
+    assert respuesta.status_code == 400
+    assert respuesta.json()["code"] == "DATOS_INVALIDOS"
+    assert "007" not in bd.agencias
 
 
 # --- ORG-02 · actualización parcial ---------------------------------------------------

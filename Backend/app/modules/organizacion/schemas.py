@@ -94,7 +94,6 @@ class _Entrada(CamelModel):
 
 
 class AgenciaCreate(_Entrada):
-    id_agencia: IdAgencia
     codigo: Codigo
     tipo_agencia: TipoAgencia
     id_ciudad: IdCiudad

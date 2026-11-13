@@ -135,7 +135,7 @@ def _verificar_ciudad(conn: Connection, id_ciudad: int) -> None:
 
 def _verificar_unicidad(
     conn: Connection,
-    id_agencia: str,
+    id_agencia: str | None,
     *,
     codigo: str | None,
     key_agencia: str | None,
@@ -190,35 +190,47 @@ def crear_agencia(
     ip: str | None,
     trace_id: str,
 ) -> Agencia:
-    auditoria = _Auditoria("INSERT", datos.id_agencia, creado_por, ip, trace_id)
+    auditoria = _Auditoria("INSERT", "NO_ASIGNADO", creado_por, ip, trace_id)
     auditoria.detalle = (
         f"ORG01 codigo={datos.codigo} tipo={datos.tipo_agencia} "
         f"ciudad={datos.id_ciudad} workos={datos.key_agencia is not None}"
     )
+
     try:
-        if repo.obtener_agencia(conn, datos.id_agencia, bloquear=True) is not None:
-            raise _error("PK_Agencia")
         _verificar_ciudad(conn, datos.id_ciudad)
+
         _verificar_unicidad(
             conn,
-            datos.id_agencia,
+            None,
             codigo=datos.codigo,
             key_agencia=datos.key_agencia,
             matriz=datos.tipo_agencia == "Matriz",
         )
-        repo.insertar_agencia(conn, datos.model_dump())
-        fila = repo.obtener_agencia(conn, datos.id_agencia)
-        if fila is None:  # pragma: no cover - el INSERT acaba de ocurrir
-            raise problema(500, "ERROR_INTERNO", "Error interno del servidor.")
+
+        id_agencia = repo.insertar_agencia(conn, datos.model_dump())
+        auditoria.id_agencia = id_agencia
+
+        fila = repo.obtener_agencia(conn, id_agencia)
+
+        if fila is None:
+            raise problema(
+                500,
+                "ERROR_INTERNO",
+                "Error interno del servidor.",
+            )
+
         conn.commit()
+
     except DBAPIError as exc:
         conn.rollback()
         auditoria.registrar("Fallido")
         raise traducir_error_agencia(exc) from None
+
     except Exception:
         conn.rollback()
         auditoria.registrar("Fallido")
         raise
+
     auditoria.registrar("Exitoso")
     return a_respuesta(fila)
 
