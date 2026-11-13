@@ -314,7 +314,7 @@ def test_ddl_impide_segunda_entidad(engine, sql_app):
         )
 
 
-def test_put_http_crea_con_defaults_y_fecha_sql(
+def test_post_http_crea_con_defaults_y_fecha_sql(
     engine, entidad_vacia, eventos_auditados
 ):
     _, cliente = entidad_vacia
@@ -322,7 +322,7 @@ def test_put_http_crea_con_defaults_y_fecha_sql(
         antes = conn.exec_driver_sql(
             "SELECT CONVERT(datetime2, sysdatetimeoffset() AT TIME ZONE 'SA Pacific Standard Time')"
         ).scalar_one()
-    r = cliente.put(RUTA, json=DATOS_CREACION)
+    r = cliente.post(RUTA, json=DATOS_CREACION)
     assert r.status_code == 201, r.text
     datos = r.json()
     with engine.connect() as conn:
@@ -350,7 +350,7 @@ def test_put_http_crea_con_defaults_y_fecha_sql(
         len(eventos_auditados) == 1 and eventos_auditados[0].accion == "CREAR_ENTIDAD"
     )
     for payload in (DATOS_CREACION, DATOS_CREACION | {"razonSocial": "Otra entidad"}):
-        repetido = cliente.put(RUTA, json=payload)
+        repetido = cliente.post(RUTA, json=payload)
         assert (
             repetido.status_code == 409
             and repetido.json()["code"] == "ENTIDAD_YA_EXISTE"
@@ -359,7 +359,7 @@ def test_put_http_crea_con_defaults_y_fecha_sql(
     assert len(eventos_auditados) == 1
 
 
-def test_put_http_crea_con_todos_los_campos(entidad_vacia):
+def test_post_http_crea_con_todos_los_campos(entidad_vacia):
     _, cliente = entidad_vacia
     datos = DATOS_CREACION | {
         "nombreComercial": "Nombre comercial SQL",
@@ -371,14 +371,14 @@ def test_put_http_crea_con_todos_los_campos(entidad_vacia):
         "sitioWeb": "https://example.org",
         "estado": "I",
     }
-    r = cliente.put(RUTA, json=datos)
+    r = cliente.post(RUTA, json=datos)
     assert r.status_code == 201, r.text
     assert {campo: r.json()[campo] for campo in datos} == datos
     assert cliente.get(RUTA).json() == r.json()
 
 
 @pytest.mark.parametrize("nocount", ["ON", "OFF"])
-def test_put_servicio_admite_nocount(engine, entidad_vacia, nocount):
+def test_post_servicio_admite_nocount(engine, entidad_vacia, nocount):
     with engine.connect() as conn:
         conn.exec_driver_sql("SET NOCOUNT " + nocount)
         conn.commit()
@@ -388,7 +388,7 @@ def test_put_servicio_admite_nocount(engine, entidad_vacia, nocount):
         assert resultado.id_entidad == 1 and resultado.modificado_por == 47
 
 
-def test_put_fallo_sql_revierte_insercion(
+def test_post_fallo_sql_revierte_insercion(
     engine, entidad_vacia, monkeypatch, eventos_auditados
 ):
     _, cliente = entidad_vacia
@@ -401,7 +401,7 @@ def test_put_fallo_sql_revierte_insercion(
         )
 
     monkeypatch.setattr(repository, "insertar_entidad", insertar_y_fallar)
-    r = cliente.put(RUTA, json=DATOS_CREACION)
+    r = cliente.post(RUTA, json=DATOS_CREACION)
     assert r.status_code == 500, r.text
     with engine.connect() as conn:
         assert (
@@ -411,7 +411,7 @@ def test_put_fallo_sql_revierte_insercion(
     assert eventos_auditados == []
 
 
-def test_put_bloquea_rango_antes_de_crear_primera_fila(engine, entidad_vacia):
+def test_post_bloquea_rango_antes_de_crear_primera_fila(engine, entidad_vacia):
     with engine.connect() as primera, primera.begin():
         assert repository.obtener_entidad(primera, bloquear=True) is None
         with engine.connect() as segunda:
@@ -434,7 +434,7 @@ def test_put_bloquea_rango_antes_de_crear_primera_fila(engine, entidad_vacia):
         assert service.obtener_entidad(segunda).modificado_por == 47
 
 
-def test_dos_put_simultaneos_crean_una_sola_entidad(
+def test_dos_post_simultaneos_crean_una_sola_entidad(
     engine, entidad_vacia, eventos_auditados
 ):
     _, cliente = entidad_vacia
@@ -442,7 +442,7 @@ def test_dos_put_simultaneos_crean_una_sola_entidad(
 
     def crear():
         barrera.wait()
-        return cliente.put(RUTA, json=DATOS_CREACION)
+        return cliente.post(RUTA, json=DATOS_CREACION)
 
     with ThreadPoolExecutor(max_workers=2) as ejecutor:
         resultados = list(ejecutor.map(lambda _: crear(), range(2)))
