@@ -47,6 +47,14 @@ def get_frontend_url() -> str:
     return url
 
 
+def get_organizacion_id() -> str:
+    """Organización de la cooperativa (EnquoCoop) en WorkOS."""
+    organizacion = get_settings().workos_organization_id
+    if not organizacion:
+        raise RuntimeError("Falta WORKOS_ORGANIZATION_ID en la configuración")
+    return organizacion
+
+
 def get_redirect_uri() -> str:
     uri = get_settings().workos_redirect_uri
     if not uri:
