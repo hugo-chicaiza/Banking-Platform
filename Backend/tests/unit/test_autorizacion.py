@@ -43,6 +43,12 @@ _VALORES_PATH = {
 # Roles de cada tarea (GitHubProject_Files)
 ROLES_POR_RUTA: dict[tuple[str, str], tuple[str, ...]] = {
     ("GET", "/api/v1/auth/me"): AUTH,
+    # AUT-05..09 (C-05): usuarios internos
+    ("GET", "/api/v1/usuarios"): ("ADMIN",),
+    ("POST", "/api/v1/usuarios"): ("ADMIN",),
+    ("GET", "/api/v1/usuarios/{idUsuario}"): ("ADMIN",),
+    ("PATCH", "/api/v1/usuarios/{idUsuario}"): ("ADMIN",),
+    ("PUT", "/api/v1/usuarios/{idUsuario}/roles"): ("ADMIN",),
     **{
         ("GET", f"/api/v1/catalogos/{ruta}"): AUTH
         for ruta in (
