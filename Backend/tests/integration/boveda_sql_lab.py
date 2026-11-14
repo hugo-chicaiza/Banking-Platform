@@ -97,7 +97,7 @@ class LaboratorioBoveda:
                     MARCA,
                 )
             self.ejecutar_script(raw, Path(__file__).with_name("boveda_schema.sql"))
-            migracion = BACKEND / "migrations/20261114_boveda_bov01_06.sql"
+            migracion = BACKEND / "migrations/20261114_boveda_bov01_06.tsql"
             self.ejecutar_script(raw, migracion)
             self.ejecutar_script(raw, migracion)  # También comprueba reejecución.
         self.engine = create_engine(

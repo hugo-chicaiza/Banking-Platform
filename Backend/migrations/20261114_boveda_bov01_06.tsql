@@ -1,4 +1,4 @@
-/* BOV-01..06. Ejecutar en CooperativaDB antes de desplegar el backend.
+/* T-SQL (SQL Server). BOV-01..06. Ejecutar en CooperativaDB antes de desplegar el backend.
    Requiere el esquema NewCooperativaDB.sql. Usar sqlcmd -b o equivalente que
    detenga la ejecución ante errores. No crea cuentas ni inventa la matriz G-06.
    Reejecutable; no reconstruye referencias históricas que nunca se guardaron. */

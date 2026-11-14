@@ -105,10 +105,13 @@ su autor y fecha. Otra aprobación responde 409 y no duplica los ajustes.
 
 ## Base de datos y configuración previa al despliegue
 
-Aplicar `migrations/20261114_boveda_bov01_06.sql` sobre CooperativaDB con un
+Aplicar `migrations/20261114_boveda_bov01_06.tsql` sobre CooperativaDB con un
 ejecutor que soporte GO y detenga la ejecución ante errores (`sqlcmd -b`). La
 migración está preparada para repetirse y conserva los datos existentes.
 No fue aplicada a bases de negocio por esta implementación.
+
+La extensión `.tsql` identifica el dialecto de SQL Server ante SonarQube Cloud;
+su configuración predeterminada interpreta `.sql` como PL/SQL de Oracle.
 
 - Admite ProvisionExterna en los CHECK de tipo/naturaleza.
 - Añade vínculo al asiento y al arqueo en MovimientoBoveda.
