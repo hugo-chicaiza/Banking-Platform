@@ -59,15 +59,15 @@ Body `MovimientoBovedaRequest`:
 ```json
 {
   "tipoMovimiento": "Traslado",
-  "idBovedaContraparte": 1,
-  "autorizadoPor": 12,
+  "idBovedaContraparte": 2,
+  "autorizadoPor": 9,
   "desglose": [
     {
       "idDenominacion": 1,
-      "cantidad": 12
+      "cantidad": 2
     }
   ],
-  "observaciones": "observaciones"
+  "observaciones": "Entrega de efectivo"
 }
 ```
 
@@ -80,16 +80,46 @@ Body `MovimientoBovedaRequest`:
   {
     "idMovimiento": 1,
     "idBoveda": 1,
+    "idBovedaContraparte": 2,
+    "tipoMovimiento": "Traslado",
+    "naturaleza": "E",
+    "monto": 40,
+    "saldoAnterior": 200,
+    "saldoPosterior": 160,
+    "autorizadoPor": 9,
+    "idUsuarioMovimiento": 7,
+    "idMovimientoRelacionado": 2,
+    "fechaMovimiento": "2026-11-16T10:00:00-05:00",
+    "observaciones": null,
+    "idAsientoContable": 1,
+    "desglose": [
+      {
+        "idDenominacion": 1,
+        "cantidad": 2
+      }
+    ]
+  },
+  {
+    "idMovimiento": 2,
+    "idBoveda": 2,
     "idBovedaContraparte": 1,
-    "tipoMovimiento": "tipoMovimiento",
+    "tipoMovimiento": "Traslado",
     "naturaleza": "I",
-    "monto": 150.0,
-    "saldoAnterior": 150.0,
-    "saldoPosterior": 150.0,
-    "autorizadoPor": 12,
-    "idUsuarioMovimiento": 1,
+    "monto": 40,
+    "saldoAnterior": 200,
+    "saldoPosterior": 240,
+    "autorizadoPor": 9,
+    "idUsuarioMovimiento": 7,
     "idMovimientoRelacionado": 1,
-    "fechaMovimiento": "2026-11-04T10:15:00-05:00"
+    "fechaMovimiento": "2026-11-16T10:00:00-05:00",
+    "observaciones": null,
+    "idAsientoContable": 2,
+    "desglose": [
+      {
+        "idDenominacion": 1,
+        "cantidad": 2
+      }
+    ]
   }
 ]
 ```
@@ -106,5 +136,9 @@ Formato ProblemDetails (ver F-04). Además de 400/401/403:
 
 ## Definición de terminado
 
-- [ ] Coincide con `openapi.yaml` (request, response y errores)
-- [ ] Prueba del caso feliz y de cada error de la tabla
+- [x] Contrato implementado en OpenAPI generado (`/api/openapi.json`); no existe `openapi.yaml` en este repositorio
+- [x] Pruebas del caso feliz y errores documentados
+
+## Implementación BOV-01..06
+
+Reglas adicionales, errores, migración y configuración contable: [documentación del módulo](../../../Backend/docs/BOV-01-06-bovedas.md). Los ejemplos anteriores usan datos ficticios coherentes; no son semillas de producción.

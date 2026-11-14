@@ -1,0 +1,94 @@
+/* BOV-01..06. Ejecutar en CooperativaDB antes de desplegar el backend.
+   Requiere el esquema NewCooperativaDB.sql. Usar sqlcmd -b o equivalente que
+   detenga la ejecución ante errores. No crea cuentas ni inventa la matriz G-06.
+   Reejecutable; no reconstruye referencias históricas que nunca se guardaron. */
+SET XACT_ABORT ON;
+BEGIN TRANSACTION;
+GO
+
+IF COL_LENGTH('Boveda.MovimientoBoveda', 'IdAsientoContable') IS NULL
+    ALTER TABLE Boveda.MovimientoBoveda ADD IdAsientoContable int NULL;
+IF COL_LENGTH('Boveda.MovimientoBoveda', 'IdArqueoBoveda') IS NULL
+    ALTER TABLE Boveda.MovimientoBoveda ADD IdArqueoBoveda bigint NULL;
+IF COL_LENGTH('Boveda.MovimientoBoveda', 'ClaveIdempotencia') IS NULL
+    ALTER TABLE Boveda.MovimientoBoveda ADD ClaveIdempotencia varchar(64) COLLATE Latin1_General_100_BIN2 NULL,
+                                          HuellaPeticion char(64) NULL;
+IF COL_LENGTH('Boveda.ArqueoBoveda', 'SaldoTeorico') IS NULL
+    ALTER TABLE Boveda.ArqueoBoveda ADD SaldoTeorico decimal(18,2) NULL,
+                                      SaldoFisico decimal(18,2) NULL,
+                                      IdMovimientoCorte bigint NULL,
+                                      IdUsuarioAprobador int NULL,
+                                      FechaHoraAprobacion datetime2 NULL;
+IF COL_LENGTH('Boveda.ArqueoBovedaDenominacion', 'CantidadEsperada') IS NULL
+    ALTER TABLE Boveda.ArqueoBovedaDenominacion ADD CantidadEsperada int NULL,
+                                                 ValorUnitario decimal(10,2) NULL;
+GO
+
+ALTER TABLE Boveda.MovimientoBoveda DROP CONSTRAINT CK_MovimientoBoveda_Tipo;
+ALTER TABLE Boveda.MovimientoBoveda WITH CHECK ADD CONSTRAINT CK_MovimientoBoveda_Tipo CHECK
+    (TipoMovimiento IN ('AjusteFaltante', 'AjusteSobrante', 'Traslado', 'RemanenteATM',
+                       'AbastecimientoATM', 'DevolucionCaja', 'DotacionCaja',
+                       'EnvioExcedente', 'ProvisionExterna'));
+ALTER TABLE Boveda.MovimientoBoveda DROP CONSTRAINT CK_MovimientoBoveda_TipoNaturaleza;
+ALTER TABLE Boveda.MovimientoBoveda WITH CHECK ADD CONSTRAINT CK_MovimientoBoveda_TipoNaturaleza CHECK
+    ((TipoMovimiento IN ('AjusteFaltante', 'EnvioExcedente', 'AbastecimientoATM', 'DotacionCaja') AND Naturaleza = 'E')
+     OR (TipoMovimiento IN ('AjusteSobrante', 'RemanenteATM', 'DevolucionCaja', 'ProvisionExterna') AND Naturaleza = 'I')
+     OR TipoMovimiento = 'Traslado');
+
+IF NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name = 'FK_MovimientoBoveda_Asiento')
+    ALTER TABLE Boveda.MovimientoBoveda WITH CHECK ADD CONSTRAINT FK_MovimientoBoveda_Asiento
+        FOREIGN KEY (IdAsientoContable) REFERENCES Contabilidad.AsientoContable(IdAsientoContable);
+IF NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name = 'FK_MovimientoBoveda_Arqueo')
+    ALTER TABLE Boveda.MovimientoBoveda WITH CHECK ADD CONSTRAINT FK_MovimientoBoveda_Arqueo
+        FOREIGN KEY (IdArqueoBoveda) REFERENCES Boveda.ArqueoBoveda(IdArqueoBoveda);
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'UX_MovimientoBoveda_Idempotencia' AND object_id = OBJECT_ID('Boveda.MovimientoBoveda'))
+    CREATE UNIQUE INDEX UX_MovimientoBoveda_Idempotencia
+        ON Boveda.MovimientoBoveda(IdUsuarioMovimiento, ClaveIdempotencia)
+        WHERE ClaveIdempotencia IS NOT NULL;
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'UX_MovimientoBoveda_ArqueoNaturaleza' AND object_id = OBJECT_ID('Boveda.MovimientoBoveda'))
+    CREATE UNIQUE INDEX UX_MovimientoBoveda_ArqueoNaturaleza
+        ON Boveda.MovimientoBoveda(IdArqueoBoveda, Naturaleza)
+        WHERE IdArqueoBoveda IS NOT NULL;
+IF NOT EXISTS (SELECT 1 FROM sys.check_constraints WHERE name = 'CK_MovimientoBoveda_Idempotencia')
+    ALTER TABLE Boveda.MovimientoBoveda WITH CHECK ADD CONSTRAINT CK_MovimientoBoveda_Idempotencia CHECK
+        ((ClaveIdempotencia IS NULL AND HuellaPeticion IS NULL)
+         OR (ClaveIdempotencia IS NOT NULL AND HuellaPeticion IS NOT NULL));
+IF NOT EXISTS (SELECT 1 FROM sys.check_constraints WHERE name = 'CK_ArqueoBoveda_Referencia')
+    ALTER TABLE Boveda.ArqueoBoveda WITH CHECK ADD CONSTRAINT CK_ArqueoBoveda_Referencia CHECK
+        ((SaldoTeorico IS NULL AND SaldoFisico IS NULL AND IdMovimientoCorte IS NULL)
+         OR (SaldoTeorico IS NOT NULL AND SaldoFisico IS NOT NULL AND IdMovimientoCorte IS NOT NULL
+             AND SaldoTeorico >= 0 AND SaldoFisico >= 0 AND IdMovimientoCorte >= 0));
+IF NOT EXISTS (SELECT 1 FROM sys.check_constraints WHERE name = 'CK_ArqueoBoveda_Aprobador')
+    ALTER TABLE Boveda.ArqueoBoveda WITH CHECK ADD CONSTRAINT CK_ArqueoBoveda_Aprobador CHECK
+        ((IdUsuarioAprobador IS NULL AND FechaHoraAprobacion IS NULL)
+         OR (IdUsuarioAprobador IS NOT NULL AND FechaHoraAprobacion IS NOT NULL
+             AND Estado = 'APROBADO' AND IdUsuarioAprobador <> IdUsuarioArqueador));
+IF NOT EXISTS (SELECT 1 FROM sys.check_constraints WHERE name = 'CK_ArqueoBovedaDenominacion_Referencia')
+    ALTER TABLE Boveda.ArqueoBovedaDenominacion WITH CHECK ADD CONSTRAINT CK_ArqueoBovedaDenominacion_Referencia CHECK
+        ((CantidadEsperada IS NULL AND ValorUnitario IS NULL)
+         OR (CantidadEsperada IS NOT NULL AND ValorUnitario IS NOT NULL AND CantidadEsperada >= 0 AND ValorUnitario > 0));
+GO
+
+IF OBJECT_ID('Contabilidad.PlantillaBoveda', 'U') IS NULL
+BEGIN
+    CREATE TABLE Contabilidad.PlantillaBoveda (
+        IdAgencia char(3) NOT NULL,
+        TipoMovimiento varchar(20) NOT NULL,
+        Naturaleza char(1) NOT NULL,
+        IdCuentaDebito int NOT NULL,
+        IdCuentaCredito int NOT NULL,
+        IdTipoAsiento int NOT NULL,
+        CONSTRAINT PK_PlantillaBoveda PRIMARY KEY (IdAgencia, TipoMovimiento, Naturaleza),
+        CONSTRAINT FK_PlantillaBoveda_Agencia FOREIGN KEY (IdAgencia) REFERENCES Organizacion.Agencia(IdAgencia),
+        CONSTRAINT FK_PlantillaBoveda_Debito FOREIGN KEY (IdCuentaDebito) REFERENCES Contabilidad.CuentasContables(IdCuentaContable),
+        CONSTRAINT FK_PlantillaBoveda_Credito FOREIGN KEY (IdCuentaCredito) REFERENCES Contabilidad.CuentasContables(IdCuentaContable),
+        CONSTRAINT FK_PlantillaBoveda_TipoAsiento FOREIGN KEY (IdTipoAsiento) REFERENCES Contabilidad.TiposAsiento(IdTipoAsiento),
+        CONSTRAINT CK_PlantillaBoveda_Cuentas CHECK (IdCuentaDebito <> IdCuentaCredito),
+        CONSTRAINT CK_PlantillaBoveda_TipoNaturaleza CHECK
+            ((TipoMovimiento IN ('ProvisionExterna', 'AjusteSobrante') AND Naturaleza = 'I')
+             OR (TipoMovimiento IN ('EnvioExcedente', 'AjusteFaltante') AND Naturaleza = 'E')
+             OR (TipoMovimiento = 'Traslado' AND Naturaleza IN ('I', 'E')))
+    );
+END;
+COMMIT TRANSACTION;
+GO

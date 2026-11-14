@@ -53,29 +53,41 @@ Movimientos de bóveda.
     {
       "idMovimiento": 1,
       "idBoveda": 1,
-      "idBovedaContraparte": 1,
-      "tipoMovimiento": "tipoMovimiento",
+      "idBovedaContraparte": null,
+      "tipoMovimiento": "ProvisionExterna",
       "naturaleza": "I",
-      "monto": 150.0,
-      "saldoAnterior": 150.0,
-      "saldoPosterior": 150.0,
-      "autorizadoPor": 12,
-      "idUsuarioMovimiento": 1,
-      "idMovimientoRelacionado": 1,
-      "fechaMovimiento": "2026-11-04T10:15:00-05:00"
+      "monto": 40,
+      "saldoAnterior": 200,
+      "saldoPosterior": 240,
+      "autorizadoPor": 9,
+      "idUsuarioMovimiento": 7,
+      "idMovimientoRelacionado": null,
+      "fechaMovimiento": "2026-11-16T10:00:00-05:00",
+      "observaciones": null,
+      "idAsientoContable": 1,
+      "desglose": [
+        {
+          "idDenominacion": 1,
+          "cantidad": 2
+        }
+      ]
     }
   ],
-  "page": 12,
-  "pageSize": 12,
-  "total": 12
+  "page": 1,
+  "pageSize": 20,
+  "total": 1
 }
 ```
 
 ## Errores
 
-Formato ProblemDetails (ver F-04). Solo 400/401/403/404.
+Formato ProblemDetails (ver F-04). Errores ampliados: ver la documentación de implementación enlazada al final.
 
 ## Definición de terminado
 
-- [ ] Coincide con `openapi.yaml` (request, response y errores)
-- [ ] Prueba del caso feliz y de cada error de la tabla
+- [x] Contrato implementado en OpenAPI generado (`/api/openapi.json`); no existe `openapi.yaml` en este repositorio
+- [x] Pruebas del caso feliz y errores documentados
+
+## Implementación BOV-01..06
+
+Reglas adicionales, errores, migración y configuración contable: [documentación del módulo](../../../Backend/docs/BOV-01-06-bovedas.md). Los ejemplos anteriores usan datos ficticios coherentes; no son semillas de producción.
