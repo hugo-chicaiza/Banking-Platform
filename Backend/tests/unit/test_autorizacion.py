@@ -42,6 +42,16 @@ _VALORES_PATH = {
 
 # Roles de cada tarea (GitHubProject_Files)
 ROLES_POR_RUTA: dict[tuple[str, str], tuple[str, ...]] = {
+    ("GET", "/api/v1/boveda/bovedas"): ("SUPERVISOR", "CONTADOR", "ADMIN"),
+    ("GET", "/api/v1/boveda/bovedas/{idBoveda}"): ("SUPERVISOR", "CONTADOR", "ADMIN"),
+    ("GET", "/api/v1/boveda/bovedas/{idBoveda}/movimientos"): (
+        "SUPERVISOR",
+        "CONTADOR",
+        "AUDITOR",
+    ),
+    ("POST", "/api/v1/boveda/bovedas/{idBoveda}/movimientos"): ("SUPERVISOR",),
+    ("POST", "/api/v1/boveda/bovedas/{idBoveda}/arqueos"): ("SUPERVISOR", "AUDITOR"),
+    ("POST", "/api/v1/boveda/arqueos/{idArqueoBoveda}/aprobacion"): ("SUPERVISOR",),
     ("GET", "/api/v1/auth/me"): AUTH,
     # AUT-05..09 (C-05): usuarios internos
     ("GET", "/api/v1/usuarios"): ("ADMIN",),

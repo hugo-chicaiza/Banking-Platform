@@ -1,11 +1,13 @@
 import logging
 import re
 from datetime import date, datetime, timedelta, timezone
+from decimal import Decimal
 from typing import Any
 
 from fastapi import HTTPException
 from sqlalchemy import Connection
 
+from app.core.api.errors import problema
 from app.modules.contabilidad import repository
 
 log = logging.getLogger(__name__)
@@ -112,3 +114,72 @@ def listar_cuentas_contables(
         {**fila, "estado": "Activo" if fila["estado"] else "Inactivo"}
         for fila in repository.listar_cuentas_contables(conn, q, imputable)
     ]
+
+
+def contabilizar_boveda(
+    conn: Connection,
+    *,
+    agencia: str,
+    tipo: str,
+    naturaleza: str,
+    monto: Decimal,
+    fecha_contable: int,
+    actor: int,
+    movimiento: int,
+    ahora: datetime,
+) -> int:
+    """Asiento real de BOV-04/06 en la misma transacción que el efectivo.
+
+    Las cuentas y el tipo de asiento se configuran en PlantillaBoveda por agencia,
+    tipo y naturaleza. No se inventa la matriz G-06 ni se confirma efectivo sin ella.
+    """
+    if not conn.in_transaction():
+        raise RuntimeError("La contabilización de bóveda requiere una transacción")
+    periodo = repository.periodo_boveda(conn, fecha_contable)
+    if periodo is None or periodo["estado"] != "ABIERTO":
+        raise problema(
+            409, "PERIODO_CONTABLE_NO_ABIERTO", "El período contable no está abierto."
+        )
+    plantilla = repository.plantilla_boveda(conn, agencia, tipo, naturaleza)
+    if plantilla is None or plantilla["estado_tipo"] != "A":
+        raise problema(
+            409,
+            "PLANTILLA_BOVEDA_NO_CONFIGURADA",
+            "Falta una plantilla contable activa para esta operación y agencia.",
+        )
+    cuentas: dict[int, dict[str, Any]] = {}
+    for id_cuenta in sorted({plantilla["debito"], plantilla["credito"]}):
+        cuenta = repository.cuenta_boveda(conn, id_cuenta)
+        if cuenta is None or not cuenta["estado"] or not cuenta["imputable"]:
+            raise problema(
+                409,
+                "CUENTA_CONTABLE_NO_HABILITADA",
+                "La plantilla contiene una cuenta inactiva o no imputable.",
+            )
+        cuentas[id_cuenta] = cuenta
+    asiento = repository.crear_asiento_boveda(
+        conn,
+        {
+            "fecha": periodo["fecha"],
+            "ahora": ahora,
+            "agencia": agencia,
+            "tipo_asiento": plantilla["tipo_asiento"],
+            "actor": actor,
+            "fecha_contable": fecha_contable,
+            "concepto": f"Bóveda: {tipo}; movimiento {movimiento}",
+        },
+    )
+    for campo, lado in (("debito", "DEBITO"), ("credito", "CREDITO")):
+        cuenta = plantilla[campo]
+        repository.linea_boveda(
+            conn,
+            asiento,
+            cuenta,
+            agencia,
+            monto,
+            lado,
+            ahora,
+            cuentas[cuenta]["naturaleza"],
+        )
+    repository.confirmar_asiento_boveda(conn, asiento)
+    return asiento

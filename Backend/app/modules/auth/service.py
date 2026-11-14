@@ -325,6 +325,35 @@ def perfil(usuario: Usuario) -> UsuarioSesion:
     )
 
 
+def validar_participante_boveda(
+    id_usuario: int, id_agencia: str, roles_permitidos: frozenset[str]
+) -> None:
+    """Valida identidad interna vigente y alcance del autorizador/testigo.
+
+    Usa la copia de roles de la última sesión, igual que Caja. No constituye una
+    segunda autenticación ni prueba de presencia física del participante.
+    """
+    with get_engine("seguridad").connect() as conn:
+        fila = repository.obtener_usuario(conn, id_usuario)
+        if fila is None or fila["Estado"] != "Activo" or not fila["KeyUsuario"]:
+            raise problema(
+                422, "PARTICIPANTE_NO_HABILITADO", "El participante no está habilitado."
+            )
+        roles = set(normalizar_roles((fila["RolesWorkOS"] or "").split(","), None))
+        if (
+            not roles & roles_permitidos
+            or repository.bloqueo_vigente(conn, id_usuario) is not None
+        ):
+            raise problema(
+                422, "PARTICIPANTE_NO_HABILITADO", "El participante no está habilitado."
+            )
+        auditor_global = "AUDITOR" in roles_permitidos and "AUDITOR" in roles
+        if not auditor_global and fila["AgenciaID"] != id_agencia:
+            raise problema(
+                403, "SIN_ACCESO_AGENCIA", "El participante pertenece a otra agencia."
+            )
+
+
 # --- AUT-05..09 usuarios internos (C-05) -------------------------------------------
 #
 # La base es la fuente del usuario interno (datos, estado, agencia, bloqueos) y WorkOS

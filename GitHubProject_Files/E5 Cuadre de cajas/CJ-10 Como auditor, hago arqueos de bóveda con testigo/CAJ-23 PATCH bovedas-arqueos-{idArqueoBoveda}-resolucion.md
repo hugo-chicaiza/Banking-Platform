@@ -46,27 +46,39 @@ Aprueba arqueo y genera ajuste si hay diferencia.
 {
   "idArqueoBoveda": 1,
   "idBoveda": 1,
-  "fechaHoraArqueo": "2026-11-04T10:15:00-05:00",
-  "tipoArqueo": "tipoArqueo",
-  "idUsuarioArqueador": 1,
-  "idUsuarioTestigo": 1,
-  "estado": "REGISTRADO",
+  "fechaHoraArqueo": "2026-11-16T10:00:00-05:00",
+  "tipoArqueo": "Sorpresivo",
+  "idUsuarioArqueador": 7,
+  "idUsuarioTestigo": 9,
+  "estado": "APROBADO",
   "idMovimientoAjuste": 1,
+  "idsMovimientosAjuste": [
+    1
+  ],
   "diferenciaPorDenominacion": [
     {
       "idDenominacion": 1,
-      "cantidad": 12
+      "cantidad": -1
     }
   ],
-  "observaciones": "observaciones"
+  "observaciones": null,
+  "saldoTeorico": 200,
+  "saldoFisico": 180,
+  "diferencia": -20,
+  "idUsuarioAprobador": 9,
+  "fechaHoraAprobacion": "2026-11-16T10:05:00-05:00"
 }
 ```
 
 ## Errores
 
-Formato ProblemDetails (ver F-04). Solo 400/401/403/404.
+Formato ProblemDetails (ver F-04). Errores ampliados: ver la documentación de implementación enlazada al final.
 
 ## Definición de terminado
 
-- [ ] Coincide con `openapi.yaml` (request, response y errores)
-- [ ] Prueba del caso feliz y de cada error de la tabla
+- [x] Contrato implementado en OpenAPI generado (`/api/openapi.json`); no existe `openapi.yaml` en este repositorio
+- [x] Pruebas del caso feliz y errores documentados
+
+## Implementación BOV-01..06
+
+Reglas adicionales, errores, migración y configuración contable: [documentación del módulo](../../../Backend/docs/BOV-01-06-bovedas.md). Los ejemplos anteriores usan datos ficticios coherentes; no son semillas de producción.

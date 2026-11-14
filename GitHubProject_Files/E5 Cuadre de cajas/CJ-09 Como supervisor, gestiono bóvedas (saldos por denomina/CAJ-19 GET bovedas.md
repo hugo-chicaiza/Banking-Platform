@@ -49,26 +49,33 @@ Lista bóvedas.
     "codigoBoveda": "COD01",
     "tipoBoveda": "General",
     "idAgencia": "001",
-    "idBovedaSuperior": 1,
-    "limiteMaximo": 150.0,
-    "limiteMinimo": 150.0,
-    "saldoActual": 150.0,
+    "idBovedaSuperior": null,
+    "limiteMaximo": 1000,
+    "limiteMinimo": 50,
+    "saldoActual": 200,
     "estado": "A",
     "denominaciones": [
       {
         "idDenominacion": 1,
-        "cantidadActual": 12
+        "cantidadActual": 10,
+        "valor": 20,
+        "subtotal": 200
       }
-    ]
+    ],
+    "totalDesglose": 200
   }
 ]
 ```
 
 ## Errores
 
-Formato ProblemDetails (ver F-04). Solo 400/401/403.
+Formato ProblemDetails (ver F-04). Errores ampliados: ver la documentación de implementación enlazada al final.
 
 ## Definición de terminado
 
-- [ ] Coincide con `openapi.yaml` (request, response y errores)
-- [ ] Prueba del caso feliz y de cada error de la tabla
+- [x] Contrato implementado en OpenAPI generado (`/api/openapi.json`); no existe `openapi.yaml` en este repositorio
+- [x] Pruebas del caso feliz y errores documentados
+
+## Implementación BOV-01..06
+
+Reglas adicionales, errores, migración y configuración contable: [documentación del módulo](../../../Backend/docs/BOV-01-06-bovedas.md). Los ejemplos anteriores usan datos ficticios coherentes; no son semillas de producción.

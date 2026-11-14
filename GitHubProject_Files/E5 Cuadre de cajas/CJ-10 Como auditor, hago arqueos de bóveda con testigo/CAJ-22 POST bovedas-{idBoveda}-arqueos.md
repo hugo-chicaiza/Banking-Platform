@@ -50,14 +50,14 @@ Body `ArqueoBovedaRequest`:
 ```json
 {
   "tipoArqueo": "Sorpresivo",
-  "idUsuarioTestigo": 1,
+  "idUsuarioTestigo": 9,
   "desglose": [
     {
       "idDenominacion": 1,
-      "cantidad": 12
+      "cantidad": 9
     }
   ],
-  "observaciones": "observaciones"
+  "observaciones": null
 }
 ```
 
@@ -69,19 +69,25 @@ Body `ArqueoBovedaRequest`:
 {
   "idArqueoBoveda": 1,
   "idBoveda": 1,
-  "fechaHoraArqueo": "2026-11-04T10:15:00-05:00",
-  "tipoArqueo": "tipoArqueo",
-  "idUsuarioArqueador": 1,
-  "idUsuarioTestigo": 1,
+  "fechaHoraArqueo": "2026-11-16T10:00:00-05:00",
+  "tipoArqueo": "Sorpresivo",
+  "idUsuarioArqueador": 7,
+  "idUsuarioTestigo": 9,
   "estado": "REGISTRADO",
-  "idMovimientoAjuste": 1,
+  "idMovimientoAjuste": null,
+  "idsMovimientosAjuste": [],
   "diferenciaPorDenominacion": [
     {
       "idDenominacion": 1,
-      "cantidad": 12
+      "cantidad": -1
     }
   ],
-  "observaciones": "observaciones"
+  "observaciones": null,
+  "saldoTeorico": 200,
+  "saldoFisico": 180,
+  "diferencia": -20,
+  "idUsuarioAprobador": null,
+  "fechaHoraAprobacion": null
 }
 ```
 
@@ -95,5 +101,9 @@ Formato ProblemDetails (ver F-04). Además de 400/401/403:
 
 ## Definición de terminado
 
-- [ ] Coincide con `openapi.yaml` (request, response y errores)
-- [ ] Prueba del caso feliz y de cada error de la tabla
+- [x] Contrato implementado en OpenAPI generado (`/api/openapi.json`); no existe `openapi.yaml` en este repositorio
+- [x] Pruebas del caso feliz y errores documentados
+
+## Implementación BOV-01..06
+
+Reglas adicionales, errores, migración y configuración contable: [documentación del módulo](../../../Backend/docs/BOV-01-06-bovedas.md). Los ejemplos anteriores usan datos ficticios coherentes; no son semillas de producción.
