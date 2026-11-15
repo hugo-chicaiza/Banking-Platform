@@ -10,6 +10,7 @@ Desmarcar no borra: la fila queda en Estado 'I' (historial) y marcar de nuevo la
 El SQL de cada tabla es fijo.
 """
 
+from contextlib import ExitStack
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -186,19 +187,70 @@ def leer(conn: Connection, destino: Destino, id_: int) -> dict[str, Any]:
     }
 
 
-def _guardar(
-    conn: Connection, destino: Destino, id_: int, datos: VinculosEntrada, usuario: int
-) -> None:
-    ids = _ids(destino, id_)
-    listas: dict[str, list[tuple[Any, Any]]] = {
-        "tasas": [(t, None) for t in datos.tasas_interes],
-        "comisiones": [(c.id_comision, c.exonerado) for c in datos.comisiones],
-        "seguros": [(s.id_seguro, s.es_obligatorio) for s in datos.seguros],
-        "sistemas": [(s, None) for s in datos.sistemas_amortizacion],
+# Tabla que se registra en Auditoria.Auditoria por cada lista que cambia
+_TABLA_AUDITORIA = {
+    "tasas": "ProductosFinancieros.ProductoTasaInteres",
+    "comisiones": "ProductosFinancieros.ProductoComision",
+    "seguros": "ProductosFinancieros.ProductoSeguro",
+    "sistemas": "ProductosFinancieros.ProductoSistemaAmortizacion",
+}
+
+
+def _por_tabla_entrada(datos: VinculosEntrada) -> dict[str, dict[Any, Any]]:
+    """Cada lista como {objeto: marca} (marca = exonerado u obligatorio)."""
+    return {
+        "tasas": {t: None for t in datos.tasas_interes},
+        "comisiones": {c.id_comision: c.exonerado for c in datos.comisiones},
+        "seguros": {s.id_seguro: s.es_obligatorio for s in datos.seguros},
+        "sistemas": {s: None for s in datos.sistemas_amortizacion},
     }
-    for clave, tabla in _TABLAS.items():
+
+
+def _por_tabla_leido(leido: dict[str, Any]) -> dict[str, dict[Any, Any]]:
+    return {
+        "tasas": {t: None for t in leido["tasas_interes"]},
+        "comisiones": {c["id_comision"]: c["exonerado"] for c in leido["comisiones"]},
+        "seguros": {s["id_seguro"]: s["es_obligatorio"] for s in leido["seguros"]},
+        "sistemas": {s: None for s in leido["sistemas_amortizacion"]},
+    }
+
+
+def _detalle(
+    destino: Destino, id_: int, antes: dict[Any, Any], despues: dict[Any, Any]
+) -> str:
+    """Solo ids: qué se marcó, qué se desmarcó y a qué se le cambió la marca."""
+    marcados = sorted(str(k) for k in despues.keys() - antes.keys())
+    quitados = sorted(str(k) for k in antes.keys() - despues.keys())
+    cambiados = sorted(
+        f"{k}={int(bool(despues[k]))}"
+        for k in despues.keys() & antes.keys()
+        if despues[k] != antes[k]
+    )
+    partes = [f"PRD-VINCULOS {destino}={id_}"]
+    if marcados:
+        partes.append(f"marcados={','.join(marcados)}")
+    if quitados:
+        partes.append(f"desmarcados={','.join(quitados)}")
+    if cambiados:
+        partes.append(f"marca={','.join(cambiados)}")
+    return " ".join(partes)[:250]
+
+
+def _guardar(
+    conn: Connection,
+    destino: Destino,
+    id_: int,
+    datos: VinculosEntrada,
+    usuario: int,
+    tablas: list[str],
+) -> None:
+    """Escribe solo las listas que cambian (las demás conservan su fecha de asignación)."""
+    ids = _ids(destino, id_)
+    listas = _por_tabla_entrada(datos)
+    for clave in tablas:
+        tabla = _TABLAS[clave]
         conn.execute(text(tabla.desactivar), ids)
-        for objeto, marca in listas[clave]:
+        for objeto, marca in listas[clave].items():
             conn.execute(
                 text(tabla.guardar),
                 {**ids, "objeto": objeto, "marca": marca, "usuario": usuario},
@@ -323,20 +375,28 @@ def guardar(
     ip: str,
 ) -> VinculosVista:
     actor = exigir_id_interno(usuario.interno())
-    with auditar(
-        "ACTUALIZAR",
-        "ProductosFinancieros.ProductoTasaInteres",
-        usuario,
-        ip,
-        f"PRD-VINCULOS {destino} tasas={len(datos.tasas_interes)}"
-        f" comisiones={len(datos.comisiones)} seguros={len(datos.seguros)}"
-        f" sistemas={len(datos.sistemas_amortizacion)}",
-        str(id_),
-    ):
+    producto = _producto_de(conn, destino, id_)
+    antes = _por_tabla_leido(leer(conn, destino, id_))
+    despues = _por_tabla_entrada(datos)
+    tablas = [clave for clave in _TABLAS if antes[clave] != despues[clave]]
+    if not tablas:
+        return obtener(conn, destino, id_)
+    # Un registro de auditoría por cada tabla de vínculo que cambia (éxito o fallo)
+    with ExitStack() as registros:
+        for clave in tablas:
+            registros.enter_context(
+                auditar(
+                    "ACTUALIZAR",
+                    _TABLA_AUDITORIA[clave],
+                    usuario,
+                    ip,
+                    _detalle(destino, id_, antes[clave], despues[clave]),
+                    str(id_),
+                )
+            )
         try:
-            producto = _producto_de(conn, destino, id_)
             _validar(conn, producto, destino, datos)
-            _guardar(conn, destino, id_, datos, actor)
+            _guardar(conn, destino, id_, datos, actor, tablas)
             conn.commit()
         except DBAPIError as exc:
             conn.rollback()

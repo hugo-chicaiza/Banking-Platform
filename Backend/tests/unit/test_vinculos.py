@@ -16,6 +16,7 @@ from app.modules.productos.router import router
 from tests.sesion import simular_sesion, usuario_con_roles
 
 BASE = "https://testserver/api/v1/productos"
+EVENTOS: list[audit.EventoAuditoria] = []
 
 PRODUCTOS = {
     1: {"id_producto": 1, "tipo_producto": "Tarjeta", "id_tipo_credito": None},
@@ -45,7 +46,9 @@ def bd(monkeypatch: pytest.MonkeyPatch) -> dict[tuple[str, int], dict[str, Any]]
             return [TASAS[i] for i in ids if i in TASAS]
         return [{"id": i} for i in ids if i in (1, 2)]  # comisiones y seguros 1 y 2
 
-    def guardar(_c: Any, destino: str, id_: int, datos: Any, _u: int) -> None:
+    def guardar(
+        _c: Any, destino: str, id_: int, datos: Any, _u: int, _t: list[str]
+    ) -> None:
         guardado[(destino, id_)] = datos.model_dump()
 
     monkeypatch.setattr(vinculos, "_filas", filas)
@@ -55,7 +58,8 @@ def bd(monkeypatch: pytest.MonkeyPatch) -> dict[tuple[str, int], dict[str, Any]]
     monkeypatch.setattr(
         repo, "obtener_subproducto", lambda _c, i, **_k: SUBPRODUCTOS.get(i)
     )
-    monkeypatch.setattr(audit, "registrar", lambda _e: None)
+    monkeypatch.setattr(audit, "registrar", EVENTOS.append)
+    EVENTOS.clear()
     return guardado
 
 
@@ -138,3 +142,35 @@ def test_repetidos_e_inexistentes(bd, admin):
     ).status_code in (400, 422)
     assert admin.put(f"{BASE}/99/vinculos", json={}).status_code == 404
     assert admin.get(f"{BASE}/subproductos/99/vinculos").status_code == 404
+
+
+def test_auditoria_por_tabla_que_cambia(bd, admin):
+    admin.put(
+        f"{BASE}/1/vinculos",
+        json={"tasasInteres": [5], "comisiones": [{"idComision": 1}]},
+    )
+    tablas = sorted(e.tabla or "" for e in EVENTOS)
+    assert tablas == [
+        "ProductosFinancieros.ProductoComision",
+        "ProductosFinancieros.ProductoTasaInteres",
+    ]
+    assert all(e.resultado == "Exitoso" for e in EVENTOS)
+    EVENTOS.clear()
+    # Sin cambios: no escribe ni audita
+    admin.put(
+        f"{BASE}/1/vinculos",
+        json={"tasasInteres": [5], "comisiones": [{"idComision": 1}]},
+    )
+    assert EVENTOS == []
+    # Solo cambia una lista: un solo registro, con lo que se desmarcó
+    admin.put(f"{BASE}/1/vinculos", json={"tasasInteres": [5]})
+    assert [e.tabla for e in EVENTOS] == ["ProductosFinancieros.ProductoComision"]
+    assert "desmarcados=1" in EVENTOS[0].descripcion
+
+
+def test_auditoria_del_fallo_en_la_tabla_afectada(bd, admin):
+    r = admin.put(f"{BASE}/1/vinculos", json={"seguros": [{"idSeguro": 9}]})
+    assert r.status_code == 422
+    assert [(e.tabla, e.resultado) for e in EVENTOS] == [
+        ("ProductosFinancieros.ProductoSeguro", "Fallido")
+    ]

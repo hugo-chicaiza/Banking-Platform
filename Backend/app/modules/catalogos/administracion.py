@@ -647,9 +647,9 @@ def _validar_fila(final: dict[str, Any]) -> None:
 def _validar_tasa(
     conn: Connection, actual: dict[str, Any], cambios: dict[str, Any]
 ) -> None:
-    """Una tasa de crédito necesita plazo y no puede solaparse con otra del mismo tipo de
-    crédito. Cuenta también las inactivas: Credito.usp_EvaluarSolicitudCredito no filtra
-    por Estado y con dos tasas lanza 55103. Ahorro y tarjeta pueden coexistir."""
+    """Una tasa de crédito necesita plazo y, si queda activa, no puede solaparse con otra
+    activa del mismo tipo de crédito (usp_EvaluarSolicitudCredito lanzaría 55103). Ahorro y
+    tarjeta pueden coexistir: cada producto vincula la suya."""
     final = {**actual, **cambios}
     minimo, maximo = final["montoMinimo"], final["montoMaximo"]
     if minimo is not None and maximo is not None and maximo < minimo:
@@ -658,13 +658,15 @@ def _validar_tasa(
         return
     if final["plazoMaximoMeses"] is None:
         raise _invalido("Plazo máximo (meses)", "es obligatorio en tasas de crédito.")
+    if final["estado"] != "A":
+        return
     hasta = final["vigenciaHasta"]
     solapadas = conn.execute(
         text(
             """
             SELECT COUNT(*)
             FROM Credito.TasaInteres WITH (UPDLOCK, HOLDLOCK)
-            WHERE IdTipoCredito = :tipo AND TipoTasa = 'CREDITO'
+            WHERE IdTipoCredito = :tipo AND TipoTasa = 'CREDITO' AND Estado = 'A'
               AND IdTasaInteres <> TRY_CAST(:id AS int)
               AND VigenciaDesde <= ISNULL(:hasta, '9999-12-31')
               AND :desde <= ISNULL(VigenciaHasta, '9999-12-31')
@@ -685,7 +687,7 @@ def _validar_tasa(
         raise problema(
             409,
             "TASA_SOLAPADA",
-            "Ya hay una tasa de ese tipo de crédito para ese rango de monto en esas fechas.",
+            "Ya hay una tasa activa de ese tipo de crédito para ese rango de monto en esas fechas.",
         )
 
 
