@@ -659,7 +659,8 @@ def test_estado_valido_200_registra_historial_y_fechas(
     esperado = {"resolucion": False, "emision": False, "pin_asignado": False}
     assert capturado["marcas"] == {**esperado, **marcas}
     assert capturado["historial"][2:6] == (evento, anterior, destino, "Motivo")
-    assert capturado["historial"][7] == "testclient"
+    # ip_cliente: "testclient" no es una IP válida (ASVS 4.1.3)
+    assert capturado["historial"][7] == "desconocida"
     assert conns.coop.commits == 1 and conns.seg.commits == 0
 
 

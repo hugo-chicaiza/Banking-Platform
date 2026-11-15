@@ -92,7 +92,8 @@ def listar_productos(
         conn,
         """
         SELECT IdProducto AS id_producto, CodigoProducto AS codigo_producto,
-               NombreProducto AS nombre_producto, TipoProducto AS tipo_producto,
+               NombreProducto AS nombre_producto, Descripcion AS descripcion,
+               TipoProducto AS tipo_producto,
                CASE WHEN TipoProducto = 'Cuenta'
                     THEN MontoAperturaMinimo END AS monto_apertura_minimo,
                CASE WHEN TipoProducto = 'Credito'
@@ -135,6 +136,19 @@ def listar_productos(
         # Solo los productos que tienen algo que ofrecer de ese tipo
         productos = [p for p in productos if p["subproductos"]]
     return productos
+
+
+def listar_redes(conn: Connection) -> list[dict[str, Any]]:
+    # Redes de tarjeta activas: las que puede elegir un producto Tarjeta
+    return _rows(
+        conn,
+        """
+        SELECT IdRed AS id_red, CodigoRed AS codigo_red, Nombre AS nombre
+        FROM ProductosFinancieros.Red
+        WHERE Estado = 'A'
+        ORDER BY Nombre
+        """,
+    )
 
 
 def listar_canales(conn: Connection) -> list[dict[str, Any]]:

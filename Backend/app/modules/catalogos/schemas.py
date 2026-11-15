@@ -67,6 +67,7 @@ class Producto(CamelModel):
     id_producto: int
     codigo_producto: str
     nombre_producto: str
+    descripcion: str | None = None
     tipo_producto: TipoProducto
     monto_apertura_minimo: Money | None = None
     id_tipo_credito: int | None = None
@@ -74,6 +75,12 @@ class Producto(CamelModel):
     tipo_cuenta: str | None = None
     permite_operaciones_presenciales: bool
     subproductos: list[SubProducto] = Field(default_factory=list)
+
+
+class Red(CamelModel):
+    id_red: int
+    codigo_red: str
+    nombre: str
 
 
 class Agencia(CamelModel):

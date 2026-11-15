@@ -184,6 +184,8 @@ def test_productos_sin_filtro_devuelve_nulos_y_monto_numerico(client, monkeypatc
             "idProducto": 1,
             "codigoProducto": "AHO001",
             "nombreProducto": "Ahorro a la vista",
+            # Sin descripción cargada: el contrato devuelve null
+            "descripcion": None,
             "tipoProducto": "Cuenta",
             "montoAperturaMinimo": 20.0,
             "idTipoCredito": None,

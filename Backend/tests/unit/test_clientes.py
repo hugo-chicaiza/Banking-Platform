@@ -1139,13 +1139,15 @@ def test_cli13_router_propaga_evaluador_e_ip(monkeypatch):
     request = Request(
         {
             "type": "http",
+            "client": ("198.51.100.4", 1234),
+            # ASVS 4.1.3: el cliente no puede fijar su IP con X-Forwarded-For
             "headers": [(b"x-forwarded-for", b"192.0.2.10, 192.0.2.20")],
         }
     )
     conn = _fake_conn()
     payload = _payload_riesgo_create()
     resultado = router.registrar_evaluacion_riesgo(10, payload, request, 7, conn)
-    registrar.assert_called_once_with(conn, 10, payload, 7, "192.0.2.10")
+    registrar.assert_called_once_with(conn, 10, payload, 7, "198.51.100.4")
     assert resultado.es_vigente is True
 
 
@@ -2902,8 +2904,8 @@ def test_cli12_http_identidad_de_sesion_y_mecanismo_ip_actual(monkeypatch):
 
     respuesta = asyncio.run(llamar())
     assert respuesta.status_code == 204
-    # Se conserva el helper de IP existente; la configuración del proxy queda pendiente.
-    eliminar.assert_called_once_with(None, 10, 5, 12, "203.0.113.77")
+    # ASVS 4.1.3: X-Forwarded-For del cliente se ignora; queda la IP de la conexión
+    eliminar.assert_called_once_with(None, 10, 5, 12, "127.0.0.1")
 
 
 def test_cli12_sin_usuario_interno_no_se_ejecuta_baja(monkeypatch):
