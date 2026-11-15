@@ -148,64 +148,6 @@ class SubProductoUpdate(_Entrada):
 MontoLimite = Annotated[
     Decimal, Field(gt=0, le=Decimal("9999999999999999.99"), decimal_places=2)
 ]
-Plazo = Annotated[int, Field(ge=1, le=600)]
-CodigoSistema = Annotated[
-    str,
-    StringConstraints(
-        strip_whitespace=True, to_upper=True, pattern=r"^[A-Za-z]{3,10}$"
-    ),
-]
-
-
-class SubProductoParametros(_Entrada):
-    """Parámetros de un subproducto de crédito y sus vínculos con los catálogos.
-
-    Se reemplaza entero (PUT): null deja ese límite sin definir y una lista vacía quita
-    todos los vínculos. Las tasas deben ser del tipo de crédito del producto.
-    """
-
-    monto_minimo: MontoLimite | None = None
-    monto_maximo: MontoLimite | None = None
-    plazo_minimo_meses: Plazo | None = None
-    plazo_maximo_meses: Plazo | None = None
-    tasas_interes: Annotated[list[IdPositivo], Field(max_length=50)] = Field(
-        default_factory=list
-    )
-    sistemas_amortizacion: Annotated[list[CodigoSistema], Field(max_length=10)] = Field(
-        default_factory=list
-    )
-
-    @model_validator(mode="after")
-    def _rangos(self) -> Self:
-        if (
-            self.monto_minimo
-            and self.monto_maximo
-            and self.monto_maximo < self.monto_minimo
-        ):
-            raise ValueError("montoMaximo debe ser mayor o igual que montoMinimo.")
-        if (
-            self.plazo_minimo_meses
-            and self.plazo_maximo_meses
-            and self.plazo_maximo_meses < self.plazo_minimo_meses
-        ):
-            raise ValueError(
-                "plazoMaximoMeses debe ser mayor o igual que plazoMinimoMeses."
-            )
-        if len(set(self.tasas_interes)) != len(self.tasas_interes) or len(
-            set(self.sistemas_amortizacion)
-        ) != len(self.sistemas_amortizacion):
-            raise ValueError("Las listas no admiten elementos repetidos.")
-        return self
-
-
-class SubProductoParametrosVista(CamelModel):
-    id_sub_producto: int
-    monto_minimo: Money | None = None
-    monto_maximo: Money | None = None
-    plazo_minimo_meses: int | None = None
-    plazo_maximo_meses: int | None = None
-    tasas_interes: list[int] = Field(default_factory=list)
-    sistemas_amortizacion: list[str] = Field(default_factory=list)
 
 
 class SubProducto(CamelModel):

@@ -1,0 +1,29 @@
+/* T-SQL (SQL Server). Catálogo de sistemas de amortización (no existía en la BD: solo
+   el CK de Credito.CreditoSolicitud.SistemaAmortizacion). Los rangos de monto y plazo
+   no van aquí: ya están en Credito.TasaInteres. Ejecutar en CooperativaDB antes de
+   desplegar el backend que lo usa. Reejecutable. Usar sqlcmd -b o equivalente. */
+SET XACT_ABORT ON;
+GO
+
+/* El cálculo de cada sistema es código (creditos/amortizacion.py); qué sistemas hay es dato.
+   Mismos códigos que CK de Credito.CreditoSolicitud.SistemaAmortizacion. */
+IF OBJECT_ID('Catalogo.SistemaAmortizacion') IS NULL
+CREATE TABLE Catalogo.SistemaAmortizacion (
+    Codigo      varchar(10)  NOT NULL CONSTRAINT PK_SistemaAmortizacion PRIMARY KEY,
+    Nombre      varchar(60)  NOT NULL,
+    Descripcion varchar(250) NOT NULL,
+    Estado      char(1)      NOT NULL CONSTRAINT DF_SistemaAmortizacion_Estado DEFAULT ('A')
+                             CONSTRAINT CK_SistemaAmortizacion_Estado CHECK (Estado IN ('A', 'I'))
+);
+GO
+INSERT INTO Catalogo.SistemaAmortizacion (Codigo, Nombre, Descripcion)
+SELECT v.Codigo, v.Nombre, v.Descripcion
+FROM (VALUES
+    ('FRANCES', 'Francés', 'Cuota fija: el capital crece y el interés baja en cada cuota.'),
+    ('ALEMAN',  'Alemán',  'Capital fijo: la cuota baja porque el interés se calcula sobre un saldo menor.')
+) AS v (Codigo, Nombre, Descripcion)
+WHERE NOT EXISTS (SELECT 1 FROM Catalogo.SistemaAmortizacion s WHERE s.Codigo = v.Codigo);
+GO
+
+/* Vuelta atrás (solo si ningún subproducto lo vincula todavía):
+   DROP TABLE IF EXISTS Catalogo.SistemaAmortizacion; */

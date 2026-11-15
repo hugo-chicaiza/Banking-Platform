@@ -28,8 +28,6 @@ from app.modules.productos.schemas import (
     RestriccionesVista,
     SubProducto,
     SubProductoCreate,
-    SubProductoParametros,
-    SubProductoParametrosVista,
     SubProductoUpdate,
 )
 
@@ -263,77 +261,6 @@ def actualizar_subproducto(
     if fila is None or producto is None:
         raise _no_leido()
     return _subproducto(fila, producto["tipo_producto"])
-
-
-def _subproducto_de_credito(
-    conn: Connection, id_sub: int, *, bloquear: bool = False
-) -> dict[str, Any]:
-    """El subproducto y su producto; los parámetros solo existen en productos de crédito."""
-    sub = repo.obtener_subproducto(conn, id_sub, bloquear=bloquear)
-    if sub is None:
-        raise problema(404, "SUBPRODUCTO_NO_ENCONTRADO", "El subproducto no existe.")
-    producto = repo.obtener_producto(conn, sub["id_producto"])
-    if producto is None or producto["tipo_producto"] != "Credito":
-        raise problema(
-            422,
-            "CAMPO_NO_APLICA",
-            "Los parámetros de monto, plazo, tasas y amortización solo aplican a créditos.",
-        )
-    return producto
-
-
-def obtener_parametros(conn: Connection, id_sub: int) -> SubProductoParametrosVista:
-    _subproducto_de_credito(conn, id_sub)
-    return SubProductoParametrosVista.model_validate(
-        repo.obtener_parametros(conn, id_sub)
-    )
-
-
-def guardar_parametros(
-    conn: Connection,
-    id_sub: int,
-    datos: SubProductoParametros,
-    usuario: Usuario,
-    ip: str,
-) -> SubProductoParametrosVista:
-    actor = exigir_id_interno(usuario.interno())
-    with auditar(
-        "ACTUALIZAR",
-        "ProductosFinancieros.SubProductoParametro",
-        usuario,
-        ip,
-        f"PRD-SUB-PARAMETROS tasas={len(datos.tasas_interes)}"
-        f" sistemas={','.join(datos.sistemas_amortizacion)}",
-        str(id_sub),
-    ):
-        try:
-            producto = _subproducto_de_credito(conn, id_sub, bloquear=True)
-            ajenas = set(datos.tasas_interes) - repo.tasas_de_tipo_credito(
-                conn, producto["id_tipo_credito"]
-            )
-            if ajenas:
-                raise problema(
-                    422,
-                    "TASA_NO_APLICA",
-                    "Hay tasas que no existen o no son del tipo de crédito del producto.",
-                )
-            if set(datos.sistemas_amortizacion) - repo.sistemas_activos(conn):
-                raise problema(
-                    422,
-                    "SISTEMA_NO_EXISTE",
-                    "Hay sistemas de amortización que no existen o están inactivos.",
-                )
-            repo.guardar_parametros(conn, id_sub, datos.model_dump(), actor)
-            conn.commit()
-        except DBAPIError as exc:
-            conn.rollback()
-            raise _traducir(exc) from None
-        except Exception:
-            conn.rollback()
-            raise
-    return SubProductoParametrosVista.model_validate(
-        repo.obtener_parametros(conn, id_sub)
-    )
 
 
 def _subproducto_de_tipo(

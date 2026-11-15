@@ -2,8 +2,7 @@
    desactivarlos desde Productos y Catálogos › Catálogos sin borrar filas.
    Todas las filas existentes quedan Activas (DEFAULT 'A'): nada cambia hasta que
    un ADMIN desactive algo. Ejecutar en CooperativaDB ANTES de desplegar el backend
-   que filtra por Estado. Reejecutable. Usar sqlcmd -b o equivalente.
-   Requiere antes 20261115_subproducto_parametros.tsql. */
+   que filtra por Estado. Reejecutable. Usar sqlcmd -b o equivalente. */
 SET XACT_ABORT ON;
 GO
 
