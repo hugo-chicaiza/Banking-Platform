@@ -20,6 +20,8 @@ from app.modules.productos.schemas import (
     ProductoUpdate,
     SubProducto,
     SubProductoCreate,
+    SubProductoParametros,
+    SubProductoParametrosVista,
     SubProductoUpdate,
 )
 
@@ -75,6 +77,38 @@ def crear_producto(
 
 
 # Antes de /{id_producto}: si no, «subproductos» se tomaría como id de producto
+@router.get(
+    "/subproductos/{id_sub_producto}/parametros",
+    operation_id="PRDSubParametros",
+    response_model=SubProductoParametrosVista,
+    openapi_extra={"x-roles": _LECTURA},
+)
+def obtener_parametros(
+    id_sub_producto: IdPath, _: Lector, conn: Db
+) -> SubProductoParametrosVista:
+    """Límites de monto y plazo, y las tasas y sistemas de amortización vinculados."""
+    return service.obtener_parametros(conn, id_sub_producto)
+
+
+@router.put(
+    "/subproductos/{id_sub_producto}/parametros",
+    operation_id="PRDSubParametrizar",
+    response_model=SubProductoParametrosVista,
+    openapi_extra={"x-roles": _ESCRITURA},
+)
+def guardar_parametros(
+    id_sub_producto: IdPath,
+    payload: SubProductoParametros,
+    request: Request,
+    usuario: Administrador,
+    conn: Db,
+) -> SubProductoParametrosVista:
+    """Reemplaza los parámetros; los objetos vinculados se crean en Catálogos."""
+    return service.guardar_parametros(
+        conn, id_sub_producto, payload, usuario, ip_cliente(request.scope)
+    )
+
+
 @router.patch(
     "/subproductos/{id_sub_producto}",
     operation_id="PRDSubEditar",

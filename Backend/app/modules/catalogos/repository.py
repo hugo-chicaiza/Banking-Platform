@@ -1,3 +1,4 @@
+from datetime import date
 from typing import Any
 
 from sqlalchemy import Connection, text
@@ -136,6 +137,105 @@ def listar_productos(
         # Solo los productos que tienen algo que ofrecer de ese tipo
         productos = [p for p in productos if p["subproductos"]]
     return productos
+
+
+def listar_sistemas_amortizacion(conn: Connection) -> list[dict[str, Any]]:
+    return _rows(
+        conn,
+        """
+        SELECT Codigo AS codigo, Nombre AS nombre, Descripcion AS descripcion
+        FROM Catalogo.SistemaAmortizacion
+        WHERE Estado = 'A'
+        ORDER BY Nombre
+        """,
+    )
+
+
+_TASAS = """
+    SELECT t.IdTasaInteres AS id_tasa_interes, t.IdTipoCredito AS id_tipo_credito,
+           tc.Nombre AS nombre_tipo_credito, t.TasaNominalAnual AS tasa_nominal_anual,
+           t.RecargoMoraSobreTasa AS recargo_mora_sobre_tasa,
+           t.PlazoMaximoMeses AS plazo_maximo_meses, t.MontoMinimo AS monto_minimo,
+           t.MontoMaximo AS monto_maximo, t.VigenciaDesde AS vigencia_desde,
+           t.VigenciaHasta AS vigencia_hasta,
+           CAST(CASE WHEN t.VigenciaDesde <= :hoy
+                      AND (t.VigenciaHasta IS NULL OR t.VigenciaHasta >= :hoy)
+                THEN 1 ELSE 0 END AS bit) AS vigente
+    FROM Credito.TasaInteres AS t
+    JOIN Credito.TipoCredito AS tc ON tc.IdTipoCredito = t.IdTipoCredito
+"""
+
+
+def listar_tasas_interes(
+    conn: Connection, hoy: date, id_tipo_credito: int | None = None
+) -> list[dict[str, Any]]:
+    return _rows(
+        conn,
+        _TASAS
+        + """
+        WHERE (:tipo IS NULL OR t.IdTipoCredito = :tipo)
+        ORDER BY tc.Nombre, t.VigenciaDesde DESC, t.MontoMinimo
+        """,
+        {"hoy": hoy, "tipo": id_tipo_credito},
+    )
+
+
+def obtener_tasa_interes(
+    conn: Connection, id_tasa: int, hoy: date
+) -> dict[str, Any] | None:
+    filas = _rows(
+        conn, _TASAS + " WHERE t.IdTasaInteres = :id", {"hoy": hoy, "id": id_tasa}
+    )
+    return filas[0] if filas else None
+
+
+def tasas_que_se_solapan(conn: Connection, datos: dict[str, Any]) -> list[int]:
+    """Tasas del mismo tipo cuyo rango de monto y vigencia se cruzan con la nueva."""
+    return [
+        int(fila["id"])
+        for fila in _rows(
+            conn,
+            """
+            SELECT IdTasaInteres AS id
+            FROM Credito.TasaInteres WITH (UPDLOCK, HOLDLOCK)
+            WHERE IdTipoCredito = :id_tipo_credito
+              AND VigenciaDesde <= ISNULL(:vigencia_hasta, '9999-12-31')
+              AND :vigencia_desde <= ISNULL(VigenciaHasta, '9999-12-31')
+              AND ISNULL(MontoMinimo, 0) <= ISNULL(:monto_maximo, 9999999999999999)
+              AND ISNULL(:monto_minimo, 0) <= ISNULL(MontoMaximo, 9999999999999999)
+            """,
+            datos,
+        )
+    ]
+
+
+def insertar_tasa_interes(conn: Connection, datos: dict[str, Any]) -> int:
+    return int(
+        conn.execute(
+            text(
+                """
+                INSERT INTO Credito.TasaInteres (
+                    IdTipoCredito, PlazoMaximoMeses, TasaNominalAnual, RecargoMoraSobreTasa,
+                    MontoMinimo, MontoMaximo, VigenciaDesde, VigenciaHasta)
+                OUTPUT inserted.IdTasaInteres
+                VALUES (:id_tipo_credito, :plazo_maximo_meses, :tasa_nominal_anual,
+                        :recargo_mora_sobre_tasa, :monto_minimo, :monto_maximo,
+                        :vigencia_desde, :vigencia_hasta)
+                """
+            ),
+            datos,
+        ).scalar_one()
+    )
+
+
+def existe_tipo_credito_activo(conn: Connection, id_tipo_credito: int) -> bool:
+    return bool(
+        _rows(
+            conn,
+            "SELECT 1 AS x FROM Credito.TipoCredito WHERE IdTipoCredito = :id AND Estado = 'A'",
+            {"id": id_tipo_credito},
+        )
+    )
 
 
 def listar_redes(conn: Connection) -> list[dict[str, Any]]:

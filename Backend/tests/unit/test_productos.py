@@ -320,3 +320,112 @@ def test_producto_inexistente(bd, admin):
 
 def test_parametros_de_consulta_desconocidos(bd, asesor):
     assert asesor.get(f"{BASE}?estado=A").status_code == 400
+
+
+# ---------- Parámetros del subproducto de crédito (vínculos con catálogos) ----------
+
+
+@pytest.fixture
+def parametros(
+    bd: BdFalsa, monkeypatch: pytest.MonkeyPatch
+) -> dict[int, dict[str, Any]]:
+    guardados: dict[int, dict[str, Any]] = {}
+    monkeypatch.setattr(
+        repo,
+        "obtener_parametros",
+        lambda _c, i: (
+            {"id_sub_producto": i, "tasas_interes": [], "sistemas_amortizacion": []}
+            | guardados.get(i, {})
+        ),
+    )
+    monkeypatch.setattr(
+        repo, "guardar_parametros", lambda _c, i, d, _u: guardados.__setitem__(i, d)
+    )
+    monkeypatch.setattr(
+        repo, "tasas_de_tipo_credito", lambda _c, t: {1} if t == 1 else {2}
+    )
+    monkeypatch.setattr(repo, "sistemas_activos", lambda _c: {"FRANCES", "ALEMAN"})
+    return guardados
+
+
+def _sub_de_credito(admin: TestClient) -> int:
+    id_ = admin.post(
+        BASE,
+        json={
+            "codigoProducto": "CRE009",
+            "nombreProducto": "Crédito de consumo",
+            "tipoProducto": "Credito",
+            "idTipoCredito": 1,
+        },
+    ).json()["idProducto"]
+    return admin.post(
+        f"{BASE}/{id_}/subproductos",
+        json={
+            "codigoSubProducto": "CRE009-01",
+            "nombreSubProducto": "Consumo hasta 10000",
+        },
+    ).json()["idSubProducto"]
+
+
+CONSUMO = {
+    "montoMinimo": 500,
+    "montoMaximo": 10000,
+    "plazoMinimoMeses": 6,
+    "plazoMaximoMeses": 48,
+    "tasasInteres": [1],
+    "sistemasAmortizacion": ["frances"],
+}
+
+
+def test_admin_parametriza_y_asesor_consulta(bd, parametros, admin, asesor, eventos):
+    sub = _sub_de_credito(admin)
+    url = f"{BASE}/subproductos/{sub}/parametros"
+    assert asesor.put(url, json=CONSUMO).status_code == 403
+    r = admin.put(url, json=CONSUMO)
+    assert r.status_code == 200, r.text
+    assert r.json()["montoMaximo"] == 10000 and r.json()["sistemasAmortizacion"] == [
+        "FRANCES"
+    ]
+    assert eventos[-1].resultado == "Exitoso"
+    assert asesor.get(url).json()["tasasInteres"] == [1]
+
+
+@pytest.mark.parametrize(
+    ("cambio", "codigo"),
+    [
+        ({"tasasInteres": [2]}, "TASA_NO_APLICA"),  # tasa de otro tipo de crédito
+        ({"sistemasAmortizacion": ["SOBRE"]}, "SISTEMA_NO_EXISTE"),
+    ],
+)
+def test_vinculos_invalidos(bd, parametros, admin, cambio, codigo):
+    sub = _sub_de_credito(admin)
+    r = admin.put(f"{BASE}/subproductos/{sub}/parametros", json={**CONSUMO, **cambio})
+    assert r.status_code == 422 and r.json()["code"] == codigo
+    assert sub not in parametros
+
+
+@pytest.mark.parametrize(
+    "cambio",
+    [
+        {"montoMinimo": 20000},  # mínimo mayor que el máximo
+        {"plazoMinimoMeses": 60},
+        {"tasasInteres": [1, 1]},
+        {"montoMaximo": 0},
+        {"otro": 1},
+    ],
+)
+def test_parametros_fuera_de_rango(bd, parametros, admin, cambio):
+    sub = _sub_de_credito(admin)
+    r = admin.put(f"{BASE}/subproductos/{sub}/parametros", json={**CONSUMO, **cambio})
+    assert r.status_code in (400, 422)
+
+
+def test_parametros_solo_en_credito(bd, parametros, admin):
+    id_ = admin.post(BASE, json=AHORRO).json()["idProducto"]
+    sub = admin.post(
+        f"{BASE}/{id_}/subproductos",
+        json={"codigoSubProducto": "AHO002-PN", "nombreSubProducto": "Natural"},
+    ).json()["idSubProducto"]
+    r = admin.get(f"{BASE}/subproductos/{sub}/parametros")
+    assert r.status_code == 422 and r.json()["code"] == "CAMPO_NO_APLICA"
+    assert admin.get(f"{BASE}/subproductos/999/parametros").status_code == 404

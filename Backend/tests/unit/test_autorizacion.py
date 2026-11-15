@@ -65,6 +65,8 @@ ROLES_POR_RUTA: dict[tuple[str, str], tuple[str, ...]] = {
             "paises",
             "paises/{codigo_pais}/ciudades",
             "redes",
+            "sistemas-amortizacion",
+            "tasas-interes",
             "actividades-economicas",
             "tipos-antecedente",
             "denominaciones",
@@ -258,6 +260,12 @@ ROLES_POR_RUTA: dict[tuple[str, str], tuple[str, ...]] = {
     ("PATCH", "/api/v1/productos/{id_producto}"): ("ADMIN",),
     ("POST", "/api/v1/productos/{id_producto}/subproductos"): ("ADMIN",),
     ("PATCH", "/api/v1/productos/subproductos/{id_sub_producto}"): ("ADMIN",),
+    ("GET", "/api/v1/productos/subproductos/{id_sub_producto}/parametros"): (
+        "ADMIN",
+        "ASESOR",
+    ),
+    ("PUT", "/api/v1/productos/subproductos/{id_sub_producto}/parametros"): ("ADMIN",),
+    ("POST", "/api/v1/catalogos/tasas-interes"): ("ADMIN",),
 }
 
 

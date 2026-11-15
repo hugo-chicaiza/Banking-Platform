@@ -1,0 +1,78 @@
+/* T-SQL (SQL Server). Parámetros de un subproducto y sus vínculos con los catálogos.
+   Los catálogos crean los objetos (tasas de interés, sistemas de amortización); el
+   subproducto solo los vincula. Ejecutar en CooperativaDB antes de desplegar el backend
+   que los usa. Reejecutable; no cambia filas existentes. Usar sqlcmd -b o equivalente. */
+SET XACT_ABORT ON;
+GO
+
+/* ---------- 1. Catálogo de sistemas de amortización ----------
+   El cálculo de cada sistema es código (creditos/amortizacion.py); qué sistemas hay es dato.
+   Mismos códigos que CK de Credito.CreditoSolicitud.SistemaAmortizacion. */
+IF OBJECT_ID('Catalogo.SistemaAmortizacion') IS NULL
+CREATE TABLE Catalogo.SistemaAmortizacion (
+    Codigo      varchar(10)  NOT NULL CONSTRAINT PK_SistemaAmortizacion PRIMARY KEY,
+    Nombre      varchar(60)  NOT NULL,
+    Descripcion varchar(250) NOT NULL,
+    Estado      char(1)      NOT NULL CONSTRAINT DF_SistemaAmortizacion_Estado DEFAULT ('A')
+                             CONSTRAINT CK_SistemaAmortizacion_Estado CHECK (Estado IN ('A', 'I'))
+);
+GO
+INSERT INTO Catalogo.SistemaAmortizacion (Codigo, Nombre, Descripcion)
+SELECT v.Codigo, v.Nombre, v.Descripcion
+FROM (VALUES
+    ('FRANCES', 'Francés', 'Cuota fija: el capital crece y el interés baja en cada cuota.'),
+    ('ALEMAN',  'Alemán',  'Capital fijo: la cuota baja porque el interés se calcula sobre un saldo menor.')
+) AS v (Codigo, Nombre, Descripcion)
+WHERE NOT EXISTS (SELECT 1 FROM Catalogo.SistemaAmortizacion s WHERE s.Codigo = v.Codigo);
+GO
+
+/* ---------- 2. Parámetros de un subproducto de crédito ---------- */
+IF OBJECT_ID('ProductosFinancieros.SubProductoParametro') IS NULL
+CREATE TABLE ProductosFinancieros.SubProductoParametro (
+    IdSubProducto     int           NOT NULL CONSTRAINT PK_SubProductoParametro PRIMARY KEY
+                                    CONSTRAINT FK_SubProductoParametro_SubProducto
+                                    REFERENCES ProductosFinancieros.SubProducto (IdSubProducto),
+    MontoMinimo       decimal(18,2) NULL,
+    MontoMaximo       decimal(18,2) NULL,
+    PlazoMinimoMeses  smallint      NULL,
+    PlazoMaximoMeses  smallint      NULL,
+    ModificadoPor     int           NOT NULL,
+    FechaModificacion datetime2     NOT NULL CONSTRAINT DF_SubProductoParametro_Fecha DEFAULT (SYSUTCDATETIME()),
+    CONSTRAINT CK_SubProductoParametro_Montos CHECK (
+        (MontoMinimo IS NULL OR MontoMinimo > 0) AND (MontoMaximo IS NULL OR MontoMaximo > 0)
+        AND (MontoMinimo IS NULL OR MontoMaximo IS NULL OR MontoMaximo >= MontoMinimo)),
+    CONSTRAINT CK_SubProductoParametro_Plazos CHECK (
+        (PlazoMinimoMeses IS NULL OR PlazoMinimoMeses > 0) AND (PlazoMaximoMeses IS NULL OR PlazoMaximoMeses > 0)
+        AND (PlazoMinimoMeses IS NULL OR PlazoMaximoMeses IS NULL OR PlazoMaximoMeses >= PlazoMinimoMeses))
+);
+GO
+
+/* ---------- 3. Vínculos (checklist) ---------- */
+IF OBJECT_ID('ProductosFinancieros.SubProductoTasaInteres') IS NULL
+CREATE TABLE ProductosFinancieros.SubProductoTasaInteres (
+    IdSubProducto   int       NOT NULL CONSTRAINT FK_SubProductoTasa_SubProducto
+                              REFERENCES ProductosFinancieros.SubProducto (IdSubProducto),
+    IdTasaInteres   int       NOT NULL CONSTRAINT FK_SubProductoTasa_Tasa
+                              REFERENCES Credito.TasaInteres (IdTasaInteres),
+    AsignadoPor     int       NOT NULL,
+    FechaAsignacion datetime2 NOT NULL CONSTRAINT DF_SubProductoTasa_Fecha DEFAULT (SYSUTCDATETIME()),
+    CONSTRAINT PK_SubProductoTasaInteres PRIMARY KEY (IdSubProducto, IdTasaInteres)
+);
+GO
+IF OBJECT_ID('ProductosFinancieros.SubProductoSistemaAmortizacion') IS NULL
+CREATE TABLE ProductosFinancieros.SubProductoSistemaAmortizacion (
+    IdSubProducto   int         NOT NULL CONSTRAINT FK_SubProductoSistema_SubProducto
+                                REFERENCES ProductosFinancieros.SubProducto (IdSubProducto),
+    CodigoSistema   varchar(10) NOT NULL CONSTRAINT FK_SubProductoSistema_Sistema
+                                REFERENCES Catalogo.SistemaAmortizacion (Codigo),
+    AsignadoPor     int         NOT NULL,
+    FechaAsignacion datetime2   NOT NULL CONSTRAINT DF_SubProductoSistema_Fecha DEFAULT (SYSUTCDATETIME()),
+    CONSTRAINT PK_SubProductoSistemaAmortizacion PRIMARY KEY (IdSubProducto, CodigoSistema)
+);
+GO
+
+/* Vuelta atrás (solo fuera de producción, antes de cargar vínculos reales):
+   DROP TABLE IF EXISTS ProductosFinancieros.SubProductoSistemaAmortizacion;
+   DROP TABLE IF EXISTS ProductosFinancieros.SubProductoTasaInteres;
+   DROP TABLE IF EXISTS ProductosFinancieros.SubProductoParametro;
+   DROP TABLE IF EXISTS Catalogo.SistemaAmortizacion; */

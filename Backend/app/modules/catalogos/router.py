@@ -1,6 +1,6 @@
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, Path, Query
+from fastapi import APIRouter, Depends, Path, Query, Request
 from sqlalchemy import Connection
 
 from app.core.api.errors import (
@@ -9,9 +9,10 @@ from app.core.api.errors import (
     problema,
     solo_parametros,
 )
+from app.core.api.middleware import ip_cliente
 from app.core.database.db import cooperativa
-from app.core.security.auth import require_auth
-from app.modules.catalogos import repository
+from app.core.security.auth import Usuario, require_auth, require_roles
+from app.modules.catalogos import repository, service
 from app.modules.catalogos.schemas import (
     ActividadEconomica,
     Agencia,
@@ -21,6 +22,9 @@ from app.modules.catalogos.schemas import (
     Pais,
     Producto,
     Red,
+    SistemaAmortizacion,
+    TasaInteres,
+    TasaInteresCreate,
     TipoAntecedente,
     TipoCredito,
     TipoMovimientoCaja,
@@ -28,7 +32,8 @@ from app.modules.catalogos.schemas import (
 )
 from app.modules.catalogos.subproductos import TipoTarjeta
 
-# Catálogos de solo lectura: sin service.py porque no hay reglas de negocio
+# Catálogos de lectura para cualquier usuario autenticado. Solo las tasas de interés se
+# crean aquí (ADMIN); sus reglas están en service.py
 router = APIRouter(
     prefix="/catalogos",
     tags=["catalogos"],
@@ -62,6 +67,42 @@ def listar_canales(conn: Db) -> Any:
 @router.get("/redes", response_model=list[Red])
 def listar_redes(conn: Db) -> Any:
     return repository.listar_redes(conn)
+
+
+@router.get("/sistemas-amortizacion", response_model=list[SistemaAmortizacion])
+def listar_sistemas_amortizacion(conn: Db) -> Any:
+    return repository.listar_sistemas_amortizacion(conn)
+
+
+@router.get(
+    "/tasas-interes",
+    response_model=list[TasaInteres],
+    dependencies=[Depends(solo_parametros("idTipoCredito"))],
+)
+def listar_tasas_interes(
+    conn: Db,
+    id_tipo_credito: Annotated[
+        int | None, Query(alias="idTipoCredito", ge=1, le=2_147_483_647)
+    ] = None,
+) -> Any:
+    """Todas las tasas (vigentes, futuras y vencidas); `vigente` dice cuáles aplican hoy."""
+    return service.listar_tasas_interes(conn, id_tipo_credito)
+
+
+@router.post(
+    "/tasas-interes",
+    response_model=TasaInteres,
+    status_code=201,
+    openapi_extra={"x-roles": ["ADMIN"]},
+)
+def crear_tasa_interes(
+    payload: TasaInteresCreate,
+    request: Request,
+    usuario: Annotated[Usuario, Depends(require_roles("ADMIN"))],
+    conn: Db,
+) -> Any:
+    """Las tasas no se editan: una nueva con su vigencia reemplaza a la anterior."""
+    return service.crear_tasa_interes(conn, payload, usuario, ip_cliente(request.scope))
 
 
 @router.get("/agencias", response_model=list[Agencia])

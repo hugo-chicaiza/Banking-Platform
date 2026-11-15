@@ -1,6 +1,8 @@
-from typing import Literal
+from datetime import date
+from decimal import Decimal
+from typing import Annotated, Literal
 
-from pydantic import Field
+from pydantic import ConfigDict, Field, model_validator
 
 from app.core.api.schemas import CamelModel, Money
 from app.modules.catalogos.subproductos import TipoTarjeta
@@ -75,6 +77,59 @@ class Producto(CamelModel):
     tipo_cuenta: str | None = None
     permite_operaciones_presenciales: bool
     subproductos: list[SubProducto] = Field(default_factory=list)
+
+
+class SistemaAmortizacion(CamelModel):
+    codigo: str
+    nombre: str
+    descripcion: str
+
+
+class TasaInteres(CamelModel):
+    """Tasa de un tipo de crédito para un rango de monto y un plazo máximo, con vigencia."""
+
+    id_tasa_interes: int
+    id_tipo_credito: int
+    nombre_tipo_credito: str
+    # Fracción anual: 0.16 = 16 %
+    tasa_nominal_anual: Money
+    recargo_mora_sobre_tasa: Money
+    plazo_maximo_meses: int
+    monto_minimo: Money | None = None
+    monto_maximo: Money | None = None
+    vigencia_desde: date
+    vigencia_hasta: date | None = None
+    vigente: bool
+
+
+class TasaInteresCreate(CamelModel):
+    """La tasa no puede solaparse con otra del mismo tipo de crédito en monto y vigencia:
+    la simulación de créditos exige una sola tasa por consulta (TASA_VIGENTE_DUPLICADA)."""
+
+    model_config = ConfigDict(extra="forbid", validate_by_name=False)
+
+    id_tipo_credito: Annotated[int, Field(ge=1, le=2_147_483_647)]
+    tasa_nominal_anual: Annotated[Decimal, Field(gt=0, le=1, decimal_places=4)]
+    recargo_mora_sobre_tasa: Annotated[Decimal, Field(ge=0, le=1, decimal_places=4)] = (
+        Decimal(0)
+    )
+    plazo_maximo_meses: Annotated[int, Field(ge=1, le=600)]
+    monto_minimo: Annotated[Decimal, Field(gt=0, decimal_places=2)] | None = None
+    monto_maximo: Annotated[Decimal, Field(gt=0, decimal_places=2)] | None = None
+    vigencia_desde: date
+    vigencia_hasta: date | None = None
+
+    @model_validator(mode="after")
+    def _rangos(self) -> "TasaInteresCreate":
+        if (
+            self.monto_minimo
+            and self.monto_maximo
+            and self.monto_maximo < self.monto_minimo
+        ):
+            raise ValueError("montoMaximo debe ser mayor o igual que montoMinimo.")
+        if self.vigencia_hasta and self.vigencia_hasta <= self.vigencia_desde:
+            raise ValueError("vigenciaHasta debe ser posterior a vigenciaDesde.")
+        return self
 
 
 class Red(CamelModel):
