@@ -35,6 +35,12 @@ _RESTRICCION = re.compile(
 )
 
 
+def _no_leido() -> HTTPException:
+    """El registro recién guardado no se pudo releer: el cambio ya se confirmó, se informa sin datos."""
+    logger.error("productos: registro guardado no encontrado al releerlo")
+    return problema(500, "ERROR_INTERNO", "Error interno del servidor.")
+
+
 def _traducir(exc: DBAPIError) -> HTTPException:
     if _RESTRICCION.search(str(exc.orig)):
         return problema(
@@ -213,7 +219,8 @@ def crear_subproducto(
             conn.rollback()
             raise
     fila = repo.obtener_subproducto(conn, id_sub)
-    assert fila is not None
+    if fila is None:
+        raise _no_leido()
     return _subproducto(fila, producto["tipo_producto"])
 
 
@@ -247,5 +254,6 @@ def actualizar_subproducto(
             raise
     fila = repo.obtener_subproducto(conn, id_sub)
     producto = repo.obtener_producto(conn, actual["id_producto"])
-    assert fila is not None and producto is not None
+    if fila is None or producto is None:
+        raise _no_leido()
     return _subproducto(fila, producto["tipo_producto"])

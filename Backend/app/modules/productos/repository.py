@@ -117,41 +117,55 @@ def insertar_producto(conn: Connection, datos: dict[str, Any]) -> int:
     )
 
 
-_COLUMNAS_PRODUCTO = {
-    "nombre_producto": "NombreProducto",
-    "descripcion": "Descripcion",
-    "monto_apertura_minimo": "MontoAperturaMinimo",
-    "permite_operaciones_presenciales": "PermiteOperacionesPresenciales",
-    "estado": "Estado",
-}
-_COLUMNAS_SUBPRODUCTO = {"nombre_sub_producto": "NombreSubProducto", "estado": "Estado"}
+_CAMPOS_PRODUCTO = (
+    "nombre_producto",
+    "descripcion",
+    "monto_apertura_minimo",
+    "permite_operaciones_presenciales",
+    "estado",
+)
+_CAMPOS_SUBPRODUCTO = ("nombre_sub_producto", "estado")
 
 
-def _actualizar(
-    conn: Connection,
-    tabla: str,
-    columnas: dict[str, str],
-    clave: str,
-    id_: int,
-    cambios: dict[str, Any],
-) -> None:
-    # Las columnas salen de una lista blanca fija, nunca del cliente
-    sets = ", ".join(f"{columnas[c]} = :{c}" for c in cambios)
-    conn.execute(
-        text(f"UPDATE {tabla} SET {sets} WHERE {clave} = :id"), {**cambios, "id": id_}
-    )
+def _parametros(
+    campos: tuple[str, ...], id_: int, cambios: dict[str, Any]
+) -> dict[str, Any]:
+    """Cada campo lleva su bandera "cambia_*": el SQL es fijo y solo se escriben los presentes.
+
+    Así descripcion=None (borrarla) se distingue de "no se envió".
+    """
+    desconocidos = set(cambios) - set(campos)
+    if desconocidos:
+        raise ValueError(f"Campos no editables: {sorted(desconocidos)}")
+    parametros: dict[str, Any] = {"id": id_}
+    for campo in campos:
+        parametros[f"cambia_{campo}"] = campo in cambios
+        parametros[campo] = cambios.get(campo)
+    return parametros
 
 
 def actualizar_producto(
     conn: Connection, id_producto: int, cambios: dict[str, Any]
 ) -> None:
-    _actualizar(
-        conn,
-        "ProductosFinancieros.Producto",
-        _COLUMNAS_PRODUCTO,
-        "IdProducto",
-        id_producto,
-        cambios,
+    conn.execute(
+        text(
+            """
+            UPDATE ProductosFinancieros.Producto SET
+                NombreProducto = CASE WHEN :cambia_nombre_producto = 1
+                    THEN :nombre_producto ELSE NombreProducto END,
+                Descripcion = CASE WHEN :cambia_descripcion = 1
+                    THEN :descripcion ELSE Descripcion END,
+                MontoAperturaMinimo = CASE WHEN :cambia_monto_apertura_minimo = 1
+                    THEN :monto_apertura_minimo ELSE MontoAperturaMinimo END,
+                PermiteOperacionesPresenciales =
+                    CASE WHEN :cambia_permite_operaciones_presenciales = 1
+                    THEN :permite_operaciones_presenciales
+                    ELSE PermiteOperacionesPresenciales END,
+                Estado = CASE WHEN :cambia_estado = 1 THEN :estado ELSE Estado END
+            WHERE IdProducto = :id
+            """
+        ),
+        _parametros(_CAMPOS_PRODUCTO, id_producto, cambios),
     )
 
 
@@ -175,11 +189,15 @@ def insertar_subproducto(
 def actualizar_subproducto(
     conn: Connection, id_sub: int, cambios: dict[str, Any]
 ) -> None:
-    _actualizar(
-        conn,
-        "ProductosFinancieros.SubProducto",
-        _COLUMNAS_SUBPRODUCTO,
-        "IdSubProducto",
-        id_sub,
-        cambios,
+    conn.execute(
+        text(
+            """
+            UPDATE ProductosFinancieros.SubProducto SET
+                NombreSubProducto = CASE WHEN :cambia_nombre_sub_producto = 1
+                    THEN :nombre_sub_producto ELSE NombreSubProducto END,
+                Estado = CASE WHEN :cambia_estado = 1 THEN :estado ELSE Estado END
+            WHERE IdSubProducto = :id
+            """
+        ),
+        _parametros(_CAMPOS_SUBPRODUCTO, id_sub, cambios),
     )
