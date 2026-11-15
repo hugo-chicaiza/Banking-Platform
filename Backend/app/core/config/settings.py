@@ -144,6 +144,12 @@ class Settings(BaseSettings):
     # Cloudflare), aceptados si llegan en X-Forwarded-Host desde el Worker. Ejemplo:
     # ^https://[a-z0-9-]+-banking-platform-front\.cuenta\.workers\.dev$
     frontend_origin_regex: str = ""
+    # ASVS 4.1.3 / 15.3.4: secreto compartido con el Worker de Cloudflare. Solo una
+    # petición que lo trae (X-Proxy-Secreto) puede fijar la IP del usuario (X-Cliente-Ip).
+    # Vacío (local) = se usa la IP de la conexión. Mismo valor que el secreto del Worker
+    proxy_secreto: SecretStr = SecretStr("")
+    # True = se rechaza (403) toda petición que no venga del Worker con el secreto
+    proxy_exigido: bool = False
 
     # HSM simulado de tarjetas (app/core/security/hsm.py): claves ficticias en hex.
     # Vacías = HSM no disponible (503). En producción nunca se usan. Deben ser las

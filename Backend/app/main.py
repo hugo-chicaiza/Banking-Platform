@@ -4,7 +4,11 @@ from fastapi import FastAPI
 # from app.core.config import get_settings
 # from app.core.middleware import TraceIdMiddleware
 # from app.core.rate_limit import LimitePeticionesMiddleware
-from app.core.api.middleware import HstsMiddleware, TraceIdMiddleware
+from app.core.api.middleware import (
+    HstsMiddleware,
+    SoloProxyMiddleware,
+    TraceIdMiddleware,
+)
 from app.core.api.rate_limit import LimitePeticionesMiddleware
 from app.core.config.logs import configurar_logging
 from app.core.config.settings import get_settings
@@ -20,6 +24,7 @@ from app.modules.contabilidad.router import router as contabilidad_router
 from app.modules.creditos.router import router as creditos_router
 from app.modules.cuentas.router import router as cuentas_router
 from app.modules.organizacion.router import router as organizacion_router
+from app.modules.productos.router import router as productos_router
 from app.modules.tarjetas.router import router as tarjetas_router
 from app.modules.tarjetas.router import router_pruebas as tarjetas_pruebas_router
 from app.modules.transacciones.router import router as transacciones_router
@@ -51,6 +56,9 @@ if settings.limite_peticiones_activo:
 # Fuera de development: en localhost el navegador recordaría HSTS para otros proyectos
 if settings.app_env != "development":
     app.add_middleware(HstsMiddleware)
+# ASVS 4.1.3: en Azure, solo tráfico que llega por el Worker con el secreto compartido
+if settings.proxy_exigido:
+    app.add_middleware(SoloProxyMiddleware)
 # Debe ir de último: se ejecuta primero el último agregado y así el 429 lleva traceId
 app.add_middleware(TraceIdMiddleware)
 
@@ -63,6 +71,7 @@ app.include_router(contabilidad_router, prefix=API_V1)
 app.include_router(creditos_router, prefix=API_V1)
 app.include_router(cuentas_router, prefix=API_V1)
 app.include_router(organizacion_router, prefix=API_V1)
+app.include_router(productos_router, prefix=API_V1)
 app.include_router(tarjetas_router, prefix=API_V1)
 app.include_router(caja_router, prefix=API_V1)
 app.include_router(boveda_router, prefix=API_V1)

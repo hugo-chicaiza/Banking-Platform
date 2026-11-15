@@ -14,6 +14,7 @@ from app.core.api.errors import (
     problema,
     solo_parametros,
 )
+from app.core.api.middleware import ip_cliente
 from app.core.config.settings import get_settings
 from app.core.database.db import cooperativa, get_engine
 from app.core.security.auth import UsuarioAuditoria, require_auth, require_roles
@@ -105,9 +106,8 @@ async def _leer_pin_prueba(request: Request) -> tuple[int, SecretStr]:
 
 
 def _ip(request: Request) -> str | None:
-    # X-Forwarded-For no se lee aquí porque el cliente puede falsificarlo. En Azure esta
-    # será la IP del proxy hasta configurarlo.
-    return request.client.host if request.client else None
+    # La IP confiable la resuelve ip_cliente (solo del Worker con el secreto)
+    return ip_cliente(request.scope)
 
 
 # TAR-01. Roles: ASESOR, ADMIN

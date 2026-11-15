@@ -3,7 +3,9 @@
 El X-Request-Id es el mismo traceId de los errores (F-04) y de cada línea de log.
 """
 
+import hmac
 import ipaddress
+import json
 import logging
 import re
 import time
@@ -15,6 +17,7 @@ from starlette.datastructures import MutableHeaders
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from app.core.config.logs import trace_id_actual
+from app.core.config.settings import get_settings
 
 logger = logging.getLogger("app.peticiones")
 
@@ -26,16 +29,83 @@ def obtener_trace_id(scope: Mapping[str, Any]) -> str:
     return scope.get("state", {}).get("trace_id") or str(uuid.uuid4())
 
 
-def ip_cliente(scope: Scope) -> str:
-    """IP que entrega uvicorn. Si no es válida, no se usa como clave ni va al log.
+CABECERA_IP = b"x-cliente-ip"
+CABECERA_SECRETO = b"x-proxy-secreto"
 
-    En Azure será la del proxy hasta que se configure FORWARDED_ALLOW_IPS.
+
+def _valores(scope: Scope, nombre: bytes) -> list[bytes]:
+    return [valor for clave, valor in scope.get("headers", []) if clave == nombre]
+
+
+def viene_del_proxy(scope: Scope) -> bool:
+    """True si la petición trae, una sola vez, el secreto compartido con el Worker.
+
+    Comparación en tiempo constante. Sin secreto configurado nunca es True.
     """
-    cliente = scope.get("client")
+    secreto = get_settings().proxy_secreto.get_secret_value().encode()
+    valores = _valores(scope, CABECERA_SECRETO)
+    return (
+        bool(secreto) and len(valores) == 1 and hmac.compare_digest(valores[0], secreto)
+    )
+
+
+def _ip_valida(valor: str) -> str | None:
     try:
-        return str(ipaddress.ip_address(cliente[0])) if cliente else "desconocida"
+        return str(ipaddress.ip_address(valor.strip()))
     except ValueError:
-        return "desconocida"
+        return None
+
+
+def ip_cliente(scope: Scope) -> str:
+    """IP del usuario para auditoría, logs y límite de peticiones (ASVS 4.1.3, 15.3.4).
+
+    Solo se cree en X-Cliente-Ip si la petición viene del Worker (secreto válido): el
+    Worker la toma de CF-Connecting-IP, que fija Cloudflare y el cliente no puede
+    cambiar. En cualquier otro caso, la IP de la conexión. Una IP no válida no se usa
+    como clave ni va al log.
+    """
+    if viene_del_proxy(scope):
+        valores = _valores(scope, CABECERA_IP)
+        ip = _ip_valida(valores[0].decode("latin1")) if len(valores) == 1 else None
+        if ip:
+            return ip
+    cliente = scope.get("client")
+    return (_ip_valida(str(cliente[0])) if cliente else None) or "desconocida"
+
+
+class SoloProxyMiddleware:
+    """Con PROXY_EXIGIDO, rechaza (403) lo que no llega por el Worker con el secreto: el
+    backend solo atiende tráfico del proxy (ASVS 4.1.3; P4 FND-08).
+    """
+
+    def __init__(self, app: ASGIApp) -> None:
+        self._app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] == "http" and not viene_del_proxy(scope):
+            cuerpo = json.dumps(
+                {
+                    "type": "about:blank",
+                    "title": "Forbidden",
+                    "status": 403,
+                    "code": "ORIGEN_NO_PERMITIDO",
+                    "detail": "La petición no llegó por el canal autorizado.",
+                    "traceId": obtener_trace_id(scope),
+                }
+            ).encode()
+            await send(
+                {
+                    "type": "http.response.start",
+                    "status": 403,
+                    "headers": [
+                        (b"content-type", b"application/problem+json"),
+                        (b"cache-control", b"no-store"),
+                    ],
+                }
+            )
+            await send({"type": "http.response.body", "body": cuerpo})
+            return
+        await self._app(scope, receive, send)
 
 
 def _id_de_la_peticion(scope: Scope) -> str:

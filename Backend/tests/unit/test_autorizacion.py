@@ -64,6 +64,7 @@ ROLES_POR_RUTA: dict[tuple[str, str], tuple[str, ...]] = {
         for ruta in (
             "paises",
             "paises/{codigo_pais}/ciudades",
+            "redes",
             "actividades-economicas",
             "tipos-antecedente",
             "denominaciones",
@@ -250,6 +251,13 @@ ROLES_POR_RUTA: dict[tuple[str, str], tuple[str, ...]] = {
     ("POST", "/api/v1/agencias"): ("ADMIN",),
     ("GET", "/api/v1/agencias/{id_agencia}"): ("ADMIN",),
     ("PATCH", "/api/v1/agencias/{id_agencia}"): ("ADMIN",),
+    # Productos y subproductos (plan E3-02): ADMIN escribe; ADMIN y ASESOR consultan
+    ("GET", "/api/v1/productos"): ("ADMIN", "ASESOR"),
+    ("GET", "/api/v1/productos/{id_producto}"): ("ADMIN", "ASESOR"),
+    ("POST", "/api/v1/productos"): ("ADMIN",),
+    ("PATCH", "/api/v1/productos/{id_producto}"): ("ADMIN",),
+    ("POST", "/api/v1/productos/{id_producto}/subproductos"): ("ADMIN",),
+    ("PATCH", "/api/v1/productos/subproductos/{id_sub_producto}"): ("ADMIN",),
 }
 
 

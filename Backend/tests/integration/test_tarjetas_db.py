@@ -157,7 +157,7 @@ def test_auditoria_real_registra_exito_y_fallo(client, bd, datos, monkeypatch):
     ]
     assert filas[1][4].endswith("PIN_NO_PERMITIDO")
     assert filas[3][4] == "TAR-05 Regeneración de PIN"
-    assert all(f[0] == ID_AUDITORIA and f[3] == "testclient" for f in filas)
+    assert all(f[0] == ID_AUDITORIA and f[3] == "desconocida" for f in filas)
     pin, pan, offset = _pin_generado(seg, id_tarjeta)
     for secreto in (pin, pan, offset):
         assert secreto not in str(filas)
@@ -371,7 +371,7 @@ def test_ciclo_completo_pin_generado_activacion_bloqueo_e_historial(client, bd, 
         ),
         {"i": id_tarjeta},
     ).one()
-    assert fila[1] is not None and fila[2] == "testclient"
+    assert fila[1] is not None and fila[2] == "desconocida"
 
 
 def test_credito_usa_su_subproducto_y_su_pin_no_es_temporal(client, bd, datos):
