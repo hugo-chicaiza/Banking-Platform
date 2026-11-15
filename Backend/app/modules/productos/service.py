@@ -19,9 +19,13 @@ from app.core.security.operador import auditar, exigir_id_interno
 from app.modules.catalogos.subproductos import PREFIJO_TIPO_TARJETA, tipo_tarjeta_de
 from app.modules.productos import repository as repo
 from app.modules.productos.schemas import (
+    CupoCanalVista,
+    CuposSubProducto,
     Producto,
     ProductoCreate,
     ProductoUpdate,
+    RestriccionesSubProducto,
+    RestriccionesVista,
     SubProducto,
     SubProductoCreate,
     SubProductoParametros,
@@ -330,3 +334,128 @@ def guardar_parametros(
     return SubProductoParametrosVista.model_validate(
         repo.obtener_parametros(conn, id_sub)
     )
+
+
+def _subproducto_de_tipo(
+    conn: Connection, id_sub: int, tipos: tuple[str, ...], que: str
+) -> dict[str, Any]:
+    sub = repo.obtener_subproducto(conn, id_sub)
+    if sub is None:
+        raise problema(404, "SUBPRODUCTO_NO_ENCONTRADO", "El subproducto no existe.")
+    producto = repo.obtener_producto(conn, sub["id_producto"])
+    if producto is None or producto["tipo_producto"] not in tipos:
+        raise problema(
+            422, "CAMPO_NO_APLICA", f"{que} no aplica a este tipo de producto."
+        )
+    return producto
+
+
+# Cupos por canal: cuentas y tarjetas (las transacciones salen de la cuenta)
+_CON_CUPOS = ("Cuenta", "Tarjeta")
+
+
+def listar_cupos(conn: Connection, id_sub: int) -> list[CupoCanalVista]:
+    _subproducto_de_tipo(conn, id_sub, _CON_CUPOS, "Los cupos por canal")
+    return [CupoCanalVista.model_validate(f) for f in repo.listar_cupos(conn, id_sub)]
+
+
+def guardar_cupos(
+    conn: Connection, id_sub: int, datos: CuposSubProducto, usuario: Usuario, ip: str
+) -> list[CupoCanalVista]:
+    with auditar(
+        "ACTUALIZAR",
+        "ProductosFinancieros.ProductoCanalCupo",
+        usuario,
+        ip,
+        f"PRD-SUB-CUPOS canales={','.join(str(c.id_canal) for c in datos.cupos)}",
+        str(id_sub),
+    ):
+        try:
+            _subproducto_de_tipo(conn, id_sub, _CON_CUPOS, "Los cupos por canal")
+            if {c.id_canal for c in datos.cupos} - repo.canales_activos(conn):
+                raise problema(
+                    422,
+                    "CANAL_NO_EXISTE",
+                    "Hay canales que no existen o están inactivos.",
+                )
+            personalizados = repo.cupos_personalizados_maximos(conn, id_sub)
+            nuevos = {c.id_canal: c for c in datos.cupos}
+            for id_canal, maximo in personalizados.items():
+                cupo = nuevos.get(id_canal)
+                # Una cuenta con cupo personalizado en ese canal quedaría por encima del
+                # máximo (o sin canal): primero se ajusta la cuenta
+                if (
+                    cupo is None
+                    or cupo.cupo_diario_maximo < maximo["cupo_diario"]
+                    or cupo.cupo_mensual_maximo < maximo["cupo_mensual"]
+                    or cupo.monto_max_transaccion < maximo["monto_max_transaccion"]
+                ):
+                    raise problema(
+                        409,
+                        "CUPO_MENOR_QUE_PERSONALIZADO",
+                        "Hay cuentas con cupos personalizados mayores en ese canal. "
+                        "Ajústalos antes de bajar o quitar el máximo.",
+                    )
+            repo.guardar_cupos(conn, id_sub, [c.model_dump() for c in datos.cupos])
+            conn.commit()
+        except DBAPIError as exc:
+            conn.rollback()
+            raise _traducir(exc) from None
+        except Exception:
+            conn.rollback()
+            raise
+    return [CupoCanalVista.model_validate(f) for f in repo.listar_cupos(conn, id_sub)]
+
+
+def obtener_restricciones(conn: Connection, id_sub: int) -> RestriccionesVista:
+    _subproducto_de_tipo(conn, id_sub, ("Cuenta",), "Las restricciones")
+    return RestriccionesVista.model_validate(repo.obtener_restricciones(conn, id_sub))
+
+
+def guardar_restricciones(
+    conn: Connection,
+    id_sub: int,
+    datos: RestriccionesSubProducto,
+    usuario: Usuario,
+    ip: str,
+) -> RestriccionesVista:
+    actor = exigir_id_interno(usuario.interno())
+    with auditar(
+        "ACTUALIZAR",
+        "ProductosFinancieros.ProductoRestriccion",
+        usuario,
+        ip,
+        f"PRD-SUB-RESTRICCIONES sinRetiros={datos.dias_sin_retiros is not None}"
+        f" saldoMinimo={datos.saldo_minimo is not None}",
+        str(id_sub),
+    ):
+        try:
+            _subproducto_de_tipo(conn, id_sub, ("Cuenta",), "Las restricciones")
+            dias = datos.dias_sin_retiros
+            saldo = datos.saldo_minimo
+            repo.guardar_restriccion(
+                conn,
+                id_sub,
+                "SIN_RETIROS",
+                dias,
+                None,
+                f"Sin retiros durante {dias} días desde la apertura." if dias else "",
+                actor,
+            )
+            repo.guardar_restriccion(
+                conn,
+                id_sub,
+                "SALDO_MINIMO",
+                None,
+                saldo,
+                f"Saldo mínimo de USD {saldo:,.2f}." if saldo else "",
+                actor,
+            )
+            conn.commit()
+        except DBAPIError as exc:
+            conn.rollback()
+            raise _traducir(exc) from None
+        except Exception:
+            conn.rollback()
+            raise
+    return RestriccionesVista.model_validate(repo.obtener_restricciones(conn, id_sub))

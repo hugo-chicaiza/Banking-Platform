@@ -233,3 +233,66 @@ class Producto(CamelModel):
     permite_operaciones_presenciales: bool
     estado: Estado
     subproductos: list[SubProducto] = Field(default_factory=list)
+
+
+# ---------- Cupos por canal (ProductosFinancieros.ProductoCanalCupo) ----------
+
+
+class CupoCanal(_Entrada):
+    """Máximos del subproducto en un canal. Los cupos que el cliente personaliza (CTA-08)
+    no pueden superarlos. Mismas reglas que CK_ProductoCanalCupo_*."""
+
+    id_canal: IdPositivo
+    cupo_diario_maximo: MontoLimite
+    cupo_mensual_maximo: MontoLimite
+    monto_max_transaccion: MontoLimite
+    max_transacciones_dia: Annotated[int, Field(ge=1, le=10_000)]
+
+    @model_validator(mode="after")
+    def _coherentes(self) -> Self:
+        if self.cupo_mensual_maximo < self.cupo_diario_maximo:
+            raise ValueError("El cupo mensual debe ser mayor o igual que el diario.")
+        if self.monto_max_transaccion > self.cupo_diario_maximo:
+            raise ValueError(
+                "El monto por transacción no puede superar el cupo diario."
+            )
+        return self
+
+
+class CuposSubProducto(_Entrada):
+    """Reemplaza los canales habilitados: el canal que no viene se quita."""
+
+    cupos: Annotated[list[CupoCanal], Field(max_length=20)]
+
+    @model_validator(mode="after")
+    def _sin_repetidos(self) -> Self:
+        canales = [c.id_canal for c in self.cupos]
+        if len(set(canales)) != len(canales):
+            raise ValueError("Cada canal va una sola vez.")
+        return self
+
+
+class CupoCanalVista(CamelModel):
+    id_canal: int
+    codigo_canal: str
+    nombre_canal: str
+    habilitado: bool
+    cupo_diario_maximo: Money | None = None
+    cupo_mensual_maximo: Money | None = None
+    monto_max_transaccion: Money | None = None
+    max_transacciones_dia: int | None = None
+
+
+# ---------- Restricciones de cuenta (ProductosFinancieros.ProductoRestriccion) ----------
+
+
+class RestriccionesSubProducto(_Entrada):
+    """null = sin esa restricción. SIN_RETIROS en días; SALDO_MINIMO en USD."""
+
+    dias_sin_retiros: Annotated[int, Field(ge=1, le=3650)] | None = None
+    saldo_minimo: MontoLimite | None = None
+
+
+class RestriccionesVista(CamelModel):
+    dias_sin_retiros: int | None = None
+    saldo_minimo: Money | None = None
