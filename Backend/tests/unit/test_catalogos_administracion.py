@@ -20,6 +20,7 @@ BASE = "https://testserver/api/v1/catalogos/administracion"
 TASA = {
     "id": "1",
     "estado": "A",
+    "tipoTasa": "CREDITO",
     "idTipoCredito": 1,
     "nombreTipoCredito": "Crédito de consumo",
     "tasaNominalAnual": Decimal("0.1600"),

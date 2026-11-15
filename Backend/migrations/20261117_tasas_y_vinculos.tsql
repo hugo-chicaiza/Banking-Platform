@@ -1,0 +1,146 @@
+/* T-SQL (SQL Server). Tasas de ahorro y de tarjeta, y vínculos de productos y
+   subproductos con tasas, comisiones, seguros y sistemas de amortización.
+   Aprobado: TipoTasa en Credito.TasaInteres y cuatro tablas de vínculo.
+   Ejecutar en CooperativaDB después de 20261115_sistema_amortizacion y
+   20261116_catalogos_estado, y antes de desplegar el backend que lo usa.
+   Reejecutable; las filas existentes quedan como tasas CREDITO, sin cambios.
+   Credito.usp_EvaluarSolicitudCredito filtra por IdTipoCredito: las tasas de
+   ahorro y tarjeta (IdTipoCredito NULL) no le afectan. */
+SET XACT_ABORT ON;
+GO
+
+/* ---------- 1. Tipo de tasa ---------- */
+IF COL_LENGTH('Credito.TasaInteres', 'TipoTasa') IS NULL
+    ALTER TABLE Credito.TasaInteres ADD TipoTasa varchar(20) NOT NULL
+        CONSTRAINT DF_TasaInteres_TipoTasa DEFAULT ('CREDITO')
+        CONSTRAINT CK_TasaInteres_TipoTasa CHECK (TipoTasa IN ('CREDITO', 'AHORRO',
+            'TARJETA_COMPRA', 'TARJETA_AVANCE', 'TARJETA_DIFERIDO', 'TARJETA_EXTERIOR',
+            'TARJETA_MORA'));
+GO
+
+/* IdTipoCredito y PlazoMaximoMeses pasan a NULL (solo los exige CREDITO). La FK, el
+   índice y el CK de plazo dependen de las columnas: se quitan y se vuelven a crear. */
+IF COLUMNPROPERTY(OBJECT_ID('Credito.TasaInteres'), 'IdTipoCredito', 'AllowsNull') = 0
+BEGIN
+    ALTER TABLE Credito.TasaInteres DROP CONSTRAINT FK_TasaInteres_TipoCredito;
+    DROP INDEX IX_TasaInteres_TipoCredito ON Credito.TasaInteres;
+    ALTER TABLE Credito.TasaInteres ALTER COLUMN IdTipoCredito int NULL;
+    CREATE INDEX IX_TasaInteres_TipoCredito ON Credito.TasaInteres (IdTipoCredito);
+    ALTER TABLE Credito.TasaInteres ADD CONSTRAINT FK_TasaInteres_TipoCredito
+        FOREIGN KEY (IdTipoCredito) REFERENCES Credito.TipoCredito (IdTipoCredito);
+END
+GO
+IF COLUMNPROPERTY(OBJECT_ID('Credito.TasaInteres'), 'PlazoMaximoMeses', 'AllowsNull') = 0
+BEGIN
+    ALTER TABLE Credito.TasaInteres DROP CONSTRAINT CK_TasaInteres_Plazo;
+    ALTER TABLE Credito.TasaInteres ALTER COLUMN PlazoMaximoMeses smallint NULL;
+    ALTER TABLE Credito.TasaInteres ADD CONSTRAINT CK_TasaInteres_Plazo
+        CHECK (PlazoMaximoMeses IS NULL OR PlazoMaximoMeses > 0);
+END
+GO
+IF OBJECT_ID('Credito.CK_TasaInteres_TipoCredito') IS NULL
+    ALTER TABLE Credito.TasaInteres ADD CONSTRAINT CK_TasaInteres_TipoCredito CHECK (
+        (TipoTasa = 'CREDITO' AND IdTipoCredito IS NOT NULL AND PlazoMaximoMeses IS NOT NULL)
+        OR (TipoTasa <> 'CREDITO' AND IdTipoCredito IS NULL));
+GO
+
+/* ---------- 2. Vínculos uno a varios ----------
+   Cada fila apunta a un producto (aplica a todos sus subproductos) o a un
+   subproducto (lo personaliza), nunca a los dos. Desmarcar = Estado 'I'. */
+IF OBJECT_ID('ProductosFinancieros.ProductoTasaInteres') IS NULL
+CREATE TABLE ProductosFinancieros.ProductoTasaInteres (
+    IdVinculo       int IDENTITY(1,1) NOT NULL CONSTRAINT PK_ProductoTasaInteres PRIMARY KEY,
+    IdTasaInteres   int       NOT NULL CONSTRAINT FK_ProductoTasaInteres_Tasa
+                              REFERENCES Credito.TasaInteres (IdTasaInteres),
+    IdProducto      int       NULL CONSTRAINT FK_ProductoTasaInteres_Producto
+                              REFERENCES ProductosFinancieros.Producto (IdProducto),
+    IdSubProducto   int       NULL CONSTRAINT FK_ProductoTasaInteres_SubProducto
+                              REFERENCES ProductosFinancieros.SubProducto (IdSubProducto),
+    Estado          char(1)   NOT NULL CONSTRAINT DF_ProductoTasaInteres_Estado DEFAULT ('A')
+                              CONSTRAINT CK_ProductoTasaInteres_Estado CHECK (Estado IN ('A', 'I')),
+    AsignadoPor     int       NOT NULL,
+    FechaAsignacion datetime2 NOT NULL CONSTRAINT DF_ProductoTasaInteres_Fecha DEFAULT (SYSUTCDATETIME()),
+    CONSTRAINT CK_ProductoTasaInteres_Destino CHECK (
+        (IdProducto IS NULL AND IdSubProducto IS NOT NULL) OR (IdProducto IS NOT NULL AND IdSubProducto IS NULL))
+);
+GO
+IF OBJECT_ID('ProductosFinancieros.ProductoComision') IS NULL
+CREATE TABLE ProductosFinancieros.ProductoComision (
+    IdVinculo       int IDENTITY(1,1) NOT NULL CONSTRAINT PK_ProductoComision PRIMARY KEY,
+    IdComision      int       NOT NULL CONSTRAINT FK_ProductoComision_Comision
+                              REFERENCES Transacciones.Comisiones (IdComision),
+    IdProducto      int       NULL CONSTRAINT FK_ProductoComision_Producto
+                              REFERENCES ProductosFinancieros.Producto (IdProducto),
+    IdSubProducto   int       NULL CONSTRAINT FK_ProductoComision_SubProducto
+                              REFERENCES ProductosFinancieros.SubProducto (IdSubProducto),
+    /* Solo en subproductos: la comisión del producto no se cobra en este subproducto */
+    Exonerado       bit       NOT NULL CONSTRAINT DF_ProductoComision_Exonerado DEFAULT (0),
+    Estado          char(1)   NOT NULL CONSTRAINT DF_ProductoComision_Estado DEFAULT ('A')
+                              CONSTRAINT CK_ProductoComision_Estado CHECK (Estado IN ('A', 'I')),
+    AsignadoPor     int       NOT NULL,
+    FechaAsignacion datetime2 NOT NULL CONSTRAINT DF_ProductoComision_Fecha DEFAULT (SYSUTCDATETIME()),
+    CONSTRAINT CK_ProductoComision_Destino CHECK (
+        (IdProducto IS NULL AND IdSubProducto IS NOT NULL) OR (IdProducto IS NOT NULL AND IdSubProducto IS NULL)),
+    CONSTRAINT CK_ProductoComision_Exonerado CHECK (Exonerado = 0 OR IdSubProducto IS NOT NULL)
+);
+GO
+IF OBJECT_ID('ProductosFinancieros.ProductoSeguro') IS NULL
+CREATE TABLE ProductosFinancieros.ProductoSeguro (
+    IdVinculo       int IDENTITY(1,1) NOT NULL CONSTRAINT PK_ProductoSeguro PRIMARY KEY,
+    IdSeguro        int       NOT NULL CONSTRAINT FK_ProductoSeguro_Seguro
+                              REFERENCES Credito.Seguro (IdSeguro),
+    IdProducto      int       NULL CONSTRAINT FK_ProductoSeguro_Producto
+                              REFERENCES ProductosFinancieros.Producto (IdProducto),
+    IdSubProducto   int       NULL CONSTRAINT FK_ProductoSeguro_SubProducto
+                              REFERENCES ProductosFinancieros.SubProducto (IdSubProducto),
+    EsObligatorio   bit       NOT NULL CONSTRAINT DF_ProductoSeguro_Obligatorio DEFAULT (0),
+    Estado          char(1)   NOT NULL CONSTRAINT DF_ProductoSeguro_Estado DEFAULT ('A')
+                              CONSTRAINT CK_ProductoSeguro_Estado CHECK (Estado IN ('A', 'I')),
+    AsignadoPor     int       NOT NULL,
+    FechaAsignacion datetime2 NOT NULL CONSTRAINT DF_ProductoSeguro_Fecha DEFAULT (SYSUTCDATETIME()),
+    CONSTRAINT CK_ProductoSeguro_Destino CHECK (
+        (IdProducto IS NULL AND IdSubProducto IS NOT NULL) OR (IdProducto IS NOT NULL AND IdSubProducto IS NULL))
+);
+GO
+IF OBJECT_ID('ProductosFinancieros.ProductoSistemaAmortizacion') IS NULL
+CREATE TABLE ProductosFinancieros.ProductoSistemaAmortizacion (
+    IdVinculo       int IDENTITY(1,1) NOT NULL CONSTRAINT PK_ProductoSistemaAmortizacion PRIMARY KEY,
+    CodigoSistema   varchar(10) NOT NULL CONSTRAINT FK_ProductoSistemaAmortizacion_Sistema
+                              REFERENCES Catalogo.SistemaAmortizacion (Codigo),
+    IdProducto      int       NULL CONSTRAINT FK_ProductoSistemaAmortizacion_Producto
+                              REFERENCES ProductosFinancieros.Producto (IdProducto),
+    IdSubProducto   int       NULL CONSTRAINT FK_ProductoSistemaAmortizacion_SubProducto
+                              REFERENCES ProductosFinancieros.SubProducto (IdSubProducto),
+    Estado          char(1)   NOT NULL CONSTRAINT DF_ProductoSistemaAmortizacion_Estado DEFAULT ('A')
+                              CONSTRAINT CK_ProductoSistemaAmortizacion_Estado CHECK (Estado IN ('A', 'I')),
+    AsignadoPor     int       NOT NULL,
+    FechaAsignacion datetime2 NOT NULL CONSTRAINT DF_ProductoSistemaAmortizacion_Fecha DEFAULT (SYSUTCDATETIME()),
+    CONSTRAINT CK_ProductoSistemaAmortizacion_Destino CHECK (
+        (IdProducto IS NULL AND IdSubProducto IS NOT NULL) OR (IdProducto IS NOT NULL AND IdSubProducto IS NULL))
+);
+GO
+
+/* Un vínculo por objeto y destino (activo o no): marcar de nuevo reactiva la fila */
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'UX_ProductoTasaInteres_Producto')
+    CREATE UNIQUE INDEX UX_ProductoTasaInteres_Producto ON ProductosFinancieros.ProductoTasaInteres (IdProducto, IdTasaInteres) WHERE IdProducto IS NOT NULL;
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'UX_ProductoTasaInteres_SubProducto')
+    CREATE UNIQUE INDEX UX_ProductoTasaInteres_SubProducto ON ProductosFinancieros.ProductoTasaInteres (IdSubProducto, IdTasaInteres) WHERE IdSubProducto IS NOT NULL;
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'UX_ProductoComision_Producto')
+    CREATE UNIQUE INDEX UX_ProductoComision_Producto ON ProductosFinancieros.ProductoComision (IdProducto, IdComision) WHERE IdProducto IS NOT NULL;
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'UX_ProductoComision_SubProducto')
+    CREATE UNIQUE INDEX UX_ProductoComision_SubProducto ON ProductosFinancieros.ProductoComision (IdSubProducto, IdComision) WHERE IdSubProducto IS NOT NULL;
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'UX_ProductoSeguro_Producto')
+    CREATE UNIQUE INDEX UX_ProductoSeguro_Producto ON ProductosFinancieros.ProductoSeguro (IdProducto, IdSeguro) WHERE IdProducto IS NOT NULL;
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'UX_ProductoSeguro_SubProducto')
+    CREATE UNIQUE INDEX UX_ProductoSeguro_SubProducto ON ProductosFinancieros.ProductoSeguro (IdSubProducto, IdSeguro) WHERE IdSubProducto IS NOT NULL;
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'UX_ProductoSistemaAmortizacion_Producto')
+    CREATE UNIQUE INDEX UX_ProductoSistemaAmortizacion_Producto ON ProductosFinancieros.ProductoSistemaAmortizacion (IdProducto, CodigoSistema) WHERE IdProducto IS NOT NULL;
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'UX_ProductoSistemaAmortizacion_SubProducto')
+    CREATE UNIQUE INDEX UX_ProductoSistemaAmortizacion_SubProducto ON ProductosFinancieros.ProductoSistemaAmortizacion (IdSubProducto, CodigoSistema) WHERE IdSubProducto IS NOT NULL;
+GO
+
+/* Vuelta atrás (solo si no hay tasas de ahorro/tarjeta ni vínculos cargados):
+   DROP TABLE ProductosFinancieros.ProductoSistemaAmortizacion, ProductosFinancieros.ProductoSeguro,
+              ProductosFinancieros.ProductoComision, ProductosFinancieros.ProductoTasaInteres;
+   ALTER TABLE Credito.TasaInteres DROP CONSTRAINT CK_TasaInteres_TipoCredito, CK_TasaInteres_TipoTasa, DF_TasaInteres_TipoTasa, COLUMN TipoTasa;
+   (y volver IdTipoCredito y PlazoMaximoMeses a NOT NULL con el mismo procedimiento) */

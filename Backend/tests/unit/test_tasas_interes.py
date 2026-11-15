@@ -30,6 +30,7 @@ NUEVA = {
 def _fila(**cambios: Any) -> dict[str, Any]:
     return {
         "id_tasa_interes": 1,
+        "tipo_tasa": "CREDITO",
         "id_tipo_credito": 1,
         "nombre_tipo_credito": "Crédito de consumo",
         "tasa_nominal_anual": Decimal("0.1600"),
@@ -48,7 +49,7 @@ def bd(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
     insertadas: list[dict[str, Any]] = []
     monkeypatch.setattr(service, "hoy", lambda: HOY)
     monkeypatch.setattr(
-        repository, "listar_tasas_interes", lambda _c, _h, _t: [_fila()]
+        repository, "listar_tasas_interes", lambda _c, _h, _t, _tt: [_fila()]
     )
     monkeypatch.setattr(repository, "existe_tipo_credito_activo", lambda _c, t: t == 1)
     monkeypatch.setattr(

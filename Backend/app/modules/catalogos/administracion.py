@@ -23,7 +23,10 @@ from app.core.api.errors import problema, traducir_error_bd
 from app.core.security.auth import Usuario
 from app.core.security.operador import auditar
 
-TipoCampo = Literal["texto", "entero", "dinero", "porcentaje", "booleano", "fecha"]
+# numero: >= 0 con hasta 6 decimales (valor de comisión o seguro; en % si es Porcentaje)
+TipoCampo = Literal[
+    "texto", "entero", "dinero", "porcentaje", "numero", "booleano", "fecha"
+]
 _SIN_CONTROL = re.compile(r"^[^\x00-\x1f\x7f]+$")
 _MAX_DINERO = Decimal("9999999999999999.99")
 
@@ -65,10 +68,14 @@ CATALOGOS: dict[str, Catalogo] = {
         Catalogo(
             clave="tasas-interes",
             nombre="Tasas de interés",
-            descripcion="Tasa por tipo de crédito, rango de monto, plazo máximo y vigencia.",
+            descripcion=(
+                "Tasas de crédito, ahorro y tarjeta, con rango de monto y vigencia. "
+                "Se vinculan a productos y subproductos desde Productos."
+            ),
             tabla="Credito.TasaInteres",
             permite_crear=True,
             campos=(
+                Campo("tipoTasa", "Tipo de tasa"),
                 Campo("nombreTipoCredito", "Tipo de crédito"),
                 Campo("tasaNominalAnual", "Tasa anual", "porcentaje", True),
                 Campo("recargoMoraSobreTasa", "Recargo por mora", "porcentaje", True),
@@ -79,6 +86,7 @@ CATALOGOS: dict[str, Catalogo] = {
                     "Plazo máximo (meses)",
                     "entero",
                     True,
+                    nulo=True,
                     maximo=600,
                     minimo=1,
                 ),
@@ -87,6 +95,7 @@ CATALOGOS: dict[str, Catalogo] = {
             ),
             listar="""
                 SELECT CAST(t.IdTasaInteres AS varchar(10)) AS id, t.Estado AS estado,
+                       t.TipoTasa AS tipoTasa,
                        t.IdTipoCredito AS idTipoCredito, tc.Nombre AS nombreTipoCredito,
                        t.TasaNominalAnual AS tasaNominalAnual,
                        t.RecargoMoraSobreTasa AS recargoMoraSobreTasa,
@@ -94,8 +103,8 @@ CATALOGOS: dict[str, Catalogo] = {
                        t.PlazoMaximoMeses AS plazoMaximoMeses,
                        t.VigenciaDesde AS vigenciaDesde, t.VigenciaHasta AS vigenciaHasta
                 FROM Credito.TasaInteres AS t
-                JOIN Credito.TipoCredito AS tc ON tc.IdTipoCredito = t.IdTipoCredito
-                ORDER BY tc.Nombre, t.VigenciaDesde DESC, t.MontoMinimo
+                LEFT JOIN Credito.TipoCredito AS tc ON tc.IdTipoCredito = t.IdTipoCredito
+                ORDER BY t.TipoTasa, tc.Nombre, t.VigenciaDesde DESC, t.MontoMinimo
             """,
             actualizar="""
                 UPDATE Credito.TasaInteres SET
@@ -113,6 +122,79 @@ CATALOGOS: dict[str, Catalogo] = {
                         THEN :vigenciaHasta ELSE VigenciaHasta END,
                     Estado = CASE WHEN :c_estado = 1 THEN :estado ELSE Estado END
                 WHERE IdTasaInteres = TRY_CAST(:id AS int)
+            """,
+        ),
+        Catalogo(
+            clave="comisiones",
+            nombre="Comisiones y recargos",
+            descripcion=(
+                "Cobros por canal (fijos o en %). Se vinculan a productos y subproductos; "
+                "un subproducto puede quedar exonerado."
+            ),
+            tabla="Transacciones.Comisiones",
+            campos=(
+                Campo("codigo", "Código"),
+                Campo("tipoComision", "Tipo"),
+                Campo("tipoCalculo", "Cálculo"),
+                Campo("valor", "Valor", "numero", True, minimo=0),
+                Campo("nombreCanal", "Canal"),
+                Campo("descripcion", "Descripción", editable=True, maximo=250),
+                Campo("vigenciaDesde", "Vigente desde", "fecha"),
+                Campo("vigenciaHasta", "Vigente hasta", "fecha", True, nulo=True),
+            ),
+            listar="""
+                SELECT CAST(c.IdComision AS varchar(10)) AS id, c.Estado AS estado,
+                       c.CodigoComision AS codigo, c.TipoComision AS tipoComision,
+                       c.TipoCalculo AS tipoCalculo, c.Valor AS valor,
+                       ca.NombreCanal AS nombreCanal, c.Descripcion AS descripcion,
+                       c.VigenciaDesde AS vigenciaDesde, c.VigenciaHasta AS vigenciaHasta
+                FROM Transacciones.Comisiones AS c
+                JOIN Canal.Canal AS ca ON ca.IdCanal = c.IdCanal
+                ORDER BY c.TipoComision, c.CodigoComision
+            """,
+            actualizar="""
+                UPDATE Transacciones.Comisiones SET
+                    Valor = CASE WHEN :c_valor = 1 THEN :valor ELSE Valor END,
+                    Descripcion = CASE WHEN :c_descripcion = 1 THEN :descripcion ELSE Descripcion END,
+                    VigenciaHasta = CASE WHEN :c_vigenciaHasta = 1
+                        THEN :vigenciaHasta ELSE VigenciaHasta END,
+                    Estado = CASE WHEN :c_estado = 1 THEN :estado ELSE Estado END
+                WHERE IdComision = TRY_CAST(:id AS int)
+            """,
+        ),
+        Catalogo(
+            clave="seguros",
+            nombre="Seguros",
+            descripcion="Seguros (fijos o en %) que se vinculan a productos y subproductos.",
+            tabla="Credito.Seguro",
+            campos=(
+                Campo("codigo", "Código"),
+                Campo("nombre", "Nombre", editable=True, maximo=60),
+                Campo(
+                    "aseguradora", "Aseguradora", editable=True, nulo=True, maximo=100
+                ),
+                Campo("tipoCalculo", "Cálculo"),
+                Campo("valor", "Valor", "numero", True, minimo=0),
+                Campo("vigenciaDesde", "Vigente desde", "fecha"),
+                Campo("vigenciaHasta", "Vigente hasta", "fecha", True, nulo=True),
+            ),
+            listar="""
+                SELECT CAST(IdSeguro AS varchar(10)) AS id, Estado AS estado,
+                       CodigoSeguro AS codigo, Nombre AS nombre, Aseguradora AS aseguradora,
+                       TipoCalculo AS tipoCalculo, Valor AS valor,
+                       VigenciaDesde AS vigenciaDesde, VigenciaHasta AS vigenciaHasta
+                FROM Credito.Seguro
+                ORDER BY Nombre
+            """,
+            actualizar="""
+                UPDATE Credito.Seguro SET
+                    Nombre = CASE WHEN :c_nombre = 1 THEN :nombre ELSE Nombre END,
+                    Aseguradora = CASE WHEN :c_aseguradora = 1 THEN :aseguradora ELSE Aseguradora END,
+                    Valor = CASE WHEN :c_valor = 1 THEN :valor ELSE Valor END,
+                    VigenciaHasta = CASE WHEN :c_vigenciaHasta = 1
+                        THEN :vigenciaHasta ELSE VigenciaHasta END,
+                    Estado = CASE WHEN :c_estado = 1 THEN :estado ELSE Estado END
+                WHERE IdSeguro = TRY_CAST(:id AS int)
             """,
         ),
         Catalogo(
@@ -487,7 +569,7 @@ def _valor(campo: Campo, valor: Any) -> Any:
         raise _invalido(campo.etiqueta, "debe ser un número.") from None
     if not numero.is_finite():
         raise _invalido(campo.etiqueta, "debe ser un número.")
-    decimales = 2 if campo.tipo == "dinero" else 4
+    decimales = {"dinero": 2, "porcentaje": 4}.get(campo.tipo, 6)
     if numero != numero.quantize(Decimal(1).scaleb(-decimales)):
         raise _invalido(campo.etiqueta, f"usa {decimales} decimales como máximo.")
     if campo.tipo == "porcentaje":
@@ -495,6 +577,10 @@ def _valor(campo: Campo, valor: Any) -> Any:
         minimo_ok = numero > 0 if campo.nombre == "tasaNominalAnual" else numero >= 0
         if not minimo_ok or numero > 1:
             raise _invalido(campo.etiqueta, "debe estar entre 0 y 100 %.")
+        return numero
+    if campo.tipo == "numero":
+        if numero < 0 or numero > Decimal("99999999.999999"):
+            raise _invalido(campo.etiqueta, "está fuera de rango.")
         return numero
     minimo = Decimal(campo.minimo) if campo.minimo is not None else Decimal("0.01")
     if numero < minimo or numero > _MAX_DINERO:
@@ -549,25 +635,36 @@ def _fila(conn: Connection, catalogo: Catalogo, id_: str) -> dict[str, Any] | No
     )
 
 
+def _validar_fila(final: dict[str, Any]) -> None:
+    """Reglas que cruzan campos, antes de que la BD las rechace con un 500 (CK)."""
+    hasta = final.get("vigenciaHasta")
+    if hasta is not None and hasta <= final["vigenciaDesde"]:
+        raise _invalido("Vigente hasta", "debe ser posterior a la fecha de inicio.")
+    if final.get("tipoCalculo") == "Porcentaje" and final["valor"] > 100:
+        raise _invalido("Valor", "en porcentaje no puede pasar de 100.")
+
+
 def _validar_tasa(
     conn: Connection, actual: dict[str, Any], cambios: dict[str, Any]
 ) -> None:
-    """La tasa resultante no puede solaparse con otra activa del mismo tipo de crédito."""
+    """Una tasa de crédito necesita plazo y no puede solaparse con otra del mismo tipo de
+    crédito. Cuenta también las inactivas: Credito.usp_EvaluarSolicitudCredito no filtra
+    por Estado y con dos tasas lanza 55103. Ahorro y tarjeta pueden coexistir."""
     final = {**actual, **cambios}
     minimo, maximo = final["montoMinimo"], final["montoMaximo"]
     if minimo is not None and maximo is not None and maximo < minimo:
         raise _invalido("Monto máximo", "debe ser mayor o igual que el mínimo.")
-    hasta = final["vigenciaHasta"]
-    if hasta is not None and hasta <= final["vigenciaDesde"]:
-        raise _invalido("Vigente hasta", "debe ser posterior a la fecha de inicio.")
-    if final["estado"] != "A":
+    if final["tipoTasa"] != "CREDITO":
         return
+    if final["plazoMaximoMeses"] is None:
+        raise _invalido("Plazo máximo (meses)", "es obligatorio en tasas de crédito.")
+    hasta = final["vigenciaHasta"]
     solapadas = conn.execute(
         text(
             """
             SELECT COUNT(*)
             FROM Credito.TasaInteres WITH (UPDLOCK, HOLDLOCK)
-            WHERE IdTipoCredito = :tipo AND Estado = 'A'
+            WHERE IdTipoCredito = :tipo AND TipoTasa = 'CREDITO'
               AND IdTasaInteres <> TRY_CAST(:id AS int)
               AND VigenciaDesde <= ISNULL(:hasta, '9999-12-31')
               AND :desde <= ISNULL(VigenciaHasta, '9999-12-31')
@@ -588,7 +685,7 @@ def _validar_tasa(
         raise problema(
             409,
             "TASA_SOLAPADA",
-            "Ya hay una tasa activa de ese tipo de crédito para ese rango de monto en esas fechas.",
+            "Ya hay una tasa de ese tipo de crédito para ese rango de monto en esas fechas.",
         )
 
 
@@ -614,6 +711,7 @@ def actualizar(
             actual = _fila(conn, catalogo, id_)
             if actual is None:
                 raise problema(404, "REGISTRO_NO_ENCONTRADO", "El registro no existe.")
+            _validar_fila({**actual, **cambios})
             if clave == "tasas-interes":
                 _validar_tasa(conn, actual, cambios)
             parametros: dict[str, Any] = {"id": id_}

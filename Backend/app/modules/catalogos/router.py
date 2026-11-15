@@ -18,10 +18,12 @@ from app.modules.catalogos.schemas import (
     Agencia,
     Canal,
     Ciudad,
+    Comision,
     Denominacion,
     Pais,
     Producto,
     Red,
+    Seguro,
     SistemaAmortizacion,
     TasaInteres,
     TasaInteresCreate,
@@ -29,6 +31,7 @@ from app.modules.catalogos.schemas import (
     TipoCredito,
     TipoMovimientoCaja,
     TipoProducto,
+    TipoTasa,
 )
 from app.modules.catalogos.subproductos import TipoTarjeta
 
@@ -77,16 +80,28 @@ def listar_sistemas_amortizacion(conn: Db) -> Any:
 @router.get(
     "/tasas-interes",
     response_model=list[TasaInteres],
-    dependencies=[Depends(solo_parametros("idTipoCredito"))],
+    dependencies=[Depends(solo_parametros("idTipoCredito", "tipoTasa"))],
 )
 def listar_tasas_interes(
     conn: Db,
     id_tipo_credito: Annotated[
         int | None, Query(alias="idTipoCredito", ge=1, le=2_147_483_647)
     ] = None,
+    tipo_tasa: Annotated[TipoTasa | None, Query(alias="tipoTasa")] = None,
 ) -> Any:
-    """Todas las tasas (vigentes, futuras y vencidas); `vigente` dice cuáles aplican hoy."""
-    return service.listar_tasas_interes(conn, id_tipo_credito)
+    """Tasas activas (vigentes, futuras y vencidas); `vigente` dice cuáles aplican hoy."""
+    return service.listar_tasas_interes(conn, id_tipo_credito, tipo_tasa)
+
+
+@router.get("/comisiones", response_model=list[Comision])
+def listar_comisiones(conn: Db) -> Any:
+    """Comisiones y recargos activos, para vincularlos a productos y subproductos."""
+    return repository.listar_comisiones(conn)
+
+
+@router.get("/seguros", response_model=list[Seguro])
+def listar_seguros(conn: Db) -> Any:
+    return repository.listar_seguros(conn)
 
 
 @router.post(

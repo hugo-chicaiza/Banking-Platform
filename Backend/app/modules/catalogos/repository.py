@@ -154,7 +154,8 @@ def listar_sistemas_amortizacion(conn: Connection) -> list[dict[str, Any]]:
 
 
 _TASAS = """
-    SELECT t.IdTasaInteres AS id_tasa_interes, t.IdTipoCredito AS id_tipo_credito,
+    SELECT t.IdTasaInteres AS id_tasa_interes, t.TipoTasa AS tipo_tasa,
+           t.IdTipoCredito AS id_tipo_credito,
            tc.Nombre AS nombre_tipo_credito, t.TasaNominalAnual AS tasa_nominal_anual,
            t.RecargoMoraSobreTasa AS recargo_mora_sobre_tasa,
            t.PlazoMaximoMeses AS plazo_maximo_meses, t.MontoMinimo AS monto_minimo,
@@ -164,21 +165,25 @@ _TASAS = """
                       AND (t.VigenciaHasta IS NULL OR t.VigenciaHasta >= :hoy)
                 THEN 1 ELSE 0 END AS bit) AS vigente
     FROM Credito.TasaInteres AS t
-    JOIN Credito.TipoCredito AS tc ON tc.IdTipoCredito = t.IdTipoCredito
+    LEFT JOIN Credito.TipoCredito AS tc ON tc.IdTipoCredito = t.IdTipoCredito
 """
 
 
 def listar_tasas_interes(
-    conn: Connection, hoy: date, id_tipo_credito: int | None = None
+    conn: Connection,
+    hoy: date,
+    id_tipo_credito: int | None = None,
+    tipo_tasa: str | None = None,
 ) -> list[dict[str, Any]]:
     return _rows(
         conn,
         _TASAS
         + """
         WHERE t.Estado = 'A' AND (:tipo IS NULL OR t.IdTipoCredito = :tipo)
-        ORDER BY tc.Nombre, t.VigenciaDesde DESC, t.MontoMinimo
+          AND (:tipo_tasa IS NULL OR t.TipoTasa = :tipo_tasa)
+        ORDER BY t.TipoTasa, tc.Nombre, t.VigenciaDesde DESC, t.MontoMinimo
         """,
-        {"hoy": hoy, "tipo": id_tipo_credito},
+        {"hoy": hoy, "tipo": id_tipo_credito, "tipo_tasa": tipo_tasa},
     )
 
 
@@ -192,7 +197,9 @@ def obtener_tasa_interes(
 
 
 def tasas_que_se_solapan(conn: Connection, datos: dict[str, Any]) -> list[int]:
-    """Tasas del mismo tipo cuyo rango de monto y vigencia se cruzan con la nueva."""
+    """Tasas de crédito del mismo tipo cuyo rango de monto y vigencia se cruzan con la
+    nueva. Cuenta también las inactivas: Credito.usp_EvaluarSolicitudCredito no filtra
+    por Estado y con dos tasas lanza 55103."""
     return [
         int(fila["id"])
         for fila in _rows(
@@ -200,7 +207,7 @@ def tasas_que_se_solapan(conn: Connection, datos: dict[str, Any]) -> list[int]:
             """
             SELECT IdTasaInteres AS id
             FROM Credito.TasaInteres WITH (UPDLOCK, HOLDLOCK)
-            WHERE IdTipoCredito = :id_tipo_credito AND Estado = 'A'
+            WHERE IdTipoCredito = :id_tipo_credito AND TipoTasa = 'CREDITO'
               AND VigenciaDesde <= ISNULL(:vigencia_hasta, '9999-12-31')
               AND :vigencia_desde <= ISNULL(VigenciaHasta, '9999-12-31')
               AND ISNULL(MontoMinimo, 0) <= ISNULL(:monto_maximo, 9999999999999999)
@@ -217,10 +224,10 @@ def insertar_tasa_interes(conn: Connection, datos: dict[str, Any]) -> int:
             text(
                 """
                 INSERT INTO Credito.TasaInteres (
-                    IdTipoCredito, PlazoMaximoMeses, TasaNominalAnual, RecargoMoraSobreTasa,
+                    TipoTasa, IdTipoCredito, PlazoMaximoMeses, TasaNominalAnual, RecargoMoraSobreTasa,
                     MontoMinimo, MontoMaximo, VigenciaDesde, VigenciaHasta)
                 OUTPUT inserted.IdTasaInteres
-                VALUES (:id_tipo_credito, :plazo_maximo_meses, :tasa_nominal_anual,
+                VALUES (:tipo_tasa, :id_tipo_credito, :plazo_maximo_meses, :tasa_nominal_anual,
                         :recargo_mora_sobre_tasa, :monto_minimo, :monto_maximo,
                         :vigencia_desde, :vigencia_hasta)
                 """
@@ -341,3 +348,32 @@ def listar_ciudades(
         params["patron"] = f"%{_escapar_like(q)}%"
     sql += " ORDER BY Provincia, Nombre"
     return _rows(conn, sql, params)
+
+
+def listar_comisiones(conn: Connection) -> list[dict[str, Any]]:
+    """Comisiones y recargos activos: los que se pueden vincular a un producto."""
+    return _rows(
+        conn,
+        """
+        SELECT c.IdComision AS id_comision, c.CodigoComision AS codigo_comision,
+               c.TipoComision AS tipo_comision, c.TipoCalculo AS tipo_calculo,
+               c.Valor AS valor, ca.NombreCanal AS nombre_canal, c.Descripcion AS descripcion
+        FROM Transacciones.Comisiones AS c
+        JOIN Canal.Canal AS ca ON ca.IdCanal = c.IdCanal
+        WHERE c.Estado = 'A'
+        ORDER BY c.TipoComision, c.CodigoComision
+        """,
+    )
+
+
+def listar_seguros(conn: Connection) -> list[dict[str, Any]]:
+    return _rows(
+        conn,
+        """
+        SELECT IdSeguro AS id_seguro, CodigoSeguro AS codigo_seguro, Nombre AS nombre,
+               Aseguradora AS aseguradora, TipoCalculo AS tipo_calculo, Valor AS valor
+        FROM Credito.Seguro
+        WHERE Estado = 'A'
+        ORDER BY Nombre
+        """,
+    )

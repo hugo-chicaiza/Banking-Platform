@@ -23,11 +23,13 @@ def hoy() -> date:
 
 
 def listar_tasas_interes(
-    conn: Connection, id_tipo_credito: int | None
+    conn: Connection, id_tipo_credito: int | None, tipo_tasa: str | None = None
 ) -> list[TasaInteres]:
     return [
         TasaInteres.model_validate(f)
-        for f in repository.listar_tasas_interes(conn, hoy(), id_tipo_credito)
+        for f in repository.listar_tasas_interes(
+            conn, hoy(), id_tipo_credito, tipo_tasa
+        )
     ]
 
 
@@ -39,21 +41,25 @@ def crear_tasa_interes(
         "Credito.TasaInteres",
         usuario,
         ip,
-        f"CAT-TASA tipoCredito={datos.id_tipo_credito} desde={datos.vigencia_desde.isoformat()}",
+        f"CAT-TASA tipo={datos.tipo_tasa} tipoCredito={datos.id_tipo_credito}"
+        f" desde={datos.vigencia_desde.isoformat()}",
     ) as registro:
         try:
             if datos.vigencia_desde < hoy():
                 raise problema(
                     422, "VIGENCIA_PASADA", "La vigencia no puede empezar antes de hoy."
                 )
-            if not repository.existe_tipo_credito_activo(conn, datos.id_tipo_credito):
+            es_credito = datos.id_tipo_credito is not None
+            if es_credito and not repository.existe_tipo_credito_activo(
+                conn, datos.id_tipo_credito or 0
+            ):
                 raise problema(
                     422,
                     "TIPO_CREDITO_NO_EXISTE",
                     "El tipo de crédito no existe o está inactivo.",
                 )
             valores = datos.model_dump()
-            if repository.tasas_que_se_solapan(conn, valores):
+            if es_credito and repository.tasas_que_se_solapan(conn, valores):
                 raise problema(
                     409,
                     "TASA_SOLAPADA",

@@ -10,7 +10,7 @@ varchar(15) único, NombreSubProducto varchar(100), Estado A/I.
 
 from datetime import datetime
 from decimal import Decimal
-from typing import Annotated, Literal, Self
+from typing import Annotated, Any, Literal, Self
 
 from pydantic import ConfigDict, Field, StringConstraints, model_validator
 
@@ -238,3 +238,75 @@ class RestriccionesSubProducto(_Entrada):
 class RestriccionesVista(CamelModel):
     dias_sin_retiros: int | None = None
     saldo_minimo: Money | None = None
+
+
+# ---------- Vínculos con tasas, comisiones, seguros y amortización ----------
+
+CodigoSistema = Annotated[
+    str,
+    StringConstraints(
+        strip_whitespace=True, to_upper=True, pattern=r"^[A-Za-z]{3,10}$"
+    ),
+]
+
+
+class ComisionVinculo(_Entrada):
+    id_comision: IdPositivo
+    # Solo en subproductos: no cobra la comisión que el producto sí cobra
+    exonerado: bool = False
+
+
+class SeguroVinculo(_Entrada):
+    id_seguro: IdPositivo
+    es_obligatorio: bool = False
+
+
+class VinculosEntrada(_Entrada):
+    """Checklist completo: lo que no viene queda desmarcado (Estado 'I')."""
+
+    tasas_interes: Annotated[list[IdPositivo], Field(max_length=100)] = Field(
+        default_factory=list
+    )
+    comisiones: Annotated[list[ComisionVinculo], Field(max_length=100)] = Field(
+        default_factory=list
+    )
+    seguros: Annotated[list[SeguroVinculo], Field(max_length=50)] = Field(
+        default_factory=list
+    )
+    sistemas_amortizacion: Annotated[list[CodigoSistema], Field(max_length=10)] = Field(
+        default_factory=list
+    )
+
+    @model_validator(mode="after")
+    def _sin_repetidos(self) -> Self:
+        listas: list[list[Any]] = [
+            self.tasas_interes,
+            [c.id_comision for c in self.comisiones],
+            [s.id_seguro for s in self.seguros],
+            self.sistemas_amortizacion,
+        ]
+        if any(len(set(lista)) != len(lista) for lista in listas):
+            raise ValueError("Las listas no admiten elementos repetidos.")
+        return self
+
+
+class ComisionVinculada(CamelModel):
+    id_comision: int
+    exonerado: bool
+
+
+class SeguroVinculado(CamelModel):
+    id_seguro: int
+    es_obligatorio: bool
+
+
+class VinculosBase(CamelModel):
+    tasas_interes: list[int] = Field(default_factory=list)
+    comisiones: list[ComisionVinculada] = Field(default_factory=list)
+    seguros: list[SeguroVinculado] = Field(default_factory=list)
+    sistemas_amortizacion: list[str] = Field(default_factory=list)
+
+
+class VinculosVista(VinculosBase):
+    # Solo en subproductos: lo que heredan del producto
+    del_producto: VinculosBase | None = None

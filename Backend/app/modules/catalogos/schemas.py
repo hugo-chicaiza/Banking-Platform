@@ -85,16 +85,29 @@ class SistemaAmortizacion(CamelModel):
     descripcion: str
 
 
+TipoTasa = Literal[
+    "CREDITO",
+    "AHORRO",
+    "TARJETA_COMPRA",
+    "TARJETA_AVANCE",
+    "TARJETA_DIFERIDO",
+    "TARJETA_EXTERIOR",
+    "TARJETA_MORA",
+]
+
+
 class TasaInteres(CamelModel):
-    """Tasa de un tipo de crédito para un rango de monto y un plazo máximo, con vigencia."""
+    """Tasa con rango de monto y vigencia. CREDITO lleva tipo de crédito y plazo máximo;
+    AHORRO y TARJETA_* no tienen tipo de crédito (CK_TasaInteres_TipoCredito)."""
 
     id_tasa_interes: int
-    id_tipo_credito: int
-    nombre_tipo_credito: str
+    tipo_tasa: TipoTasa
+    id_tipo_credito: int | None = None
+    nombre_tipo_credito: str | None = None
     # Fracción anual: 0.16 = 16 %
     tasa_nominal_anual: Money
     recargo_mora_sobre_tasa: Money
-    plazo_maximo_meses: int
+    plazo_maximo_meses: int | None = None
     monto_minimo: Money | None = None
     monto_maximo: Money | None = None
     vigencia_desde: date
@@ -103,17 +116,19 @@ class TasaInteres(CamelModel):
 
 
 class TasaInteresCreate(CamelModel):
-    """La tasa no puede solaparse con otra del mismo tipo de crédito en monto y vigencia:
-    la simulación de créditos exige una sola tasa por consulta (TASA_VIGENTE_DUPLICADA)."""
+    """Una tasa CREDITO no puede solaparse con otra del mismo tipo de crédito en monto y
+    vigencia: la evaluación exige una sola tasa por consulta (DB 55103). Las de ahorro y
+    tarjeta sí pueden coexistir: cada producto vincula la suya."""
 
     model_config = ConfigDict(extra="forbid", validate_by_name=False)
 
-    id_tipo_credito: Annotated[int, Field(ge=1, le=2_147_483_647)]
+    tipo_tasa: TipoTasa = "CREDITO"
+    id_tipo_credito: Annotated[int, Field(ge=1, le=2_147_483_647)] | None = None
     tasa_nominal_anual: Annotated[Decimal, Field(gt=0, le=1, decimal_places=4)]
     recargo_mora_sobre_tasa: Annotated[Decimal, Field(ge=0, le=1, decimal_places=4)] = (
         Decimal(0)
     )
-    plazo_maximo_meses: Annotated[int, Field(ge=1, le=600)]
+    plazo_maximo_meses: Annotated[int, Field(ge=1, le=600)] | None = None
     monto_minimo: Annotated[Decimal, Field(gt=0, decimal_places=2)] | None = None
     monto_maximo: Annotated[Decimal, Field(gt=0, decimal_places=2)] | None = None
     vigencia_desde: date
@@ -129,7 +144,35 @@ class TasaInteresCreate(CamelModel):
             raise ValueError("montoMaximo debe ser mayor o igual que montoMinimo.")
         if self.vigencia_hasta and self.vigencia_hasta <= self.vigencia_desde:
             raise ValueError("vigenciaHasta debe ser posterior a vigenciaDesde.")
+        if self.tipo_tasa == "CREDITO":
+            if self.id_tipo_credito is None or self.plazo_maximo_meses is None:
+                raise ValueError(
+                    "Una tasa de crédito necesita tipo de crédito y plazo máximo."
+                )
+        elif self.id_tipo_credito is not None:
+            raise ValueError("Solo las tasas de crédito llevan tipo de crédito.")
         return self
+
+
+class Comision(CamelModel):
+    """Comisión o recargo (Transacciones.Comisiones). Porcentaje: Valor en % (0 a 100)."""
+
+    id_comision: int
+    codigo_comision: str
+    tipo_comision: str
+    tipo_calculo: Literal["Fijo", "Porcentaje"]
+    valor: Money
+    nombre_canal: str
+    descripcion: str
+
+
+class Seguro(CamelModel):
+    id_seguro: int
+    codigo_seguro: str
+    nombre: str
+    aseguradora: str | None = None
+    tipo_calculo: Literal["Fijo", "Porcentaje"]
+    valor: Money
 
 
 class Red(CamelModel):
