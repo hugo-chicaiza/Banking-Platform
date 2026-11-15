@@ -157,17 +157,20 @@ def listar_asientos(
     params = {k: v for k, v in filtros.items() if v is not None}
     where = "".join(f" AND {_FILTROS_ASIENTOS[k]}" for k in params)
     where = " WHERE 1 = 1" + where
-    total = int(
-        conn.execute(
-            text("SELECT COUNT(*) FROM Contabilidad.AsientoContable" + where), params
-        ).scalar_one()
-    )
+    # SQL dinámico seguro: `where` solo se arma con fragmentos fijos de
+    # _FILTROS_ASIENTOS (las claves vienen del servicio, no del cliente) y los
+    # valores de los filtros van como parámetros enlazados, nunca en el texto.
+    sql_total = "SELECT COUNT(*) FROM Contabilidad.AsientoContable" + where  # nosec B608  # NOSONAR
+    total = int(conn.execute(text(sql_total), params).scalar_one())
     columna = ORDEN_ASIENTOS[campo]
     orden = "ASC" if direccion == "asc" else "DESC"
     desempate = "" if campo == "idAsientoContable" else ", IdAsientoContable DESC"
+    # Igual que arriba: `where` solo tiene fragmentos fijos de _FILTROS_ASIENTOS y
+    # los valores van parametrizados. El ORDER BY usa columnas de ORDEN_ASIENTOS y
+    # los literales ASC/DESC; offset y page_size también son parámetros.
     sql = (
         _ASIENTO
-        + where
+        + where  # nosec B608  # NOSONAR
         + f" ORDER BY {columna} {orden}{desempate}"
         + " OFFSET :offset ROWS FETCH NEXT :page_size ROWS ONLY"
     )
