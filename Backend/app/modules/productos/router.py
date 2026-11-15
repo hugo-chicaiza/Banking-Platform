@@ -13,14 +13,20 @@ from app.core.api.errors import RESPUESTAS_ERROR, ProblemDetailsRoute, solo_para
 from app.core.api.middleware import ip_cliente
 from app.core.database.db import cooperativa
 from app.core.security.auth import Usuario, require_auth, require_roles
-from app.modules.productos import service
+from app.modules.productos import service, vinculos
 from app.modules.productos.schemas import (
+    CupoCanalVista,
+    CuposSubProducto,
     Producto,
     ProductoCreate,
     ProductoUpdate,
+    RestriccionesSubProducto,
+    RestriccionesVista,
     SubProducto,
     SubProductoCreate,
     SubProductoUpdate,
+    VinculosEntrada,
+    VinculosVista,
 )
 
 _LECTURA = ["ADMIN", "ASESOR"]
@@ -75,6 +81,103 @@ def crear_producto(
 
 
 # Antes de /{id_producto}: si no, «subproductos» se tomaría como id de producto
+@router.get(
+    "/subproductos/{id_sub_producto}/vinculos",
+    operation_id="PRDSubVinculos",
+    response_model=VinculosVista,
+    openapi_extra={"x-roles": _LECTURA},
+)
+def obtener_vinculos_subproducto(
+    id_sub_producto: IdPath, _: Lector, conn: Db
+) -> VinculosVista:
+    """Tasas, comisiones, seguros y amortización del subproducto, y los del producto."""
+    return vinculos.obtener(conn, "subproducto", id_sub_producto)
+
+
+@router.put(
+    "/subproductos/{id_sub_producto}/vinculos",
+    operation_id="PRDSubVinculosGuardar",
+    response_model=VinculosVista,
+    openapi_extra={"x-roles": _ESCRITURA},
+)
+def guardar_vinculos_subproducto(
+    id_sub_producto: IdPath,
+    payload: VinculosEntrada,
+    request: Request,
+    usuario: Administrador,
+    conn: Db,
+) -> VinculosVista:
+    return vinculos.guardar(
+        conn,
+        "subproducto",
+        id_sub_producto,
+        payload,
+        usuario,
+        ip_cliente(request.scope),
+    )
+
+
+@router.get(
+    "/subproductos/{id_sub_producto}/cupos",
+    operation_id="PRDSubCupos",
+    response_model=list[CupoCanalVista],
+    openapi_extra={"x-roles": _LECTURA},
+)
+def listar_cupos(id_sub_producto: IdPath, _: Lector, conn: Db) -> list[CupoCanalVista]:
+    """Cuentas y tarjetas: máximos por canal (diario, mensual, por transacción, número)."""
+    return service.listar_cupos(conn, id_sub_producto)
+
+
+@router.put(
+    "/subproductos/{id_sub_producto}/cupos",
+    operation_id="PRDSubCuposGuardar",
+    response_model=list[CupoCanalVista],
+    openapi_extra={"x-roles": _ESCRITURA},
+)
+def guardar_cupos(
+    id_sub_producto: IdPath,
+    payload: CuposSubProducto,
+    request: Request,
+    usuario: Administrador,
+    conn: Db,
+) -> list[CupoCanalVista]:
+    """Reemplaza los canales habilitados y sus máximos."""
+    return service.guardar_cupos(
+        conn, id_sub_producto, payload, usuario, ip_cliente(request.scope)
+    )
+
+
+@router.get(
+    "/subproductos/{id_sub_producto}/restricciones",
+    operation_id="PRDSubRestricciones",
+    response_model=RestriccionesVista,
+    openapi_extra={"x-roles": _LECTURA},
+)
+def obtener_restricciones(
+    id_sub_producto: IdPath, _: Lector, conn: Db
+) -> RestriccionesVista:
+    """Cuentas: días sin retiros desde la apertura y saldo mínimo."""
+    return service.obtener_restricciones(conn, id_sub_producto)
+
+
+@router.put(
+    "/subproductos/{id_sub_producto}/restricciones",
+    operation_id="PRDSubRestriccionesGuardar",
+    response_model=RestriccionesVista,
+    openapi_extra={"x-roles": _ESCRITURA},
+)
+def guardar_restricciones(
+    id_sub_producto: IdPath,
+    payload: RestriccionesSubProducto,
+    request: Request,
+    usuario: Administrador,
+    conn: Db,
+) -> RestriccionesVista:
+    return service.guardar_restricciones(
+        conn, id_sub_producto, payload, usuario, ip_cliente(request.scope)
+    )
+
+
 @router.patch(
     "/subproductos/{id_sub_producto}",
     operation_id="PRDSubEditar",
@@ -127,4 +230,35 @@ def crear_subproducto(
 ) -> SubProducto:
     return service.crear_subproducto(
         conn, id_producto, payload, usuario, ip_cliente(request.scope)
+    )
+
+
+@router.get(
+    "/{id_producto}/vinculos",
+    operation_id="PRDVinculos",
+    response_model=VinculosVista,
+    openapi_extra={"x-roles": _LECTURA},
+)
+def obtener_vinculos_producto(
+    id_producto: IdPath, _: Lector, conn: Db
+) -> VinculosVista:
+    """Lo vinculado al producto aplica a todos sus subproductos."""
+    return vinculos.obtener(conn, "producto", id_producto)
+
+
+@router.put(
+    "/{id_producto}/vinculos",
+    operation_id="PRDVinculosGuardar",
+    response_model=VinculosVista,
+    openapi_extra={"x-roles": _ESCRITURA},
+)
+def guardar_vinculos_producto(
+    id_producto: IdPath,
+    payload: VinculosEntrada,
+    request: Request,
+    usuario: Administrador,
+    conn: Db,
+) -> VinculosVista:
+    return vinculos.guardar(
+        conn, "producto", id_producto, payload, usuario, ip_cliente(request.scope)
     )

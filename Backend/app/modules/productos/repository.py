@@ -201,3 +201,172 @@ def actualizar_subproducto(
         ),
         _parametros(_CAMPOS_SUBPRODUCTO, id_sub, cambios),
     )
+
+
+# ---------- Cupos por canal ----------
+
+
+def listar_cupos(conn: Connection, id_sub: int) -> list[dict[str, Any]]:
+    """Cada canal activo (o ya habilitado), con los máximos del subproducto."""
+    return _rows(
+        conn,
+        """
+        SELECT c.IdCanal AS id_canal, c.CodigoCanal AS codigo_canal,
+               c.NombreCanal AS nombre_canal,
+               CAST(CASE WHEN p.IdProductoCanalCupo IS NULL THEN 0 ELSE 1 END AS bit)
+                   AS habilitado,
+               p.CupoDiarioMaximo AS cupo_diario_maximo,
+               p.CupoMensualMaximo AS cupo_mensual_maximo,
+               p.MontoMaxTransaccion AS monto_max_transaccion,
+               p.MaxTransaccionesDia AS max_transacciones_dia
+        FROM Canal.Canal AS c
+        LEFT JOIN ProductosFinancieros.ProductoCanalCupo AS p
+          ON p.IdCanal = c.IdCanal AND p.IdSubProducto = :id
+        WHERE c.Estado = 'A' OR p.IdProductoCanalCupo IS NOT NULL
+        ORDER BY c.NombreCanal
+        """,
+        {"id": id_sub},
+    )
+
+
+def canales_activos(conn: Connection) -> set[int]:
+    return {
+        int(i)
+        for i in conn.execute(
+            text("SELECT IdCanal FROM Canal.Canal WHERE Estado = 'A'")
+        ).scalars()
+    }
+
+
+def cupos_personalizados_maximos(
+    conn: Connection, id_sub: int
+) -> dict[int, dict[str, Any]]:
+    """Por canal, lo más alto que ya personalizaron las cuentas del subproducto (CTA-08)."""
+    return {
+        int(f["id_canal"]): f
+        for f in _rows(
+            conn,
+            """
+            SELECT cc.IdCanal AS id_canal, MAX(cc.CupoDiario) AS cupo_diario,
+                   MAX(cc.CupoMensual) AS cupo_mensual,
+                   MAX(cc.MontoMaxTransaccion) AS monto_max_transaccion
+            FROM Canal.CanalCupoClienteCustom AS cc WITH (HOLDLOCK)
+            JOIN Cuentas.Cuenta AS cu ON cu.IdCuenta = cc.IdCuenta
+            WHERE cu.IdSubProducto = :id AND cc.Estado = 'A'
+            GROUP BY cc.IdCanal
+            """,
+            {"id": id_sub},
+        )
+    }
+
+
+def guardar_cupos(conn: Connection, id_sub: int, cupos: list[dict[str, Any]]) -> None:
+    """Quita los canales que no vienen y crea o actualiza los que sí (en la transacción)."""
+    actuales = {
+        int(i)
+        for i in conn.execute(
+            text(
+                "SELECT IdCanal FROM ProductosFinancieros.ProductoCanalCupo"
+                " WITH (UPDLOCK, HOLDLOCK) WHERE IdSubProducto = :id"
+            ),
+            {"id": id_sub},
+        ).scalars()
+    }
+    for id_canal in actuales - {c["id_canal"] for c in cupos}:
+        conn.execute(
+            text(
+                "DELETE FROM ProductosFinancieros.ProductoCanalCupo"
+                " WHERE IdSubProducto = :id AND IdCanal = :canal"
+            ),
+            {"id": id_sub, "canal": id_canal},
+        )
+    for cupo in cupos:
+        conn.execute(
+            text(
+                """
+                MERGE ProductosFinancieros.ProductoCanalCupo WITH (HOLDLOCK) AS d
+                USING (SELECT :id AS IdSubProducto, :id_canal AS IdCanal) AS o
+                   ON d.IdSubProducto = o.IdSubProducto AND d.IdCanal = o.IdCanal
+                WHEN MATCHED THEN UPDATE SET
+                    CupoDiarioMaximo = :cupo_diario_maximo,
+                    CupoMensualMaximo = :cupo_mensual_maximo,
+                    MontoMaxTransaccion = :monto_max_transaccion,
+                    MaxTransaccionesDia = :max_transacciones_dia
+                WHEN NOT MATCHED THEN INSERT (IdSubProducto, IdCanal, CupoDiarioMaximo,
+                    CupoMensualMaximo, MontoMaxTransaccion, MaxTransaccionesDia)
+                    VALUES (:id, :id_canal, :cupo_diario_maximo, :cupo_mensual_maximo,
+                            :monto_max_transaccion, :max_transacciones_dia);
+                """
+            ),
+            {"id": id_sub, **cupo},
+        )
+
+
+# ---------- Restricciones de cuenta ----------
+
+
+def obtener_restricciones(conn: Connection, id_sub: int) -> dict[str, Any]:
+    filas = _rows(
+        conn,
+        """
+        SELECT TipoRestriccion AS tipo, Dias AS dias, Monto AS monto
+        FROM ProductosFinancieros.ProductoRestriccion
+        WHERE IdSubProducto = :id AND Estado = 'A'
+        """,
+        {"id": id_sub},
+    )
+    por_tipo = {f["tipo"]: f for f in filas}
+    return {
+        "dias_sin_retiros": por_tipo.get("SIN_RETIROS", {}).get("dias"),
+        "saldo_minimo": por_tipo.get("SALDO_MINIMO", {}).get("monto"),
+    }
+
+
+def guardar_restriccion(
+    conn: Connection,
+    id_sub: int,
+    tipo: str,
+    dias: int | None,
+    monto: Any,
+    descripcion: str,
+    id_usuario: int,
+) -> None:
+    """Una fila por tipo (UX_ProductoRestriccion_Activa): se actualiza, se activa o se
+    inactiva; nunca se borra. Sin valor = inactiva."""
+    activa = dias is not None or monto is not None
+    parametros = {
+        "id": id_sub,
+        "tipo": tipo,
+        "activa": activa,
+        "dias": dias,
+        "monto": monto,
+        "descripcion": descripcion,
+        "usuario": id_usuario,
+    }
+    actualizadas = conn.execute(
+        text(
+            """
+            UPDATE ProductosFinancieros.ProductoRestriccion WITH (UPDLOCK, HOLDLOCK)
+            SET Dias = CASE WHEN :activa = 1 THEN :dias ELSE Dias END,
+                Monto = CASE WHEN :activa = 1 THEN :monto ELSE Monto END,
+                Descripcion = CASE WHEN :activa = 1 THEN :descripcion ELSE Descripcion END,
+                Estado = CASE WHEN :activa = 1 THEN 'A' ELSE 'I' END,
+                RegistradoPor = :usuario
+            WHERE IdSubProducto = :id AND TipoRestriccion = :tipo
+            """
+        ),
+        parametros,
+    ).rowcount
+    if actualizadas == 0 and activa:
+        conn.execute(
+            text(
+                """
+                INSERT INTO ProductosFinancieros.ProductoRestriccion (IdSubProducto,
+                    TipoRestriccion, Dias, Monto, Descripcion, VigenciaDesde, Estado,
+                    RegistradoPor)
+                VALUES (:id, :tipo, :dias, :monto, :descripcion,
+                        CAST(SYSUTCDATETIME() AS date), 'A', :usuario)
+                """
+            ),
+            parametros,
+        )

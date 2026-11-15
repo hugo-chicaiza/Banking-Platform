@@ -320,3 +320,158 @@ def test_producto_inexistente(bd, admin):
 
 def test_parametros_de_consulta_desconocidos(bd, asesor):
     assert asesor.get(f"{BASE}?estado=A").status_code == 400
+
+
+def _sub_de_credito(admin: TestClient) -> int:
+    id_ = admin.post(
+        BASE,
+        json={
+            "codigoProducto": "CRE009",
+            "nombreProducto": "Crédito de consumo",
+            "tipoProducto": "Credito",
+            "idTipoCredito": 1,
+        },
+    ).json()["idProducto"]
+    return admin.post(
+        f"{BASE}/{id_}/subproductos",
+        json={
+            "codigoSubProducto": "CRE009-01",
+            "nombreSubProducto": "Consumo hasta 10000",
+        },
+    ).json()["idSubProducto"]
+
+
+# ---------- Cupos por canal y restricciones (cuentas y tarjetas) ----------
+
+VENTANILLA = {
+    "idCanal": 1,
+    "cupoDiarioMaximo": 10000,
+    "cupoMensualMaximo": 50000,
+    "montoMaxTransaccion": 5000,
+    "maxTransaccionesDia": 10,
+}
+
+
+@pytest.fixture
+def cupos(bd: BdFalsa, monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
+    estado: dict[str, Any] = {"cupos": {}, "personalizados": {}, "restricciones": {}}
+
+    def listar(_c: Any, _id: int) -> list[dict[str, Any]]:
+        return [
+            {
+                "id_canal": i,
+                "codigo_canal": codigo,
+                "nombre_canal": codigo.title(),
+                "habilitado": i in estado["cupos"],
+                **estado["cupos"].get(i, {}),
+            }
+            for i, codigo in ((1, "VENT"), (2, "ATM"))
+        ]
+
+    def guardar(_c: Any, _id: int, lista: list[dict[str, Any]]) -> None:
+        estado["cupos"] = {
+            c["id_canal"]: {k: v for k, v in c.items() if k != "id_canal"}
+            for c in lista
+        }
+
+    def guardar_restriccion(
+        _c: Any, _id: int, tipo: str, dias: Any, monto: Any, _d: str, _u: int
+    ) -> None:
+        estado["restricciones"][tipo] = dias if tipo == "SIN_RETIROS" else monto
+
+    monkeypatch.setattr(repo, "listar_cupos", listar)
+    monkeypatch.setattr(repo, "guardar_cupos", guardar)
+    monkeypatch.setattr(repo, "canales_activos", lambda _c: {1, 2})
+    monkeypatch.setattr(
+        repo, "cupos_personalizados_maximos", lambda _c, _i: estado["personalizados"]
+    )
+    monkeypatch.setattr(repo, "guardar_restriccion", guardar_restriccion)
+    monkeypatch.setattr(
+        repo,
+        "obtener_restricciones",
+        lambda _c, _i: {
+            "dias_sin_retiros": estado["restricciones"].get("SIN_RETIROS"),
+            "saldo_minimo": estado["restricciones"].get("SALDO_MINIMO"),
+        },
+    )
+    return estado
+
+
+def _sub_de_cuenta(admin: TestClient) -> int:
+    id_ = admin.post(BASE, json=AHORRO).json()["idProducto"]
+    return admin.post(
+        f"{BASE}/{id_}/subproductos",
+        json={"codigoSubProducto": "AHO002-PN", "nombreSubProducto": "Natural"},
+    ).json()["idSubProducto"]
+
+
+def test_admin_habilita_canales_y_asesor_consulta(bd, cupos, admin, asesor):
+    sub = _sub_de_cuenta(admin)
+    url = f"{BASE}/subproductos/{sub}/cupos"
+    assert asesor.put(url, json={"cupos": [VENTANILLA]}).status_code == 403
+    r = admin.put(url, json={"cupos": [VENTANILLA]})
+    assert r.status_code == 200, r.text
+    por_canal = {c["codigoCanal"]: c for c in r.json()}
+    assert (
+        por_canal["VENT"]["habilitado"]
+        and por_canal["VENT"]["cupoDiarioMaximo"] == 10000
+    )
+    assert not por_canal["ATM"]["habilitado"]
+    assert asesor.get(url).status_code == 200
+
+
+@pytest.mark.parametrize(
+    ("cambio", "status"),
+    [
+        ({"cupoMensualMaximo": 100}, 400),  # mensual menor que el diario
+        ({"montoMaxTransaccion": 20000}, 400),  # supera el diario
+        ({"maxTransaccionesDia": 0}, 400),
+        ({"idCanal": 9}, 422),  # canal inexistente
+    ],
+)
+def test_cupos_invalidos(bd, cupos, admin, cambio, status):
+    sub = _sub_de_cuenta(admin)
+    r = admin.put(
+        f"{BASE}/subproductos/{sub}/cupos", json={"cupos": [{**VENTANILLA, **cambio}]}
+    )
+    assert r.status_code in (status, 422), r.text
+    assert cupos["cupos"] == {}
+
+
+def test_no_baja_el_maximo_bajo_un_cupo_personalizado(bd, cupos, admin):
+    sub = _sub_de_cuenta(admin)
+    cupos["personalizados"] = {
+        1: {"cupo_diario": 8000, "cupo_mensual": 9000, "monto_max_transaccion": 100}
+    }
+    url = f"{BASE}/subproductos/{sub}/cupos"
+    r = admin.put(
+        url,
+        json={
+            "cupos": [
+                {**VENTANILLA, "cupoDiarioMaximo": 6000, "montoMaxTransaccion": 1000}
+            ]
+        },
+    )
+    assert r.status_code == 409 and r.json()["code"] == "CUPO_MENOR_QUE_PERSONALIZADO"
+    assert admin.put(url, json={"cupos": []}).status_code == 409  # quitar el canal
+    assert admin.put(url, json={"cupos": [VENTANILLA]}).status_code == 200
+
+
+def test_cupos_no_aplican_a_creditos(bd, cupos, admin):
+    sub = _sub_de_credito(admin)
+    r = admin.get(f"{BASE}/subproductos/{sub}/cupos")
+    assert r.status_code == 422 and r.json()["code"] == "CAMPO_NO_APLICA"
+
+
+def test_restricciones_de_cuenta(bd, cupos, admin, asesor):
+    sub = _sub_de_cuenta(admin)
+    url = f"{BASE}/subproductos/{sub}/restricciones"
+    r = admin.put(url, json={"diasSinRetiros": 30, "saldoMinimo": 100})
+    assert r.status_code == 200 and r.json() == {
+        "diasSinRetiros": 30,
+        "saldoMinimo": 100,
+    }
+    r = admin.put(url, json={"diasSinRetiros": None, "saldoMinimo": 100})
+    assert r.json()["diasSinRetiros"] is None
+    assert asesor.put(url, json={}).status_code == 403
+    assert admin.put(url, json={"saldoMinimo": 0}).status_code in (400, 422)

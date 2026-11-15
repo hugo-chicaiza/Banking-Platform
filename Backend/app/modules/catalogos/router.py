@@ -1,6 +1,6 @@
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, Path, Query
+from fastapi import APIRouter, Depends, Path, Query, Request
 from sqlalchemy import Connection
 
 from app.core.api.errors import (
@@ -9,26 +9,34 @@ from app.core.api.errors import (
     problema,
     solo_parametros,
 )
+from app.core.api.middleware import ip_cliente
 from app.core.database.db import cooperativa
-from app.core.security.auth import require_auth
-from app.modules.catalogos import repository
+from app.core.security.auth import Usuario, require_auth, require_roles
+from app.modules.catalogos import administracion, repository, service
 from app.modules.catalogos.schemas import (
     ActividadEconomica,
     Agencia,
     Canal,
     Ciudad,
+    Comision,
     Denominacion,
     Pais,
     Producto,
     Red,
+    Seguro,
+    SistemaAmortizacion,
+    TasaInteres,
+    TasaInteresCreate,
     TipoAntecedente,
     TipoCredito,
     TipoMovimientoCaja,
     TipoProducto,
+    TipoTasa,
 )
 from app.modules.catalogos.subproductos import TipoTarjeta
 
-# Catálogos de solo lectura: sin service.py porque no hay reglas de negocio
+# Catálogos de lectura para cualquier usuario autenticado. Solo las tasas de interés se
+# crean aquí (ADMIN); sus reglas están en service.py
 router = APIRouter(
     prefix="/catalogos",
     tags=["catalogos"],
@@ -62,6 +70,101 @@ def listar_canales(conn: Db) -> Any:
 @router.get("/redes", response_model=list[Red])
 def listar_redes(conn: Db) -> Any:
     return repository.listar_redes(conn)
+
+
+@router.get("/sistemas-amortizacion", response_model=list[SistemaAmortizacion])
+def listar_sistemas_amortizacion(conn: Db) -> Any:
+    return repository.listar_sistemas_amortizacion(conn)
+
+
+@router.get(
+    "/tasas-interes",
+    response_model=list[TasaInteres],
+    dependencies=[Depends(solo_parametros("idTipoCredito", "tipoTasa"))],
+)
+def listar_tasas_interes(
+    conn: Db,
+    id_tipo_credito: Annotated[
+        int | None, Query(alias="idTipoCredito", ge=1, le=2_147_483_647)
+    ] = None,
+    tipo_tasa: Annotated[TipoTasa | None, Query(alias="tipoTasa")] = None,
+) -> Any:
+    """Tasas activas (vigentes, futuras y vencidas); `vigente` dice cuáles aplican hoy."""
+    return service.listar_tasas_interes(conn, id_tipo_credito, tipo_tasa)
+
+
+@router.get("/comisiones", response_model=list[Comision])
+def listar_comisiones(conn: Db) -> Any:
+    """Comisiones y recargos activos, para vincularlos a productos y subproductos."""
+    return repository.listar_comisiones(conn)
+
+
+@router.get("/seguros", response_model=list[Seguro])
+def listar_seguros(conn: Db) -> Any:
+    return repository.listar_seguros(conn)
+
+
+@router.post(
+    "/tasas-interes",
+    response_model=TasaInteres,
+    status_code=201,
+    openapi_extra={"x-roles": ["ADMIN"]},
+)
+def crear_tasa_interes(
+    payload: TasaInteresCreate,
+    request: Request,
+    usuario: Annotated[Usuario, Depends(require_roles("ADMIN"))],
+    conn: Db,
+) -> Any:
+    """Las tasas no se editan: una nueva con su vigencia reemplaza a la anterior."""
+    return service.crear_tasa_interes(conn, payload, usuario, ip_cliente(request.scope))
+
+
+_ADMIN_LECTURA = ("ADMIN", "ASESOR")
+Clave = Annotated[str, Path(pattern=r"^[a-z-]{3,40}$")]
+IdRegistro = Annotated[str, Path(pattern=r"^[A-Za-z0-9]{1,15}$")]
+
+
+@router.get(
+    "/administracion",
+    openapi_extra={"x-roles": list(_ADMIN_LECTURA)},
+)
+def listar_catalogos_administrables(
+    _: Annotated[Usuario, Depends(require_roles(*_ADMIN_LECTURA))],
+) -> list[dict[str, Any]]:
+    """Catálogos que se administran y la descripción de sus campos."""
+    return administracion.descriptores()
+
+
+@router.get(
+    "/administracion/{clave}",
+    openapi_extra={"x-roles": list(_ADMIN_LECTURA)},
+)
+def listar_registros(
+    clave: Clave,
+    _: Annotated[Usuario, Depends(require_roles(*_ADMIN_LECTURA))],
+    conn: Db,
+) -> list[dict[str, Any]]:
+    """Todas las filas del catálogo, activas e inactivas."""
+    return administracion.listar(conn, clave)
+
+
+@router.patch(
+    "/administracion/{clave}/{id_registro}",
+    openapi_extra={"x-roles": ["ADMIN"]},
+)
+def actualizar_registro(
+    clave: Clave,
+    id_registro: IdRegistro,
+    payload: dict[str, Any],
+    request: Request,
+    usuario: Annotated[Usuario, Depends(require_roles("ADMIN"))],
+    conn: Db,
+) -> dict[str, Any]:
+    """Edita los campos editables o el estado (A/I). Nada se borra."""
+    return administracion.actualizar(
+        conn, clave, id_registro, payload, usuario, ip_cliente(request.scope)
+    )
 
 
 @router.get("/agencias", response_model=list[Agencia])

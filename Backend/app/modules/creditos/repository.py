@@ -30,6 +30,7 @@ def tasas_vigentes(
                MontoMaximo AS monto_maximo
         FROM Credito.TasaInteres
         WHERE IdTipoCredito = :id_tipo_credito
+          AND Estado = 'A'
           AND VigenciaDesde <= :hoy
           AND (VigenciaHasta IS NULL OR VigenciaHasta >= :hoy)
         ORDER BY IdTasaInteres

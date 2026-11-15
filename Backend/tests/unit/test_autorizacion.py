@@ -65,6 +65,10 @@ ROLES_POR_RUTA: dict[tuple[str, str], tuple[str, ...]] = {
             "paises",
             "paises/{codigo_pais}/ciudades",
             "redes",
+            "sistemas-amortizacion",
+            "tasas-interes",
+            "comisiones",
+            "seguros",
             "actividades-economicas",
             "tipos-antecedente",
             "denominaciones",
@@ -258,6 +262,29 @@ ROLES_POR_RUTA: dict[tuple[str, str], tuple[str, ...]] = {
     ("PATCH", "/api/v1/productos/{id_producto}"): ("ADMIN",),
     ("POST", "/api/v1/productos/{id_producto}/subproductos"): ("ADMIN",),
     ("PATCH", "/api/v1/productos/subproductos/{id_sub_producto}"): ("ADMIN",),
+    ("GET", "/api/v1/productos/subproductos/{id_sub_producto}/cupos"): (
+        "ADMIN",
+        "ASESOR",
+    ),
+    ("PUT", "/api/v1/productos/subproductos/{id_sub_producto}/cupos"): ("ADMIN",),
+    ("GET", "/api/v1/productos/subproductos/{id_sub_producto}/vinculos"): (
+        "ADMIN",
+        "ASESOR",
+    ),
+    ("PUT", "/api/v1/productos/subproductos/{id_sub_producto}/vinculos"): ("ADMIN",),
+    ("GET", "/api/v1/productos/{id_producto}/vinculos"): ("ADMIN", "ASESOR"),
+    ("PUT", "/api/v1/productos/{id_producto}/vinculos"): ("ADMIN",),
+    ("GET", "/api/v1/productos/subproductos/{id_sub_producto}/restricciones"): (
+        "ADMIN",
+        "ASESOR",
+    ),
+    ("PUT", "/api/v1/productos/subproductos/{id_sub_producto}/restricciones"): (
+        "ADMIN",
+    ),
+    ("POST", "/api/v1/catalogos/tasas-interes"): ("ADMIN",),
+    ("GET", "/api/v1/catalogos/administracion"): ("ADMIN", "ASESOR"),
+    ("GET", "/api/v1/catalogos/administracion/{clave}"): ("ADMIN", "ASESOR"),
+    ("PATCH", "/api/v1/catalogos/administracion/{clave}/{id_registro}"): ("ADMIN",),
 }
 
 
