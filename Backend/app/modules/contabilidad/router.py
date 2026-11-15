@@ -7,7 +7,13 @@ from app.core.api.errors import RESPUESTAS_ERROR, ProblemDetailsRoute, solo_para
 from app.core.database.db import cooperativa
 from app.core.security.auth import require_auth, require_roles
 from app.modules.contabilidad import service
-from app.modules.contabilidad.schemas import CuentaContable, FechaContable
+from app.modules.contabilidad.schemas import (
+    INT32_MAX,
+    Asiento,
+    CuentaContable,
+    FechaContable,
+    PageAsiento,
+)
 
 router = APIRouter(
     prefix="/contabilidad",
@@ -71,9 +77,83 @@ def listar_cuentas_contables(
 ) -> Any:
     """CON-03 · Plan de cuentas (CUC), con filtro por texto y por imputable.
 
-    Implementación parcial: responde 501 hasta que se agregue la consulta a la BD.
+    Lista ordenada por código; la jerarquía va en idCuentaSuperior.
     """
     return service.listar_cuentas_contables(conn, q, imputable)
 
 
 router.include_router(_cuentas_contables_router)
+
+
+# ---------------------------------------------------------------------------
+# AC-03 · Asientos contables (consulta)
+# ---------------------------------------------------------------------------
+# Roles: CONTADOR, AUDITOR, ADMIN
+_ROLES_ASIENTOS = ["CONTADOR", "AUDITOR", "ADMIN"]
+_asientos_router = APIRouter(
+    route_class=ProblemDetailsRoute,
+    responses=RESPUESTAS_ERROR,
+    dependencies=[Depends(require_roles(*_ROLES_ASIENTOS))],
+)
+# Origen y estado: texto libre (se normaliza en el servicio), no un enum fijo,
+# porque pueden aparecer valores nuevos.
+
+
+@_asientos_router.get(
+    "/asientos",
+    operation_id="CON04",
+    response_model=PageAsiento,
+    dependencies=[
+        Depends(
+            solo_parametros(
+                "fecha", "origen", "idAgencia", "estado", "page", "pageSize", "sort"
+            )
+        )
+    ],
+    openapi_extra={"x-roles": _ROLES_ASIENTOS},
+)
+def listar_asientos(
+    conn: Db,
+    fecha: Annotated[
+        str | None, Query(max_length=10, description="Fecha del asiento, YYYY-MM-DD")
+    ] = None,
+    origen: Annotated[str | None, Query(min_length=1, max_length=20)] = None,
+    id_agencia: Annotated[
+        str | None, Query(alias="idAgencia", min_length=3, max_length=3)
+    ] = None,
+    estado: Annotated[str | None, Query(min_length=1, max_length=20)] = None,
+    page: Annotated[int, Query(ge=1, le=INT32_MAX)] = 1,
+    page_size: Annotated[int, Query(alias="pageSize", ge=1, le=100)] = 20,
+    sort: Annotated[
+        str | None, Query(max_length=40, description="campo,asc|desc")
+    ] = None,
+) -> Any:
+    """CON-04 · Asientos paginados; por defecto fechaAsiento desc. Sin detalle."""
+    return service.listar_asientos(
+        conn,
+        fecha=fecha,
+        origen=origen,
+        id_agencia=id_agencia,
+        estado=estado,
+        page=page,
+        page_size=page_size,
+        sort=sort,
+    )
+
+
+@_asientos_router.get(
+    "/asientos/{idAsiento}",
+    operation_id="CON05",
+    response_model=Asiento,
+    dependencies=[Depends(solo_parametros())],
+    openapi_extra={"x-roles": _ROLES_ASIENTOS},
+)
+def obtener_asiento(
+    conn: Db,
+    id_asiento: Annotated[int, Path(alias="idAsiento", ge=1, le=INT32_MAX)],
+) -> Any:
+    """CON-05 · Asiento con su detalle (líneas ordenadas por IdMovimientoContable)."""
+    return service.obtener_asiento(conn, id_asiento)
+
+
+router.include_router(_asientos_router)

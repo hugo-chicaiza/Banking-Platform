@@ -31,3 +31,47 @@ class CuentaContable(CamelModel):
     es_imputable: bool  # solo las imputables reciben movimientos
     saldo: Money
     estado: str
+
+
+# CON-04 / CON-05 · Asientos contables
+
+INT32_MAX = 2_147_483_647
+
+
+class MovimientoAsiento(CamelModel):
+    """Una línea del asiento (Contabilidad.MovimientosContables)."""
+
+    id_movimiento_contable: int
+    id_cuenta_contable: int
+    codigo_cuenta: str
+    tipo_movimiento: str  # "DEBITO" o "CREDITO"
+    monto: Money
+    id_transaccion: int | None
+    id_agencia: str | None
+
+
+class Asiento(CamelModel):
+    """Cabecera de Contabilidad.AsientoContable con su detalle.
+
+    En CON-04 `detalle` va vacío; el detalle completo se pide a CON-05.
+    """
+
+    id_asiento_contable: int
+    numero_asiento: str
+    fecha_asiento: date
+    id_tipo_asiento: int
+    origen: str
+    concepto: str
+    total_debito: Money
+    total_credito: Money
+    estado: str
+    id_asiento_reversion: int | None
+    id_agencia: str
+    detalle: list[MovimientoAsiento]
+
+
+class PageAsiento(CamelModel):
+    items: list[Asiento]
+    page: int
+    page_size: int
+    total: int
