@@ -241,7 +241,8 @@ def tasas_de_tipo_credito(conn: Connection, id_tipo_credito: int) -> set[int]:
         int(t)
         for t in conn.execute(
             text(
-                "SELECT IdTasaInteres FROM Credito.TasaInteres WHERE IdTipoCredito = :t"
+                "SELECT IdTasaInteres FROM Credito.TasaInteres"
+                " WHERE IdTipoCredito = :t AND Estado = 'A'"
             ),
             {"t": id_tipo_credito},
         ).scalars()

@@ -13,13 +13,14 @@ def _rows(
 
 
 def listar_paises(conn: Connection) -> list[dict[str, Any]]:
-    # CAT-01: la tabla no tiene Estado
+    # CAT-01: solo activos (Estado desde la migración 20261116)
     return _rows(
         conn,
         """
         SELECT CodigoPais AS codigo_pais, CodigoNumerico AS codigo_numerico,
                NombrePais AS nombre_pais
         FROM Catalogo.Paises
+        WHERE Estado = 'A'
         ORDER BY NombrePais
         """,
     )
@@ -40,13 +41,14 @@ def listar_denominaciones(conn: Connection) -> list[dict[str, Any]]:
 
 
 def listar_tipos_movimiento_caja(conn: Connection) -> list[dict[str, Any]]:
-    # CAT-10: la tabla no tiene Estado
+    # CAT-10: solo activos (Estado desde la migración 20261116)
     return _rows(
         conn,
         """
         SELECT IdTipoMovimientoCaja AS id_tipo_movimiento_caja, Codigo AS codigo,
                Descripcion AS descripcion, Naturaleza AS naturaleza
         FROM Caja.TipoMovimientoCaja
+        WHERE Estado = 'A'
         ORDER BY Naturaleza, Codigo
         """,
     )
@@ -173,7 +175,7 @@ def listar_tasas_interes(
         conn,
         _TASAS
         + """
-        WHERE (:tipo IS NULL OR t.IdTipoCredito = :tipo)
+        WHERE t.Estado = 'A' AND (:tipo IS NULL OR t.IdTipoCredito = :tipo)
         ORDER BY tc.Nombre, t.VigenciaDesde DESC, t.MontoMinimo
         """,
         {"hoy": hoy, "tipo": id_tipo_credito},
@@ -198,7 +200,7 @@ def tasas_que_se_solapan(conn: Connection, datos: dict[str, Any]) -> list[int]:
             """
             SELECT IdTasaInteres AS id
             FROM Credito.TasaInteres WITH (UPDLOCK, HOLDLOCK)
-            WHERE IdTipoCredito = :id_tipo_credito
+            WHERE IdTipoCredito = :id_tipo_credito AND Estado = 'A'
               AND VigenciaDesde <= ISNULL(:vigencia_hasta, '9999-12-31')
               AND :vigencia_desde <= ISNULL(VigenciaHasta, '9999-12-31')
               AND ISNULL(MontoMinimo, 0) <= ISNULL(:monto_maximo, 9999999999999999)
@@ -330,7 +332,7 @@ def listar_ciudades(
         SELECT IdCiudad AS id_ciudad, CodigoPais AS codigo_pais,
                Nombre AS nombre, Provincia AS provincia
         FROM Catalogo.Ciudad
-        WHERE CodigoPais = :codigo
+        WHERE CodigoPais = :codigo AND Estado = 'A'
     """
     params: dict[str, Any] = {"codigo": codigo_pais}
     if q:

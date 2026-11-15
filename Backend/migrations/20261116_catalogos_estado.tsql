@@ -1,0 +1,37 @@
+/* T-SQL (SQL Server). Estado A/I en los catálogos que no lo tenían, para poder
+   desactivarlos desde Productos y Catálogos › Catálogos sin borrar filas.
+   Todas las filas existentes quedan Activas (DEFAULT 'A'): nada cambia hasta que
+   un ADMIN desactive algo. Ejecutar en CooperativaDB ANTES de desplegar el backend
+   que filtra por Estado. Reejecutable. Usar sqlcmd -b o equivalente.
+   Requiere antes 20261115_subproducto_parametros.tsql. */
+SET XACT_ABORT ON;
+GO
+
+IF COL_LENGTH('Catalogo.Paises', 'Estado') IS NULL
+    ALTER TABLE Catalogo.Paises ADD Estado char(1) NOT NULL
+        CONSTRAINT DF_Paises_Estado DEFAULT ('A')
+        CONSTRAINT CK_Paises_Estado CHECK (Estado IN ('A', 'I'));
+GO
+IF COL_LENGTH('Catalogo.Ciudad', 'Estado') IS NULL
+    ALTER TABLE Catalogo.Ciudad ADD Estado char(1) NOT NULL
+        CONSTRAINT DF_Ciudad_Estado DEFAULT ('A')
+        CONSTRAINT CK_Ciudad_Estado CHECK (Estado IN ('A', 'I'));
+GO
+IF COL_LENGTH('Caja.TipoMovimientoCaja', 'Estado') IS NULL
+    ALTER TABLE Caja.TipoMovimientoCaja ADD Estado char(1) NOT NULL
+        CONSTRAINT DF_TipoMovimientoCaja_Estado DEFAULT ('A')
+        CONSTRAINT CK_TipoMovimientoCaja_Estado CHECK (Estado IN ('A', 'I'));
+GO
+/* Una tasa inactiva no se ofrece ni la usa la simulación; los créditos ya
+   otorgados guardan su propia tasa (CreditoSolicitud.TasaNominalAnual). */
+IF COL_LENGTH('Credito.TasaInteres', 'Estado') IS NULL
+    ALTER TABLE Credito.TasaInteres ADD Estado char(1) NOT NULL
+        CONSTRAINT DF_TasaInteres_Estado DEFAULT ('A')
+        CONSTRAINT CK_TasaInteres_Estado CHECK (Estado IN ('A', 'I'));
+GO
+
+/* Vuelta atrás (solo si nadie desactivó nada todavía):
+   ALTER TABLE Credito.TasaInteres DROP CONSTRAINT CK_TasaInteres_Estado, DF_TasaInteres_Estado, COLUMN Estado;
+   ALTER TABLE Caja.TipoMovimientoCaja DROP CONSTRAINT CK_TipoMovimientoCaja_Estado, DF_TipoMovimientoCaja_Estado, COLUMN Estado;
+   ALTER TABLE Catalogo.Ciudad DROP CONSTRAINT CK_Ciudad_Estado, DF_Ciudad_Estado, COLUMN Estado;
+   ALTER TABLE Catalogo.Paises DROP CONSTRAINT CK_Paises_Estado, DF_Paises_Estado, COLUMN Estado; */

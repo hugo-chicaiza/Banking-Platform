@@ -12,7 +12,7 @@ from app.core.api.errors import (
 from app.core.api.middleware import ip_cliente
 from app.core.database.db import cooperativa
 from app.core.security.auth import Usuario, require_auth, require_roles
-from app.modules.catalogos import repository, service
+from app.modules.catalogos import administracion, repository, service
 from app.modules.catalogos.schemas import (
     ActividadEconomica,
     Agencia,
@@ -103,6 +103,53 @@ def crear_tasa_interes(
 ) -> Any:
     """Las tasas no se editan: una nueva con su vigencia reemplaza a la anterior."""
     return service.crear_tasa_interes(conn, payload, usuario, ip_cliente(request.scope))
+
+
+_ADMIN_LECTURA = ("ADMIN", "ASESOR")
+Clave = Annotated[str, Path(pattern=r"^[a-z-]{3,40}$")]
+IdRegistro = Annotated[str, Path(pattern=r"^[A-Za-z0-9]{1,15}$")]
+
+
+@router.get(
+    "/administracion",
+    openapi_extra={"x-roles": list(_ADMIN_LECTURA)},
+)
+def listar_catalogos_administrables(
+    _: Annotated[Usuario, Depends(require_roles(*_ADMIN_LECTURA))],
+) -> list[dict[str, Any]]:
+    """Catálogos que se administran y la descripción de sus campos."""
+    return administracion.descriptores()
+
+
+@router.get(
+    "/administracion/{clave}",
+    openapi_extra={"x-roles": list(_ADMIN_LECTURA)},
+)
+def listar_registros(
+    clave: Clave,
+    _: Annotated[Usuario, Depends(require_roles(*_ADMIN_LECTURA))],
+    conn: Db,
+) -> list[dict[str, Any]]:
+    """Todas las filas del catálogo, activas e inactivas."""
+    return administracion.listar(conn, clave)
+
+
+@router.patch(
+    "/administracion/{clave}/{id_registro}",
+    openapi_extra={"x-roles": ["ADMIN"]},
+)
+def actualizar_registro(
+    clave: Clave,
+    id_registro: IdRegistro,
+    payload: dict[str, Any],
+    request: Request,
+    usuario: Annotated[Usuario, Depends(require_roles("ADMIN"))],
+    conn: Db,
+) -> dict[str, Any]:
+    """Edita los campos editables o el estado (A/I). Nada se borra."""
+    return administracion.actualizar(
+        conn, clave, id_registro, payload, usuario, ip_cliente(request.scope)
+    )
 
 
 @router.get("/agencias", response_model=list[Agencia])
