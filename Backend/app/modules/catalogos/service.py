@@ -22,6 +22,16 @@ def hoy() -> date:
     return ahora_ecuador().date()
 
 
+def edad_en(nacimiento: date, dia: date | None = None) -> int:
+    """Años cumplidos a la fecha (hoy en Ecuador por defecto)."""
+    dia = dia or hoy()
+    return (
+        dia.year
+        - nacimiento.year
+        - ((dia.month, dia.day) < (nacimiento.month, nacimiento.day))
+    )
+
+
 def listar_tasas_interes(
     conn: Connection, id_tipo_credito: int | None, tipo_tasa: str | None = None
 ) -> list[TasaInteres]:

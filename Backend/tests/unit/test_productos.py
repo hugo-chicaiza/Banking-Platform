@@ -36,6 +36,7 @@ class BdFalsa:
     subs: dict[int, dict[str, Any]] = field(default_factory=dict)
     redes: set[int] = field(default_factory=lambda: {2})
     tipos_credito: set[int] = field(default_factory=lambda: {1})
+    en_uso: set[int] = field(default_factory=set)
     siguiente: int = 10
 
     def _producto(self, id_: int) -> dict[str, Any] | None:
@@ -90,7 +91,15 @@ class BdFalsa:
     def actualizar(self, _c: Any, id_: int, cambios: dict[str, Any]) -> None:
         self.productos[id_].update(cambios)
 
-    def insertar_sub(self, _c: Any, id_producto: int, codigo: str, nombre: str) -> int:
+    def insertar_sub(
+        self,
+        _c: Any,
+        id_producto: int,
+        codigo: str,
+        nombre: str,
+        edad_minima: int | None = None,
+        edad_maxima: int | None = None,
+    ) -> int:
         if any(s["codigo_sub_producto"] == codigo for s in self.subs.values()):
             raise _duplicado("UQ_SubProducto_Codigo")
         self.siguiente += 1
@@ -101,6 +110,8 @@ class BdFalsa:
             "nombre_sub_producto": nombre,
             "estado": "A",
             "fecha_registro": datetime(2026, 11, 15, 10, 0),
+            "edad_minima": edad_minima,
+            "edad_maxima": edad_maxima,
         }
         return self.siguiente
 
@@ -122,6 +133,8 @@ def bd(monkeypatch: pytest.MonkeyPatch) -> BdFalsa:
         "actualizar_subproducto": falsa.actualizar_sub,
         "existe_red_activa": lambda _c, i: i in falsa.redes,
         "existe_tipo_credito_activo": lambda _c, i: i in falsa.tipos_credito,
+        "producto_en_uso": lambda _c, i: i in falsa.en_uso,
+        "eliminar_producto": lambda _c, i: falsa.productos.pop(i),
     }.items():
         monkeypatch.setattr(repo, nombre, funcion)
     return falsa
@@ -242,14 +255,72 @@ def test_activar_exige_subproducto_y_luego_se_activa(bd, admin):
     assert len(r.json()["subproductos"]) == 1
 
 
-def test_codigo_y_tipo_no_se_editan(bd, admin):
+def test_codigo_solo_se_edita_en_borrador_y_el_tipo_nunca(bd, admin):
     id_ = admin.post(BASE, json=AHORRO).json()["idProducto"]
-    assert admin.patch(
-        f"{BASE}/{id_}", json={"codigoProducto": "OTRO1"}
-    ).status_code in (400, 422)
+    # Inactivo y sin uso: el código se corrige
+    r = admin.patch(f"{BASE}/{id_}", json={"codigoProducto": "AHO003"})
+    assert r.status_code == 200 and bd.productos[id_]["codigo_producto"] == "AHO003"
+    # Usado o activo: 409 PRODUCTO_NO_EDITABLE (E3-02 AC 4)
+    bd.en_uso.add(id_)
+    r = admin.patch(f"{BASE}/{id_}", json={"codigoProducto": "AHO004"})
+    assert r.status_code == 409 and r.json()["code"] == "PRODUCTO_NO_EDITABLE"
+    bd.en_uso.clear()
+    bd.productos[id_]["estado"] = "A"
+    r = admin.patch(f"{BASE}/{id_}", json={"codigoProducto": "AHO004"})
+    assert r.status_code == 409 and r.json()["code"] == "PRODUCTO_NO_EDITABLE"
     assert admin.patch(
         f"{BASE}/{id_}", json={"tipoProducto": "Credito"}
     ).status_code in (400, 422)
+
+
+def test_elegibilidad_por_edad(bd, admin):
+    id_ = admin.post(BASE, json=AHORRO).json()["idProducto"]
+    url = f"{BASE}/{id_}/subproductos"
+    r = admin.post(
+        url,
+        json={
+            "codigoSubProducto": "AHO002-MN",
+            "nombreSubProducto": "Menores",
+            "edadMinima": 18,
+            "edadMaxima": 17,
+        },
+    )
+    assert r.status_code == 422 and r.json()["code"] == "ELEGIBILIDAD_INVALIDA"
+    r = admin.post(
+        url,
+        json={
+            "codigoSubProducto": "AHO002-MN",
+            "nombreSubProducto": "Menores",
+            "edadMaxima": 17,
+        },
+    )
+    assert r.status_code == 201 and r.json()["edadMaxima"] == 17
+    sub = r.json()["idSubProducto"]
+    r = admin.patch(f"{BASE}/subproductos/{sub}", json={"edadMinima": 20})
+    assert r.status_code == 422 and r.json()["code"] == "ELEGIBILIDAD_INVALIDA"
+    r = admin.patch(f"{BASE}/subproductos/{sub}", json={"edadMaxima": None})
+    assert r.status_code == 200 and r.json()["edadMaxima"] is None
+
+
+def test_eliminar_solo_en_borrador_sin_uso(bd, admin, asesor):
+    id_ = admin.post(BASE, json=AHORRO).json()["idProducto"]
+    assert asesor.delete(f"{BASE}/{id_}").status_code == 403
+    bd.en_uso.add(id_)
+    r = admin.delete(f"{BASE}/{id_}")
+    assert r.status_code == 409 and r.json()["code"] == "PRODUCTO_EN_USO"
+    bd.en_uso.clear()
+    bd.productos[id_]["estado"] = "A"
+    r = admin.delete(f"{BASE}/{id_}")
+    assert r.status_code == 409 and r.json()["code"] == "PRODUCTO_ACTIVO"
+    bd.productos[id_]["estado"] = "I"
+    assert admin.delete(f"{BASE}/{id_}").status_code == 204
+    assert id_ not in bd.productos
+    assert admin.delete(f"{BASE}/{id_}").status_code == 404
+
+
+def test_tipos_de_producto_vienen_con_el_software(bd, asesor):
+    r = asesor.get(f"{BASE}/tipos")
+    assert [t["codigo"] for t in r.json()] == ["Cuenta", "Credito", "Tarjeta"]
 
 
 def test_monto_solo_en_cuenta(bd, admin):
@@ -423,8 +494,8 @@ def test_admin_habilita_canales_y_asesor_consulta(bd, cupos, admin, asesor):
 @pytest.mark.parametrize(
     ("cambio", "status"),
     [
-        ({"cupoMensualMaximo": 100}, 400),  # mensual menor que el diario
-        ({"montoMaxTransaccion": 20000}, 400),  # supera el diario
+        ({"cupoMensualMaximo": 100}, 422),  # mensual menor que el diario
+        ({"montoMaxTransaccion": 20000}, 422),  # supera el diario
         ({"maxTransaccionesDia": 0}, 400),
         ({"idCanal": 9}, 422),  # canal inexistente
     ],

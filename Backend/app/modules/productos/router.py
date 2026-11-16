@@ -6,7 +6,7 @@ de los módulos. Sin DELETE: la baja es lógica por Estado.
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Path, Request
+from fastapi import APIRouter, Depends, Path, Request, Response
 from sqlalchemy import Connection
 
 from app.core.api.errors import RESPUESTAS_ERROR, ProblemDetailsRoute, solo_parametros
@@ -17,6 +17,7 @@ from app.modules.productos import service, vinculos
 from app.modules.productos.schemas import (
     CupoCanalVista,
     CuposSubProducto,
+    FichaSubProducto,
     Producto,
     ProductoCreate,
     ProductoUpdate,
@@ -25,6 +26,7 @@ from app.modules.productos.schemas import (
     SubProducto,
     SubProductoCreate,
     SubProductoUpdate,
+    TipoProductoInfo,
     VinculosEntrada,
     VinculosVista,
 )
@@ -54,6 +56,30 @@ Administrador = Annotated[Usuario, Depends(require_roles(*_ESCRITURA))]
 def listar_productos(_: Lector, conn: Db) -> list[Producto]:
     """Todos los productos (activos e inactivos) con todos sus subproductos."""
     return service.listar_productos(conn)
+
+
+# Antes de /{id_producto}: si no, «tipos» se tomaría como id de producto
+@router.get(
+    "/tipos",
+    operation_id="PRDTipos",
+    response_model=list[TipoProductoInfo],
+    openapi_extra={"x-roles": _LECTURA},
+)
+def listar_tipos(_: Lector) -> list[TipoProductoInfo]:
+    """Tipos de producto que trae el software (no se crean desde la API)."""
+    return service.TIPOS_PRODUCTO
+
+
+@router.get(
+    "/subproductos/{id_sub_producto}/ficha",
+    operation_id="PRDSubFicha",
+    response_model=FichaSubProducto,
+    openapi_extra={"x-roles": _LECTURA},
+)
+def ficha_subproducto(id_sub_producto: IdPath, _: Lector, conn: Db) -> FichaSubProducto:
+    """Lo que el asesor lee al cliente: elegibilidad, cupos, restricciones, tasas,
+    comisiones, seguros y amortización, con lo heredado del producto."""
+    return service.ficha_subproducto(conn, id_sub_producto)
 
 
 @router.get(
@@ -262,3 +288,17 @@ def guardar_vinculos_producto(
     return vinculos.guardar(
         conn, "producto", id_producto, payload, usuario, ip_cliente(request.scope)
     )
+
+
+@router.delete(
+    "/{id_producto}",
+    operation_id="PRDEliminar",
+    status_code=204,
+    openapi_extra={"x-roles": _ESCRITURA},
+)
+def eliminar_producto(
+    id_producto: IdPath, request: Request, usuario: Administrador, conn: Db
+) -> Response:
+    """Solo un producto inactivo que nunca se usó; con uso, 409 PRODUCTO_EN_USO."""
+    service.eliminar_producto(conn, id_producto, usuario, ip_cliente(request.scope))
+    return Response(status_code=204)

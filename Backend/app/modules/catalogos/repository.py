@@ -84,7 +84,10 @@ def listar_tipos_antecedente(conn: Connection) -> list[dict[str, Any]]:
 
 
 def listar_productos(
-    conn: Connection, tipo: str | None, tipo_tarjeta: str | None = None
+    conn: Connection,
+    tipo: str | None,
+    tipo_tarjeta: str | None = None,
+    edad: int | None = None,
 ) -> list[dict[str, Any]]:
     # CAT-07: solo activos; los campos que no aplican al tipo van en NULL. Cada
     # producto lleva sus subproductos activos (lo que el asesor puede ofrecer).
@@ -121,9 +124,14 @@ def listar_productos(
         JOIN ProductosFinancieros.Producto AS p ON p.IdProducto = s.IdProducto
         WHERE s.Estado = 'A' AND p.Estado = 'A'
           AND (:tipo IS NULL OR p.TipoProducto = :tipo)
+          -- Elegibilidad: edad -1 = cliente sin fecha de nacimiento (solo sin límites)
+          AND (:edad IS NULL
+               OR (:edad >= 0 AND (s.EdadMinima IS NULL OR :edad >= s.EdadMinima)
+                   AND (s.EdadMaxima IS NULL OR :edad <= s.EdadMaxima))
+               OR (:edad < 0 AND s.EdadMinima IS NULL AND s.EdadMaxima IS NULL))
         ORDER BY s.NombreSubProducto
         """,
-        {"tipo": tipo},
+        {"tipo": tipo, "edad": edad},
     )
     por_producto: dict[int, list[dict[str, Any]]] = {}
     for sub in subproductos:
@@ -135,8 +143,8 @@ def listar_productos(
             por_producto.setdefault(sub.pop("id_producto"), []).append(sub)
     for producto in productos:
         producto["subproductos"] = por_producto.get(producto["id_producto"], [])
-    if tipo_tarjeta is not None:
-        # Solo los productos que tienen algo que ofrecer de ese tipo
+    if tipo_tarjeta is not None or edad is not None:
+        # Solo los productos que tienen algo que ofrecer (de ese tipo o a ese cliente)
         productos = [p for p in productos if p["subproductos"]]
     return productos
 
@@ -377,3 +385,12 @@ def listar_seguros(conn: Connection) -> list[dict[str, Any]]:
         ORDER BY Nombre
         """,
     )
+
+
+def fecha_nacimiento_cliente(conn: Connection, id_cliente: int) -> tuple[bool, Any]:
+    """(existe el cliente, su fecha de nacimiento o None)."""
+    fila = conn.execute(
+        text("SELECT FechaNacimiento FROM Clientes.Cliente WHERE IdCliente = :id"),
+        {"id": id_cliente},
+    ).first()
+    return (fila is not None, fila[0] if fila else None)

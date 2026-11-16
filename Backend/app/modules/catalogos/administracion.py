@@ -10,6 +10,7 @@ que tienen su propia pantalla.
 El SQL de cada catálogo es fijo (sin armar nombres de tabla o columna con texto).
 """
 
+import json
 import re
 from dataclasses import dataclass, field
 from datetime import date
@@ -24,8 +25,9 @@ from app.core.security.auth import Usuario
 from app.core.security.operador import auditar
 
 # numero: >= 0 con hasta 6 decimales (valor de comisión o seguro; en % si es Porcentaje)
+# opcion: uno de `opciones` (p. ej. Billete o Moneda)
 TipoCampo = Literal[
-    "texto", "entero", "dinero", "porcentaje", "numero", "booleano", "fecha"
+    "texto", "entero", "dinero", "porcentaje", "numero", "booleano", "fecha", "opcion"
 ]
 _SIN_CONTROL = re.compile(r"^[^\x00-\x1f\x7f]+$")
 _MAX_DINERO = Decimal("9999999999999999.99")
@@ -40,6 +42,8 @@ class Campo:
     nulo: bool = False
     maximo: int | None = None  # largo del texto o valor máximo del número
     minimo: int | None = None
+    opciones: tuple[str, ...] = ()
+    patron: str | None = None  # formato del texto (códigos); se guarda en mayúsculas
 
 
 @dataclass(frozen=True)
@@ -485,28 +489,37 @@ CATALOGOS: dict[str, Catalogo] = {
 }
 
 
+def _campo_json(f: Campo, *, editable: bool | None = None) -> dict[str, Any]:
+    return {
+        "nombre": f.nombre,
+        "etiqueta": f.etiqueta,
+        "tipo": f.tipo,
+        "editable": f.editable if editable is None else editable,
+        "nulo": f.nulo,
+        "maximo": f.maximo,
+        "minimo": f.minimo,
+        "opciones": list(f.opciones),
+    }
+
+
 def descriptores() -> list[dict[str, Any]]:
-    return [
-        {
-            "clave": c.clave,
-            "nombre": c.nombre,
-            "descripcion": c.descripcion,
-            "permiteCrear": c.permite_crear,
-            "campos": [
-                {
-                    "nombre": f.nombre,
-                    "etiqueta": f.etiqueta,
-                    "tipo": f.tipo,
-                    "editable": f.editable,
-                    "nulo": f.nulo,
-                    "maximo": f.maximo,
-                    "minimo": f.minimo,
-                }
-                for f in c.campos
-            ],
-        }
-        for c in CATALOGOS.values()
-    ]
+    """Catálogos y sus campos: el frontend dibuja la tabla, la edición y el alta con esto."""
+    salida = []
+    for c in CATALOGOS.values():
+        alta_baja = _ALTA_BAJA.get(c.clave, AltaBaja())
+        salida.append(
+            {
+                "clave": c.clave,
+                "nombre": c.nombre,
+                "descripcion": c.descripcion,
+                "permiteCrear": c.permite_crear,
+                "campos": [_campo_json(f) for f in c.campos],
+                # Alta genérica (vacío = sin alta desde esta pantalla)
+                "camposAlta": [_campo_json(f, editable=True) for f in alta_baja.campos],
+                "permiteEliminar": bool(alta_baja.eliminar),
+            }
+        )
+    return salida
 
 
 def _catalogo(clave: str) -> Catalogo:
@@ -534,10 +547,16 @@ def _valor(campo: Campo, valor: Any) -> Any:
         valor = valor.strip()
         if not _SIN_CONTROL.match(valor):
             raise _invalido(campo.etiqueta, "escríbelo en una sola línea.")
+        if campo.patron and not re.match(campo.patron, valor):
+            raise _invalido(campo.etiqueta, "tiene un formato no válido.")
         if campo.maximo and len(valor) > campo.maximo:
             raise _invalido(
                 campo.etiqueta, f"usa {campo.maximo} caracteres como máximo."
             )
+        return valor
+    if campo.tipo == "opcion":
+        if valor not in campo.opciones:
+            raise _invalido(campo.etiqueta, f"elige {' o '.join(campo.opciones)}.")
         return valor
     if campo.tipo == "booleano":
         if not isinstance(valor, bool):
@@ -701,18 +720,21 @@ def actualizar(
 ) -> dict[str, Any]:
     catalogo = _catalogo(clave)
     cambios = _cambios(catalogo, cuerpo)
+    actual = _fila(conn, catalogo, id_)
+    if actual is None:
+        raise problema(404, "REGISTRO_NO_ENCONTRADO", "El registro no existe.")
+    # E1-09 AC 5: antes y después de cada campo que cambia (lo demás no cambia)
+    antes = {k: actual.get(k) for k in sorted(cambios)}
+    despues = {k: cambios[k] for k in sorted(cambios)}
     with auditar(
         "ACTUALIZAR",
         catalogo.tabla,
         usuario,
         ip,
-        f"CAT-EDITAR {clave} campos={','.join(sorted(cambios))}",
+        f"CAT-EDITAR {clave} antes={_json(antes)} despues={_json(despues)}",
         id_,
     ):
         try:
-            actual = _fila(conn, catalogo, id_)
-            if actual is None:
-                raise problema(404, "REGISTRO_NO_ENCONTRADO", "El registro no existe.")
             _validar_fila({**actual, **cambios})
             if clave == "tasas-interes":
                 _validar_tasa(conn, actual, cambios)
@@ -724,7 +746,7 @@ def actualizar(
             conn.commit()
         except DBAPIError as exc:
             conn.rollback()
-            raise traducir_error_bd(exc) from None
+            raise _error_bd(exc) from None
         except Exception:
             conn.rollback()
             raise
@@ -732,3 +754,352 @@ def actualizar(
     if fila is None:
         raise problema(500, "ERROR_INTERNO", "Error interno del servidor.")
     return _salida(fila)
+
+
+# ---------- Alta y baja (E1-09 #109) ----------
+# Sin alta ni baja: sistemas de amortización y canales (su comportamiento es código),
+# comisiones (el tipo de cálculo cambia qué datos exige; alta con pantalla propia) y
+# tasas (alta en POST /catalogos/tasas-interes). Una baja solo procede sin uso: lo que
+# se usa se desactiva (409 ITEM_EN_USO). El SQL de cada catálogo es fijo.
+
+_CODIGO = r"^[A-Za-z0-9_-]{2,15}$"
+
+
+@dataclass(frozen=True)
+class AltaBaja:
+    campos: tuple[Campo, ...] = ()  # vacío = sin alta
+    insertar: str | None = None
+    en_uso: str = ""
+    eliminar: str = ""
+
+
+_ALTA_BAJA: dict[str, AltaBaja] = {
+    "tasas-interes": AltaBaja(
+        en_uso="""
+            SELECT CASE WHEN EXISTS (SELECT 1 FROM ProductosFinancieros.ProductoTasaInteres
+                WHERE IdTasaInteres = TRY_CAST(:id AS int)) THEN 1 ELSE 0 END
+        """,
+        eliminar="DELETE FROM Credito.TasaInteres WHERE IdTasaInteres = TRY_CAST(:id AS int)",
+    ),
+    "comisiones": AltaBaja(
+        en_uso="""
+            SELECT CASE WHEN EXISTS (SELECT 1 FROM ProductosFinancieros.ProductoComision
+                    WHERE IdComision = TRY_CAST(:id AS int))
+                OR EXISTS (SELECT 1 FROM Transacciones.TransaccionComision
+                    WHERE IdComision = TRY_CAST(:id AS int))
+                OR EXISTS (SELECT 1 FROM Transacciones.ComisionTipoTransaccion
+                    WHERE IdComision = TRY_CAST(:id AS int))
+            THEN 1 ELSE 0 END
+        """,
+        eliminar="DELETE FROM Transacciones.Comisiones WHERE IdComision = TRY_CAST(:id AS int)",
+    ),
+    "seguros": AltaBaja(
+        campos=(
+            Campo("codigo", "Código", maximo=15, patron=_CODIGO),
+            Campo("nombre", "Nombre", maximo=60),
+            Campo("aseguradora", "Aseguradora", nulo=True, maximo=100),
+            Campo("tipoCalculo", "Cálculo", "opcion", opciones=("Fijo", "Porcentaje")),
+            Campo("valor", "Valor", "numero", minimo=0),
+            Campo("vigenciaDesde", "Vigente desde", "fecha"),
+        ),
+        insertar="""
+            INSERT INTO Credito.Seguro (CodigoSeguro, Nombre, Aseguradora, TipoCalculo, Valor,
+                VigenciaDesde)
+            OUTPUT CAST(inserted.IdSeguro AS varchar(10))
+            VALUES (:codigo, :nombre, :aseguradora, :tipoCalculo, :valor, :vigenciaDesde)
+        """,
+        en_uso="""
+            SELECT CASE WHEN EXISTS (SELECT 1 FROM ProductosFinancieros.ProductoSeguro
+                    WHERE IdSeguro = TRY_CAST(:id AS int))
+                OR EXISTS (SELECT 1 FROM Credito.CreditoPlanDetalleRubro
+                    WHERE IdSeguro = TRY_CAST(:id AS int))
+                OR EXISTS (SELECT 1 FROM Credito.TipoCreditoSeguro
+                    WHERE IdSeguro = TRY_CAST(:id AS int))
+            THEN 1 ELSE 0 END
+        """,
+        eliminar="DELETE FROM Credito.Seguro WHERE IdSeguro = TRY_CAST(:id AS int)",
+    ),
+    "tipos-credito": AltaBaja(
+        campos=(
+            Campo("codigo", "Código", maximo=15, patron=_CODIGO),
+            Campo("nombre", "Nombre", maximo=60),
+            Campo("descripcion", "Descripción", nulo=True, maximo=250),
+        ),
+        insertar="""
+            INSERT INTO Credito.TipoCredito (CodigoTipoCredito, Nombre, Descripcion)
+            OUTPUT CAST(inserted.IdTipoCredito AS varchar(10))
+            VALUES (:codigo, :nombre, :descripcion)
+        """,
+        en_uso="""
+            SELECT CASE WHEN EXISTS (SELECT 1 FROM ProductosFinancieros.Producto
+                    WHERE IdTipoCredito = TRY_CAST(:id AS int))
+                OR EXISTS (SELECT 1 FROM Credito.TasaInteres WHERE IdTipoCredito = TRY_CAST(:id AS int))
+                OR EXISTS (SELECT 1 FROM Credito.CreditoSolicitud
+                    WHERE IdTipoCredito = TRY_CAST(:id AS int))
+                OR EXISTS (SELECT 1 FROM Credito.TipoCreditoSeguro
+                    WHERE IdTipoCredito = TRY_CAST(:id AS int))
+                OR EXISTS (SELECT 1 FROM Credito.TipoCreditoImpuesto
+                    WHERE IdTipoCredito = TRY_CAST(:id AS int))
+            THEN 1 ELSE 0 END
+        """,
+        eliminar="DELETE FROM Credito.TipoCredito WHERE IdTipoCredito = TRY_CAST(:id AS int)",
+    ),
+    "redes": AltaBaja(
+        campos=(
+            Campo("codigo", "Código", maximo=20, patron=_CODIGO),
+            Campo("nombre", "Nombre", maximo=60),
+            Campo("descripcion", "Descripción", nulo=True, maximo=250),
+            Campo("ingresoMinimo", "Ingreso mínimo", "dinero", nulo=True, minimo=0),
+            Campo(
+                "edadMinima", "Edad mínima", "entero", nulo=True, minimo=16, maximo=99
+            ),
+            Campo("requiereCuentaActiva", "Requiere cuenta activa", "booleano"),
+        ),
+        insertar="""
+            INSERT INTO ProductosFinancieros.Red (CodigoRed, Nombre, Descripcion, IngresoMinimo,
+                EdadMinima, RequiereCuentaActiva)
+            OUTPUT CAST(inserted.IdRed AS varchar(10))
+            VALUES (:codigo, :nombre, :descripcion, :ingresoMinimo, :edadMinima,
+                    :requiereCuentaActiva)
+        """,
+        en_uso="""
+            SELECT CASE WHEN EXISTS (SELECT 1 FROM ProductosFinancieros.Producto
+                    WHERE IdRed = TRY_CAST(:id AS int))
+                OR EXISTS (SELECT 1 FROM Tarjeta.BIN WHERE IdRed = TRY_CAST(:id AS int))
+            THEN 1 ELSE 0 END
+        """,
+        eliminar="DELETE FROM ProductosFinancieros.Red WHERE IdRed = TRY_CAST(:id AS int)",
+    ),
+    "denominaciones": AltaBaja(
+        campos=(
+            Campo("tipoPieza", "Tipo", "opcion", opciones=("Billete", "Moneda")),
+            Campo("valor", "Valor", "dinero"),
+            Campo("descripcion", "Descripción", maximo=50),
+        ),
+        insertar="""
+            INSERT INTO Catalogo.Denominacion (TipoPieza, Valor, Descripcion)
+            OUTPUT CAST(inserted.IdDenominacion AS varchar(10))
+            VALUES (:tipoPieza, :valor, :descripcion)
+        """,
+        en_uso="""
+            SELECT CASE WHEN EXISTS (SELECT 1 FROM Boveda.BilleteSerie WHERE IdDenominacion = TRY_CAST(:id AS int))
+                OR EXISTS (SELECT 1 FROM Boveda.ArqueoBovedaDenominacion WHERE IdDenominacion = TRY_CAST(:id AS int))
+                OR EXISTS (SELECT 1 FROM ATM.Gaveta WHERE IdDenominacion = TRY_CAST(:id AS int))
+                OR EXISTS (SELECT 1 FROM Boveda.BovedaDenominacion WHERE IdDenominacion = TRY_CAST(:id AS int))
+                OR EXISTS (SELECT 1 FROM Boveda.MovimientoBovedaDenominacion WHERE IdDenominacion = TRY_CAST(:id AS int))
+                OR EXISTS (SELECT 1 FROM Caja.DevolucionCajaDenominacion WHERE IdDenominacion = TRY_CAST(:id AS int))
+                OR EXISTS (SELECT 1 FROM Caja.DotacionCajaDenominacion WHERE IdDenominacion = TRY_CAST(:id AS int))
+            THEN 1 ELSE 0 END
+        """,
+        eliminar="DELETE FROM Catalogo.Denominacion WHERE IdDenominacion = TRY_CAST(:id AS int)",
+    ),
+    "tipos-movimiento-caja": AltaBaja(
+        campos=(
+            Campo("codigo", "Código", maximo=20, patron=_CODIGO),
+            Campo("descripcion", "Descripción", maximo=150),
+            Campo("naturaleza", "Naturaleza", "opcion", opciones=("Ingreso", "Egreso")),
+        ),
+        insertar="""
+            INSERT INTO Caja.TipoMovimientoCaja (Codigo, Descripcion, Naturaleza)
+            OUTPUT CAST(inserted.IdTipoMovimientoCaja AS varchar(10))
+            VALUES (:codigo, :descripcion, CASE :naturaleza WHEN 'Ingreso' THEN 'I' ELSE 'E' END)
+        """,
+        en_uso="""
+            SELECT CASE WHEN EXISTS (SELECT 1 FROM Caja.MovimientosCaja
+                WHERE IdTipoMovimiento = TRY_CAST(:id AS int)) THEN 1 ELSE 0 END
+        """,
+        eliminar="DELETE FROM Caja.TipoMovimientoCaja WHERE IdTipoMovimientoCaja = TRY_CAST(:id AS int)",
+    ),
+    "actividades-economicas": AltaBaja(
+        campos=(
+            Campo("descripcion", "Descripción", maximo=200),
+            Campo("areaActividad", "Área", maximo=100),
+        ),
+        insertar="""
+            INSERT INTO Catalogo.ActividadEconomica (Descripcion, AreaActividad)
+            OUTPUT CAST(inserted.IdActividadEconomica AS varchar(10))
+            VALUES (:descripcion, :areaActividad)
+        """,
+        en_uso="""
+            SELECT CASE WHEN EXISTS (SELECT 1 FROM Clientes.Cliente
+                WHERE IdActividadEconomica = TRY_CAST(:id AS int)) THEN 1 ELSE 0 END
+        """,
+        eliminar="DELETE FROM Catalogo.ActividadEconomica WHERE IdActividadEconomica = TRY_CAST(:id AS int)",
+    ),
+    "tipos-antecedente": AltaBaja(
+        campos=(
+            Campo("nombre", "Nombre", maximo=150),
+            Campo(
+                "categoria", "Categoría", "opcion", opciones=("EnRevision", "Critico")
+            ),
+            Campo(
+                "puedeImpedirVinculacion", "Puede impedir la vinculación", "booleano"
+            ),
+        ),
+        insertar="""
+            INSERT INTO Catalogo.TipoAntecedente (Nombre, Categoria, PuedeImpedirVinculacion)
+            OUTPUT CAST(inserted.IdTipoAntecedente AS varchar(10))
+            VALUES (:nombre, :categoria, :puedeImpedirVinculacion)
+        """,
+        en_uso="""
+            SELECT CASE WHEN EXISTS (SELECT 1 FROM Clientes.RiesgoCliente
+                WHERE IdTipoAntecedente = TRY_CAST(:id AS int)) THEN 1 ELSE 0 END
+        """,
+        eliminar="DELETE FROM Catalogo.TipoAntecedente WHERE IdTipoAntecedente = TRY_CAST(:id AS int)",
+    ),
+    "paises": AltaBaja(
+        campos=(
+            Campo(
+                "codigoPais", "Código (ISO alfa-3)", maximo=3, patron=r"^[A-Za-z]{3}$"
+            ),
+            Campo("codigoNumerico", "Código numérico", maximo=3, patron=r"^[0-9]{3}$"),
+            Campo("nombrePais", "Nombre", maximo=100),
+        ),
+        insertar="""
+            INSERT INTO Catalogo.Paises (CodigoPais, CodigoNumerico, NombrePais)
+            OUTPUT inserted.CodigoPais
+            VALUES (:codigoPais, :codigoNumerico, :nombrePais)
+        """,
+        en_uso="""
+            SELECT CASE WHEN EXISTS (SELECT 1 FROM Catalogo.Ciudad WHERE CodigoPais = :id)
+                OR EXISTS (SELECT 1 FROM Clientes.Cliente WHERE CodigoPaisNacionalidad = :id)
+                OR EXISTS (SELECT 1 FROM Transacciones.Transaccion WHERE CodigoPaisOrigen = :id)
+            THEN 1 ELSE 0 END
+        """,
+        eliminar="DELETE FROM Catalogo.Paises WHERE CodigoPais = :id",
+    ),
+    "ciudades": AltaBaja(
+        campos=(
+            Campo("codigoPais", "País (ISO alfa-3)", maximo=3, patron=r"^[A-Za-z]{3}$"),
+            Campo("provincia", "Provincia", maximo=80),
+            Campo("nombre", "Nombre", maximo=80),
+        ),
+        insertar="""
+            INSERT INTO Catalogo.Ciudad (CodigoPais, Provincia, Nombre)
+            OUTPUT CAST(inserted.IdCiudad AS varchar(10))
+            VALUES (:codigoPais, :provincia, :nombre)
+        """,
+        en_uso="""
+            SELECT CASE WHEN EXISTS (SELECT 1 FROM Organizacion.Agencia WHERE IdCiudad = TRY_CAST(:id AS int))
+                OR EXISTS (SELECT 1 FROM Clientes.Direcciones WHERE IdCiudad = TRY_CAST(:id AS int))
+                OR EXISTS (SELECT 1 FROM Tarjeta.EnviosTarjeta WHERE IdCiudad = TRY_CAST(:id AS int))
+                OR EXISTS (SELECT 1 FROM Transacciones.Transaccion WHERE IdCiudad = TRY_CAST(:id AS int))
+                OR EXISTS (SELECT 1 FROM Contabilidad.Feriado WHERE IdCiudad = TRY_CAST(:id AS int))
+            THEN 1 ELSE 0 END
+        """,
+        eliminar="DELETE FROM Catalogo.Ciudad WHERE IdCiudad = TRY_CAST(:id AS int)",
+    ),
+}
+
+_DUPLICADO = re.compile(r"\((2627|2601)\)")
+_REFERENCIA = re.compile(r"\(547\)")
+
+
+def _error_bd(exc: DBAPIError, *, borrando: bool = False) -> Exception:
+    """Duplicados y referencias con su código del criterio; lo demás, al traductor común."""
+    texto = str(exc.orig)
+    if _DUPLICADO.search(texto):
+        return problema(
+            409, "CODIGO_DUPLICADO", "Ya existe un registro con ese código o nombre."
+        )
+    if _REFERENCIA.search(texto):
+        if borrando:
+            return problema(
+                409, "ITEM_EN_USO", "El registro se usa en otros datos: desactívelo."
+            )
+        return problema(
+            422,
+            "REFERENCIA_INVALIDA",
+            "Hay un dato que apunta a un registro que no existe.",
+        )
+    return traducir_error_bd(exc)
+
+
+def _json(datos: dict[str, Any]) -> str:
+    """Valores del catálogo para la auditoría (no hay datos personales en los catálogos)."""
+    return json.dumps(
+        _salida(datos), ensure_ascii=False, separators=(",", ":"), default=str
+    )
+
+
+def crear(
+    conn: Connection, clave: str, cuerpo: dict[str, Any], usuario: Usuario, ip: str
+) -> dict[str, Any]:
+    catalogo = _catalogo(clave)
+    alta = _ALTA_BAJA.get(clave)
+    if alta is None or not alta.campos or alta.insertar is None:
+        raise problema(
+            422, "ALTA_NO_PERMITIDA", "Este catálogo no admite altas desde aquí."
+        )
+    nombres = {c.nombre for c in alta.campos}
+    desconocidos = set(cuerpo) - nombres
+    if desconocidos:
+        raise problema(
+            400,
+            "DATOS_INVALIDOS",
+            f"Campos que no se usan al crear: {', '.join(sorted(desconocidos))}.",
+        )
+    valores = {c.nombre: _valor(c, cuerpo.get(c.nombre)) for c in alta.campos}
+    for c in alta.campos:
+        if c.patron and isinstance(valores[c.nombre], str):
+            valores[c.nombre] = valores[c.nombre].upper()
+    if valores.get("tipoCalculo") == "Porcentaje" and valores["valor"] > 100:
+        raise _invalido("Valor", "en porcentaje no puede pasar de 100.")
+    with auditar(
+        "CREAR",
+        catalogo.tabla,
+        usuario,
+        ip,
+        f"CAT-CREAR {clave} despues={_json(valores)}",
+    ) as registro:
+        try:
+            id_ = str(conn.execute(text(alta.insertar), valores).scalar_one())
+            registro.id_registro = id_
+            conn.commit()
+        except DBAPIError as exc:
+            conn.rollback()
+            raise _error_bd(exc) from None
+        except Exception:
+            conn.rollback()
+            raise
+    fila = _fila(conn, catalogo, id_)
+    if fila is None:
+        raise problema(500, "ERROR_INTERNO", "Error interno del servidor.")
+    return _salida(fila)
+
+
+def eliminar(conn: Connection, clave: str, id_: str, usuario: Usuario, ip: str) -> None:
+    catalogo = _catalogo(clave)
+    baja = _ALTA_BAJA.get(clave)
+    if baja is None or not baja.eliminar:
+        raise problema(
+            422,
+            "BAJA_NO_PERMITIDA",
+            "Este catálogo no admite eliminar: desactive el registro.",
+        )
+    actual = _fila(conn, catalogo, id_)
+    if actual is None:
+        raise problema(404, "REGISTRO_NO_ENCONTRADO", "El registro no existe.")
+    with auditar(
+        "ELIMINAR",
+        catalogo.tabla,
+        usuario,
+        ip,
+        f"CAT-ELIMINAR {clave} antes={_json(actual)}",
+        id_,
+    ):
+        try:
+            if conn.execute(text(baja.en_uso), {"id": id_}).scalar_one():
+                raise problema(
+                    409,
+                    "ITEM_EN_USO",
+                    "El registro se usa en otros datos: desactívelo.",
+                )
+            conn.execute(text(baja.eliminar), {"id": id_})
+            conn.commit()
+        except DBAPIError as exc:
+            conn.rollback()
+            raise _error_bd(exc, borrando=True) from None
+        except Exception:
+            conn.rollback()
+            raise
