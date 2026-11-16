@@ -1,0 +1,20 @@
+/* T-SQL (SQL Server). PRD: descripción de los productos (plan E3-01, campo Descripcion).
+   Ejecutar en CooperativaDB antes de desplegar el backend que la lee (catálogo CAT-07 y
+   /api/v1/productos). Columna nula: no cambia ninguna fila ni rompe consultas existentes.
+   Reejecutable. Usar sqlcmd -b o equivalente que detenga la ejecución ante errores. */
+SET XACT_ABORT ON;
+GO
+
+IF COL_LENGTH('ProductosFinancieros.Producto', 'Descripcion') IS NULL
+    ALTER TABLE ProductosFinancieros.Producto ADD Descripcion varchar(250) NULL;
+GO
+
+/* Nunca cadena vacía (NULL = sin descripción). Los caracteres de control los rechaza la API */
+IF NOT EXISTS (SELECT 1 FROM sys.check_constraints WHERE name = 'CK_Producto_Descripcion')
+    ALTER TABLE ProductosFinancieros.Producto WITH CHECK ADD CONSTRAINT CK_Producto_Descripcion
+        CHECK (Descripcion IS NULL OR LEN(Descripcion) > 0);
+GO
+
+/* Vuelta atrás (solo fuera de producción, antes de que haya descripciones cargadas):
+   ALTER TABLE ProductosFinancieros.Producto DROP CONSTRAINT CK_Producto_Descripcion;
+   ALTER TABLE ProductosFinancieros.Producto DROP COLUMN Descripcion; */

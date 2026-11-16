@@ -274,13 +274,9 @@ def eliminar_direccion(
 
 
 def _ip_cliente(request: Request) -> str:
-    """Obtiene la IP del cliente desde los headers o la conexión."""
-    forwarded = request.headers.get("x-forwarded-for")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
-    if request.client:
-        return request.client.host
-    return "127.0.0.1"
+    """IP confiable del usuario: X-Forwarded-For no se lee porque el cliente puede
+    falsificarlo (ASVS 4.1.3); ip_cliente solo acepta la que fija el Worker."""
+    return ip_cliente(request.scope)
 
 
 _riesgo_router = APIRouter(route_class=ProblemDetailsRoute)

@@ -71,8 +71,8 @@ router = APIRouter(
 
 
 def _ip(request: Request) -> str | None:
-    # X-Forwarded-For no se lee porque el cliente puede falsificarlo
-    return request.client.host if request.client else None
+    # La IP confiable la resuelve ip_cliente (solo del Worker con el secreto)
+    return ip_cliente(request.scope)
 
 
 def _user_agent(request: Request) -> str | None:

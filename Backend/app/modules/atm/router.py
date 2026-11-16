@@ -11,6 +11,7 @@ from pydantic import ValidationError
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.core.api.errors import RESPUESTAS_ERROR, ProblemDetailsRoute, problema
+from app.core.api.middleware import ip_cliente
 from app.core.database.db import get_engine
 from app.modules.atm import (
     cambio_pin_service,
@@ -164,7 +165,7 @@ def autenticar_atm(
                 conn,
                 solicitud.entrada,
                 usuario_bloqueo=solicitud.terminal.audit_user_id,
-                ip=request.client.host if request.client else None,
+                ip=ip_cliente(request.scope),
             )
         )
     revalidar_terminal(solicitud.terminal)
@@ -236,7 +237,7 @@ def consultar_saldo_atm(
                 sesion,
                 terminal,
                 entrada,
-                request.client.host if request.client else None,
+                ip_cliente(request.scope),
             )
     except SQLAlchemyError:
         raise saldo_service._no_disponible() from None
@@ -312,7 +313,7 @@ def cambiar_pin_atm(
         solicitud.sesion,
         solicitud.terminal,
         solicitud.entrada,
-        request.client.host if request.client else None,
+        ip_cliente(request.scope),
     )
     return Response(status_code=204)
 
