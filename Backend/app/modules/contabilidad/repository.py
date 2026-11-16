@@ -104,6 +104,108 @@ def listar_cuentas_contables(
     return [dict(f) for f in conn.execute(text(sql), params).mappings().all()]
 
 
+# CON-04 / CON-05 · Asientos contables
+
+# Lista blanca del sort de CON-04: campo del contrato -> columna. Solo estos nombres
+# de columna y los literales ASC/DESC llegan al ORDER BY; nunca texto del cliente.
+ORDEN_ASIENTOS = {
+    "fechaAsiento": "FechaAsiento",
+    "numeroAsiento": "NumeroAsiento",
+    "idAsientoContable": "IdAsientoContable",
+    "totalDebito": "TotalDebito",
+    "estado": "Estado",
+    "origen": "Origen",
+}
+
+_ASIENTO = """
+    SELECT IdAsientoContable  AS id_asiento_contable,
+           NumeroAsiento      AS numero_asiento,
+           FechaAsiento       AS fecha_asiento,
+           IdTipoAsiento      AS id_tipo_asiento,
+           Origen             AS origen,
+           Concepto           AS concepto,
+           TotalDebito        AS total_debito,
+           TotalCredito       AS total_credito,
+           Estado             AS estado,
+           IdAsientoReversion AS id_asiento_reversion,
+           IdAgencia          AS id_agencia
+    FROM Contabilidad.AsientoContable
+"""
+
+# Filtros de CON-04: parámetro -> condición (todas por igualdad).
+_FILTROS_ASIENTOS = {
+    "fecha": "FechaAsiento = :fecha",
+    "origen": "Origen = :origen",
+    "id_agencia": "IdAgencia = :id_agencia",
+    "estado": "Estado = :estado",
+}
+
+
+def listar_asientos(
+    conn: Connection,
+    filtros: dict[str, Any],
+    page: int,
+    page_size: int,
+    campo: str,
+    direccion: str,
+) -> tuple[list[dict[str, Any]], int]:
+    """Página de asientos (CON-04) y el total que cumple los filtros.
+
+    `filtros` trae fecha, origen, id_agencia y estado (None = sin filtro). `campo`
+    debe estar en ORDEN_ASIENTOS; el desempate es IdAsientoContable DESC.
+    """
+    params = {k: v for k, v in filtros.items() if v is not None}
+    where = "".join(f" AND {_FILTROS_ASIENTOS[k]}" for k in params)
+    where = " WHERE 1 = 1" + where
+    # SQL dinámico seguro: `where` solo se arma con fragmentos fijos de
+    # _FILTROS_ASIENTOS (las claves vienen del servicio, no del cliente) y los
+    # valores de los filtros van como parámetros enlazados, nunca en el texto.
+    sql_total = "SELECT COUNT(*) FROM Contabilidad.AsientoContable" + where  # nosec B608  # NOSONAR
+    total = int(conn.execute(text(sql_total), params).scalar_one())
+    columna = ORDEN_ASIENTOS[campo]
+    orden = "ASC" if direccion == "asc" else "DESC"
+    desempate = "" if campo == "idAsientoContable" else ", IdAsientoContable DESC"
+    # Igual que arriba: `where` solo tiene fragmentos fijos de _FILTROS_ASIENTOS y
+    # los valores van parametrizados. El ORDER BY usa columnas de ORDEN_ASIENTOS y
+    # los literales ASC/DESC; offset y page_size también son parámetros.
+    sql = (
+        _ASIENTO
+        + where  # nosec B608  # NOSONAR
+        + f" ORDER BY {columna} {orden}{desempate}"
+        + " OFFSET :offset ROWS FETCH NEXT :page_size ROWS ONLY"
+    )
+    filas = conn.execute(
+        text(sql),
+        {**params, "offset": (page - 1) * page_size, "page_size": page_size},
+    ).mappings()
+    return [dict(f) for f in filas.all()], total
+
+
+def obtener_asiento(conn: Connection, id_asiento: int) -> dict[str, Any] | None:
+    """Cabecera de un asiento (CON-05), o None si no existe."""
+    return _one(conn, _ASIENTO + " WHERE IdAsientoContable = :id", {"id": id_asiento})
+
+
+def movimientos_asiento(conn: Connection, id_asiento: int) -> list[dict[str, Any]]:
+    """Líneas de un asiento (CON-05) con el código de la cuenta, en orden de registro."""
+    sql = """
+        SELECT m.IdMovimientoContable AS id_movimiento_contable,
+               m.IdCuentaContable     AS id_cuenta_contable,
+               c.CodigoCuenta         AS codigo_cuenta,
+               m.TipoMovimiento       AS tipo_movimiento,
+               m.Monto                AS monto,
+               m.IdTransaccion        AS id_transaccion,
+               m.IdAgencia            AS id_agencia
+        FROM Contabilidad.MovimientosContables m
+        JOIN Contabilidad.CuentasContables c
+          ON c.IdCuentaContable = m.IdCuentaContable
+        WHERE m.IdAsientoContable = :id
+        ORDER BY m.IdMovimientoContable
+    """
+    filas = conn.execute(text(sql), {"id": id_asiento}).mappings().all()
+    return [dict(f) for f in filas]
+
+
 def plantilla_boveda(
     conn: Connection, agencia: str, tipo: str, naturaleza: str
 ) -> dict[str, Any] | None:

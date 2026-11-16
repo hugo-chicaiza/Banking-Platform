@@ -116,6 +116,89 @@ def listar_cuentas_contables(
     ]
 
 
+def _texto_filtro(valor: str | None) -> str | None:
+    """Origen y estado son texto libre (pueden aparecer valores nuevos): se
+    normalizan a mayúsculas sin espacios alrededor, como se guardan en la DB."""
+    if valor is None:
+        return None
+    normalizado = valor.strip().upper()
+    if not normalizado:
+        raise problema(
+            400, "PARAMETRO_INVALIDO", "Un filtro de la consulta está vacío."
+        )
+    return normalizado
+
+
+def listar_asientos(
+    conn: Connection,
+    *,
+    fecha: str | None,
+    origen: str | None,
+    id_agencia: str | None,
+    estado: str | None,
+    page: int,
+    page_size: int,
+    sort: str | None,
+) -> dict[str, Any]:
+    """CON-04: asientos paginados, con filtros opcionales y sort de lista blanca.
+
+    Sin `sort`, el orden es fechaAsiento desc, idAsientoContable desc. En la lista
+    `detalle` va vacío: el detalle completo está en CON-05.
+
+    Raises:
+        HTTPException 400 FECHA_INVALIDA, ORDEN_INVALIDO, PARAMETRO_INVALIDO
+    """
+    dia: date | None = None
+    if fecha is not None:
+        try:
+            if not _FECHA_RE.match(fecha):
+                raise ValueError(fecha)
+            dia = date.fromisoformat(fecha)
+        except ValueError:
+            raise problema(
+                400, "FECHA_INVALIDA", "La fecha debe tener el formato YYYY-MM-DD."
+            ) from None
+
+    campo, direccion = "fechaAsiento", "desc"
+    if sort is not None:
+        partes = sort.split(",")
+        if (
+            len(partes) != 2
+            or partes[0] not in repository.ORDEN_ASIENTOS
+            or partes[1] not in {"asc", "desc"}
+        ):
+            raise problema(400, "ORDEN_INVALIDO", "El ordenamiento no es válido.")
+        campo, direccion = partes
+
+    filtros = {
+        "fecha": dia,
+        "origen": _texto_filtro(origen),
+        "id_agencia": id_agencia,
+        "estado": _texto_filtro(estado),
+    }
+    filas, total = repository.listar_asientos(
+        conn, filtros, page, page_size, campo, direccion
+    )
+    return {
+        "items": [{**fila, "detalle": []} for fila in filas],
+        "page": page,
+        "page_size": page_size,
+        "total": total,
+    }
+
+
+def obtener_asiento(conn: Connection, id_asiento: int) -> dict[str, Any]:
+    """CON-05: un asiento con sus líneas, ordenadas por IdMovimientoContable.
+
+    Raises:
+        HTTPException 404 ASIENTO_NO_ENCONTRADO
+    """
+    asiento = repository.obtener_asiento(conn, id_asiento)
+    if asiento is None:
+        raise problema(404, "ASIENTO_NO_ENCONTRADO", "El asiento contable no existe.")
+    return {**asiento, "detalle": repository.movimientos_asiento(conn, id_asiento)}
+
+
 def contabilizar_boveda(
     conn: Connection,
     *,
