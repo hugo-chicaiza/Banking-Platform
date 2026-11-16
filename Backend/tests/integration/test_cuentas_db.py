@@ -490,7 +490,6 @@ def test_cta_gestion_claves_sin_ambiguedad(conn):
             ["IdCuenta", "IdCanal"],
             True,
         ),
-    
         ("Canal.CuposModHis", "PK_CuposModHis", ["IdCupoModHis"], True),
         (
             "Canal.CuposModHis",
