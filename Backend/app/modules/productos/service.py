@@ -23,6 +23,7 @@ from app.modules.productos import repository as repo
 from app.modules.productos import vinculos
 from app.modules.productos.schemas import (
     ComisionFicha,
+    ElegibilidadFicha,
     CupoCanalVista,
     CuposSubProducto,
     FichaSubProducto,
@@ -557,9 +558,17 @@ def ficha_subproducto(conn: Connection, id_sub: int) -> FichaSubProducto:
         if tipo == "Cuenta"
         else None
     )
+    edades = catalogos_repo.reglas_edad(conn, id_sub)
     return FichaSubProducto(
         producto=producto,
         subproducto=_subproducto(sub, tipo),
+        elegibilidad=ElegibilidadFicha(
+            edad_minima=edades.get("efectiva"),
+            edad_maxima=edades.get("maxima"),
+            edad_minima_subproducto=edades.get("subproducto"),
+            edad_minima_red=edades.get("red"),
+            edad_minima_politica=edades.get("politica"),
+        ),
         cupos=cupos,
         restricciones=restricciones,
         tasas=tasas,

@@ -360,11 +360,23 @@ class SeguroFicha(CamelModel):
     del_producto: bool
 
 
+class ElegibilidadFicha(CamelModel):
+    """Edad que rige: la mínima es la más alta de subproducto, red (tarjetas) y política
+    EDAD_MINIMA (créditos); la máxima, la del subproducto. null = sin límite."""
+
+    edad_minima: int | None = None
+    edad_maxima: int | None = None
+    edad_minima_subproducto: int | None = None
+    edad_minima_red: int | None = None
+    edad_minima_politica: int | None = None
+
+
 class FichaSubProducto(CamelModel):
     """Lo que el asesor lee al cliente: lo vigente hoy del subproducto y lo que hereda."""
 
     producto: Producto
     subproducto: SubProducto
+    elegibilidad: ElegibilidadFicha
     cupos: list[CupoCanalVista]
     restricciones: RestriccionesVista | None = None
     tasas: list[TasaFicha]

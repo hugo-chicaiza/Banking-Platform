@@ -127,6 +127,17 @@ def ficha(monkeypatch: pytest.MonkeyPatch) -> None:
     )
     monkeypatch.setattr(catalogos_repo, "listar_seguros", lambda _c: [])
     monkeypatch.setattr(
+        catalogos_repo,
+        "reglas_edad",
+        lambda _c, _i: {
+            "subproducto": 18,
+            "red": 21,
+            "politica": None,
+            "efectiva": 21,
+            "maxima": None,
+        },
+    )
+    monkeypatch.setattr(
         repo,
         "listar_cupos",
         lambda _c, _i: [
@@ -157,6 +168,11 @@ def test_ficha_reune_lo_vigente_y_lo_heredado(ficha):
     assert r.status_code == 200, r.text
     f = r.json()
     assert f["subproducto"]["edadMinima"] == 18
+    # Rige la más alta: la red pide 21
+    assert (
+        f["elegibilidad"]["edadMinima"] == 21
+        and f["elegibilidad"]["edadMinimaRed"] == 21
+    )
     assert [(t["idTasaInteres"], t["delProducto"]) for t in f["tasas"]] == [(4, True)]
     # GAS viene del producto pero el subproducto la exonera: no aparece
     assert [c["codigoComision"] for c in f["comisiones"]] == ["EXT"]
