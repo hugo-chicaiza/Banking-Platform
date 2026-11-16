@@ -1,23 +1,33 @@
-"""Pruebas específicas E3-01. Ejecutar con pytest."""
+"""Pruebas específicas de E3-01."""
 
 from datetime import date
+from typing import cast
 from unittest.mock import MagicMock
+
+import pytest
+from sqlalchemy.engine import Connection
 
 from app.modules.productos import repository as repo
 
 
 def test_cupo_sin_canal_rechazado():
-    import pytest
-
     with pytest.raises(ValueError):
-        repo.cupo_vigente(MagicMock(), 1, date(2026, 11, 16), "")
+        repo.cupo_vigente(
+            MagicMock(),
+            1,
+            date(2026, 11, 16),
+            "",
+        )
 
 
 def test_condiciones_sin_canal_rechazado():
-    import pytest
-
     with pytest.raises(ValueError):
-        repo.condiciones_vigentes(MagicMock(), 1, date(2026, 11, 16), "")
+        repo.condiciones_vigentes(
+            MagicMock(),
+            1,
+            date(2026, 11, 16),
+            "",
+        )
 
 
 def test_guardar_cupos_no_elimina_historia(monkeypatch):
@@ -32,9 +42,16 @@ def test_guardar_cupos_no_elimina_historia(monkeypatch):
             consultas.append(str(stmt))
             return Resultado()
 
-    monkeypatch.setattr(repo, "_rows", lambda *args, **kwargs: [])
+    monkeypatch.setattr(
+        repo,
+        "_rows",
+        lambda *args, **kwargs: [],
+    )
+
+    conn = Conn()
+
     repo.guardar_cupos(
-        Conn(),
+        cast(Connection, conn),
         1,
         [
             {
@@ -46,5 +63,6 @@ def test_guardar_cupos_no_elimina_historia(monkeypatch):
             }
         ],
     )
+
     assert any("INSERT INTO" in q for q in consultas)
     assert not any("DELETE FROM" in q for q in consultas)
