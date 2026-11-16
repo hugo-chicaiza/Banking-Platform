@@ -23,9 +23,9 @@ from app.modules.productos import repository as repo
 from app.modules.productos import vinculos
 from app.modules.productos.schemas import (
     ComisionFicha,
-    ElegibilidadFicha,
     CupoCanalVista,
     CuposSubProducto,
+    ElegibilidadFicha,
     FichaSubProducto,
     Producto,
     ProductoCreate,
