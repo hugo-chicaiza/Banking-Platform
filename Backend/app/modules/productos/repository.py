@@ -1,3 +1,4 @@
+from datetime import date
 from typing import Any
 
 from sqlalchemy import Connection, text
@@ -227,24 +228,29 @@ def actualizar_subproducto(
 
 
 def listar_cupos(conn: Connection, id_sub: int) -> list[dict[str, Any]]:
-    """Cada canal activo (o ya habilitado), con los máximos del subproducto."""
+    """Vista de cupos activos a la fecha de la BD, sin duplicar canales históricos."""
     return _rows(
         conn,
         """
         SELECT c.IdCanal AS id_canal, c.CodigoCanal AS codigo_canal,
                c.NombreCanal AS nombre_canal,
-               CAST(CASE WHEN p.IdProductoCanalCupo IS NULL THEN 0 ELSE 1 END AS bit)
-                   AS habilitado,
+               CAST(CASE WHEN p.IdProductoCanalCupo IS NULL THEN 0 ELSE 1 END AS bit) AS habilitado,
                p.CupoDiarioMaximo AS cupo_diario_maximo,
                p.CupoMensualMaximo AS cupo_mensual_maximo,
                p.MontoMaxTransaccion AS monto_max_transaccion,
                p.MaxTransaccionesDia AS max_transacciones_dia
         FROM Canal.Canal AS c
-        LEFT JOIN ProductosFinancieros.ProductoCanalCupo AS p
-          ON p.IdCanal = c.IdCanal AND p.IdSubProducto = :id
+        OUTER APPLY (
+            SELECT TOP (1) x.* FROM ProductosFinancieros.ProductoCanalCupo AS x
+            WHERE x.IdCanal = c.IdCanal AND x.IdSubProducto = :id
+              AND x.EstadoCupo = 'A'
+              AND x.VigenciaDesde <= CONVERT(date, SYSDATETIMEOFFSET() AT TIME ZONE 'SA Pacific Standard Time')
+              AND (x.VigenciaHasta IS NULL OR x.VigenciaHasta >= CONVERT(date, SYSDATETIMEOFFSET() AT TIME ZONE 'SA Pacific Standard Time'))
+            ORDER BY x.VigenciaDesde DESC, x.IdProductoCanalCupo DESC
+        ) AS p
         WHERE c.Estado = 'A' OR p.IdProductoCanalCupo IS NOT NULL
         ORDER BY c.NombreCanal
-        """,
+    """,
         {"id": id_sub},
     )
 
@@ -281,61 +287,122 @@ def cupos_personalizados_maximos(
 
 
 def guardar_cupos(conn: Connection, id_sub: int, cupos: list[dict[str, Any]]) -> None:
-    """Quita los canales que no vienen y crea o actualiza los que sí (en la transacción)."""
-    actuales = {
-        int(i)
-        for i in conn.execute(
-            text(
-                "SELECT IdCanal FROM ProductosFinancieros.ProductoCanalCupo"
-                " WITH (UPDLOCK, HOLDLOCK) WHERE IdSubProducto = :id"
-            ),
-            {"id": id_sub},
-        ).scalars()
-    }
-    for id_canal in actuales - {c["id_canal"] for c in cupos}:
-        conn.execute(
-            text(
-                "DELETE FROM ProductosFinancieros.ProductoCanalCupo"
-                " WHERE IdSubProducto = :id AND IdCanal = :canal"
-            ),
-            {"id": id_sub, "canal": id_canal},
+    """Versiona cupos sin DELETE. Debe llamarse dentro de una transacción."""
+    hoy = conn.execute(
+        text(
+            "SELECT CONVERT(date, SYSDATETIMEOFFSET() AT TIME ZONE 'SA Pacific Standard Time')"
         )
-    for cupo in cupos:
+    ).scalar_one()
+    actuales = _rows(
+        conn,
+        """
+        SELECT IdProductoCanalCupo AS id, IdCanal AS canal, VigenciaDesde AS desde
+        FROM ProductosFinancieros.ProductoCanalCupo WITH (UPDLOCK, HOLDLOCK)
+        WHERE IdSubProducto = :id AND EstadoCupo = 'A'
+          AND VigenciaDesde <= :hoy AND (VigenciaHasta IS NULL OR VigenciaHasta >= :hoy)
+    """,
+        {"id": id_sub, "hoy": hoy},
+    )
+    if len({f["canal"] for f in actuales}) != len(actuales):
+        raise ValueError("Existen cupos vigentes superpuestos; no se puede versionar")
+    futuros = _rows(
+        conn,
+        """
+        SELECT IdProductoCanalCupo FROM ProductosFinancieros.ProductoCanalCupo WITH (UPDLOCK, HOLDLOCK)
+        WHERE IdSubProducto = :id AND EstadoCupo = 'A' AND VigenciaDesde > :hoy
+    """,
+        {"id": id_sub, "hoy": hoy},
+    )
+    if futuros:
+        raise ValueError("Existen cupos futuros programados; revisar antes de guardar")
+    por_canal = {int(f["canal"]): f for f in actuales}
+    nuevos = {int(c["id_canal"]): c for c in cupos}
+    for canal, anterior in por_canal.items():
+        if anterior["desde"] == hoy:
+            if canal not in nuevos:
+                conn.execute(
+                    text("""
+                    UPDATE ProductosFinancieros.ProductoCanalCupo SET EstadoCupo = 'I'
+                    WHERE IdProductoCanalCupo = :id
+                """),
+                    {"id": anterior["id"]},
+                )
+            else:
+                c = nuevos[canal]
+                conn.execute(
+                    text("""
+                    UPDATE ProductosFinancieros.ProductoCanalCupo SET
+                        CupoDiarioMaximo = :cupo_diario_maximo,
+                        CupoMensualMaximo = :cupo_mensual_maximo,
+                        MontoMaxTransaccion = :monto_max_transaccion,
+                        MaxTransaccionesDia = :max_transacciones_dia
+                    WHERE IdProductoCanalCupo = :id
+                """),
+                    {**c, "id": anterior["id"]},
+                )
+        else:
+            conn.execute(
+                text("""
+                UPDATE ProductosFinancieros.ProductoCanalCupo
+                SET VigenciaHasta = DATEADD(day, -1, :hoy)
+                WHERE IdProductoCanalCupo = :id
+            """),
+                {"id": anterior["id"], "hoy": hoy},
+            )
+    for canal, c in nuevos.items():
+        if canal in por_canal and por_canal[canal]["desde"] == hoy:
+            continue
         conn.execute(
-            text(
-                """
-                MERGE ProductosFinancieros.ProductoCanalCupo WITH (HOLDLOCK) AS d
-                USING (SELECT :id AS IdSubProducto, :id_canal AS IdCanal) AS o
-                   ON d.IdSubProducto = o.IdSubProducto AND d.IdCanal = o.IdCanal
-                WHEN MATCHED THEN UPDATE SET
-                    CupoDiarioMaximo = :cupo_diario_maximo,
-                    CupoMensualMaximo = :cupo_mensual_maximo,
-                    MontoMaxTransaccion = :monto_max_transaccion,
-                    MaxTransaccionesDia = :max_transacciones_dia
-                WHEN NOT MATCHED THEN INSERT (IdSubProducto, IdCanal, CupoDiarioMaximo,
-                    CupoMensualMaximo, MontoMaxTransaccion, MaxTransaccionesDia)
-                    VALUES (:id, :id_canal, :cupo_diario_maximo, :cupo_mensual_maximo,
-                            :monto_max_transaccion, :max_transacciones_dia);
-                """
-            ),
-            {"id": id_sub, **cupo},
+            text("""
+            INSERT INTO ProductosFinancieros.ProductoCanalCupo
+                (IdSubProducto, IdCanal, CupoDiarioMaximo, CupoMensualMaximo,
+                 MontoMaxTransaccion, MaxTransaccionesDia, VigenciaDesde, EstadoCupo)
+            VALUES (:id, :id_canal, :cupo_diario_maximo, :cupo_mensual_maximo,
+                    :monto_max_transaccion, :max_transacciones_dia, :hoy, 'A')
+        """),
+            {"id": id_sub, "hoy": hoy, **c},
         )
 
 
 # ---------- Restricciones de cuenta ----------
 
 
-def obtener_restricciones(conn: Connection, id_sub: int) -> dict[str, Any]:
+def obtener_restricciones(
+    conn: Connection,
+    id_sub: int,
+) -> dict[str, Any]:
+    """Consulta las restricciones activas y vigentes del subproducto.
+
+    Considera la fecha actual de la base de datos y excluye
+    restricciones futuras o vencidas.
+    """
     filas = _rows(
         conn,
         """
-        SELECT TipoRestriccion AS tipo, Dias AS dias, Monto AS monto
+        SELECT
+            TipoRestriccion AS tipo,
+            Dias AS dias,
+            Monto AS monto
         FROM ProductosFinancieros.ProductoRestriccion
-        WHERE IdSubProducto = :id AND Estado = 'A'
+        WHERE IdSubProducto = :id
+          AND Estado = 'A'
+          AND VigenciaDesde <= CAST(
+              SYSDATETIMEOFFSET() AT TIME ZONE
+              'SA Pacific Standard Time' AS date
+          )
+          AND (
+              VigenciaHasta IS NULL
+              OR VigenciaHasta >= CAST(
+                  SYSDATETIMEOFFSET() AT TIME ZONE
+                  'SA Pacific Standard Time' AS date
+              )
+          )
         """,
         {"id": id_sub},
     )
-    por_tipo = {f["tipo"]: f for f in filas}
+
+    por_tipo = {fila["tipo"]: fila for fila in filas}
+
     return {
         "dias_sin_retiros": por_tipo.get("SIN_RETIROS", {}).get("dias"),
         "saldo_minimo": por_tipo.get("SALDO_MINIMO", {}).get("monto"),
@@ -444,3 +511,173 @@ def eliminar_producto(conn: Connection, id_producto: int) -> None:
         "DELETE FROM ProductosFinancieros.Producto WHERE IdProducto = :id",
     ):
         conn.execute(text(sql), {"id": id_producto})
+
+
+# ---------- E3-01: servicios internos de vigencia ----------
+
+
+def _fecha(fecha_contable: date) -> date:
+    if not isinstance(fecha_contable, date):
+        raise TypeError("fecha_contable debe ser date")
+    return fecha_contable
+
+
+def condiciones_vigentes(
+    conn: Connection, id_subproducto: int, fecha_contable: date, canal: str
+) -> dict[str, Any] | None:
+    """Devuelve condiciones aplicables o None. El canal es obligatorio aunque
+    las condiciones actuales sean globales; no se presume ventanilla.
+    """
+    if not canal or not canal.strip():
+        raise ValueError("canal es obligatorio")
+    fila = (
+        conn.execute(
+            text("""
+            SELECT TOP (1) c.IdCondicion AS id_condicion,
+                c.IdSubProducto AS id_subproducto,
+                c.MontoAperturaMinimo AS monto_apertura_minimo,
+                c.SaldoMinimo AS saldo_minimo,
+                c.TasaInteresAnual AS tasa_interes_anual,
+                c.PeriodicidadInteres AS periodicidad_interes,
+                c.CostoMantenimiento AS costo_mantenimiento,
+                c.PeriodicidadCosto AS periodicidad_costo,
+                c.MesesInactividad AS meses_inactividad,
+                c.AplicaACuentasExistentes AS aplica_a_cuentas_existentes,
+                c.VigenciaDesde AS vigencia_desde,
+                c.VigenciaHasta AS vigencia_hasta
+            FROM ProductosFinancieros.SubProductoCondicion AS c
+            WHERE c.IdSubProducto = :id
+              AND c.Estado IN ('Vigente', 'Programada')
+              AND c.VigenciaDesde <= :fecha
+              AND (c.VigenciaHasta IS NULL OR c.VigenciaHasta >= :fecha)
+            ORDER BY c.VigenciaDesde DESC, c.IdCondicion DESC
+        """),
+            {"id": id_subproducto, "fecha": _fecha(fecha_contable)},
+        )
+        .mappings()
+        .first()
+    )
+    return dict(fila) if fila is not None else None
+
+
+def cupo_vigente(
+    conn: Connection, id_subproducto: int, fecha_contable: date, canal: str
+) -> dict[str, Any]:
+    """Sin canal activo o sin cupo vigente: permitido=False (denegar por defecto)."""
+    if not canal or not canal.strip():
+        raise ValueError("canal es obligatorio")
+    fila = (
+        conn.execute(
+            text("""
+            SELECT TOP (1) cc.IdProductoCanalCupo AS id_cupo,
+                cc.CupoDiarioMaximo AS cupo_diario_maximo,
+                cc.CupoMensualMaximo AS cupo_mensual_maximo,
+                cc.MontoMaxTransaccion AS monto_max_transaccion,
+                cc.MaxTransaccionesDia AS max_transacciones_dia,
+                cc.VigenciaDesde AS vigencia_desde,
+                cc.VigenciaHasta AS vigencia_hasta
+            FROM ProductosFinancieros.ProductoCanalCupo AS cc
+            JOIN Canal.Canal AS ca ON ca.IdCanal = cc.IdCanal
+            WHERE cc.IdSubProducto = :id
+              AND ca.CodigoCanal = :canal AND ca.Estado = 'A'
+              AND cc.EstadoCupo = 'A'
+              AND cc.VigenciaDesde <= :fecha
+              AND (cc.VigenciaHasta IS NULL OR cc.VigenciaHasta >= :fecha)
+            ORDER BY cc.VigenciaDesde DESC, cc.IdProductoCanalCupo DESC
+        """),
+            {
+                "id": id_subproducto,
+                "fecha": _fecha(fecha_contable),
+                "canal": canal.strip(),
+            },
+        )
+        .mappings()
+        .first()
+    )
+    if fila is None:
+        return {"permitido": False, "motivo": "CANAL_SIN_CUPO_VIGENTE"}
+    return {"permitido": True, **dict(fila)}
+
+
+def restricciones_vigentes(
+    conn: Connection, id_subproducto: int, fecha_contable: date, canal: str
+) -> list[dict[str, Any]]:
+    """Lista restricciones aplicables; las restricciones actuales son globales al canal."""
+    if not canal or not canal.strip():
+        raise ValueError("canal es obligatorio")
+    filas = (
+        conn.execute(
+            text("""
+            SELECT IdRestriccion AS id_restriccion,
+                TipoRestriccion AS tipo_restriccion,
+                Dias AS dias, Monto AS monto, Descripcion AS descripcion,
+                VigenciaDesde AS vigencia_desde,
+                VigenciaHasta AS vigencia_hasta
+            FROM ProductosFinancieros.ProductoRestriccion
+            WHERE IdSubProducto = :id AND Estado = 'A'
+              AND VigenciaDesde <= :fecha
+              AND (VigenciaHasta IS NULL OR VigenciaHasta >= :fecha)
+            ORDER BY TipoRestriccion, VigenciaDesde DESC
+        """),
+            {"id": id_subproducto, "fecha": _fecha(fecha_contable)},
+        )
+        .mappings()
+        .all()
+    )
+    return [dict(fila) for fila in filas]
+
+
+# ---------- E3-01: datos para elegibilidad ----------
+
+
+def datos_elegibilidad(
+    conn: Connection, id_cliente: int, id_subproducto: int
+) -> dict[str, Any] | None:
+    """Consulta los atributos sin exponer datos personales en la respuesta."""
+    filas = _rows(
+        conn,
+        """
+        SELECT c.TipoCliente AS tipo_cliente, c.FechaNacimiento AS fecha_nacimiento,
+               c.Estado AS estado_cliente,
+               s.IdSubProducto AS id_subproducto, s.TipoClientePermitido AS tipo_permitido,
+               s.EdadMinima AS edad_minima, s.EdadMaxima AS edad_maxima,
+               s.RequiereTutor AS requiere_tutor,
+               s.IdSubProductoRequerido AS id_requerido,
+               s.MaximoPorCliente AS maximo_por_cliente,
+               s.Estado AS estado_subproducto, s.EstadoSubProducto AS estado_subproducto_nuevo,
+               p.Estado AS estado_producto, p.EstadoProducto AS estado_producto_nuevo,
+               p.TipoProducto AS tipo_producto
+        FROM Clientes.Cliente AS c
+        CROSS JOIN ProductosFinancieros.SubProducto AS s
+        JOIN ProductosFinancieros.Producto AS p ON p.IdProducto = s.IdProducto
+        WHERE c.IdCliente = :cliente AND s.IdSubProducto = :sub
+    """,
+        {"cliente": id_cliente, "sub": id_subproducto},
+    )
+    return filas[0] if filas else None
+
+
+def cuentas_cliente_para_elegibilidad(
+    conn: Connection, id_cliente: int
+) -> list[dict[str, Any]]:
+    return _rows(
+        conn,
+        """
+        SELECT IdSubProducto AS id_subproducto, Estado AS estado
+        FROM Cuentas.Cuenta WHERE IdCliente = :cliente
+    """,
+        {"cliente": id_cliente},
+    )
+
+
+def tarjetas_cliente_para_elegibilidad(
+    conn: Connection, id_cliente: int
+) -> list[dict[str, Any]]:
+    return _rows(
+        conn,
+        """
+        SELECT IdSubProducto AS id_subproducto, Estado AS estado
+        FROM Tarjeta.Tarjeta WHERE IdCliente = :cliente
+    """,
+        {"cliente": id_cliente},
+    )
