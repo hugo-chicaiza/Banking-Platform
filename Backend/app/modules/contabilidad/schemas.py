@@ -1,4 +1,7 @@
 from datetime import date, time
+from typing import Annotated, Literal
+
+from pydantic import ConfigDict, Field, StringConstraints
 
 from app.core.api.schemas import CamelModel, Money
 
@@ -36,6 +39,44 @@ class CuentaContable(CamelModel):
 # CON-04 / CON-05 · Asientos contables
 
 INT32_MAX = 2_147_483_647
+
+
+# #206 · Alta, edición, estado y baja de cuentas contables (contrato)
+# Tamaños tomados de la base de desarrollo: CodigoCuenta varchar(30), solo dígitos
+# en los datos actuales; NombreCuenta varchar(150).
+
+CodigoCuenta = Annotated[str, StringConstraints(pattern=r"^[0-9]{1,30}$")]
+NombreCuenta = Annotated[
+    str, StringConstraints(strip_whitespace=True, min_length=1, max_length=150)
+]
+
+
+class CuentaContableCrear(CamelModel):
+    """Alta de una cuenta. El código debe empezar con el del padre (422
+    CODIGO_NO_CORRESPONDE_AL_PADRE); la naturaleza y el tipo salen del padre."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    codigo_cuenta: CodigoCuenta
+    nombre_cuenta: NombreCuenta
+    id_cuenta_superior: Annotated[int, Field(strict=True, ge=1, le=INT32_MAX)]
+    es_imputable: Annotated[bool, Field(strict=True)]
+
+
+class CuentaContableEditar(CamelModel):
+    """Solo el nombre es editable; el código y la jerarquía no cambian."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    nombre_cuenta: NombreCuenta
+
+
+class CuentaContableEstado(CamelModel):
+    """Mismos textos que publica CON-03 a partir del bit Estado."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    estado: Literal["Activo", "Inactivo"]
 
 
 class MovimientoAsiento(CamelModel):

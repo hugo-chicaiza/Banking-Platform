@@ -2,13 +2,18 @@ import logging
 import re
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
-from typing import Any
+from typing import Any, NoReturn
 
 from fastapi import HTTPException
 from sqlalchemy import Connection
 
 from app.core.api.errors import problema
 from app.modules.contabilidad import repository
+from app.modules.contabilidad.schemas import (
+    CuentaContableCrear,
+    CuentaContableEditar,
+    CuentaContableEstado,
+)
 
 log = logging.getLogger(__name__)
 
@@ -114,6 +119,58 @@ def listar_cuentas_contables(
         {**fila, "estado": "Activo" if fila["estado"] else "Inactivo"}
         for fila in repository.listar_cuentas_contables(conn, q, imputable)
     ]
+
+
+# #206 · Alta, edición, estado y baja de cuentas: solo contrato. Hasta que exista la
+# lógica (y el flujo de aprobación que da los 202) responden 501.
+
+
+def _no_habilitada() -> HTTPException:
+    return problema(
+        501,
+        "OPERACION_NO_HABILITADA",
+        "La operación aún no está habilitada en este ambiente.",
+    )
+
+
+def crear_cuenta_contable(conn: Connection, datos: CuentaContableCrear) -> NoReturn:
+    """Alta de cuenta: 201 con la cuenta o 202 si queda pendiente de aprobación.
+
+    Raises:
+        HTTPException 501 OPERACION_NO_HABILITADA (contrato sin lógica)
+    """
+    raise _no_habilitada()
+
+
+def editar_cuenta_contable(
+    conn: Connection, id_cuenta: int, datos: CuentaContableEditar
+) -> NoReturn:
+    """Cambio de nombre: 200 con la cuenta.
+
+    Raises:
+        HTTPException 501 OPERACION_NO_HABILITADA (contrato sin lógica)
+    """
+    raise _no_habilitada()
+
+
+def cambiar_estado_cuenta_contable(
+    conn: Connection, id_cuenta: int, datos: CuentaContableEstado
+) -> NoReturn:
+    """Activar o desactivar: 200 con la cuenta o 202 si queda pendiente.
+
+    Raises:
+        HTTPException 501 OPERACION_NO_HABILITADA (contrato sin lógica)
+    """
+    raise _no_habilitada()
+
+
+def eliminar_cuenta_contable(conn: Connection, id_cuenta: int) -> NoReturn:
+    """Baja: 204, o 202 si queda pendiente de aprobación.
+
+    Raises:
+        HTTPException 501 OPERACION_NO_HABILITADA (contrato sin lógica)
+    """
+    raise _no_habilitada()
 
 
 def _texto_filtro(valor: str | None) -> str | None:
