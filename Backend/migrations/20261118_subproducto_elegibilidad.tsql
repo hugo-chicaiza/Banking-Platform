@@ -1,0 +1,16 @@
+/* T-SQL (SQL Server). Elegibilidad por edad en el subproducto (E3-02 #375, AC 5 y 6).
+   NULL = sin límite. Un subproducto para menores tiene EdadMaxima = 17.
+   Las filas existentes quedan sin límites: nada cambia hasta que un ADMIN los defina.
+   Ejecutar en CooperativaDB antes de desplegar el backend que los lee. Reejecutable. */
+SET XACT_ABORT ON;
+GO
+IF COL_LENGTH('ProductosFinancieros.SubProducto', 'EdadMinima') IS NULL
+    ALTER TABLE ProductosFinancieros.SubProducto ADD EdadMinima tinyint NULL, EdadMaxima tinyint NULL;
+GO
+IF OBJECT_ID('ProductosFinancieros.CK_SubProducto_Edades') IS NULL
+    ALTER TABLE ProductosFinancieros.SubProducto ADD CONSTRAINT CK_SubProducto_Edades CHECK (
+        (EdadMinima IS NULL OR EdadMinima <= 120) AND (EdadMaxima IS NULL OR EdadMaxima <= 120)
+        AND (EdadMinima IS NULL OR EdadMaxima IS NULL OR EdadMaxima >= EdadMinima));
+GO
+/* Vuelta atrás (solo si nadie definió edades):
+   ALTER TABLE ProductosFinancieros.SubProducto DROP CONSTRAINT CK_SubProducto_Edades, COLUMN EdadMinima, EdadMaxima; */

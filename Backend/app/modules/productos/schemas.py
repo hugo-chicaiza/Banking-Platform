@@ -103,8 +103,10 @@ class ProductoCreate(_Entrada):
 
 
 class ProductoUpdate(_Entrada):
-    """PATCH parcial. Código y tipo no cambian: los usan cuentas, tarjetas y créditos."""
+    """PATCH parcial. El tipo no cambia. El código solo cambia mientras el producto está
+    inactivo y sin uso (borrador): activo o usado, 409 PRODUCTO_NO_EDITABLE."""
 
+    codigo_producto: CodigoProducto | None = None
     nombre_producto: Nombre | None = None
     # null borra la descripción
     descripcion: Descripcion | None = None
@@ -117,6 +119,7 @@ class ProductoUpdate(_Entrada):
         if not self.model_fields_set:
             raise ValueError("Envíe al menos un campo para actualizar.")
         for campo in (
+            "codigo_producto",
             "nombre_producto",
             "monto_apertura_minimo",
             "permite_operaciones_presenciales",
@@ -127,21 +130,31 @@ class ProductoUpdate(_Entrada):
         return self
 
 
+# Elegibilidad por edad (años cumplidos); null = sin límite. Menores: edad_maxima = 17
+Edad = Annotated[int, Field(ge=0, le=120)]
+
+
 class SubProductoCreate(_Entrada):
     codigo_sub_producto: CodigoSubProducto
     nombre_sub_producto: Nombre
+    edad_minima: Edad | None = None
+    edad_maxima: Edad | None = None
 
 
 class SubProductoUpdate(_Entrada):
     nombre_sub_producto: Nombre | None = None
     estado: Estado | None = None
+    # null quita el límite
+    edad_minima: Edad | None = None
+    edad_maxima: Edad | None = None
 
     @model_validator(mode="after")
     def _algo(self) -> Self:
         if not self.model_fields_set:
             raise ValueError("Envíe al menos un campo para actualizar.")
-        if any(getattr(self, c) is None for c in self.model_fields_set):
-            raise ValueError("Los campos enviados no admiten null.")
+        sin_null = {"nombre_sub_producto", "estado"} & self.model_fields_set
+        if any(getattr(self, c) is None for c in sin_null):
+            raise ValueError("nombreSubProducto y estado no admiten null.")
         return self
 
 
@@ -158,6 +171,8 @@ class SubProducto(CamelModel):
     estado: Estado
     fecha_registro: datetime
     tipo_tarjeta: TipoTarjeta | None = None
+    edad_minima: int | None = None
+    edad_maxima: int | None = None
 
 
 class Producto(CamelModel):
@@ -188,17 +203,9 @@ class CupoCanal(_Entrada):
     cupo_diario_maximo: MontoLimite
     cupo_mensual_maximo: MontoLimite
     monto_max_transaccion: MontoLimite
+    # El orden entre cupos (mensual >= diario >= por transacción) lo valida el servicio:
+    # 422 CUPOS_INCOHERENTES (E3-03 AC 4)
     max_transacciones_dia: Annotated[int, Field(ge=1, le=10_000)]
-
-    @model_validator(mode="after")
-    def _coherentes(self) -> Self:
-        if self.cupo_mensual_maximo < self.cupo_diario_maximo:
-            raise ValueError("El cupo mensual debe ser mayor o igual que el diario.")
-        if self.monto_max_transaccion > self.cupo_diario_maximo:
-            raise ValueError(
-                "El monto por transacción no puede superar el cupo diario."
-            )
-        return self
 
 
 class CuposSubProducto(_Entrada):
@@ -310,3 +317,70 @@ class VinculosBase(CamelModel):
 class VinculosVista(VinculosBase):
     # Solo en subproductos: lo que heredan del producto
     del_producto: VinculosBase | None = None
+
+
+# ---------- Tipos de producto y ficha del subproducto ----------
+
+
+class TipoProductoInfo(CamelModel):
+    """Los tipos vienen con el software: no se crean desde la API (E3-02 AC 2)."""
+
+    codigo: TipoProducto
+    nombre: str
+    descripcion: str
+
+
+class TasaFicha(CamelModel):
+    id_tasa_interes: int
+    tipo_tasa: str
+    tasa_nominal_anual: Money
+    monto_minimo: Money | None = None
+    monto_maximo: Money | None = None
+    plazo_maximo_meses: int | None = None
+    vigente: bool
+    del_producto: bool
+
+
+class ComisionFicha(CamelModel):
+    id_comision: int
+    codigo_comision: str
+    descripcion: str
+    tipo_calculo: str
+    valor: Money
+    nombre_canal: str
+    del_producto: bool
+
+
+class SeguroFicha(CamelModel):
+    id_seguro: int
+    nombre: str
+    tipo_calculo: str
+    valor: Money
+    es_obligatorio: bool
+    del_producto: bool
+
+
+class ElegibilidadFicha(CamelModel):
+    """Edad que rige: la mínima es la más alta de subproducto, red (tarjetas) y política
+    EDAD_MINIMA (créditos); la máxima, la del subproducto. null = sin límite."""
+
+    edad_minima: int | None = None
+    edad_maxima: int | None = None
+    edad_minima_subproducto: int | None = None
+    edad_minima_red: int | None = None
+    edad_minima_politica: int | None = None
+
+
+class FichaSubProducto(CamelModel):
+    """Lo que el asesor lee al cliente: lo vigente hoy del subproducto y lo que hereda."""
+
+    producto: Producto
+    subproducto: SubProducto
+    elegibilidad: ElegibilidadFicha
+    cupos: list[CupoCanalVista]
+    restricciones: RestriccionesVista | None = None
+    tasas: list[TasaFicha]
+    # Sin las exoneradas en el subproducto
+    comisiones: list[ComisionFicha]
+    seguros: list[SeguroFicha]
+    sistemas_amortizacion: list[str]

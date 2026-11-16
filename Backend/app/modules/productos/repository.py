@@ -23,7 +23,8 @@ _SUBPRODUCTO = """
     SELECT IdSubProducto AS id_sub_producto, IdProducto AS id_producto,
            CodigoSubProducto AS codigo_sub_producto,
            NombreSubProducto AS nombre_sub_producto, Estado AS estado,
-           FechaRegistro AS fecha_registro
+           FechaRegistro AS fecha_registro, EdadMinima AS edad_minima,
+           EdadMaxima AS edad_maxima
     FROM ProductosFinancieros.SubProducto{bloqueo}
 """
 
@@ -118,13 +119,14 @@ def insertar_producto(conn: Connection, datos: dict[str, Any]) -> int:
 
 
 _CAMPOS_PRODUCTO = (
+    "codigo_producto",
     "nombre_producto",
     "descripcion",
     "monto_apertura_minimo",
     "permite_operaciones_presenciales",
     "estado",
 )
-_CAMPOS_SUBPRODUCTO = ("nombre_sub_producto", "estado")
+_CAMPOS_SUBPRODUCTO = ("nombre_sub_producto", "estado", "edad_minima", "edad_maxima")
 
 
 def _parametros(
@@ -151,6 +153,8 @@ def actualizar_producto(
         text(
             """
             UPDATE ProductosFinancieros.Producto SET
+                CodigoProducto = CASE WHEN :cambia_codigo_producto = 1
+                    THEN :codigo_producto ELSE CodigoProducto END,
                 NombreProducto = CASE WHEN :cambia_nombre_producto = 1
                     THEN :nombre_producto ELSE NombreProducto END,
                 Descripcion = CASE WHEN :cambia_descripcion = 1
@@ -170,18 +174,30 @@ def actualizar_producto(
 
 
 def insertar_subproducto(
-    conn: Connection, id_producto: int, codigo: str, nombre: str
+    conn: Connection,
+    id_producto: int,
+    codigo: str,
+    nombre: str,
+    edad_minima: int | None = None,
+    edad_maxima: int | None = None,
 ) -> int:
     return int(
         conn.execute(
             text(
                 """
-                INSERT INTO ProductosFinancieros.SubProducto (IdProducto, CodigoSubProducto, NombreSubProducto, Estado)
+                INSERT INTO ProductosFinancieros.SubProducto (IdProducto, CodigoSubProducto,
+                    NombreSubProducto, Estado, EdadMinima, EdadMaxima)
                 OUTPUT inserted.IdSubProducto
-                VALUES (:id_producto, :codigo, :nombre, 'A')
+                VALUES (:id_producto, :codigo, :nombre, 'A', :edad_minima, :edad_maxima)
                 """
             ),
-            {"id_producto": id_producto, "codigo": codigo, "nombre": nombre},
+            {
+                "id_producto": id_producto,
+                "codigo": codigo,
+                "nombre": nombre,
+                "edad_minima": edad_minima,
+                "edad_maxima": edad_maxima,
+            },
         ).scalar_one()
     )
 
@@ -195,7 +211,11 @@ def actualizar_subproducto(
             UPDATE ProductosFinancieros.SubProducto SET
                 NombreSubProducto = CASE WHEN :cambia_nombre_sub_producto = 1
                     THEN :nombre_sub_producto ELSE NombreSubProducto END,
-                Estado = CASE WHEN :cambia_estado = 1 THEN :estado ELSE Estado END
+                Estado = CASE WHEN :cambia_estado = 1 THEN :estado ELSE Estado END,
+                EdadMinima = CASE WHEN :cambia_edad_minima = 1
+                    THEN :edad_minima ELSE EdadMinima END,
+                EdadMaxima = CASE WHEN :cambia_edad_maxima = 1
+                    THEN :edad_maxima ELSE EdadMaxima END
             WHERE IdSubProducto = :id
             """
         ),
@@ -370,3 +390,57 @@ def guardar_restriccion(
             ),
             parametros,
         )
+
+
+# ---------- Uso y eliminación de un producto en borrador ----------
+
+
+def producto_en_uso(conn: Connection, id_producto: int) -> bool:
+    """Cuentas, tarjetas o solicitudes de crédito que lo usan (nunca se elimina entonces)."""
+    return bool(
+        conn.execute(
+            text(
+                """
+                SELECT CASE WHEN EXISTS (SELECT 1 FROM Cuentas.Cuenta WHERE IdProducto = :id)
+                    OR EXISTS (SELECT 1 FROM Tarjeta.Tarjeta WHERE IdProducto = :id)
+                    OR EXISTS (SELECT 1 FROM Credito.CreditoSolicitud WHERE IdProducto = :id)
+                THEN 1 ELSE 0 END
+                """
+            ),
+            {"id": id_producto},
+        ).scalar_one()
+    )
+
+
+def eliminar_producto(conn: Connection, id_producto: int) -> None:
+    """Borra el producto, sus subproductos y lo que cuelga de ellos (en la transacción).
+    Solo para un producto inactivo y sin uso: lo valida el servicio."""
+    for sql in (
+        """
+        DELETE FROM ProductosFinancieros.ProductoTasaInteres
+        WHERE IdProducto = :id OR IdSubProducto IN (SELECT IdSubProducto FROM ProductosFinancieros.SubProducto WHERE IdProducto = :id)
+        """,
+        """
+        DELETE FROM ProductosFinancieros.ProductoComision
+        WHERE IdProducto = :id OR IdSubProducto IN (SELECT IdSubProducto FROM ProductosFinancieros.SubProducto WHERE IdProducto = :id)
+        """,
+        """
+        DELETE FROM ProductosFinancieros.ProductoSeguro
+        WHERE IdProducto = :id OR IdSubProducto IN (SELECT IdSubProducto FROM ProductosFinancieros.SubProducto WHERE IdProducto = :id)
+        """,
+        """
+        DELETE FROM ProductosFinancieros.ProductoSistemaAmortizacion
+        WHERE IdProducto = :id OR IdSubProducto IN (SELECT IdSubProducto FROM ProductosFinancieros.SubProducto WHERE IdProducto = :id)
+        """,
+        """
+        DELETE FROM ProductosFinancieros.ProductoCanalCupo
+        WHERE IdSubProducto IN (SELECT IdSubProducto FROM ProductosFinancieros.SubProducto WHERE IdProducto = :id)
+        """,
+        """
+        DELETE FROM ProductosFinancieros.ProductoRestriccion
+        WHERE IdSubProducto IN (SELECT IdSubProducto FROM ProductosFinancieros.SubProducto WHERE IdProducto = :id)
+        """,
+        "DELETE FROM ProductosFinancieros.SubProducto WHERE IdProducto = :id",
+        "DELETE FROM ProductosFinancieros.Producto WHERE IdProducto = :id",
+    ):
+        conn.execute(text(sql), {"id": id_producto})

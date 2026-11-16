@@ -258,6 +258,12 @@ ROLES_POR_RUTA: dict[tuple[str, str], tuple[str, ...]] = {
     # Productos y subproductos (plan E3-02): ADMIN escribe; ADMIN y ASESOR consultan
     ("GET", "/api/v1/productos"): ("ADMIN", "ASESOR"),
     ("GET", "/api/v1/productos/{id_producto}"): ("ADMIN", "ASESOR"),
+    ("GET", "/api/v1/productos/tipos"): ("ADMIN", "ASESOR"),
+    ("DELETE", "/api/v1/productos/{id_producto}"): ("ADMIN",),
+    ("GET", "/api/v1/productos/subproductos/{id_sub_producto}/ficha"): (
+        "ADMIN",
+        "ASESOR",
+    ),
     ("POST", "/api/v1/productos"): ("ADMIN",),
     ("PATCH", "/api/v1/productos/{id_producto}"): ("ADMIN",),
     ("POST", "/api/v1/productos/{id_producto}/subproductos"): ("ADMIN",),
@@ -285,6 +291,8 @@ ROLES_POR_RUTA: dict[tuple[str, str], tuple[str, ...]] = {
     ("GET", "/api/v1/catalogos/administracion"): ("ADMIN", "ASESOR"),
     ("GET", "/api/v1/catalogos/administracion/{clave}"): ("ADMIN", "ASESOR"),
     ("PATCH", "/api/v1/catalogos/administracion/{clave}/{id_registro}"): ("ADMIN",),
+    ("POST", "/api/v1/catalogos/administracion/{clave}"): ("ADMIN",),
+    ("DELETE", "/api/v1/catalogos/administracion/{clave}/{id_registro}"): ("ADMIN",),
 }
 
 

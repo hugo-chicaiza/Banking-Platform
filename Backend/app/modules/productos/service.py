@@ -16,19 +16,28 @@ from sqlalchemy.exc import DBAPIError
 from app.core.api.errors import problema, traducir_error_bd
 from app.core.security.auth import Usuario
 from app.core.security.operador import auditar, exigir_id_interno
+from app.modules.catalogos import repository as catalogos_repo
+from app.modules.catalogos import service as catalogos_service
 from app.modules.catalogos.subproductos import PREFIJO_TIPO_TARJETA, tipo_tarjeta_de
 from app.modules.productos import repository as repo
+from app.modules.productos import vinculos
 from app.modules.productos.schemas import (
+    ComisionFicha,
     CupoCanalVista,
     CuposSubProducto,
+    ElegibilidadFicha,
+    FichaSubProducto,
     Producto,
     ProductoCreate,
     ProductoUpdate,
     RestriccionesSubProducto,
     RestriccionesVista,
+    SeguroFicha,
     SubProducto,
     SubProductoCreate,
     SubProductoUpdate,
+    TasaFicha,
+    TipoProductoInfo,
 )
 
 logger = logging.getLogger(__name__)
@@ -43,6 +52,16 @@ def _no_leido() -> HTTPException:
     """El registro recién guardado no se pudo releer: el cambio ya se confirmó, se informa sin datos."""
     logger.error("productos: registro guardado no encontrado al releerlo")
     return problema(500, "ERROR_INTERNO", "Error interno del servidor.")
+
+
+def _validar_edades(minima: int | None, maxima: int | None) -> None:
+    """E3-02 AC 5 (ASVS 2.2.1): la edad máxima no puede ser menor que la mínima."""
+    if minima is not None and maxima is not None and maxima < minima:
+        raise problema(
+            422,
+            "ELEGIBILIDAD_INVALIDA",
+            "La edad máxima no puede ser menor que la mínima.",
+        )
 
 
 def _traducir(exc: DBAPIError) -> HTTPException:
@@ -154,6 +173,15 @@ def actualizar_producto(
             if actual is None:
                 raise problema(404, "PRODUCTO_NO_ENCONTRADO", "El producto no existe.")
             cambios = {c: getattr(datos, c) for c in campos}
+            if "codigo_producto" in cambios and (
+                str(actual["estado"]).strip() == "A"
+                or repo.producto_en_uso(conn, id_producto)
+            ):
+                raise problema(
+                    409,
+                    "PRODUCTO_NO_EDITABLE",
+                    "El código solo se cambia en un producto inactivo y sin uso.",
+                )
             if (
                 "monto_apertura_minimo" in cambios
                 and actual["tipo_producto"] != "Cuenta"
@@ -211,8 +239,14 @@ def crear_subproducto(
                     "CODIGO_TARJETA_INVALIDO",
                     f"El código de un subproducto de tarjeta debe empezar por {prefijos}.",
                 )
+            _validar_edades(datos.edad_minima, datos.edad_maxima)
             id_sub = repo.insertar_subproducto(
-                conn, id_producto, datos.codigo_sub_producto, datos.nombre_sub_producto
+                conn,
+                id_producto,
+                datos.codigo_sub_producto,
+                datos.nombre_sub_producto,
+                datos.edad_minima,
+                datos.edad_maxima,
             )
             registro.id_registro = str(id_sub)
             conn.commit()
@@ -246,9 +280,12 @@ def actualizar_subproducto(
                 raise problema(
                     404, "SUBPRODUCTO_NO_ENCONTRADO", "El subproducto no existe."
                 )
-            repo.actualizar_subproducto(
-                conn, id_sub, {c: getattr(datos, c) for c in campos}
+            cambios = {c: getattr(datos, c) for c in campos}
+            _validar_edades(
+                cambios.get("edad_minima", actual["edad_minima"]),
+                cambios.get("edad_maxima", actual["edad_maxima"]),
             )
+            repo.actualizar_subproducto(conn, id_sub, cambios)
             conn.commit()
         except DBAPIError as exc:
             conn.rollback()
@@ -305,6 +342,17 @@ def guardar_cupos(
                     "CANAL_NO_EXISTE",
                     "Hay canales que no existen o están inactivos.",
                 )
+            for c in datos.cupos:
+                if (
+                    c.cupo_mensual_maximo < c.cupo_diario_maximo
+                    or c.monto_max_transaccion > c.cupo_diario_maximo
+                ):
+                    raise problema(
+                        422,
+                        "CUPOS_INCOHERENTES",
+                        "El cupo mensual debe ser mayor o igual que el diario, y el máximo "
+                        "por transacción no puede superar el diario.",
+                    )
             personalizados = repo.cupos_personalizados_maximos(conn, id_sub)
             nuevos = {c.id_canal: c for c in datos.cupos}
             for id_canal, maximo in personalizados.items():
@@ -386,3 +434,145 @@ def guardar_restricciones(
             conn.rollback()
             raise
     return RestriccionesVista.model_validate(repo.obtener_restricciones(conn, id_sub))
+
+
+# ---------- Tipos, eliminación en borrador y ficha (E3-02) ----------
+
+TIPOS_PRODUCTO = [
+    TipoProductoInfo(
+        codigo="Cuenta",
+        nombre="Cuenta",
+        descripcion="Cuentas de ahorro y corriente: cupos por canal, restricciones y tasa de ahorro.",
+    ),
+    TipoProductoInfo(
+        codigo="Credito",
+        nombre="Crédito",
+        descripcion="Créditos de un tipo de crédito: tasas, seguros y tablas de amortización.",
+    ),
+    TipoProductoInfo(
+        codigo="Tarjeta",
+        nombre="Tarjeta",
+        descripcion="Tarjetas de débito y crédito de una red: cupos por canal y tasas de tarjeta.",
+    ),
+]
+
+
+def eliminar_producto(
+    conn: Connection, id_producto: int, usuario: Usuario, ip: str
+) -> None:
+    """Solo un producto inactivo que nunca se usó (borrador). Con uso, se desactiva."""
+    with auditar(
+        "ELIMINAR", _TABLA_PRODUCTO, usuario, ip, "PRD-ELIMINAR", str(id_producto)
+    ):
+        try:
+            actual = repo.obtener_producto(conn, id_producto, bloquear=True)
+            if actual is None:
+                raise problema(404, "PRODUCTO_NO_ENCONTRADO", "El producto no existe.")
+            if str(actual["estado"]).strip() == "A":
+                raise problema(
+                    409,
+                    "PRODUCTO_ACTIVO",
+                    "Desactive el producto antes de eliminarlo.",
+                )
+            if repo.producto_en_uso(conn, id_producto):
+                raise problema(
+                    409,
+                    "PRODUCTO_EN_USO",
+                    "El producto tiene cuentas, tarjetas o créditos: solo se desactiva.",
+                )
+            repo.eliminar_producto(conn, id_producto)
+            conn.commit()
+        except DBAPIError as exc:
+            conn.rollback()
+            raise _traducir(exc) from None
+        except Exception:
+            conn.rollback()
+            raise
+
+
+def ficha_subproducto(conn: Connection, id_sub: int) -> FichaSubProducto:
+    """Lo vigente del subproducto con lo que hereda del producto (solo lectura)."""
+    sub = repo.obtener_subproducto(conn, id_sub)
+    if sub is None:
+        raise problema(404, "SUBPRODUCTO_NO_ENCONTRADO", "El subproducto no existe.")
+    producto = obtener_producto(conn, sub["id_producto"])
+    tipo = producto.tipo_producto
+    propios = vinculos.leer(conn, "subproducto", id_sub)
+    heredados = vinculos.leer(conn, "producto", producto.id_producto)
+    hoy = catalogos_service.hoy()
+
+    def origen(ids_heredados: set[Any], ids: set[Any]) -> dict[Any, bool]:
+        return {i: i in ids_heredados for i in ids_heredados | ids}
+
+    tasas_ids = origen(set(heredados["tasas_interes"]), set(propios["tasas_interes"]))
+    tasas = [
+        TasaFicha.model_validate({**t, "del_producto": tasas_ids[t["id_tasa_interes"]]})
+        for t in catalogos_repo.listar_tasas_interes(conn, hoy)
+        if t["id_tasa_interes"] in tasas_ids
+    ]
+    exonerados = {c["id_comision"] for c in propios["comisiones"] if c["exonerado"]}
+    comisiones_ids = origen(
+        {c["id_comision"] for c in heredados["comisiones"]},
+        {c["id_comision"] for c in propios["comisiones"] if not c["exonerado"]},
+    )
+    comisiones = [
+        ComisionFicha.model_validate(
+            {**c, "del_producto": comisiones_ids[c["id_comision"]]}
+        )
+        for c in catalogos_repo.listar_comisiones(conn)
+        if c["id_comision"] in comisiones_ids and c["id_comision"] not in exonerados
+    ]
+    obligatorio = {
+        s["id_seguro"]: s["es_obligatorio"]
+        for s in [*heredados["seguros"], *propios["seguros"]]
+    }
+    seguros_ids = origen(
+        {s["id_seguro"] for s in heredados["seguros"]},
+        {s["id_seguro"] for s in propios["seguros"]},
+    )
+    seguros = [
+        SeguroFicha.model_validate(
+            {
+                **s,
+                "es_obligatorio": obligatorio[s["id_seguro"]],
+                "del_producto": seguros_ids[s["id_seguro"]],
+            }
+        )
+        for s in catalogos_repo.listar_seguros(conn)
+        if s["id_seguro"] in seguros_ids
+    ]
+    sistemas = sorted(
+        set(heredados["sistemas_amortizacion"]) | set(propios["sistemas_amortizacion"])
+    )
+    cupos = (
+        [
+            CupoCanalVista.model_validate(c)
+            for c in repo.listar_cupos(conn, id_sub)
+            if c["habilitado"]
+        ]
+        if tipo in _CON_CUPOS
+        else []
+    )
+    restricciones = (
+        RestriccionesVista.model_validate(repo.obtener_restricciones(conn, id_sub))
+        if tipo == "Cuenta"
+        else None
+    )
+    edades = catalogos_repo.reglas_edad(conn, id_sub)
+    return FichaSubProducto(
+        producto=producto,
+        subproducto=_subproducto(sub, tipo),
+        elegibilidad=ElegibilidadFicha(
+            edad_minima=edades.get("efectiva"),
+            edad_maxima=edades.get("maxima"),
+            edad_minima_subproducto=edades.get("subproducto"),
+            edad_minima_red=edades.get("red"),
+            edad_minima_politica=edades.get("politica"),
+        ),
+        cupos=cupos,
+        restricciones=restricciones,
+        tasas=tasas,
+        comisiones=comisiones,
+        seguros=seguros,
+        sistemas_amortizacion=sistemas,
+    )

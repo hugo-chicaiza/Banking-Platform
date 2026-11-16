@@ -1,6 +1,6 @@
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, Path, Query, Request
+from fastapi import APIRouter, Depends, Path, Query, Request, Response
 from sqlalchemy import Connection
 
 from app.core.api.errors import (
@@ -149,6 +149,43 @@ def listar_registros(
     return administracion.listar(conn, clave)
 
 
+@router.post(
+    "/administracion/{clave}",
+    status_code=201,
+    openapi_extra={"x-roles": ["ADMIN"]},
+)
+def crear_registro(
+    clave: Clave,
+    payload: dict[str, Any],
+    request: Request,
+    usuario: Annotated[Usuario, Depends(require_roles("ADMIN"))],
+    conn: Db,
+) -> dict[str, Any]:
+    """Alta con los campos de `camposAlta`; código repetido: 409 CODIGO_DUPLICADO."""
+    return administracion.crear(
+        conn, clave, payload, usuario, ip_cliente(request.scope)
+    )
+
+
+@router.delete(
+    "/administracion/{clave}/{id_registro}",
+    status_code=204,
+    openapi_extra={"x-roles": ["ADMIN"]},
+)
+def eliminar_registro(
+    clave: Clave,
+    id_registro: IdRegistro,
+    request: Request,
+    usuario: Annotated[Usuario, Depends(require_roles("ADMIN"))],
+    conn: Db,
+) -> Response:
+    """Solo lo que nadie usa; si se usa, 409 ITEM_EN_USO y se desactiva en su lugar."""
+    administracion.eliminar(
+        conn, clave, id_registro, usuario, ip_cliente(request.scope)
+    )
+    return Response(status_code=204)
+
+
 @router.patch(
     "/administracion/{clave}/{id_registro}",
     openapi_extra={"x-roles": ["ADMIN"]},
@@ -190,15 +227,20 @@ def listar_tipos_antecedente(conn: Db) -> Any:
 @router.get(
     "/productos",
     response_model=list[Producto],
-    dependencies=[Depends(solo_parametros("tipo", "tipoTarjeta"))],
+    dependencies=[Depends(solo_parametros("tipo", "tipoTarjeta", "idCliente"))],
 )
 def listar_productos(
     conn: Db,
     tipo: TipoProducto | None = None,
     tipo_tarjeta: Annotated[TipoTarjeta | None, Query(alias="tipoTarjeta")] = None,
+    id_cliente: Annotated[
+        int | None, Query(alias="idCliente", ge=1, le=2_147_483_647)
+    ] = None,
 ) -> Any:
     """Productos activos con sus subproductos. tipoTarjeta (Debito/Credito) deja solo
     los subproductos de tarjeta de ese tipo, para que la emisión sea congruente.
+    idCliente deja solo los subproductos para los que el cliente es elegible por edad
+    (E3-02 AC 6); un subproducto con límite de edad no se ofrece sin fecha de nacimiento.
     """
     if tipo_tarjeta is not None and tipo not in (None, "Tarjeta"):
         raise problema(
@@ -206,7 +248,13 @@ def listar_productos(
             "PARAMETRO_INVALIDO",
             "tipoTarjeta solo aplica a productos de tipo Tarjeta.",
         )
-    return repository.listar_productos(conn, tipo, tipo_tarjeta)
+    edad: int | None = None
+    if id_cliente is not None:
+        existe, nacimiento = repository.fecha_nacimiento_cliente(conn, id_cliente)
+        if not existe:
+            raise problema(404, "CLIENTE_NO_ENCONTRADO", "El cliente no existe.")
+        edad = service.edad_en(nacimiento) if nacimiento else -1
+    return repository.listar_productos(conn, tipo, tipo_tarjeta, edad)
 
 
 @router.get("/paises/{codigo_pais}/ciudades", response_model=list[Ciudad])

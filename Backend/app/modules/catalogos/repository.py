@@ -83,8 +83,55 @@ def listar_tipos_antecedente(conn: Connection) -> list[dict[str, Any]]:
     )
 
 
+# Edad mínima que rige para un subproducto `s` de un producto `p` (la más alta de):
+#   - la del subproducto (SubProducto.EdadMinima);
+#   - en tarjetas, la de su red (Red.EdadMinima);
+#   - en créditos, la política EDAD_MINIMA vigente (Credito.ParametroPolitica, la misma
+#     regla que aplica usp_EvaluarSolicitudCredito al evaluar).
+# La edad máxima es solo la del subproducto. El bloque (LEFT JOIN r, OUTER APPLY pol,
+# CROSS APPLY e con e.EdadMinima) va repetido literal en cada consulta: el SQL no se arma con texto.
+
+
+def reglas_edad(conn: Connection, id_sub: int) -> dict[str, Any]:
+    """Las tres fuentes de la edad mínima de un subproducto y la que rige."""
+    filas = _rows(
+        conn,
+        """
+        SELECT s.EdadMinima AS subproducto, r.EdadMinima AS red,
+               pol.Valor AS politica, e.EdadMinima AS efectiva,
+               s.EdadMaxima AS maxima
+        FROM ProductosFinancieros.SubProducto AS s
+        JOIN ProductosFinancieros.Producto AS p ON p.IdProducto = s.IdProducto
+        LEFT JOIN ProductosFinancieros.Red AS r
+               ON r.IdRed = p.IdRed AND p.TipoProducto = 'Tarjeta'
+        OUTER APPLY (
+            SELECT TOP 1 CAST(pp.Valor AS int) AS Valor
+            FROM Credito.ParametroPolitica AS pp
+            WHERE p.TipoProducto = 'Credito' AND pp.Clave = 'EDAD_MINIMA'
+              AND pp.Estado = 'Activo'
+              AND pp.VigenciaDesde <= CAST(SYSDATETIMEOFFSET() AT TIME ZONE
+                    'SA Pacific Standard Time' AS date)
+              AND (pp.VigenciaHasta IS NULL OR pp.VigenciaHasta > CAST(SYSDATETIMEOFFSET()
+                    AT TIME ZONE 'SA Pacific Standard Time' AS date))
+            ORDER BY pp.VigenciaDesde DESC
+        ) AS pol
+        CROSS APPLY (
+            SELECT MAX(v) AS EdadMinima
+            FROM (VALUES (CAST(s.EdadMinima AS int)), (CAST(r.EdadMinima AS int)),
+                         (pol.Valor)) AS x (v)
+        ) AS e
+        WHERE s.IdSubProducto = :id
+        """,
+        {"id": id_sub},
+    )
+    return filas[0] if filas else {}
+
+
 def listar_productos(
-    conn: Connection, tipo: str | None, tipo_tarjeta: str | None = None
+    conn: Connection,
+    tipo: str | None,
+    tipo_tarjeta: str | None = None,
+    edad: int | None = None,
 ) -> list[dict[str, Any]]:
     # CAT-07: solo activos; los campos que no aplican al tipo van en NULL. Cada
     # producto lleva sus subproductos activos (lo que el asesor puede ofrecer).
@@ -119,11 +166,34 @@ def listar_productos(
                p.TipoProducto AS tipo_producto
         FROM ProductosFinancieros.SubProducto AS s
         JOIN ProductosFinancieros.Producto AS p ON p.IdProducto = s.IdProducto
+        LEFT JOIN ProductosFinancieros.Red AS r
+               ON r.IdRed = p.IdRed AND p.TipoProducto = 'Tarjeta'
+        OUTER APPLY (
+            SELECT TOP 1 CAST(pp.Valor AS int) AS Valor
+            FROM Credito.ParametroPolitica AS pp
+            WHERE p.TipoProducto = 'Credito' AND pp.Clave = 'EDAD_MINIMA'
+              AND pp.Estado = 'Activo'
+              AND pp.VigenciaDesde <= CAST(SYSDATETIMEOFFSET() AT TIME ZONE
+                    'SA Pacific Standard Time' AS date)
+              AND (pp.VigenciaHasta IS NULL OR pp.VigenciaHasta > CAST(SYSDATETIMEOFFSET()
+                    AT TIME ZONE 'SA Pacific Standard Time' AS date))
+            ORDER BY pp.VigenciaDesde DESC
+        ) AS pol
+        CROSS APPLY (
+            SELECT MAX(v) AS EdadMinima
+            FROM (VALUES (CAST(s.EdadMinima AS int)), (CAST(r.EdadMinima AS int)),
+                         (pol.Valor)) AS x (v)
+        ) AS e
         WHERE s.Estado = 'A' AND p.Estado = 'A'
           AND (:tipo IS NULL OR p.TipoProducto = :tipo)
+          -- Elegibilidad: edad -1 = cliente sin fecha de nacimiento (solo sin límites)
+          AND (:edad IS NULL
+               OR (:edad >= 0 AND (e.EdadMinima IS NULL OR :edad >= e.EdadMinima)
+                   AND (s.EdadMaxima IS NULL OR :edad <= s.EdadMaxima))
+               OR (:edad < 0 AND e.EdadMinima IS NULL AND s.EdadMaxima IS NULL))
         ORDER BY s.NombreSubProducto
         """,
-        {"tipo": tipo},
+        {"tipo": tipo, "edad": edad},
     )
     por_producto: dict[int, list[dict[str, Any]]] = {}
     for sub in subproductos:
@@ -135,8 +205,8 @@ def listar_productos(
             por_producto.setdefault(sub.pop("id_producto"), []).append(sub)
     for producto in productos:
         producto["subproductos"] = por_producto.get(producto["id_producto"], [])
-    if tipo_tarjeta is not None:
-        # Solo los productos que tienen algo que ofrecer de ese tipo
+    if tipo_tarjeta is not None or edad is not None:
+        # Solo los productos que tienen algo que ofrecer (de ese tipo o a ese cliente)
         productos = [p for p in productos if p["subproductos"]]
     return productos
 
@@ -377,3 +447,12 @@ def listar_seguros(conn: Connection) -> list[dict[str, Any]]:
         ORDER BY Nombre
         """,
     )
+
+
+def fecha_nacimiento_cliente(conn: Connection, id_cliente: int) -> tuple[bool, Any]:
+    """(existe el cliente, su fecha de nacimiento o None)."""
+    fila = conn.execute(
+        text("SELECT FechaNacimiento FROM Clientes.Cliente WHERE IdCliente = :id"),
+        {"id": id_cliente},
+    ).first()
+    return (fila is not None, fila[0] if fila else None)
