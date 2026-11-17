@@ -50,7 +50,7 @@ def test_carga_csv_fragmentada_conserva_utf8_y_no_escribe_directamente(monkeypat
 
     from app.modules.contabilidad import importaciones
 
-    contenido = CABECERA + "1,Ahorro Ni\u00f1ez,,DEUDORA\\n".encode()
+    contenido = CABECERA + "1,Ahorro Ni\u00f1ez,,DEUDORA\n".encode()
     posicion = contenido.index(bytes([0xC3])) + 1
     fragmentos = iter([contenido[:posicion], contenido[posicion:]])
 
@@ -75,6 +75,7 @@ def test_carga_csv_fragmentada_conserva_utf8_y_no_escribe_directamente(monkeypat
     guardar.assert_called_once_with(
         conn, 101, "cuc.csv", leer_csv("cuc.csv", contenido)
     )
+    assert guardar.call_args.args[3][0]["Naturaleza"] == "DEUDORA"
     conn.execute.assert_not_called()
 
 

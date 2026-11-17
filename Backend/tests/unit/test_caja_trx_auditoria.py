@@ -15,6 +15,7 @@ from sqlalchemy.exc import OperationalError
 
 from app.core.security.operador import auditar
 from app.modules.caja import repository as caja_repo
+from app.modules.caja import service as caja_service
 from app.modules.caja.router import router as caja_router
 from app.modules.caja.schemas import Desglose, Jornada
 from app.modules.transacciones import repository as trx_repo
@@ -161,6 +162,8 @@ CUERPO_INICIAL = {
 
 
 def _preparar_dotacion(ctx: Contexto, valor: str) -> None:
+    # Esta suite verifica custodia; el motor contable se prueba en su propia suite.
+    ctx.monkeypatch.setattr(caja_service, "generar_asiento", MagicMock(return_value=1))
     ctx.fake("obtener_jornada", JORNADA)  # DineroInicial 100.50
     ctx.fake("valores_denominaciones", {1: Decimal(valor)})
     ctx.fake("autorizador_vigente", True)
