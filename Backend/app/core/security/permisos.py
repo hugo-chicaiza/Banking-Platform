@@ -3,8 +3,9 @@
 Regla: el rol decide qué se ve (pestañas y consultas, require_roles); el permiso decide
 qué se cambia (crear, editar, activar o desactivar, eliminar, operar: require_permiso).
 WorkOS asigna los permisos a roles; aquí está la asignación inicial, que repite quién
-podía escribir antes de los permisos. Las pruebas la usan para armar la sesión de cada
-rol y el script de configuración de WorkOS la aplica. Slugs en minúsculas: WorkOS no
+podía escribir antes de los permisos y las ampliaciones autorizadas. Las pruebas la
+usan para armar la sesión de cada rol; la asignación real se configura en WorkOS.
+Cambiar este archivo no modifica el tenant. Slugs en minúsculas: WorkOS no
 acepta mayúsculas.
 """
 
@@ -26,8 +27,8 @@ PERMISOS: dict[str, tuple[str, ...]] = {
     "contabilidad:editar": ("CONTADOR",),
     "caja:operar": ("CAJERO",),
     "caja:autorizar": ("SUPERVISOR",),
-    "boveda:operar": ("SUPERVISOR",),
-    "boveda:arqueo": ("SUPERVISOR", "AUDITOR"),
+    "boveda:operar": ("SUPERVISOR", "ADMIN"),
+    "boveda:arqueo": ("SUPERVISOR", "AUDITOR", "ADMIN"),
 }
 
 

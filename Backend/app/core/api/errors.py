@@ -32,6 +32,11 @@ _DB_NUMERO_RE = re.compile(r"\((\d+)\) \(SQL\w+\)")
 _DB_DUPLICADO = frozenset({2627, 2601})
 # Tabla de F-04. 52004 no aparece allí, pero lo necesita TAR-01
 _DB_ERRORES: dict[int, tuple[int, str, str]] = {
+    59010: (
+        409,
+        "SOLICITUD_MOVIMIENTO_INMUTABLE",
+        "La solicitud y sus datos no se pueden modificar ni eliminar.",
+    ),
     # Contabilidad responde lo mismo cuando lo detecta en Python (CON-02)
     51016: (
         500,

@@ -29,7 +29,7 @@ SELECT IdMovimiento AS id_movimiento, IdBoveda AS id_boveda,
        IdUsuarioMovimiento AS id_usuario_movimiento,
        IdMovimientoRelacionado AS id_movimiento_relacionado,
        FechaMovimiento AS fecha_movimiento, Observaciones AS observaciones,
-       IdAsientoContable AS id_asiento_contable
+       IdAsientoContable AS id_asiento_contable, IdSolicitudMovimiento AS id_solicitud_movimiento
 FROM Boveda.MovimientoBoveda
 """
 _ARQUEO = """
@@ -267,6 +267,71 @@ def huella_movimiento(conn: Connection, id_movimiento: int) -> str:
             {"id": id_movimiento},
         ).scalar_one()
     )
+
+
+def listar_arqueos(
+    conn: Connection,
+    id_boveda: int,
+    desde: date | None,
+    hasta: date | None,
+    estado: str | None,
+    tipo: str | None,
+    page: int,
+    page_size: int,
+) -> tuple[list[Fila], int]:
+    filas = _filas(
+        conn,
+        """
+        WITH Filtrados AS (
+            SELECT IdArqueoBoveda AS id_arqueo_boveda, IdBoveda AS id_boveda,
+                   FechaHoraArqueo AS fecha_hora_arqueo, TipoArqueo AS tipo_arqueo,
+                   IdUsuarioArqueador AS id_usuario_arqueador,
+                   IdUsuarioTestigo AS id_usuario_testigo, Estado AS estado,
+                   IdMovimientoAjuste AS id_movimiento_ajuste,
+                   Observaciones AS observaciones, SaldoTeorico AS saldo_teorico,
+                   SaldoFisico AS saldo_fisico, IdUsuarioAprobador AS id_usuario_aprobador,
+                   FechaHoraAprobacion AS fecha_hora_aprobacion,
+                   ROW_NUMBER() OVER (
+                       ORDER BY FechaHoraArqueo DESC, IdArqueoBoveda DESC
+                   ) AS numero_fila
+            FROM Boveda.ArqueoBoveda
+            WHERE IdBoveda = :boveda
+              AND (:desde IS NULL OR FechaHoraArqueo >= :desde)
+              AND (:hasta IS NULL OR FechaHoraArqueo < :hasta)
+              AND (:estado IS NULL OR Estado = :estado)
+              AND (:tipo IS NULL OR TipoArqueo = :tipo)
+        )
+        SELECT p.*, t.total
+        FROM (SELECT COUNT_BIG(*) AS total FROM Filtrados) AS t
+        LEFT JOIN Filtrados AS p ON p.numero_fila > :offset AND p.numero_fila <= :limite
+        ORDER BY p.numero_fila
+        """,
+        {
+            "boveda": id_boveda,
+            "desde": desde,
+            "hasta": hasta + timedelta(days=1) if hasta else None,
+            "estado": estado,
+            "tipo": tipo,
+            "offset": (page - 1) * page_size,
+            "limite": page * page_size,
+        },
+    )
+    total = int(filas[0]["total"]) if filas else 0
+    return [f for f in filas if f["id_arqueo_boveda"] is not None], total
+
+
+def ajustes_arqueos(conn: Connection, ids: list[int]) -> dict[int, list[int]]:
+    resultado: dict[int, list[int]] = {i: [] for i in ids}
+    if not ids:
+        return resultado
+    consulta = text("""
+        SELECT IdArqueoBoveda AS id_arqueo_boveda, IdMovimiento AS id_movimiento
+        FROM Boveda.MovimientoBoveda WHERE IdArqueoBoveda IN :ids
+        ORDER BY IdMovimiento
+    """).bindparams(bindparam("ids", expanding=True))
+    for fila in conn.execute(consulta, {"ids": ids}).mappings():
+        resultado[fila["id_arqueo_boveda"]].append(fila["id_movimiento"])
+    return resultado
 
 
 def obtener_arqueo(

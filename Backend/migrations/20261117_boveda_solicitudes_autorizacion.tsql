@@ -1,0 +1,94 @@
+/* SQL Server. Requiere 20261114_boveda_bov01_06.tsql.
+   Aplicar antes del backend, con un ejecutor que soporte GO y detenga errores.
+   Conserva movimientos históricos y las operaciones de otros módulos. */
+SET XACT_ABORT ON;
+BEGIN TRANSACTION;
+GO
+IF OBJECT_ID('Boveda.SolicitudMovimientoBoveda', 'U') IS NULL
+BEGIN
+    CREATE TABLE Boveda.SolicitudMovimientoBoveda (
+        IdSolicitudMovimiento bigint IDENTITY(1,1) NOT NULL,
+        IdBoveda int NOT NULL,
+        IdBovedaContraparte int NULL,
+        IdAgencia char(3) NOT NULL,
+        TipoMovimiento varchar(20) NOT NULL,
+        Monto decimal(18,2) NOT NULL,
+        IdUsuarioSolicitante int NOT NULL,
+        FechaSolicitud datetime2(7) NOT NULL,
+        Estado varchar(10) NOT NULL,
+        Observaciones varchar(300) NULL,
+        IdUsuarioResolucion int NULL,
+        FechaResolucion datetime2(7) NULL,
+        MotivoResolucion varchar(500) NULL,
+        ClaveIdempotencia varchar(64) COLLATE Latin1_General_100_BIN2 NULL,
+        HuellaPeticion char(64) NOT NULL,
+        CONSTRAINT PK_SolicitudMovimientoBoveda PRIMARY KEY (IdSolicitudMovimiento),
+        CONSTRAINT FK_SolicitudMovimientoBoveda_Origen FOREIGN KEY (IdBoveda) REFERENCES Boveda.Boveda(IdBoveda),
+        CONSTRAINT FK_SolicitudMovimientoBoveda_Destino FOREIGN KEY (IdBovedaContraparte) REFERENCES Boveda.Boveda(IdBoveda),
+        CONSTRAINT FK_SolicitudMovimientoBoveda_Agencia FOREIGN KEY (IdAgencia) REFERENCES Organizacion.Agencia(IdAgencia),
+        CONSTRAINT CK_SolicitudMovimientoBoveda_Tipo CHECK (TipoMovimiento IN ('Traslado','ProvisionExterna','EnvioExcedente','AjusteFaltante','AjusteSobrante')),
+        CONSTRAINT CK_SolicitudMovimientoBoveda_Monto CHECK (Monto > 0),
+        CONSTRAINT CK_SolicitudMovimientoBoveda_Contraparte CHECK
+            ((TipoMovimiento='Traslado' AND IdBovedaContraparte IS NOT NULL AND IdBoveda<>IdBovedaContraparte)
+             OR (TipoMovimiento<>'Traslado' AND IdBovedaContraparte IS NULL)),
+        CONSTRAINT CK_SolicitudMovimientoBoveda_Resolucion CHECK
+            ((Estado='PENDIENTE' AND IdUsuarioResolucion IS NULL AND FechaResolucion IS NULL AND MotivoResolucion IS NULL)
+             OR (Estado='EJECUTADA' AND IdUsuarioResolucion IS NOT NULL AND IdUsuarioResolucion<>IdUsuarioSolicitante AND FechaResolucion IS NOT NULL AND MotivoResolucion IS NULL)
+             OR (Estado='RECHAZADA' AND IdUsuarioResolucion IS NOT NULL AND IdUsuarioResolucion<>IdUsuarioSolicitante AND FechaResolucion IS NOT NULL AND MotivoResolucion IS NOT NULL AND LEN(LTRIM(RTRIM(MotivoResolucion)))>0)
+             OR (Estado='CANCELADA' AND IdUsuarioResolucion IS NOT NULL AND IdUsuarioResolucion=IdUsuarioSolicitante AND FechaResolucion IS NOT NULL AND MotivoResolucion IS NOT NULL AND LEN(LTRIM(RTRIM(MotivoResolucion)))>0)),
+        CONSTRAINT CK_SolicitudMovimientoBoveda_Fechas CHECK (FechaResolucion IS NULL OR FechaResolucion>=FechaSolicitud)
+    );
+    CREATE UNIQUE INDEX UX_SolicitudMovimientoBoveda_Idempotencia ON Boveda.SolicitudMovimientoBoveda(IdUsuarioSolicitante,ClaveIdempotencia) WHERE ClaveIdempotencia IS NOT NULL;
+    CREATE INDEX IX_SolicitudMovimientoBoveda_AgenciaEstado ON Boveda.SolicitudMovimientoBoveda(IdAgencia,Estado,IdSolicitudMovimiento);
+END;
+IF OBJECT_ID('Boveda.SolicitudMovimientoBovedaDenominacion','U') IS NULL
+BEGIN
+    CREATE TABLE Boveda.SolicitudMovimientoBovedaDenominacion (
+        IdSolicitudMovimiento bigint NOT NULL,
+        IdDenominacion int NOT NULL,
+        Cantidad int NOT NULL,
+        ValorUnitario decimal(10,2) NOT NULL,
+        CONSTRAINT PK_SolicitudMovimientoBovedaDenominacion PRIMARY KEY (IdSolicitudMovimiento,IdDenominacion),
+        CONSTRAINT FK_SolicitudMovimientoBovedaDenominacion_Solicitud FOREIGN KEY (IdSolicitudMovimiento) REFERENCES Boveda.SolicitudMovimientoBoveda(IdSolicitudMovimiento),
+        CONSTRAINT FK_SolicitudMovimientoBovedaDenominacion_Denominacion FOREIGN KEY (IdDenominacion) REFERENCES Catalogo.Denominacion(IdDenominacion),
+        CONSTRAINT CK_SolicitudMovimientoBovedaDenominacion_Cantidad CHECK (Cantidad>0 AND ValorUnitario>0)
+    );
+END;
+IF COL_LENGTH('Boveda.MovimientoBoveda','IdSolicitudMovimiento') IS NULL
+    ALTER TABLE Boveda.MovimientoBoveda ADD IdSolicitudMovimiento bigint NULL;
+GO
+IF NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name='FK_MovimientoBoveda_Solicitud')
+    ALTER TABLE Boveda.MovimientoBoveda WITH CHECK ADD CONSTRAINT FK_MovimientoBoveda_Solicitud FOREIGN KEY (IdSolicitudMovimiento) REFERENCES Boveda.SolicitudMovimientoBoveda(IdSolicitudMovimiento);
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id=OBJECT_ID('Boveda.MovimientoBoveda') AND name='UX_MovimientoBoveda_SolicitudBoveda')
+    CREATE UNIQUE INDEX UX_MovimientoBoveda_SolicitudBoveda ON Boveda.MovimientoBoveda(IdSolicitudMovimiento,IdBoveda) WHERE IdSolicitudMovimiento IS NOT NULL;
+GO
+CREATE OR ALTER TRIGGER Boveda.trg_SolicitudMovimientoBoveda_Inmutable
+ON Boveda.SolicitudMovimientoBoveda AFTER UPDATE, DELETE AS
+BEGIN
+    SET NOCOUNT ON;
+    IF EXISTS (
+        SELECT IdSolicitudMovimiento,IdBoveda,IdBovedaContraparte,IdAgencia,TipoMovimiento,Monto,IdUsuarioSolicitante,FechaSolicitud,Observaciones,ClaveIdempotencia,HuellaPeticion FROM deleted
+        EXCEPT
+        SELECT IdSolicitudMovimiento,IdBoveda,IdBovedaContraparte,IdAgencia,TipoMovimiento,Monto,IdUsuarioSolicitante,FechaSolicitud,Observaciones,ClaveIdempotencia,HuellaPeticion FROM inserted
+    ) OR EXISTS (SELECT 1 FROM deleted WHERE Estado<>'PENDIENTE')
+        THROW 59010, N'La solicitud y su resolución son inmutables.', 1;
+END;
+GO
+CREATE OR ALTER TRIGGER Boveda.trg_SolicitudMovimientoBovedaDenominacion_Inmutable
+ON Boveda.SolicitudMovimientoBovedaDenominacion INSTEAD OF UPDATE, DELETE AS
+BEGIN
+    SET NOCOUNT ON;
+    IF EXISTS (SELECT 1 FROM deleted)
+        THROW 59010, N'El detalle de la solicitud es inmutable.', 1;
+END;
+GO
+CREATE OR ALTER TRIGGER Boveda.trg_SolicitudMovimientoBovedaDenominacion_Pendiente
+ON Boveda.SolicitudMovimientoBovedaDenominacion AFTER INSERT AS
+BEGIN
+    SET NOCOUNT ON;
+    IF EXISTS (SELECT 1 FROM inserted d JOIN Boveda.SolicitudMovimientoBoveda s ON s.IdSolicitudMovimiento=d.IdSolicitudMovimiento WHERE s.Estado<>'PENDIENTE')
+        THROW 59010, N'No se puede agregar detalle a una solicitud resuelta.', 1;
+END;
+GO
+COMMIT TRANSACTION;
+GO
