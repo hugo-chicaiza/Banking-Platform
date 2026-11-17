@@ -1,0 +1,18 @@
+/* T-SQL (SQL Server). La solicitud de crédito guarda el subproducto elegido, para que la
+   evaluación tome la tasa vinculada al subproducto (y, si no tiene, la del producto), igual
+   que la simulación. NULL = sin subproducto: rige la tasa del producto.
+   La FK compuesta garantiza que el subproducto pertenece al producto de la solicitud.
+   Las 7 solicitudes existentes quedan con NULL. Ejecutar antes de
+   20261118_evaluar_tasa_vinculada.tsql. Reejecutable. */
+SET XACT_ABORT ON;
+GO
+IF COL_LENGTH('Credito.CreditoSolicitud', 'IdSubProducto') IS NULL
+    ALTER TABLE Credito.CreditoSolicitud ADD IdSubProducto int NULL;
+GO
+IF OBJECT_ID('Credito.FK_CreditoSolicitud_SubProducto') IS NULL
+    ALTER TABLE Credito.CreditoSolicitud ADD CONSTRAINT FK_CreditoSolicitud_SubProducto
+        FOREIGN KEY (IdSubProducto, IdProducto)
+        REFERENCES ProductosFinancieros.SubProducto (IdSubProducto, IdProducto);
+GO
+/* Vuelta atrás (solo si ninguna solicitud tiene subproducto):
+   ALTER TABLE Credito.CreditoSolicitud DROP CONSTRAINT FK_CreditoSolicitud_SubProducto, COLUMN IdSubProducto; */
