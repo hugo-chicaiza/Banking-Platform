@@ -15,7 +15,13 @@ from sqlalchemy import Connection
 
 from app.core.api.errors import problema
 from app.core.security.auth import Usuario
-from app.core.security.operador import auditar, exigir_agencia, exigir_id_interno
+from app.core.security.operador import (
+    agencia_de_consulta,
+    auditar,
+    exigir_agencia,
+    exigir_agencia_autorizada,
+    exigir_id_interno,
+)
 from app.modules.caja import repository as repo
 from app.modules.caja.repository import Fila
 from app.modules.caja.schemas import (
@@ -60,19 +66,7 @@ def agencia_consultable(
     Los demás usuarios solamente pueden consultar su agencia asignada.
     """
 
-    if set(usuario.roles) & roles_globales:
-        return pedida
-
-    propia = exigir_agencia(usuario)
-
-    if pedida is not None and pedida != propia:
-        raise problema(
-            403,
-            "SIN_ACCESO_AGENCIA",
-            "No tiene acceso a los datos de esa agencia.",
-        )
-
-    return propia
+    return agencia_de_consulta(usuario, pedida)
 
 
 def _caja(fila: Fila) -> CajaFisica:
@@ -245,9 +239,21 @@ def verificar_alcance(
     roles = set(usuario.roles) & set(permitidos)
 
     if roles & ROLES_GLOBALES:
+        try:
+            exigir_agencia_autorizada(usuario, str(jornada["IdAgencia"]).strip())
+        except HTTPException as exc:
+            if exc.status_code == 403:
+                raise jornada_no_encontrada() from None
+            raise
         return "GLOBAL"
 
     if "SUPERVISOR" in roles:
+        try:
+            exigir_agencia_autorizada(usuario, str(jornada["IdAgencia"]).strip())
+        except HTTPException as exc:
+            if exc.status_code == 403:
+                raise jornada_no_encontrada() from None
+            raise
         if jornada["IdAgencia"] == exigir_agencia(usuario):
             return "SUPERVISOR"
         raise jornada_no_encontrada()

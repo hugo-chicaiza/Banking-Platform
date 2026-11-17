@@ -181,7 +181,7 @@ async def subir(
         if len(contenido) + len(fragmento) > MAX_BYTES:
             raise archivo_invalido()
         contenido.extend(fragmento)
-    filas = leer_csv(nombre, contenido)
+    filas = leer_csv(nombre, bytes(contenido))
     return await run_in_threadpool(guardar_revision, conn, actor, nombre, filas)
 
 

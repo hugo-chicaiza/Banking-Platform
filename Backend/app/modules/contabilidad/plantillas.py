@@ -38,14 +38,14 @@ class Linea(BaseModel):
         "DIFERENCIA",
         "TOTAL",
     ]
-    cuenta: int | None = Field(None, gt=0)
-    rol: str | None = Field(None, min_length=1, max_length=30)
+    cuenta: int | None = Field(default=None, gt=0)
+    rol: str | None = Field(default=None, min_length=1, max_length=30)
 
 
 class Version(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    codigoPlantilla: str | None = Field(None, min_length=1, max_length=50)
+    codigoPlantilla: str | None = Field(default=None, min_length=1, max_length=50)
     vigenciaDesde: date
     nombre: str = Field(min_length=1, max_length=100)
     lineas: list[Linea] = Field(min_length=2, max_length=100)
@@ -58,7 +58,7 @@ class Simulacion(BaseModel):
     montos: dict[str, Decimal]
     producto: dict[str, int] = Field(default_factory=dict)
     contraproducto: dict[str, int] = Field(default_factory=dict)
-    comision: int | None = Field(None, gt=0)
+    comision: int | None = Field(default=None, gt=0)
 
 
 def validar_lineas(conn: Connection, lineas: list[Linea]) -> list[dict[str, Any]]:
@@ -219,7 +219,7 @@ def crear(
 @router.post("/plantillas/simulaciones")
 def simular(conn: Db, datos: Simulacion) -> dict[str, Any]:
     lineas = validar_lineas(conn, datos.lineas)
-    cuentas = {
+    cuentas: dict[tuple[str, str | None], int] = {
         (origen, rol): cuenta
         for origen, roles in (
             ("PRODUCTO", datos.producto),

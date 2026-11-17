@@ -27,7 +27,7 @@ def test_listado_aisla_agencia_y_detalle_incluye_totales(ctx):
 
 
 def test_lectura_global_filtros_y_boveda_inexistente(ctx):
-    ctx.como("CONTADOR")
+    ctx.como("ADMIN", agencia=None)
     assert len(ctx.client.get(f"{BASE}/bovedas").json()) == 2
     assert ctx.client.get(f"{BASE}/bovedas?idAgencia=002").json()[0]["idBoveda"] == 2
     assert ctx.client.get(f"{BASE}/bovedas?tipo=Menor").json() == []
@@ -405,3 +405,15 @@ def test_cambio_valor_de_pieza_sin_existencia_invalida_arqueo(ctx):
     ctx.como("SUPERVISOR", actor=9)
     r = ctx.client.post(f"{BASE}/arqueos/1/aprobacion")
     assert r.json()["code"] == "ARQUEO_DESACTUALIZADO"
+
+
+def test_contador_solo_consulta_agencias_asignadas(ctx):
+    from dataclasses import replace
+
+    ctx.como("CONTADOR")
+    assert len(ctx.client.get(f"{BASE}/bovedas").json()) == 1
+    assert ctx.client.get(f"{BASE}/bovedas?idAgencia=002").status_code == 403
+    assert ctx.client.get(f"{BASE}/bovedas/2").status_code == 403
+    ctx.usuario = replace(ctx.usuario, id_agencias=("001", "002"))
+    assert ctx.client.get(f"{BASE}/bovedas?idAgencia=002").json()[0]["idBoveda"] == 2
+    assert ctx.client.get(f"{BASE}/bovedas/2").status_code == 200

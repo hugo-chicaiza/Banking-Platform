@@ -26,7 +26,9 @@ def probar(database: str) -> None:
 
     def conectar():
         db = pyodbc.connect(cadena)
-        base, instancia = db.execute("SELECT DB_NAME(), @@SERVERNAME").fetchone()
+        identidad = db.execute("SELECT DB_NAME(), @@SERVERNAME").fetchone()
+        assert identidad is not None
+        base, instancia = identidad
         assert base.casefold() == database.casefold()
         assert instancia.casefold() == servidor.casefold()
         db.rollback()
@@ -78,29 +80,34 @@ def probar(database: str) -> None:
         try:
             aplicar(conn, revision["IdImportacion"], 101)
         except HTTPException as error:
+            assert isinstance(error.detail, dict)
             assert (
-                error.status_code == 409 and error.detail["code"] == "CATALOGO_CAMBIO"
+                error.status_code == 409
+                and error.detail.get("code") == "CATALOGO_CAMBIO"
             )
         else:
             raise AssertionError("La importación sobrescribió el cambio concurrente.")
-        ids = dict(
-            conn.execute(
+        ids = {
+            str(fila["CodigoCuenta"]): int(fila["IdCuentaContable"])
+            for fila in conn.execute(
                 text("""
-            SELECT CodigoCuenta,IdCuentaContable FROM Contabilidad.CuentasContables
-            WHERE CodigoCuenta IN ('11010505','110197')
-        """)
-            ).all()
-        )
+                    SELECT CodigoCuenta,IdCuentaContable
+                    FROM Contabilidad.CuentasContables
+                    WHERE CodigoCuenta IN ('11010505','110197')
+                """)
+            ).mappings()
+        }
         conn.rollback()
-        datos = CuentaContableEditar(nombreCuenta="Efectivo en bóveda del ensayo")
+        datos = CuentaContableEditar(nombre_cuenta="Efectivo en bóveda del ensayo")
         renombrada = editar_cuenta_contable(conn, ids["11010505"], datos, 101)
         assert renombrada["nombre_cuenta"] == datos.nombre_cuenta
         try:
             editar_cuenta_contable(conn, ids["110197"], datos, 101)
         except HTTPException as error:
+            assert isinstance(error.detail, dict)
             assert (
                 error.status_code == 409
-                and error.detail["code"] == "CUENTA_DEL_REGULADOR"
+                and error.detail.get("code") == "CUENTA_DEL_REGULADOR"
             )
         else:
             raise AssertionError("Se permitió modificar el CUC por mantenimiento.")

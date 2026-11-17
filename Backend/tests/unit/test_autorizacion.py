@@ -379,6 +379,34 @@ ROLES_POR_RUTA: dict[tuple[str, str], tuple[str, ...]] = {
 }
 
 
+# Cobertura de las rutas aditivas y de los contratos incorporados desde develop.
+ROLES_POR_RUTA.update(
+    {
+        ("GET", "/api/v1/auth/agencias"): (),
+        ("POST", "/api/v1/auth/agencia-activa"): (),
+        ("GET", "/api/v1/usuarios/{idUsuario}/agencias"): ("ADMIN",),
+        ("PUT", "/api/v1/usuarios/{idUsuario}/agencias"): ("ADMIN",),
+        ("GET", "/api/v1/usuarios/{idUsuario}/agencias/historial"): ("ADMIN",),
+        ("GET", "/api/v1/contabilidad/cuentas/importaciones/{id_importacion}"): (
+            "CONTADOR",
+        ),
+        ("POST", "/api/v1/contabilidad/cuentas/importaciones"): ("CONTADOR",),
+        (
+            "POST",
+            "/api/v1/contabilidad/cuentas/importaciones/{id_importacion}/aplicar",
+        ): ("CONTADOR",),
+        ("GET", "/api/v1/contabilidad/plantillas/{id_plantilla}"): ("CONTADOR",),
+        ("GET", "/api/v1/contabilidad/tipos-asiento/{id_tipo}/plantillas"): (
+            "CONTADOR",
+        ),
+        ("POST", "/api/v1/contabilidad/tipos-asiento/{id_tipo}/plantillas"): (
+            "CONTADOR",
+        ),
+        ("POST", "/api/v1/contabilidad/plantillas/simulaciones"): ("CONTADOR",),
+    }
+)
+
+
 def _rutas_api() -> list[tuple[str, str]]:
     return [
         (metodo.upper(), ruta)

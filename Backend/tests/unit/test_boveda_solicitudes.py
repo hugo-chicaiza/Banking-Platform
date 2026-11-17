@@ -288,17 +288,19 @@ def test_admin_resuelve_solicitud_sin_mover_efectivo(ctx, accion, actor, estado)
     assert not ctx.state["movimientos"]
 
 
-def test_admin_conserva_agencia_de_escritura_y_permisos_explicitos(ctx):
+def test_admin_global_usa_agencia_del_recurso_y_permisos_explicitos(ctx):
     from dataclasses import replace
 
-    ctx.como("ADMIN", actor=7)
+    ctx.como("ADMIN", actor=7, agencia=None)
     assert len(ctx.client.get(f"{BASE}/bovedas").json()) == 2
     assert crear(ctx).status_code == 201
-    ctx.como("ADMIN", actor=9, agencia="002")
+    ctx.como("ADMIN", actor=9, agencia=None)
     assert ctx.client.get(f"{BASE}/solicitudes-movimiento/1").status_code == 200
-    assert aprobar(ctx).json()["code"] == "SIN_ACCESO_AGENCIA"
-    assert crear(ctx).json()["code"] == "SIN_ACCESO_AGENCIA"
-    ctx.como("ADMIN", actor=9)
     ctx.usuario = replace(ctx.usuario, permisos=())
     assert aprobar(ctx).json()["code"] == "SIN_PERMISO"
     assert not ctx.state["movimientos"]
+    ctx.como("ADMIN", actor=9, agencia=None)
+    r = aprobar(ctx)
+    assert r.status_code == 201, r.text
+    assert ctx.state["solicitudes"][1]["id_agencia"] == "001"
+    assert r.json()[0]["autorizadoPor"] == 9

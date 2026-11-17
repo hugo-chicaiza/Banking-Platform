@@ -21,7 +21,10 @@ from app.core.config.settings import get_settings
 from app.core.database.db import cooperativa, seguridad
 from app.core.security import auth
 from app.main import app
+from app.modules.auth import agencias as multiagencia
+from app.modules.auth import agencias_repository as agencias_repo
 from app.modules.auth import repository, service
+from app.modules.caja import repository as caja_repo
 from tests.sesion import ID_AUDITORIA, simular_sesion, usuario_con_roles
 
 ORG = "org_enquocoop"
@@ -73,17 +76,36 @@ class _Base:
         ]
         self.agencias = {"001", "002"}
         self.listados: list[dict[str, Any]] = []
+        self.multi = {id_: ["001"] for id_ in self.usuarios}
+        self.historial_multi: list[dict[str, Any]] = []
+        self.contextos: dict[tuple[bytes, int], dict[str, Any]] = {}
+        self.jornadas: dict[int, dict[str, Any]] = {}
 
     def estado(self) -> tuple[Any, ...]:
-        return (self.usuarios, self.bloqueos, self.asignaciones)
+        return (
+            self.usuarios,
+            self.bloqueos,
+            self.asignaciones,
+            self.multi,
+            self.historial_multi,
+            self.contextos,
+        )
 
     def restaurar(self, estado: tuple[Any, ...]) -> None:
-        self.usuarios, self.bloqueos, self.asignaciones = estado
+        (
+            self.usuarios,
+            self.bloqueos,
+            self.asignaciones,
+            self.multi,
+            self.historial_multi,
+            self.contextos,
+        ) = estado
 
 
 class _Conn:
     def __init__(self, base: _Base) -> None:
         self.base = base
+        self._respaldo_multi = copy.deepcopy(base.estado())
         self.fallar_commit = False
         self.rollbacks = 0
 
@@ -98,6 +120,22 @@ class _Conn:
             self.rollbacks += 1
             self.base.restaurar(respaldo)
             raise
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+    def commit(self):
+        if self.fallar_commit:
+            raise OperationalError("COMMIT", {}, Exception("sin red"))
+        self._respaldo_multi = copy.deepcopy(self.base.estado())
+
+    def rollback(self):
+        self.rollbacks += 1
+        if hasattr(self, "_respaldo_multi"):
+            self.base.restaurar(copy.deepcopy(self._respaldo_multi))
 
 
 class _WorkOS:
@@ -215,6 +253,9 @@ def base(monkeypatch) -> _Base:
         return filas, len(filas)
 
     def obtener_usuario(_conn, id_usuario, bloquear=False):
+        if bloquear and isinstance(_conn, _Conn):
+            _conn._respaldo_multi = copy.deepcopy(datos.estado())
+
         # Como una fila real: una copia, no cambia si luego se actualiza la tabla
         fila = datos.usuarios.get(id_usuario)
         return dict(fila) if fila else None
@@ -345,6 +386,112 @@ def base(monkeypatch) -> _Base:
         "abrir_asignacion": abrir_asignacion,
     }.items():
         monkeypatch.setattr(repository, nombre, funcion)
+
+    def asignar(_conn, id_, agencia, activa, actor):
+        ids = datos.multi.setdefault(id_, [])
+        if activa and agencia not in ids:
+            ids.append(agencia)
+        if not activa and agencia in ids:
+            ids.remove(agencia)
+
+    def historial(_conn, id_, accion, agencia, anterior, nueva, actor, agencia_actor):
+        datos.historial_multi.append(
+            {
+                "id_historial": len(datos.historial_multi) + 1,
+                "usuario": id_,
+                "id_agencia": agencia,
+                "accion": accion,
+                "principal_anterior": anterior,
+                "principal_nueva": nueva,
+                "realizado_por": actor,
+                "agencia_actor": agencia_actor,
+                "fecha_utc": FECHA,
+            }
+        )
+
+    def leer_historial(_conn, id_, page, size):
+        rows = [dict(r) for r in reversed(datos.historial_multi) if r["usuario"] == id_]
+        return rows[(page - 1) * size : page * size], len(rows)
+
+    monkeypatch.setattr(
+        agencias_repo,
+        "asignaciones",
+        lambda _c, id_: (
+            sorted(datos.multi[id_])
+            if id_ in datos.multi
+            else (
+                [str(datos.usuarios[id_]["AgenciaID"]).zfill(3)]
+                if id_ in datos.usuarios
+                and datos.usuarios[id_]["AgenciaID"] is not None
+                else []
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        agencias_repo,
+        "agencias",
+        lambda _c: [
+            {"id_agencia": i, "codigo": i, "estado": "A"}
+            for i in sorted(datos.agencias)
+        ],
+    )
+    monkeypatch.setattr(
+        agencias_repo,
+        "version",
+        lambda _c, id_: max(
+            (r["id_historial"] for r in datos.historial_multi if r["usuario"] == id_),
+            default=0,
+        ),
+    )
+    monkeypatch.setattr(
+        agencias_repo,
+        "eliminar_contexto",
+        lambda _c, sid, id_: datos.contextos.pop((sid, id_), None),
+    )
+    monkeypatch.setattr(agencias_repo, "guardar_asignacion", asignar)
+    monkeypatch.setattr(agencias_repo, "historico", historial)
+    monkeypatch.setattr(agencias_repo, "historial", leer_historial)
+    monkeypatch.setattr(
+        agencias_repo,
+        "principal",
+        lambda _c, id_, agencia: datos.usuarios[id_].update(
+            AgenciaID=int(agencia) if agencia else None
+        ),
+    )
+    monkeypatch.setattr(
+        agencias_repo,
+        "usuario_por_llave",
+        lambda _c, llave: next(
+            (dict(u) for u in datos.usuarios.values() if u["KeyUsuario"] == llave), None
+        ),
+    )
+    monkeypatch.setattr(
+        agencias_repo, "contexto", lambda _c, sid, id_: datos.contextos.get((sid, id_))
+    )
+    monkeypatch.setattr(
+        agencias_repo,
+        "guardar_contexto",
+        lambda _c, sid, id_, agencia: datos.contextos.update(
+            {(sid, id_): {"agencia": agencia, "vigente": 1}}
+        ),
+    )
+    monkeypatch.setattr(
+        caja_repo,
+        "jornada_abierta_de_usuario",
+        lambda _c, id_, bloquear=False: datos.jornadas.get(id_),
+    )
+    monkeypatch.setattr(
+        multiagencia,
+        "get_engine",
+        lambda _base: SimpleNamespace(connect=lambda: _Conn(datos)),
+    )
+    monkeypatch.setattr(
+        agencias_repo,
+        "inicializar_contexto",
+        lambda _c, sid, id_, agencia: datos.contextos.setdefault(
+            (sid, id_), {"agencia": agencia, "vigente": 1}
+        ),
+    )
     return datos
 
 

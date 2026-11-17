@@ -67,9 +67,12 @@ def test_filtros_combinados_y_fechas_inclusivas(ctx):
 
 
 @pytest.mark.parametrize("rol", ["CONTADOR", "AUDITOR", "ADMIN"])
-def test_roles_globales_consultan_historial_de_otra_agencia(ctx, rol):
+def test_roles_lectores_consultan_historial_de_agencia_asignada(ctx, rol):
     ctx.registrar_conteo()
     ctx.como(rol, agencia="002")
+    from dataclasses import replace
+
+    ctx.usuario = replace(ctx.usuario, id_agencias=("001", "002"))
     assert ctx.client.get(RUTA).json()["total"] == 1
 
 

@@ -1,6 +1,7 @@
 """TRX-01 · GET /api/v1/transacciones (pruebas sin BD)."""
 
 from collections.abc import Iterator
+from dataclasses import replace
 from datetime import datetime
 from decimal import Decimal
 from typing import Any
@@ -67,13 +68,13 @@ def test_trx01_supervisor_solo_su_agencia(ctx: Contexto) -> None:
     assert (offset, limite) == (0, 20)
 
 
-def test_trx01_auditor_sin_limite_de_agencia(ctx: Contexto) -> None:
-    ctx.usuario = usuario("AUDITOR", agencia=None)
+def test_trx01_auditor_filtra_agencia_asignada(ctx: Contexto) -> None:
+    ctx.usuario = replace(usuario("AUDITOR"), id_agencias=("001", "002"))
     ctx.fake("listar_transacciones", ([], 0))
     r = ctx.cliente.get(BASE, params={"idAgencia": "002"})
     assert r.status_code == 200
     filtros = ctx.llamadas["listar_transacciones"][0][0]
-    assert filtros["alcance"] is None
+    assert filtros["alcance"] == "002"
     assert filtros["id_agencia"] == "002"
 
 

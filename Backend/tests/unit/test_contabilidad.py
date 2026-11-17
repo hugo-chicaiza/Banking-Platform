@@ -18,7 +18,20 @@ from tests.sesion import simular_sesion
 
 
 @pytest.fixture
-def client():
+def client(monkeypatch):
+    from types import SimpleNamespace
+
+    from app.modules.auth import agencias
+
+    monkeypatch.setattr(
+        agencias,
+        "contexto_usuario",
+        lambda usuario: SimpleNamespace(
+            alcance_global="ADMIN" in usuario.roles
+            and not ({"CAJERO", "ASESOR"} & set(usuario.roles)),
+            acceso_todas_agencias=False,
+        ),
+    )
     app.dependency_overrides[cooperativa] = lambda: None
     simular_sesion(app)
     yield TestClient(app)
@@ -524,7 +537,7 @@ def test_con04_sin_parametros_usa_orden_y_pagina_por_defecto(client, monkeypatch
 
     assert r.status_code == 200
     assert recibido == {
-        "filtros": {"fecha": None, "origen": None, "id_agencia": None, "estado": None},
+        "filtros": {"fecha": None, "origen": None, "id_agencia": "001", "estado": None},
         "page": 1,
         "page_size": 20,
         "campo": "fechaAsiento",

@@ -38,4 +38,72 @@ def test_archivo_invalido(nombre, contenido):
     with pytest.raises(HTTPException) as error:
         leer_csv(nombre, contenido)
     assert error.value.status_code == 422
-    assert error.value.detail["code"] == "ARCHIVO_INVALIDO"
+    assert isinstance(error.value.detail, dict)
+    assert error.value.detail.get("code") == "ARCHIVO_INVALIDO"
+
+
+def test_carga_csv_fragmentada_conserva_utf8_y_no_escribe_directamente(monkeypatch):
+    import asyncio
+    from unittest.mock import Mock
+
+    from fastapi import Request
+
+    from app.modules.contabilidad import importaciones
+
+    contenido = CABECERA + "1,Ahorro Ni\u00f1ez,,DEUDORA\n".encode()
+    posicion = contenido.index(bytes([0xC3])) + 1
+    fragmentos = iter([contenido[:posicion], contenido[posicion:]])
+
+    async def recibir():
+        fragmento = next(fragmentos, b"")
+        return {"type": "http.request", "body": fragmento, "more_body": bool(fragmento)}
+
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/",
+            "headers": [(b"content-type", b"text/csv")],
+        },
+        recibir,
+    )
+    guardar = Mock(return_value={"IdImportacion": 7})
+    monkeypatch.setattr(importaciones, "guardar_revision", guardar)
+    conn = Mock()
+    respuesta = asyncio.run(importaciones.subir(conn, 101, request, "cuc.csv"))
+    assert respuesta == {"IdImportacion": 7}
+    guardar.assert_called_once_with(
+        conn, 101, "cuc.csv", leer_csv("cuc.csv", contenido)
+    )
+    assert guardar.call_args.args[3][0]["Naturaleza"] == "DEUDORA"
+    conn.execute.assert_not_called()
+
+
+def test_carga_csv_rechaza_limite_antes_de_guardar(monkeypatch):
+    import asyncio
+    from unittest.mock import Mock
+
+    from fastapi import Request
+
+    from app.modules.contabilidad import importaciones
+
+    monkeypatch.setattr(importaciones, "MAX_BYTES", 3)
+
+    async def recibir():
+        return {"type": "http.request", "body": b"1234", "more_body": False}
+
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/",
+            "headers": [(b"content-type", b"text/csv")],
+        },
+        recibir,
+    )
+    guardar = Mock()
+    monkeypatch.setattr(importaciones, "guardar_revision", guardar)
+    with pytest.raises(HTTPException) as error:
+        asyncio.run(importaciones.subir(Mock(), 101, request, "cuc.csv"))
+    assert error.value.status_code == 422
+    guardar.assert_not_called()

@@ -140,15 +140,18 @@ def probar(database: str, laboratorio: Path) -> None:
         ):
             espejo = reversar(conn, id_asiento, "Prueba local", actor=102)
         cabecera = repository.obtener_asiento(conn, espejo)
+        assert cabecera is not None
         assert cabecera["fecha_asiento"].isoformat() == "2026-10-15"
         assert cabecera["id_asiento_reversion"] == id_asiento
-        assert repository.obtener_asiento(conn, id_asiento)["estado"] == "REVERSADO"
+        original = repository.obtener_asiento(conn, id_asiento)
+        assert original is not None and original["estado"] == "REVERSADO"
         try:
             reversar(conn, id_asiento, "Reintento", actor=102)
         except HTTPException as error:
+            assert isinstance(error.detail, dict)
             assert (
                 error.status_code == 409
-                and error.detail["code"] == "ASIENTO_YA_REVERSADO"
+                and error.detail.get("code") == "ASIENTO_YA_REVERSADO"
             )
         else:
             raise AssertionError("Se permitió un segundo reverso.")
@@ -207,7 +210,8 @@ def probar(database: str, laboratorio: Path) -> None:
                     ),
                 )
         except HTTPException as error:
-            assert error.detail["code"] == "PLANTILLA_NO_DEFINIDA"
+            assert isinstance(error.detail, dict)
+            assert error.detail.get("code") == "PLANTILLA_NO_DEFINIDA"
         else:
             raise AssertionError("Se permitió un movimiento sin plantilla.")
         assert (

@@ -6,12 +6,14 @@ from sqlalchemy import Connection
 from app.core.api.errors import RESPUESTAS_ERROR, ProblemDetailsRoute, solo_parametros
 from app.core.database.db import cooperativa
 from app.core.security.auth import (
+    Usuario,
     UsuarioActual,
     require_auth,
     require_permiso,
     require_roles,
 )
 from app.core.security.operador import IdInterno, auditar, exigir_id_interno
+from app.modules.auth.agencias import agencia_consulta_asientos
 from app.modules.contabilidad import importaciones, service
 from app.modules.contabilidad.schemas import (
     INT32_MAX,
@@ -251,6 +253,7 @@ _asientos_router = APIRouter(
 )
 def listar_asientos(
     conn: Db,
+    usuario: Annotated[Usuario, Depends(require_auth)],
     fecha: Annotated[
         str | None, Query(max_length=10, description="Fecha del asiento, YYYY-MM-DD")
     ] = None,
@@ -270,7 +273,7 @@ def listar_asientos(
         conn,
         fecha=fecha,
         origen=origen,
-        id_agencia=id_agencia,
+        id_agencia=agencia_consulta_asientos(usuario, id_agencia),
         estado=estado,
         page=page,
         page_size=page_size,
@@ -287,10 +290,13 @@ def listar_asientos(
 )
 def obtener_asiento(
     conn: Db,
+    usuario: Annotated[Usuario, Depends(require_auth)],
     id_asiento: Annotated[int, Path(alias="idAsiento", ge=1, le=INT32_MAX)],
 ) -> Any:
     """CON-05 · Asiento con su detalle (líneas ordenadas por IdMovimientoContable)."""
-    return service.obtener_asiento(conn, id_asiento)
+    resultado = service.obtener_asiento(conn, id_asiento)
+    agencia_consulta_asientos(usuario, resultado["id_agencia"])
+    return resultado
 
 
 router.include_router(_asientos_router)
