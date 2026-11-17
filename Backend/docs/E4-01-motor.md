@@ -41,17 +41,20 @@ Para un consumidor nuevo, dentro de la transacción del movimiento:
 from decimal import Decimal
 from app.modules.contabilidad.asientos import OperacionContable, generar_asiento
 
-id_asiento = generar_asiento(conn, OperacionContable(
-    codigo_plantilla="CAJA_DEPOSITO",
-    clave_evento=f"TRANSACCION:{id_transaccion}",
-    id_agencia=id_agencia,
-    id_fecha_contable=id_fecha_contable,
-    id_usuario=actor,
-    fecha_hora=fecha_hora,
-    importes={"PRINCIPAL": Decimal("100.00"), "COMISION": Decimal("0.00")},
-    id_transaccion=id_transaccion,
-    cuentas_por_rol={("PRODUCTO", "CAPITAL"): id_auxiliar_capital},
-))
+id_asiento = generar_asiento(
+    conn,
+    OperacionContable(
+        codigo_plantilla="CAJA_DEPOSITO",
+        clave_evento=f"TRANSACCION:{id_transaccion}",
+        id_agencia=id_agencia,
+        id_fecha_contable=id_fecha_contable,
+        id_usuario=actor,
+        fecha_hora=fecha_hora,
+        importes={"PRINCIPAL": Decimal("100.00"), "COMISION": Decimal("0.00")},
+        id_transaccion=id_transaccion,
+        cuentas_por_rol={("PRODUCTO", "CAPITAL"): id_auxiliar_capital},
+    ),
+)
 ```
 
 Obtenga el auxiliar del subproducto desde una configuración validada. El
