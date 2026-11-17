@@ -3,14 +3,20 @@
 from datetime import date
 from decimal import Decimal
 
+from fastapi import HTTPException
 from sqlalchemy import Connection
 
 from app.core.api.errors import problema
 from app.core.security.auth import Usuario
-from app.core.security.operador import auditar, exigir_agencia, exigir_id_interno
+from app.core.security.operador import (
+    agencia_de_consulta,
+    auditar,
+    exigir_agencia,
+    exigir_agencia_autorizada,
+    exigir_id_interno,
+)
 from app.modules.caja import repository as caja_repo
 from app.modules.caja.service import (
-    agencia_consultable,
     decimal,
     fecha_contable,
     orden_desde_texto,
@@ -74,10 +80,7 @@ def listar_transacciones(
     page_size: int,
     sort: str | None,
 ) -> PageTransaccion:
-    alcance = None
-    if not set(usuario.roles) & ROLES_GLOBALES:
-        # SUPERVISOR: pedir otra agencia es 403; sin filtro, se limita a la suya
-        alcance = agencia_consultable(usuario, id_agencia, ROLES_GLOBALES)
+    alcance = agencia_de_consulta(usuario, id_agencia)
     inicio, fin = rango_fechas(desde, hasta)
     orden = orden_desde_texto(sort, repo.ORDEN, ("fechaHoraSistema", "desc"))
     filas, total = repo.listar_transacciones(
@@ -117,6 +120,12 @@ def transaccion_no_encontrada() -> Exception:
 
 def verificar_alcance(usuario: Usuario, fila: Fila) -> None:
     """Oculta las transacciones fuera de la agencia del supervisor."""
+    try:
+        exigir_agencia_autorizada(usuario, str(fila["AgenciaOperacion"]).strip())
+    except HTTPException as exc:
+        if exc.status_code == 403:
+            raise transaccion_no_encontrada() from None
+        raise
     if set(usuario.roles) & ROLES_GLOBALES:
         return
 

@@ -1,0 +1,87 @@
+-- Issue #450. Solo SeguridadDB de desarrollo. Sin DROP ni ALTER de tablas existentes.
+-- Ejecutar despues de verificar APP_ENV, servidor, respaldo y agencias referenciadas.
+SET XACT_ABORT ON;
+IF DB_NAME() <> N'SeguridadDB'
+    THROW 51450, 'La migracion requiere SeguridadDB de desarrollo.', 1;
+IF CONVERT(nvarchar(128), SERVERPROPERTY('ServerName')) <> N'enquohub'
+    THROW 51450, 'Servidor no autorizado para esta migracion.', 1;
+IF EXISTS (SELECT 1 FROM Organizacion.Usuarios WHERE AgenciaID IS NOT NULL
+           AND (AgenciaID < 1 OR AgenciaID > 999))
+    THROW 51450, 'AgenciaID existente fuera del contrato de tres digitos.', 1;
+
+BEGIN TRANSACTION;
+BEGIN TRY
+    -- Falla ante una instalacion parcial; no asume que una tabla ajena es compatible.
+    IF OBJECT_ID(N'Organizacion.UsuarioAgencia', N'U') IS NOT NULL
+       OR OBJECT_ID(N'Organizacion.UsuarioAgenciaHistorial', N'U') IS NOT NULL
+       OR OBJECT_ID(N'Seguridad.ContextoAgenciaSesion', N'U') IS NOT NULL
+        THROW 51450, 'Existen objetos multiagencia: revisar version antes de continuar.', 1;
+
+    CREATE TABLE Organizacion.UsuarioAgencia (
+        UsuarioID int NOT NULL,
+        IdAgencia char(3) NOT NULL,
+        Activo bit NOT NULL CONSTRAINT DF_UA_Activo DEFAULT (1),
+        FechaAsignacion datetime2 NOT NULL CONSTRAINT DF_UA_Fecha DEFAULT SYSUTCDATETIME(),
+        AsignadoPor int NULL,
+        Origen varchar(16) NOT NULL,
+        CONSTRAINT PK_UsuarioAgencia PRIMARY KEY (UsuarioID, IdAgencia),
+        CONSTRAINT FK_UA_Usuario FOREIGN KEY (UsuarioID) REFERENCES Organizacion.Usuarios(UsuarioID),
+        CONSTRAINT FK_UA_Autor FOREIGN KEY (AsignadoPor) REFERENCES Organizacion.Usuarios(UsuarioID),
+        CONSTRAINT CK_UA_Origen CHECK (Origen IN ('Migracion', 'Administrador')),
+        CONSTRAINT CK_UA_Autor CHECK (Origen = 'Migracion' OR AsignadoPor IS NOT NULL),
+        CONSTRAINT CK_UA_Agencia CHECK (IdAgencia LIKE '[0-9][0-9][0-9]' AND IdAgencia <> '000')
+    );
+
+    CREATE TABLE Organizacion.UsuarioAgenciaHistorial (
+        IdHistorial bigint IDENTITY(1,1) NOT NULL CONSTRAINT PK_UsuarioAgenciaHistorial PRIMARY KEY,
+        UsuarioID int NOT NULL,
+        IdAgencia char(3) NULL,
+        Accion varchar(20) NOT NULL,
+        PrincipalAnterior char(3) NULL,
+        PrincipalNueva char(3) NULL,
+        RealizadoPor int NULL,
+        AgenciaActor char(3) NULL,
+        FechaUTC datetime2 NOT NULL CONSTRAINT DF_UAH_Fecha DEFAULT SYSUTCDATETIME(),
+        CONSTRAINT FK_UAH_Usuario FOREIGN KEY (UsuarioID) REFERENCES Organizacion.Usuarios(UsuarioID),
+        CONSTRAINT FK_UAH_Autor FOREIGN KEY (RealizadoPor) REFERENCES Organizacion.Usuarios(UsuarioID),
+        CONSTRAINT CK_UAH_Accion CHECK (Accion IN ('MIGRACION', 'ASIGNAR', 'REVOCAR', 'PRINCIPAL')),
+        CONSTRAINT CK_UAH_Autor CHECK (Accion = 'MIGRACION' OR RealizadoPor IS NOT NULL)
+    );
+    CREATE INDEX IX_UAH_Usuario ON Organizacion.UsuarioAgenciaHistorial(UsuarioID, IdHistorial);
+
+    -- El hash viene de la sesion WorkOS validada; no se almacena el token ni la cookie.
+    CREATE TABLE Seguridad.ContextoAgenciaSesion (
+        IdSesionHash binary(32) NOT NULL CONSTRAINT PK_ContextoAgenciaSesion PRIMARY KEY,
+        UsuarioID int NOT NULL,
+        IdAgencia char(3) NOT NULL,
+        FechaCambioUTC datetime2 NOT NULL CONSTRAINT DF_CAS_Fecha DEFAULT SYSUTCDATETIME(),
+        ExpiraUTC datetime2 NOT NULL,
+        CONSTRAINT FK_CAS_Usuario FOREIGN KEY (UsuarioID) REFERENCES Organizacion.Usuarios(UsuarioID)
+    );
+
+    -- Copia la asignacion existente. No cambia Usuarios ni inventa un autor humano.
+    INSERT Organizacion.UsuarioAgencia(UsuarioID, IdAgencia, Origen)
+    SELECT UsuarioID, RIGHT('000' + CONVERT(varchar(3), AgenciaID), 3), 'Migracion'
+    FROM Organizacion.Usuarios WITH (UPDLOCK, HOLDLOCK)
+    WHERE AgenciaID IS NOT NULL;
+
+    INSERT Organizacion.UsuarioAgenciaHistorial
+        (UsuarioID, IdAgencia, Accion, PrincipalAnterior, PrincipalNueva)
+    SELECT UsuarioID, IdAgencia, 'MIGRACION', IdAgencia, IdAgencia
+    FROM Organizacion.UsuarioAgencia;
+
+    IF EXISTS (
+        SELECT 1 FROM Organizacion.Usuarios u
+        WHERE u.AgenciaID IS NOT NULL AND NOT EXISTS (
+            SELECT 1 FROM Organizacion.UsuarioAgencia a
+            WHERE a.UsuarioID = u.UsuarioID
+              AND a.IdAgencia = RIGHT('000' + CONVERT(varchar(3), u.AgenciaID), 3)
+              AND a.Activo = 1
+        )
+    ) THROW 51450, 'La migracion no conservo una asignacion original.', 1;
+    COMMIT TRANSACTION;
+END TRY
+BEGIN CATCH
+    IF XACT_STATE() <> 0 ROLLBACK TRANSACTION;
+    THROW;
+END CATCH;

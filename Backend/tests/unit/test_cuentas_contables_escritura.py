@@ -1,6 +1,6 @@
 """Contrato de #206: alta, edición, estado y baja de cuentas contables.
 
-Solo contrato: el servicio responde 501 OPERACION_NO_HABILITADA. No requiere BD.
+Los cambios sujetos a aprobación conservan su respuesta 501.
 """
 
 import pytest
@@ -63,7 +63,7 @@ def test_contrato_en_openapi(ruta, metodo, operation_id, estados):
     assert operacion["operationId"] == operation_id
     assert operacion["x-roles"] == ["CONTADOR"]
     assert estados <= set(operacion["responses"])
-    assert "501" in operacion["responses"]
+    assert ("501" in operacion["responses"]) == (operation_id != "CON03Editar")
 
 
 def test_contrato_codigos_de_error_documentados():
@@ -115,11 +115,10 @@ def test_contrato_estado_solo_acepta_activo_o_inactivo():
 # ---------------------------------------------------------------------------
 
 
-# Alta y estado ya tienen lógica (test_cuentas_contables_logica.py); edición y baja
-# siguen solo con contrato.
+# Alta, edición y estado ya tienen lógica; la baja sigue solo con contrato.
 @pytest.mark.parametrize(
     ("metodo", "url", "cuerpo"),
-    [op for op in _OPERACIONES if op[0] == "DELETE" or op[1] == f"{_BASE}/7"],
+    [op for op in _OPERACIONES if op[0] == "DELETE"],
 )
 def test_contador_con_datos_validos_recibe_501(client, metodo, url, cuerpo):
     r = _llamar(client, metodo, url, cuerpo)

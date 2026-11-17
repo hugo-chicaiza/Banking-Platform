@@ -15,7 +15,13 @@ from sqlalchemy import Connection
 
 from app.core.api.errors import problema
 from app.core.security.auth import Usuario
-from app.core.security.operador import auditar, exigir_agencia, exigir_id_interno
+from app.core.security.operador import (
+    agencia_de_consulta,
+    auditar,
+    exigir_agencia,
+    exigir_agencia_autorizada,
+    exigir_id_interno,
+)
 from app.modules.caja import repository as repo
 from app.modules.caja.repository import Fila
 from app.modules.caja.schemas import (
@@ -38,6 +44,7 @@ from app.modules.caja.schemas import (
     PageMovimientoCaja,
     SeriesBilletesRequest,
 )
+from app.modules.contabilidad.asientos import OperacionContable, generar_asiento
 from app.modules.contabilidad.service import ahora_ecuador
 from app.modules.transacciones import repository as trx_repo
 from app.modules.transacciones.dependencias import (
@@ -59,19 +66,7 @@ def agencia_consultable(
     Los demás usuarios solamente pueden consultar su agencia asignada.
     """
 
-    if set(usuario.roles) & roles_globales:
-        return pedida
-
-    propia = exigir_agencia(usuario)
-
-    if pedida is not None and pedida != propia:
-        raise problema(
-            403,
-            "SIN_ACCESO_AGENCIA",
-            "No tiene acceso a los datos de esa agencia.",
-        )
-
-    return propia
+    return agencia_de_consulta(usuario, pedida)
 
 
 def _caja(fila: Fila) -> CajaFisica:
@@ -244,9 +239,21 @@ def verificar_alcance(
     roles = set(usuario.roles) & set(permitidos)
 
     if roles & ROLES_GLOBALES:
+        try:
+            exigir_agencia_autorizada(usuario, str(jornada["IdAgencia"]).strip())
+        except HTTPException as exc:
+            if exc.status_code == 403:
+                raise jornada_no_encontrada() from None
+            raise
         return "GLOBAL"
 
     if "SUPERVISOR" in roles:
+        try:
+            exigir_agencia_autorizada(usuario, str(jornada["IdAgencia"]).strip())
+        except HTTPException as exc:
+            if exc.status_code == 403:
+                raise jornada_no_encontrada() from None
+            raise
         if jornada["IdAgencia"] == exigir_agencia(usuario):
             return "SUPERVISOR"
         raise jornada_no_encontrada()
@@ -844,6 +851,8 @@ def registrar_dotacion(
                     "La dotación INICIAL debe ser igual al dinero inicial de la jornada.",
                 )
 
+            ahora = ahora_ecuador()
+            id_fecha = fecha_contable(conn, ahora)
             salida = repo.registrar_dotacion(
                 conn,
                 id_jornada,
@@ -852,7 +861,7 @@ def registrar_dotacion(
                 datos.tipo_dotacion,
                 desglose_json(datos.desglose),
                 datos.observacion,
-                fecha_contable(conn),
+                id_fecha,
             )
 
             id_dotacion = int(salida["IdDotacionCaja"])
@@ -863,6 +872,18 @@ def registrar_dotacion(
             if fila is None:
                 raise RuntimeError("La dotación no se encontró tras registrarla")
 
+            generar_asiento(
+                conn,
+                OperacionContable(
+                    codigo_plantilla="DOT_CAJA",
+                    clave_evento=f"DOTACION_CAJA:{id_dotacion}",
+                    id_agencia=jornada["IdAgencia"].strip(),
+                    id_fecha_contable=id_fecha,
+                    id_usuario=actor,
+                    fecha_hora=ahora,
+                    importes={"PRINCIPAL": decimal(fila["Monto"])},
+                ),
+            )
             return _dotacion(
                 fila,
                 bool(salida["BovedaBajoMinimo"]),
@@ -1156,6 +1177,19 @@ def registrar_devolucion(
             if fila is None:
                 raise RuntimeError("La devolución no se encontró tras registrarla")
 
+            ahora = ahora_ecuador()
+            generar_asiento(
+                conn,
+                OperacionContable(
+                    codigo_plantilla="DEV_CAJA",
+                    clave_evento=f"DEVOLUCION_CAJA:{id_devolucion}",
+                    id_agencia=jornada["IdAgencia"].strip(),
+                    id_fecha_contable=cuadre["IdFechaContable"],
+                    id_usuario=actor,
+                    fecha_hora=ahora,
+                    importes={"PRINCIPAL": decimal(fila["Monto"])},
+                ),
+            )
             return Devolucion(
                 id_devolucion_caja=fila["IdDevolucionCaja"],
                 id_jornada_caja=fila["IdJornadaCaja"],

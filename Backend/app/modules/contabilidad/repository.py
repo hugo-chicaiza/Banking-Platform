@@ -410,3 +410,134 @@ def confirmar_asiento_boveda(conn: Connection, id_asiento: int) -> None:
         text("EXEC Contabilidad.usp_ContabilizarAsiento @IdAsientoContable = :id"),
         {"id": id_asiento},
     )
+
+
+def buscar_asiento_evento(conn: Connection, clave: str) -> dict[str, Any] | None:
+    return _one(
+        conn,
+        """
+        SELECT IdAsientoContable, HuellaEventoContable, Estado
+        FROM Contabilidad.AsientoContable WITH (UPDLOCK, HOLDLOCK)
+        WHERE ClaveEventoContable = :clave
+        """,
+        {"clave": clave},
+    )
+
+
+def obtener_plantilla(
+    conn: Connection, codigo: str, fecha: date
+) -> dict[str, Any] | None:
+    return _one(
+        conn,
+        """
+        SELECT TOP (1) p.IdPlantillaAsiento, p.IdConceptoContable, p.Origen, p.IdTipoAsiento,
+               p.Nombre, p.Estado
+        FROM Contabilidad.PlantillaAsiento p WITH (HOLDLOCK)
+        JOIN Contabilidad.TiposAsiento t WITH (HOLDLOCK) ON t.IdTipoAsiento=p.IdTipoAsiento
+        WHERE p.CodigoPlantilla = :codigo AND p.Estado = 1 AND t.Estado = 'A' AND t.EsManual = 0
+          AND VigenciaDesde <= :fecha AND (VigenciaHasta IS NULL OR VigenciaHasta >= :fecha)
+        ORDER BY VigenciaDesde DESC, Version DESC
+        """,
+        {"codigo": codigo, "fecha": fecha},
+    )
+
+
+def obtener_lineas_plantilla(
+    conn: Connection, id_plantilla: int
+) -> list[dict[str, Any]]:
+    filas = conn.execute(
+        text(
+            """
+            SELECT d.IdCuentaContable, d.TipoMovimiento, d.ComponenteImporte, d.OrigenCuenta, d.CodigoRol,
+                   c.Estado, c.EsImputable, c.CodigoCuenta
+            FROM Contabilidad.PlantillaAsientoDetalle AS d WITH (HOLDLOCK)
+            LEFT JOIN Contabilidad.CuentasContables AS c
+                ON c.IdCuentaContable = d.IdCuentaContable
+            WHERE d.IdPlantillaAsiento = :id
+            ORDER BY d.Orden
+            """
+        ),
+        {"id": id_plantilla},
+    ).mappings()
+    return [dict(fila) for fila in filas]
+
+
+def periodo_abierto(conn: Connection, fecha: date) -> bool:
+    fila = _one(
+        conn,
+        """
+        SELECT Estado
+        FROM Contabilidad.PeriodoContable WITH (HOLDLOCK)
+        WHERE Anio = :anio AND Mes = :mes
+        """,
+        {"anio": fecha.year, "mes": fecha.month},
+    )
+    return fila is not None and fila["Estado"] == "ABIERTO"
+
+
+def insertar_asiento_automatico(conn: Connection, datos: dict[str, Any]) -> int:
+    valor = conn.execute(
+        text(
+            """
+            SET NOCOUNT ON;
+            DECLARE @numero varchar(20);
+            DECLARE @asiento TABLE (IdAsientoContable int NOT NULL);
+
+            EXEC Contabilidad.usp_GenerarNumeroAsiento
+                @FechaAsiento = :fecha, @IdAgencia = :agencia,
+                @NumeroAsiento = @numero OUTPUT;
+
+            INSERT INTO Contabilidad.AsientoContable (
+                NumeroAsiento, FechaAsiento, FechaSistema, IdTipoAsiento, Origen,
+                Concepto, TotalDebito, TotalCredito, Estado, IdUsuarioCreacion,
+                IdAgencia, IdConceptoContable, IdFechaContable, IdPlantillaAsiento,
+                ClaveEventoContable, HuellaEventoContable, IdTransaccion, IdAsientoReversion
+            )
+            OUTPUT inserted.IdAsientoContable INTO @asiento
+            VALUES (
+                @numero, :fecha, :fecha_hora, :tipo, :origen, :nombre, 0, 0,
+                'BORRADOR', :usuario, :agencia, :concepto, :id_fecha,
+                :plantilla, :evento, :huella, :transaccion, :original
+            );
+
+            SELECT IdAsientoContable FROM @asiento;
+            """
+        ),
+        datos,
+    ).scalar_one()
+    return int(valor)
+
+
+def insertar_lineas_asiento(conn: Connection, lineas: list[dict[str, Any]]) -> None:
+    conn.execute(
+        text(
+            """
+            INSERT INTO Contabilidad.MovimientosContables (
+                IdCuentaContable, IdTransaccion, IdAgencia, TipoMovimiento,
+                Monto, FechaHora, IdAsientoContable
+            )
+            VALUES (:cuenta, :transaccion, :agencia, :lado, :monto, :fecha_hora, :asiento)
+            """
+        ),
+        lineas,
+    )
+
+
+def contabilizar_asiento(conn: Connection, id_asiento: int) -> None:
+    confirmar_asiento_boveda(conn, id_asiento)
+    conn.execute(
+        text("EXEC Contabilidad.usp_E401_AplicarSaldos @IdAsiento = :id"),
+        {"id": id_asiento},
+    )
+
+
+def cuenta_para_plantilla(conn: Connection, id_cuenta: int) -> dict[str, Any] | None:
+    return _one(
+        conn,
+        """
+        SELECT Estado, EsImputable, CodigoCuenta
+        FROM Contabilidad.CuentasContables WITH (HOLDLOCK)
+        WHERE IdCuentaContable=:id
+        """,
+        {"id": id_cuenta},
+    )

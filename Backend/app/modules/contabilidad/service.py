@@ -5,7 +5,7 @@ from decimal import Decimal
 from typing import Any, NoReturn
 
 from fastapi import HTTPException
-from sqlalchemy import Connection
+from sqlalchemy import Connection, text
 from sqlalchemy.exc import DBAPIError
 
 from app.core.api.errors import problema, traducir_error_bd
@@ -244,14 +244,42 @@ def crear_cuenta_contable(
 
 
 def editar_cuenta_contable(
-    conn: Connection, id_cuenta: int, datos: CuentaContableEditar
-) -> NoReturn:
-    """Cambio de nombre: 200 con la cuenta.
-
-    Raises:
-        HTTPException 501 OPERACION_NO_HABILITADA (contrato sin lógica)
-    """
-    raise _no_habilitada()
+    conn: Connection, id_cuenta: int, datos: CuentaContableEditar, actor: int
+) -> dict[str, Any]:
+    """Renombra un auxiliar conservando su identidad y trazabilidad."""
+    with conn.begin():
+        cuenta = (
+            conn.execute(
+                text("""
+            SELECT CodigoCuenta, EsCatalogoRegulador
+            FROM Contabilidad.CuentasContables WITH (UPDLOCK,HOLDLOCK)
+            WHERE IdCuentaContable=:id
+        """),
+                {"id": id_cuenta},
+            )
+            .mappings()
+            .one_or_none()
+        )
+        if cuenta is None:
+            raise problema(404, "CUENTA_NO_ENCONTRADA", "La cuenta no existe.")
+        if cuenta["EsCatalogoRegulador"] or len(cuenta["CodigoCuenta"]) not in (8, 10):
+            raise problema(
+                409,
+                "CUENTA_DEL_REGULADOR",
+                "Edite el catálogo mediante una importación.",
+            )
+        conn.execute(
+            text("""
+            UPDATE Contabilidad.CuentasContables
+            SET NombreCuenta=:nombre, ModificadoPor=:actor, FechaModificacion=SYSDATETIME()
+            WHERE IdCuentaContable=:id AND NombreCuenta COLLATE Latin1_General_100_BIN2<>:nombre
+        """),
+            {"id": id_cuenta, "actor": actor, "nombre": datos.nombre_cuenta},
+        )
+        recargadas = listar_cuentas_contables(conn, cuenta["CodigoCuenta"], None)
+        return next(
+            fila for fila in recargadas if fila["id_cuenta_contable"] == id_cuenta
+        )
 
 
 def _cuenta_con_saldo() -> HTTPException:

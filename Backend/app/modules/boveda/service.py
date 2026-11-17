@@ -8,7 +8,13 @@ from sqlalchemy import Connection
 
 from app.core.api.errors import problema
 from app.core.security.auth import Usuario
-from app.core.security.operador import auditar, exigir_agencia, exigir_id_interno
+from app.core.security.operador import (
+    agencia_de_consulta,
+    auditar,
+    exigir_agencia,
+    exigir_agencia_autorizada,
+    exigir_id_interno,
+)
 from app.modules.auth.service import validar_participante_boveda
 from app.modules.boveda import repository as repo
 from app.modules.boveda.repository import Fila
@@ -35,15 +41,17 @@ _MAX_DINERO = Decimal("9999999999999999.99")
 
 
 def _agencia(usuario: Usuario, pedida: str | None) -> str | None:
-    if set(usuario.roles) & _GLOBALES:
-        return pedida
-    propia = exigir_agencia(usuario)
-    if pedida is not None and pedida != propia:
-        raise problema(403, "SIN_ACCESO_AGENCIA", "No tiene acceso a esa agencia.")
-    return propia
+    return agencia_de_consulta(usuario, pedida)
 
 
 def _alcance(usuario: Usuario, agencia: str, escritura: bool = False) -> None:
+    # ADMIN conserva acceso total; la agencia de la operacion procede del recurso.
+    if "ADMIN" in usuario.roles and not ({"CAJERO", "ASESOR"} & set(usuario.roles)):
+        exigir_agencia_autorizada(usuario, agencia)
+        return
+    if escritura or ("ADMIN" not in usuario.roles and usuario.agencia() is None):
+        exigir_agencia(usuario)
+    exigir_agencia_autorizada(usuario, agencia)
     if not escritura and set(usuario.roles) & _GLOBALES:
         return
     if exigir_agencia(usuario) != agencia:

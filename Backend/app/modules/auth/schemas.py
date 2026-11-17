@@ -1,7 +1,13 @@
 from datetime import datetime
 from typing import Annotated, Literal, Self
 
-from pydantic import AfterValidator, ConfigDict, StringConstraints, model_validator
+from pydantic import (
+    AfterValidator,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    model_validator,
+)
 from pydantic.json_schema import SkipJsonSchema
 
 from app.core.api.schemas import CamelModel
@@ -121,6 +127,7 @@ class UsuarioCreate(CamelModel):
     cedula: Cedula
     id_agencia: CodigoAgencia
     rol: Rol
+    id_agencias: list[CodigoAgencia] | None = Field(default=None, max_length=100)
 
 
 class UsuarioUpdate(CamelModel):

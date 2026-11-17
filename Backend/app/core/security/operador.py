@@ -49,6 +49,22 @@ def exigir_agencia(usuario: Usuario) -> str:
     return agencia
 
 
+def exigir_agencia_autorizada(usuario: Usuario, agencia: str) -> str:
+    admin_global = "ADMIN" in usuario.roles and not (
+        {"CAJERO", "ASESOR"} & set(usuario.roles)
+    )
+    if not admin_global and agencia not in usuario.agencias_permitidas():
+        raise problema(403, "SIN_ACCESO_AGENCIA", "No tiene acceso a esa agencia.")
+    return agencia
+
+
+def agencia_de_consulta(usuario: Usuario, pedida: str | None) -> str | None:
+    if "ADMIN" in usuario.roles and not ({"CAJERO", "ASESOR"} & set(usuario.roles)):
+        return pedida
+    seleccion = pedida if pedida is not None else exigir_agencia(usuario)
+    return exigir_agencia_autorizada(usuario, seleccion)
+
+
 @dataclass
 class RegistroAuditado:
     """Lo completa la operación cuando conoce el id del registro creado.
