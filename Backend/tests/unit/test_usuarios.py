@@ -19,6 +19,7 @@ from workos.exceptions import BadRequestException, ServerException
 
 from app.core.config.settings import get_settings
 from app.core.database.db import cooperativa, seguridad
+from app.core.security import auth
 from app.main import app
 from app.modules.auth import repository, service
 from tests.sesion import ID_AUDITORIA, simular_sesion, usuario_con_roles
@@ -749,6 +750,8 @@ def test_no_se_edita_username_ni_cedula(client):
 
 
 def test_cambiar_rol_de_vinculado(client, base, workos):
+    auth._revocadas.clear()
+
     r = client.put(f"{BASE}/2/roles", json={"rol": "SUPERVISOR"})
 
     assert r.status_code == 200
@@ -757,6 +760,22 @@ def test_cambiar_rol_de_vinculado(client, base, workos):
     assert ("update_membership", ("om_2", "org-supervisor")) in workos.llamadas
     # Dejó de ser cajero: su asignación vigente se cierra
     assert base.asignaciones[0]["Estado"] == 0
+    # Sus sesiones se cierran y se rechazan al instante: entra de nuevo con el rol nuevo
+    assert ("list_sessions", "user_2") in workos.llamadas
+    assert ("revoke_session", "session_a") in workos.llamadas
+    assert ("revoke_session", "session_b") not in workos.llamadas
+    assert auth.motivo_revocacion("session_a") == "SESION_REVOCADA"
+
+
+def test_cambiar_rol_sin_poder_cerrar_sesiones_se_revierte(client, base, workos):
+    workos.errores["list_sessions"] = _http_error(ServerException)
+
+    r = client.put(f"{BASE}/2/roles", json={"rol": "SUPERVISOR"})
+
+    assert r.status_code == 503
+    assert base.usuarios[2]["RolesWorkOS"] == "CAJERO"
+    # El rol aplicado en WorkOS se deshace
+    assert ("update_membership", ("om_2", "org-cajero")) in workos.llamadas
 
 
 def test_cambiar_rol_de_pendiente_reemplaza_la_invitacion(client, workos):

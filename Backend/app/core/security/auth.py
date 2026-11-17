@@ -12,10 +12,17 @@ Dependencias:
 - `require_roles("CAJERO", ...)`: igual que la anterior y además exige un rol (403).
 - `require_auth`: la que declaran todos los routers. Exige una sesión válida (401).
 
+Duración e inactividad las impone WorkOS (8 h y 15 min); la cookie no tiene Max-Age.
+Revocar en WorkOS no invalida el access token ya emitido (dura hasta 5 min), así que
+los sid revocados desde la plataforma se guardan en una caché en memoria
+(`revocar_sesion_local`) y se rechazan al instante. Cada 401 de sesión lleva el motivo
+en `code` (`MotivoSesion`) para que el FE lo explique.
+
 Cada 401/403 de la API queda en Auditoria.Auditoria (`AccesoDenegadoMiddleware`).
 """
 
 import hashlib
+import json
 import logging
 import threading
 import time
@@ -23,6 +30,8 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Annotated, Any, Literal, get_args
 
+import jwt
+from cryptography.fernet import Fernet, InvalidToken
 from fastapi import Depends, HTTPException, Request, Response
 from fastapi.security import APIKeyCookie
 from jwt.exceptions import PyJWKClientConnectionError, PyJWKClientError
@@ -70,7 +79,28 @@ ROLES: tuple[Rol, ...] = get_args(Rol)
 _PREFIJO_ROL = "org-"
 
 COOKIE_SESION = "__Host-session"
-DURACION_SESION = 8 * 60 * 60  # AUT-01: 8 h. Igualar a la sesión configurada en WorkOS
+# Igualar a la configuración de sesiones de WorkOS, que es la que las impone. Aquí solo
+# sirven para explicar el 401 y para el TTL de la caché de sesiones revocadas.
+DURACION_SESION = 8 * 60 * 60  # AUT-01: Maximum session length
+INACTIVIDAD_SESION = 15 * 60  # Inactivity timeout (PCI DSS 8.2.8)
+DURACION_ACCESS_TOKEN = 5 * 60  # Access token duration
+
+# Motivo de un 401 de sesión (`code` del cuerpo). NO_AUTENTICADO: no hay cookie o no
+# se puede leer.
+MotivoSesion = Literal[
+    "NO_AUTENTICADO",
+    "SESION_EXPIRADA",
+    "SESION_INACTIVA",
+    "SESION_REVOCADA",
+]
+_MENSAJES_SESION: dict[MotivoSesion, str] = {
+    "NO_AUTENTICADO": "Inicie sesión para continuar.",
+    "SESION_EXPIRADA": "Su sesión alcanzó la duración máxima. Inicie sesión de nuevo.",
+    "SESION_INACTIVA": "Su sesión se cerró por inactividad. Inicie sesión de nuevo.",
+    "SESION_REVOCADA": (
+        "Su sesión fue cerrada por un administrador. Inicie sesión de nuevo."
+    ),
+}
 
 _METODOS_SEGUROS = {"GET", "HEAD", "OPTIONS"}
 _SITIOS_PROPIOS = {"same-origin", "none"}
@@ -79,6 +109,14 @@ _SITIOS_PROPIOS = {"same-origin", "none"}
 _VIGENCIA_RENOVACION = 30.0
 _renovaciones: dict[str, tuple[float, RefreshWithSessionCookieSuccessResponse]] = {}
 _candado_renovacion = threading.Lock()
+
+# Sesiones revocadas desde la plataforma: sid -> (vence, motivo). Basta con que dure
+# lo que el access token (luego WorkOS rechaza la renovación); se guarda hasta la
+# inactividad para que el 401 siga diciendo "revocada" y no "inactiva" o "expirada".
+# Es por proceso: el backend corre en un solo proceso (python -m app).
+_TTL_REVOCADA = max(DURACION_ACCESS_TOKEN, INACTIVIDAD_SESION) + 60
+_revocadas: dict[str, tuple[float, MotivoSesion]] = {}
+_candado_revocadas = threading.Lock()
 
 # Solo documenta la cookie en /api/docs; el valor se lee igual que con request.cookies
 _cookie = APIKeyCookie(
@@ -156,11 +194,12 @@ class SesionValida:
 def guardar_cookie_sesion(response: Response, sellada: str) -> None:
     # HttpOnly: JavaScript no la lee (XSS). Secure: solo HTTPS (http://localhost cuenta
     # como seguro en Chrome y Firefox). Lax: viaja al volver del Hosted UI, pero no en
-    # POST desde otros sitios.
+    # POST desde otros sitios. Sin Max-Age (cookie de sesión del navegador): si se
+    # renovara en cada refresh alargaría la sesión; el límite lo imponen WorkOS (8 h y
+    # 15 min de inactividad) y cerrar el navegador.
     response.set_cookie(
         COOKIE_SESION,
         sellada,
-        max_age=DURACION_SESION,
         path="/",
         secure=True,
         httponly=True,
@@ -174,7 +213,9 @@ def borrar_cookie_sesion(response: Response) -> None:
     )
 
 
-def no_autenticado(borrar_cookie: bool = False) -> HTTPException:
+def no_autenticado(
+    borrar_cookie: bool = False, motivo: MotivoSesion = "NO_AUTENTICADO"
+) -> HTTPException:
     headers: dict[str, str] = {}
     if borrar_cookie:
         # La respuesta de error es otra, así que el Set-Cookie va en la excepción
@@ -183,9 +224,84 @@ def no_autenticado(borrar_cookie: bool = False) -> HTTPException:
         headers["Set-Cookie"] = temporal.headers["set-cookie"]
     return HTTPException(
         status_code=401,
-        detail={"code": "NO_AUTENTICADO", "message": "Inicie sesión para continuar."},
+        detail={"code": motivo, "message": _MENSAJES_SESION[motivo]},
         headers=headers or None,
     )
+
+
+# --- Sesiones revocadas ----------------------------------------------------------
+
+
+def revocar_sesion_local(
+    id_sesion: str, motivo: MotivoSesion = "SESION_REVOCADA"
+) -> None:
+    """Rechaza el sid desde ya, sin esperar a que venza su access token. Llamarla
+    después de revocar la sesión en WorkOS.
+    """
+    with _candado_revocadas:
+        ahora = time.monotonic()
+        for vieja in [k for k, (v, _) in _revocadas.items() if v <= ahora]:
+            del _revocadas[vieja]
+        _revocadas[id_sesion] = (ahora + _TTL_REVOCADA, motivo)
+
+
+def motivo_revocacion(id_sesion: str) -> MotivoSesion | None:
+    """Motivo si el sid está en la caché de revocadas; None si no."""
+    with _candado_revocadas:
+        entrada = _revocadas.get(id_sesion)
+        if entrada is None:
+            return None
+        if entrada[0] <= time.monotonic():
+            del _revocadas[id_sesion]
+            return None
+        return entrada[1]
+
+
+def _datos_del_token(sellada: str) -> tuple[str | None, float | None] | None:
+    """sid e iat del access token guardado en la cookie, sin validar la firma. Solo
+    sirven para explicar un 401, nunca para dar acceso: la cookie está cifrada y
+    autenticada con WORKOS_COOKIE_PASSWORD. None si no se puede leer.
+    """
+    try:
+        datos = json.loads(Fernet(get_cookie_password()).decrypt(sellada.encode()))
+        claims = jwt.decode(datos["access_token"], options={"verify_signature": False})
+    except (InvalidToken, ValueError, KeyError, TypeError, jwt.PyJWTError):
+        return None
+    sid = claims.get("sid")
+    iat = claims.get("iat")
+    return (
+        sid if isinstance(sid, str) else None,
+        float(iat) if isinstance(iat, int | float) else None,
+    )
+
+
+def sid_de_cookie(sellada: str | None) -> str | None:
+    """sid de la sesión guardada en la cookie, aunque ya no sirva (login desde el mismo
+    navegador). Nadie puede fabricar una cookie con otro sid sin
+    WORKOS_COOKIE_PASSWORD.
+    """
+    datos = _datos_del_token(sellada) if sellada else None
+    return datos[0] if datos else None
+
+
+def motivo_rechazo(sellada: str | None) -> MotivoSesion:
+    """Por qué la sesión de la cookie ya no sirve.
+
+    WorkOS responde igual (invalid_grant) a una sesión vencida, inactiva o revocada, así
+    que se deduce: revocada si el sid está en la caché; inactiva si su último access
+    token se emitió (última renovación) hace más que el tiempo de inactividad; si no,
+    alcanzó la duración máxima.
+    """
+    datos = _datos_del_token(sellada) if sellada else None
+    if datos is None:
+        return "NO_AUTENTICADO"
+    sid, emitido = datos
+    revocada = motivo_revocacion(sid) if sid else None
+    if revocada is not None:
+        return revocada
+    if emitido is not None and time.time() - emitido >= INACTIVIDAD_SESION:
+        return "SESION_INACTIVA"
+    return "SESION_EXPIRADA"
 
 
 def _no_disponible() -> HTTPException:
@@ -398,18 +514,28 @@ def _renovar(
         return resultado
 
 
+def _no_revocada(valida: SesionValida) -> SesionValida | None:
+    if motivo_revocacion(valida.usuario.id_sesion) is not None:
+        logger.info(
+            "auth: sesión revocada rechazada usuario=%s", valida.usuario.id_usuario
+        )
+        return None
+    return valida
+
+
 def renovar_sesion(sellada: str) -> SesionValida | None:
     """Pide a WorkOS un access token nuevo. None si la sesión ya no sirve."""
     resultado = _renovar(sellada)
     if not isinstance(resultado, RefreshWithSessionCookieSuccessResponse):
         return None
-    return SesionValida(_usuario(resultado), resultado.sealed_session)
+    return _no_revocada(SesionValida(_usuario(resultado), resultado.sealed_session))
 
 
 def validar_sesion(sellada: str) -> SesionValida | None:
     """Descifra la cookie y valida el access token; si venció, lo renueva.
 
-    None si la cookie no sirve; 503 si no se pueden descargar las llaves de WorkOS.
+    None si la cookie no sirve o la sesión está revocada (el motivo lo da
+    `motivo_rechazo`); 503 si no se pueden descargar las llaves de WorkOS.
     """
     sesion = get_workos().user_management.load_sealed_session(
         sealed_session=sellada, cookie_password=get_cookie_password()
@@ -428,7 +554,7 @@ def validar_sesion(sellada: str) -> SesionValida | None:
         if resultado.reason != AuthenticateWithSessionCookieFailureReason.INVALID_JWT:
             return None
         return renovar_sesion(sellada)
-    return SesionValida(_usuario(resultado), None)
+    return _no_revocada(SesionValida(_usuario(resultado), None))
 
 
 # --- Dependencias ----------------------------------------------------------------
@@ -439,13 +565,15 @@ def usuario_actual(
     response: Response,
     sellada: Annotated[str | None, Depends(_cookie)],
 ) -> Usuario:
-    """401 sin sesión válida; 403 si un POST/PUT/PATCH/DELETE viene de otro origen."""
+    """401 sin sesión válida, con el motivo en `code` (MotivoSesion); 403 si un
+    POST/PUT/PATCH/DELETE viene de otro origen.
+    """
     verificar_origen(request)
     if not sellada:
         raise no_autenticado()
     valida = validar_sesion(sellada)
     if valida is None:
-        raise no_autenticado(borrar_cookie=True)
+        raise no_autenticado(borrar_cookie=True, motivo=motivo_rechazo(sellada))
     if valida.sellada_nueva:
         guardar_cookie_sesion(response, valida.sellada_nueva)
     # Para que la auditoría de un 403 posterior sepa quién lo intentó

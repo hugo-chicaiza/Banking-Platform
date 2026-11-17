@@ -11,6 +11,11 @@ from workos import WorkOSClient
 
 from app.core.config.settings import get_settings
 
+# Segundos de tolerancia de reloj al validar el access token (iat y exp). Con 0, un
+# reloj local apenas atrasado respecto a WorkOS rechaza el token recién emitido
+# ("The token is not yet valid (iat)") y el login falla.
+JWT_LEEWAY = 15.0
+
 
 @lru_cache
 def get_workos() -> WorkOSClient:
@@ -22,6 +27,7 @@ def get_workos() -> WorkOSClient:
     return WorkOSClient(
         api_key=settings.workos_api_key.get_secret_value(),
         client_id=settings.workos_client_id,
+        jwt_leeway=JWT_LEEWAY,
     )
 
 
