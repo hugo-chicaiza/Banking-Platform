@@ -2,11 +2,14 @@
 
 import base64
 import hashlib
+import json
+import time
 from types import SimpleNamespace
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
 import httpx
+import jwt as pyjwt
 import pytest
 from cryptography.fernet import Fernet
 from fastapi import APIRouter, Depends, FastAPI
@@ -125,6 +128,9 @@ class _UserManagement:
         self.consultas_base = 0
         self.roles_registrados: dict[str, str | None] = {}
         self.llamadas: list[tuple[str, dict[str, Any]]] = []
+        # Sesiones del usuario en WorkOS (list_sessions); session_1 es la del login
+        self.sesiones_usuario = [SimpleNamespace(id="session_1", status="active")]
+        self.error_sesiones: Exception | None = None
 
     def get_authorization_url(self, **kwargs: Any) -> str:
         self.llamadas.append(("authorize", kwargs))
@@ -141,6 +147,12 @@ class _UserManagement:
         clave = get_settings().workos_cookie_password.get_secret_value()
         assert cookie_password == clave
         return _Sesion(self, sealed_session)
+
+    def list_sessions(self, *, user_id: str) -> list[Any]:
+        self.llamadas.append(("list_sessions", {"user_id": user_id}))
+        if self.error_sesiones:
+            raise self.error_sesiones
+        return list(self.sesiones_usuario)
 
     def revoke_session(self, *, session_id: str) -> None:
         self.llamadas.append(("revoke_session", {"session_id": session_id}))
@@ -162,9 +174,11 @@ def _configuracion(monkeypatch):
     get_settings.cache_clear()
     workos_client.get_cookie_password.cache_clear()
     security._renovaciones.clear()
+    security._revocadas.clear()
     yield
     get_settings.cache_clear()
     workos_client.get_cookie_password.cache_clear()
+    security._revocadas.clear()
 
 
 @pytest.fixture()
@@ -210,6 +224,25 @@ def _con_sesion(sellada: str = "sellada-vigente", **extra: str) -> dict[str, str
     return {"Cookie": f"{COOKIE_SESION}={sellada}", **extra}
 
 
+def _sellar(
+    workos: "_UserManagement",
+    estado: str,
+    *,
+    sid: str = "session_1",
+    hace: float = 60,
+) -> str:
+    """Cookie cifrada como la de WorkOS: un access token con sid e iat (emitido hace
+    `hace` segundos). Así motivo_rechazo puede leerla; el falso decide si sirve.
+    """
+    token = pyjwt.encode(
+        {"sid": sid, "iat": int(time.time() - hace)}, "x" * 32, algorithm="HS256"
+    )
+    clave = get_settings().workos_cookie_password.get_secret_value()
+    sellada = Fernet(clave).encrypt(json.dumps({"access_token": token}).encode())
+    workos.sesiones[sellada.decode()] = estado
+    return sellada.decode()
+
+
 def _iniciar(client: TestClient, return_to: str = "/clientes") -> tuple[str, str]:
     """GET /login: devuelve el state de la URL y el valor de la cookie de state."""
     r = client.get(f"{BASE}/login", params={"return_to": return_to})
@@ -218,8 +251,17 @@ def _iniciar(client: TestClient, return_to: str = "/clientes") -> tuple[str, str
     return state, cookie
 
 
-def _callback(client: TestClient, cookie_state: str | None, **params: str):
-    cabeceras = {"Cookie": f"{COOKIE_STATE}={cookie_state}"} if cookie_state else {}
+def _callback(
+    client: TestClient,
+    cookie_state: str | None,
+    sesion: str | None = None,
+    **params: str,
+):
+    """`sesion`: la cookie de sesión que ya tenía el navegador."""
+    cookies = [f"{COOKIE_STATE}={cookie_state}"] if cookie_state else []
+    if sesion:
+        cookies.append(f"{COOKIE_SESION}={sesion}")
+    cabeceras = {"Cookie": "; ".join(cookies)} if cookies else {}
     return client.get(f"{BASE}/callback", params=params, headers=cabeceras)
 
 
@@ -278,12 +320,96 @@ def test_callback_crea_la_sesion_y_vuelve_a_return_to(
     for atributo in ("HttpOnly", "Secure", "SameSite=lax", "Path=/"):
         assert atributo in sesion
     assert "Domain" not in sesion
+    # Cookie de sesión del navegador: la duración la impone WorkOS
+    assert "Max-Age" not in sesion and "expires" not in sesion.lower()
     assert "Max-Age=0" in cookies[COOKIE_STATE]
-    argumentos = workos.llamadas[-1][1]
+    argumentos = dict(workos.llamadas)["code"]
     assert argumentos["code"] == "code-1"
     assert argumentos["code_verifier"] == cookie.split(".", 2)[1]
     assert argumentos["session"]["seal_session"] is True
     assert eventos_auditados[-1].resultado == "Exitoso"
+
+
+def _revocadas(workos: "_UserManagement") -> list[str]:
+    return [d["session_id"] for n, d in workos.llamadas if n == "revoke_session"]
+
+
+def test_callback_con_otra_sesion_abierta_no_entra_y_la_abierta_sigue(
+    client, workos, eventos_auditados
+):
+    workos.sesiones_usuario += [
+        SimpleNamespace(id="session_celular", status="active"),
+    ]
+    state, cookie = _iniciar(client)
+
+    r = _callback(client, cookie, code="code-1", state=state)
+
+    assert r.headers["location"] == f"{FRONT}/login?error=SESION_ABIERTA"
+    assert COOKIE_SESION not in _cookies(r)
+    # Solo se descarta la sesión nueva; la del otro dispositivo no se toca
+    assert _revocadas(workos) == ["session_1"]
+    assert security.motivo_revocacion("session_celular") is None
+    assert eventos_auditados[-1].resultado == "Fallido"
+
+
+def test_callback_ignora_sesiones_cerradas_o_vencidas(client, workos):
+    workos.sesiones_usuario += [
+        SimpleNamespace(id="session_vieja", status="revoked"),
+        SimpleNamespace(
+            id="session_vencida", status="active", expires_at="2026-01-01T00:00:00Z"
+        ),
+    ]
+    state, cookie = _iniciar(client)
+
+    r = _callback(client, cookie, code="code-1", state=state)
+
+    assert r.headers["location"] == f"{FRONT}/clientes"
+    assert COOKIE_SESION in _cookies(r)
+    assert _revocadas(workos) == []
+
+
+def test_callback_desde_el_mismo_navegador_reemplaza_su_sesion(client, workos):
+    # Volvió a iniciar sesión en el navegador donde ya tenía la sesión "session_previa"
+    previa = _sellar(workos, "usada", sid="session_previa")
+    workos.sesiones_usuario += [
+        SimpleNamespace(id="session_previa", status="active"),
+    ]
+    state, cookie = _iniciar(client)
+
+    r = _callback(client, cookie, sesion=previa, code="code-1", state=state)
+
+    assert r.headers["location"] == f"{FRONT}/clientes"
+    assert _cookies(r)[COOKIE_SESION].startswith(f"{COOKIE_SESION}=sellada-nueva;")
+    assert _revocadas(workos) == ["session_previa"]
+
+
+def test_callback_cookie_de_otra_sesion_no_salta_la_regla(client, workos):
+    # La cookie del navegador es de una sesión distinta a la que está abierta
+    previa = _sellar(workos, "usada", sid="session_otra")
+    workos.sesiones_usuario += [
+        SimpleNamespace(id="session_celular", status="active"),
+    ]
+    state, cookie = _iniciar(client)
+
+    r = _callback(client, cookie, sesion=previa, code="code-1", state=state)
+
+    assert r.headers["location"] == f"{FRONT}/login?error=SESION_ABIERTA"
+    assert _revocadas(workos) == ["session_1"]
+
+
+def test_callback_sin_poder_cerrar_otras_sesiones_no_entra(client, workos):
+    cuerpo = {"code": "error_de_prueba", "message": "x"}
+    workos.error_sesiones = AuthenticationException(
+        httpx.Response(401, json=cuerpo), cuerpo
+    )
+    state, cookie = _iniciar(client)
+
+    r = _callback(client, cookie, code="code-1", state=state)
+
+    assert r.headers["location"] == f"{FRONT}/login?error=AUTENTICACION_NO_DISPONIBLE"
+    assert COOKIE_SESION not in _cookies(r)
+    # La sesión nueva no queda viva en WorkOS
+    assert ("revoke_session", {"session_id": "session_1"}) in workos.llamadas
 
 
 def test_callback_usuario_no_habilitado_no_crea_sesion_y_la_revoca(
@@ -590,6 +716,69 @@ def test_me_cookie_invalida_401_y_la_borra(client, workos):
     assert "Max-Age=0" in _cookies(r)[COOKIE_SESION]
 
 
+def test_me_sesion_revocada_401_al_instante(client, workos):
+    # El access token sigue vigente, pero el sid está en la caché de revocadas
+    sellada = _sellar(workos, "vigente")
+    security.revocar_sesion_local("session_1")
+
+    r = client.get(f"{BASE}/me", headers=_con_sesion(sellada))
+
+    assert r.status_code == 401
+    assert r.json()["code"] == "SESION_REVOCADA"
+    assert "Max-Age=0" in _cookies(r)[COOKIE_SESION]
+
+
+def test_me_sesion_revocada_tambien_al_renovar(client, workos):
+    sellada = _sellar(workos, "vencida")
+    security.revocar_sesion_local("session_1")
+
+    r = client.get(f"{BASE}/me", headers=_con_sesion(sellada))
+
+    assert r.status_code == 401
+    assert r.json()["code"] == "SESION_REVOCADA"
+    assert COOKIE_SESION in _cookies(r)
+    assert "Max-Age=0" in _cookies(r)[COOKIE_SESION]
+
+
+def test_me_sin_renovar_hace_mas_de_15_min_es_inactiva(client, workos):
+    # WorkOS rechaza la renovación; el último access token es de hace 16 min
+    sellada = _sellar(workos, "usada", hace=16 * 60)
+
+    r = client.get(f"{BASE}/me", headers=_con_sesion(sellada))
+
+    assert r.status_code == 401
+    assert r.json()["code"] == "SESION_INACTIVA"
+    assert "inactividad" in r.json()["detail"]
+
+
+def test_me_con_uso_reciente_que_no_renueva_es_expirada(client, workos):
+    # Renovó hace 2 min y WorkOS rechaza: alcanzó las 8 h
+    sellada = _sellar(workos, "usada", hace=2 * 60)
+
+    r = client.get(f"{BASE}/me", headers=_con_sesion(sellada))
+
+    assert r.status_code == 401
+    assert r.json()["code"] == "SESION_EXPIRADA"
+
+
+def test_me_cookie_ilegible_es_no_autenticado(client, workos):
+    r = client.get(f"{BASE}/me", headers=_con_sesion("basura"))
+
+    assert r.json()["code"] == "NO_AUTENTICADO"
+
+
+def test_la_revocacion_vence_con_su_ttl():
+    security.revocar_sesion_local("session_x")
+    vence, motivo = security._revocadas["session_x"]
+    assert motivo == "SESION_REVOCADA"
+    assert vence - time.monotonic() >= security.DURACION_ACCESS_TOKEN
+
+    security._revocadas["session_x"] = (time.monotonic() - 1, motivo)
+
+    assert security.motivo_revocacion("session_x") is None
+    assert "session_x" not in security._revocadas
+
+
 def test_me_llaves_de_workos_inaccesibles_503(client, workos):
     workos.error_jwks = PyJWKClientConnectionError("sin red")
 
@@ -614,6 +803,16 @@ def test_refresh_sin_sesion_401(client, workos):
 
     assert r.status_code == 401
     assert r.json()["code"] == "NO_AUTENTICADO"
+
+
+def test_refresh_de_sesion_revocada_401_con_motivo(client, workos):
+    sellada = _sellar(workos, "vigente")
+    security.revocar_sesion_local("session_1")
+
+    r = client.post(f"{BASE}/refresh", headers=_con_sesion(sellada, origin=FRONT))
+
+    assert r.status_code == 401
+    assert r.json()["code"] == "SESION_REVOCADA"
 
 
 def test_refresh_desde_otro_origen_403(client, workos):
@@ -871,3 +1070,41 @@ def test_cookie_password_invalida(monkeypatch):
 
     with pytest.raises(RuntimeError, match="Fernet"):
         workos_client.get_cookie_password()
+
+
+def test_token_recien_emitido_con_reloj_local_atrasado_es_valido(monkeypatch):
+    # El reloj local va 2 s detrás de WorkOS: el iat del token queda "en el futuro"
+    from cryptography.hazmat.primitives.asymmetric import rsa
+
+    monkeypatch.setenv("WORKOS_API_KEY", "sk_test_prueba")
+    monkeypatch.setenv("WORKOS_CLIENT_ID", "client_prueba")
+    get_settings.cache_clear()
+    workos_client.get_workos.cache_clear()
+    llave = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    ahora = int(time.time())
+    token = pyjwt.encode(
+        {"sid": "session_1", "iat": ahora + 2, "exp": ahora + 300},
+        llave,
+        algorithm="RS256",
+    )
+    clave = workos_client.get_cookie_password()
+    usuario = _usuario().model_dump(mode="json")
+    try:
+        gestion = workos_client.get_workos().user_management
+        sellada = gestion.load_sealed_session(
+            sealed_session=Fernet(clave)
+            .encrypt(json.dumps({"access_token": token, "user": usuario}).encode())
+            .decode(),
+            cookie_password=clave,
+        )
+        sellada.jwks = SimpleNamespace(
+            get_signing_key_from_jwt=lambda _t: SimpleNamespace(key=llave.public_key())
+        )
+
+        resultado = sellada.authenticate()
+    finally:
+        workos_client.get_workos.cache_clear()
+
+    assert workos_client.JWT_LEEWAY >= 2
+    assert resultado.authenticated is True
+    assert resultado.session_id == "session_1"
