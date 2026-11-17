@@ -731,6 +731,16 @@ def actualizar(
         id_,
     ):
         try:
+            # E1-12: el catálogo legado tampoco puede saltarse la aprobación.
+            if clave == "comisiones" and any(
+                k in cambios and cambios[k] != actual.get(k)
+                for k in ("valor", "vigenciaHasta")
+            ):
+                raise problema(
+                    501,
+                    "APROBACION_PARAMETRO_NO_DISPONIBLE",
+                    "El cambio de valor o vigencia requiere el flujo de aprobación de E1-10.",
+                )
             _validar_fila({**actual, **cambios})
             if clave == "tasas-interes":
                 _validar_tasa(conn, actual, cambios)
