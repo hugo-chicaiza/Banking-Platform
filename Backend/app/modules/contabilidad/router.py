@@ -1,12 +1,18 @@
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, Path, Query, Response
+from fastapi import APIRouter, Depends, Path, Query, Request, Response
 from sqlalchemy import Connection
 
 from app.core.api.errors import RESPUESTAS_ERROR, ProblemDetailsRoute, solo_parametros
 from app.core.database.db import cooperativa
-from app.core.security.auth import require_auth, require_permiso, require_roles
-from app.modules.contabilidad import service
+from app.core.security.auth import (
+    UsuarioActual,
+    require_auth,
+    require_permiso,
+    require_roles,
+)
+from app.core.security.operador import IdInterno, auditar, exigir_id_interno
+from app.modules.contabilidad import importaciones, service
 from app.modules.contabilidad.schemas import (
     INT32_MAX,
     Asiento,
@@ -147,14 +153,28 @@ def crear_cuenta_contable(conn: Db, datos: CuentaContableCrear) -> Any:
     "/cuentas-contables/{idCuentaContable}",
     operation_id="CON03Editar",
     response_model=CuentaContable,
-    responses={**_NO_EXISTE, **_NO_HABILITADA},
+    responses={**_NO_EXISTE, 409: _error(409, "CUENTA_DEL_REGULADOR")},
     openapi_extra={"x-roles": _ROLES_ESCRITURA_CUENTAS},
 )
 def editar_cuenta_contable(
-    conn: Db, id_cuenta: IdCuentaContable, datos: CuentaContableEditar
+    conn: Db,
+    id_cuenta: IdCuentaContable,
+    datos: CuentaContableEditar,
+    id_interno: IdInterno,
+    usuario: UsuarioActual,
+    request: Request,
 ) -> Any:
-    """Cambia el nombre de la cuenta; responde 200 con la cuenta."""
-    return service.editar_cuenta_contable(conn, id_cuenta, datos)
+    """Renombra un auxiliar contable."""
+    actor = exigir_id_interno(id_interno)
+    with auditar(
+        "CON_CUENTA_EDITADA",
+        "Contabilidad.CuentasContables",
+        usuario,
+        request.client.host if request.client else "",
+        "",
+        str(id_cuenta),
+    ):
+        return service.editar_cuenta_contable(conn, id_cuenta, datos, actor)
 
 
 @_cuentas_escritura_router.patch(
@@ -270,3 +290,5 @@ def obtener_asiento(
 
 
 router.include_router(_asientos_router)
+
+router.include_router(importaciones.router)
