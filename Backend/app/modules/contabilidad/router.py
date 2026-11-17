@@ -6,7 +6,7 @@ from sqlalchemy import Connection
 from app.core.api.errors import RESPUESTAS_ERROR, ProblemDetailsRoute, solo_parametros
 from app.core.database.db import cooperativa
 from app.core.security.auth import require_auth, require_permiso, require_roles
-from app.modules.contabilidad import service
+from app.modules.contabilidad import importaciones, service
 from app.modules.contabilidad.schemas import (
     INT32_MAX,
     Asiento,
@@ -270,3 +270,5 @@ def obtener_asiento(
 
 
 router.include_router(_asientos_router)
+
+router.include_router(importaciones.router)
