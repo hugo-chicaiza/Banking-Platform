@@ -7,6 +7,7 @@ usan siguen operando. Nada se elimina.
 
 import logging
 import re
+from datetime import date
 from typing import Any
 
 from fastapi import HTTPException
@@ -576,3 +577,103 @@ def ficha_subproducto(conn: Connection, id_sub: int) -> FichaSubProducto:
         seguros=seguros,
         sistemas_amortizacion=sistemas,
     )
+
+
+# ---------- E3-01: servicios internos sin rutas nuevas ----------
+
+
+def condiciones_vigentes(
+    conn: Connection, id_subproducto: int, fecha_contable: date, canal: str
+) -> dict[str, Any] | None:
+    return repo.condiciones_vigentes(conn, id_subproducto, fecha_contable, canal)
+
+
+def cupo_vigente(
+    conn: Connection, id_subproducto: int, fecha_contable: date, canal: str
+) -> dict[str, Any]:
+    return repo.cupo_vigente(conn, id_subproducto, fecha_contable, canal)
+
+
+def restricciones_vigentes(
+    conn: Connection, id_subproducto: int, fecha_contable: date, canal: str
+) -> list[dict[str, Any]]:
+    return repo.restricciones_vigentes(conn, id_subproducto, fecha_contable, canal)
+
+
+# ---------- E3-01: elegibilidad previa a contratación ----------
+
+
+def cliente_elegible(
+    conn: Connection,
+    id_cliente: int,
+    id_subproducto: int,
+    fecha_contable: date | None = None,
+) -> tuple[bool, list[str]]:
+    """Evalúa elegibilidad sin modificar datos; rechaza cuando falta prueba de tutor."""
+    if id_cliente <= 0 or id_subproducto <= 0:
+        raise ValueError("Los identificadores deben ser positivos")
+    fecha = fecha_contable or date.today()
+    if not isinstance(fecha, date):
+        raise TypeError("fecha_contable debe ser date")
+    datos = repo.datos_elegibilidad(conn, id_cliente, id_subproducto)
+    if datos is None:
+        return False, ["CLIENTE_O_SUBPRODUCTO_NO_EXISTE"]
+
+    motivos: list[str] = []
+    if datos["estado_cliente"] != "Activo":
+        motivos.append("CLIENTE_NO_ACTIVO")
+    if (
+        datos["estado_producto"] != "A"
+        or datos["estado_producto_nuevo"] != "Activo"
+        or datos["estado_subproducto"] != "A"
+        or datos["estado_subproducto_nuevo"] != "Activo"
+    ):
+        motivos.append("PRODUCTO_NO_ACTIVO")
+
+    permitido = str(datos["tipo_permitido"]).strip().casefold()
+    tipo = str(datos["tipo_cliente"]).strip().casefold()
+    if permitido not in ("ambos", tipo):
+        motivos.append("TIPO_CLIENTE_NO_PERMITIDO")
+
+    if tipo == "natural":
+        nacimiento = datos["fecha_nacimiento"]
+        if nacimiento is None or nacimiento > fecha:
+            motivos.append("FECHA_NACIMIENTO_NO_VALIDA")
+        else:
+            edad = (
+                fecha.year
+                - nacimiento.year
+                - ((fecha.month, fecha.day) < (nacimiento.month, nacimiento.day))
+            )
+            if datos["edad_minima"] is not None and edad < datos["edad_minima"]:
+                motivos.append("EDAD_INFERIOR_MINIMA")
+            if datos["edad_maxima"] is not None and edad > datos["edad_maxima"]:
+                motivos.append("EDAD_SUPERIOR_MAXIMA")
+    elif datos["edad_minima"] is not None or datos["edad_maxima"] is not None:
+        motivos.append("EDAD_NO_APLICA_A_PERSONA_JURIDICA")
+
+    # No hay una relación cliente-tutor verificable en el esquema recibido.
+    # Rechazar antes que asumir que existe un tutor válido.
+    if datos["requiere_tutor"]:
+        motivos.append("TUTOR_NO_VERIFICABLE")
+
+    cuentas = repo.cuentas_cliente_para_elegibilidad(conn, id_cliente)
+    tarjetas = repo.tarjetas_cliente_para_elegibilidad(conn, id_cliente)
+    activas = [c for c in cuentas if c["estado"] == "Activa"]
+    tarjetas_vigentes = [t for t in tarjetas if t["estado"] in ("Aprobada", "Generada")]
+    requerido = datos["id_requerido"]
+    if requerido is not None and not any(
+        item["id_subproducto"] == requerido for item in [*activas, *tarjetas_vigentes]
+    ):
+        motivos.append("PRODUCTO_REQUERIDO_NO_CONTRATADO")
+    if datos["tipo_producto"] == "Tarjeta" and not activas:
+        motivos.append("TARJETA_REQUIERE_CUENTA_ACTIVA")
+    maximo = datos["maximo_por_cliente"]
+    if maximo is not None:
+        cantidad = sum(
+            item["id_subproducto"] == id_subproducto
+            for item in [*activas, *tarjetas_vigentes]
+        )
+        if cantidad >= maximo:
+            motivos.append("MAXIMO_POR_CLIENTE_ALCANZADO")
+    return not motivos, motivos
