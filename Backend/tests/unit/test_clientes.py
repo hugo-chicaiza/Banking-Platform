@@ -26,6 +26,7 @@ from sqlalchemy import Connection
 
 from app.core.security import auth
 from app.core.security.auth import Usuario, require_roles
+from app.core.security.permisos import permisos_de
 from app.main import app
 from app.modules.clientes import repository, router, service
 from app.modules.clientes.schemas import (
@@ -1481,7 +1482,7 @@ def _usuario_historial(*roles: str) -> Usuario:
         nombre="Usuario de prueba",
         email="auditor@example.ec",
         roles=roles,
-        permisos=(),
+        permisos=permisos_de(roles),
         id_agencia=None,
     )
 

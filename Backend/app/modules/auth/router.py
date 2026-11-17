@@ -28,6 +28,7 @@ from app.core.security.auth import (
     guardar_cookie_sesion,
     no_autenticado,
     require_auth,
+    require_permiso,
     require_roles,
     verificar_origen,
 )
@@ -176,6 +177,7 @@ def me(usuario: Annotated[Usuario, Depends(require_auth)]) -> Any:
 ConexionSeguridad = Annotated[Connection, Depends(seguridad)]
 ConexionCooperativa = Annotated[Connection, Depends(cooperativa)]
 Admin = Annotated[Usuario, Depends(require_roles("ADMIN"))]
+EditorUsuarios = Annotated[Usuario, Depends(require_permiso("usuarios:editar"))]
 IdUsuario = Annotated[int, Path(alias="idUsuario", ge=1)]
 
 router_usuarios = APIRouter(
@@ -239,7 +241,7 @@ def listar_usuarios(
 )
 def crear_usuario(
     request: Request,
-    admin: Admin,
+    admin: EditorUsuarios,
     datos: UsuarioCreate,
     conn: ConexionSeguridad,
     conn_coop: ConexionCooperativa,
@@ -270,7 +272,7 @@ def obtener_usuario(
 )
 def actualizar_usuario(
     request: Request,
-    admin: Admin,
+    admin: EditorUsuarios,
     id_admin: UsuarioAuditoria,
     id_usuario: IdUsuario,
     cambios: UsuarioUpdate,
@@ -296,7 +298,7 @@ def actualizar_usuario(
 )
 def cambiar_rol(
     request: Request,
-    admin: Admin,
+    admin: EditorUsuarios,
     id_usuario: IdUsuario,
     datos: RolUpdate,
     conn: ConexionSeguridad,

@@ -5,7 +5,7 @@ from sqlalchemy import Connection
 
 from app.core.api.errors import RESPUESTAS_ERROR, ProblemDetailsRoute, solo_parametros
 from app.core.database.db import cooperativa
-from app.core.security.auth import require_auth, require_roles
+from app.core.security.auth import require_auth, require_permiso, require_roles
 from app.modules.contabilidad import service
 from app.modules.contabilidad.schemas import (
     INT32_MAX,
@@ -97,7 +97,7 @@ _cuentas_escritura_router = APIRouter(
     route_class=ProblemDetailsRoute,
     responses=RESPUESTAS_ERROR,
     dependencies=[
-        Depends(require_roles(*_ROLES_ESCRITURA_CUENTAS)),
+        Depends(require_permiso("contabilidad:editar")),
         Depends(solo_parametros()),
     ],
 )

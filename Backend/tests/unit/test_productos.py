@@ -218,7 +218,9 @@ def test_asesor_consulta_pero_no_crea(bd, asesor):
     assert r.status_code == 403
 
 
-@pytest.mark.parametrize("rol", [r for r in ROLES if r not in ("ADMIN", "ASESOR")])
+@pytest.mark.parametrize(
+    "rol", [r for r in ROLES if r not in ("ADMIN", "SUPERVISOR", "ASESOR")]
+)
 def test_otros_roles_no_consultan(bd, rol):
     assert _cliente(rol).get(BASE).status_code == 403
 
@@ -639,11 +641,23 @@ def test_estado_inconsistente_no_se_guarda(bd, admin):
     assert r.status_code == 422 and r.json()["code"] == "ESTADO_INVALIDO"
 
 
+def test_consultar_solo_pide_el_rol(bd):
+    # El rol decide qué se ve: sin permisos de WorkOS, la consulta responde igual
+    from dataclasses import replace
+
+    from app.core.security.auth import usuario_actual
+
+    client = _cliente("SUPERVISOR")
+    cast(FastAPI, client.app).dependency_overrides[usuario_actual] = lambda: replace(
+        usuario_con_roles("SUPERVISOR"), permisos=()
+    )
+    assert client.get(BASE).status_code == 200
+    assert client.get(BASE + "/tipos").status_code == 200
+
+
 @pytest.mark.parametrize(
     "metodo,path,body",
     [
-        ("get", "", None),
-        ("get", "/tipos", None),
         ("post", "", AHORRO),
         ("patch", "/1", {"nombreProducto": "Nuevo nombre"}),
         ("get", "/subproductos/1/ficha/imprimible", None),

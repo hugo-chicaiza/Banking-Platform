@@ -24,6 +24,7 @@ from app.core.database.db import cooperativa
 from app.core.security import audit
 from app.core.security.auth import Usuario, usuario_actual
 from app.core.security.operador import resolver_id_interno
+from app.core.security.permisos import permisos_de
 from app.modules.caja import repository as caja_repo
 
 BASE = "/api/v1/caja"
@@ -44,7 +45,7 @@ def usuario(
         nombre="Usuario Prueba",
         email="prueba@example.com",
         roles=roles,
-        permisos=(),
+        permisos=permisos_de(roles),
         id_agencia=agencia,
         # Registrado (KeyUsuario): require_auth deja pasar. El id interno de caja se
         # simula aparte con resolver_id_interno

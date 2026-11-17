@@ -1,8 +1,8 @@
 """Catalogo de productos con roles y permisos de la sesion WorkOS.
 
-ADMIN escribe con prd-editar; ADMIN/ASESOR consultan con prd-consultar.
-La ficha imprimible exige ademas prd-exportar. Los slugs de permiso de WorkOS van en
-minusculas (WorkOS no acepta mayusculas). Solo se elimina un Borrador sin uso.
+ADMIN, SUPERVISOR y ASESOR consultan (por rol); escribir exige productos:editar y la
+ficha imprimible productos:exportar (permisos de WorkOS, ver core/security/permisos.py).
+Solo se elimina un Borrador sin uso.
 """
 
 from typing import Annotated
@@ -13,12 +13,11 @@ from sqlalchemy import Connection
 from app.core.api.errors import (
     RESPUESTAS_ERROR,
     ProblemDetailsRoute,
-    problema,
     solo_parametros,
 )
 from app.core.api.middleware import ip_cliente
 from app.core.database.db import cooperativa
-from app.core.security.auth import Usuario, require_auth, require_roles
+from app.core.security.auth import Usuario, require_auth, require_permiso, require_roles
 from app.modules.productos import service, vinculos
 from app.modules.productos.schemas import (
     CupoCanalVista,
@@ -37,7 +36,7 @@ from app.modules.productos.schemas import (
     VinculosVista,
 )
 
-_LECTURA = ["ADMIN", "ASESOR"]
+_LECTURA = ["ADMIN", "SUPERVISOR", "ASESOR"]
 _ESCRITURA = ["ADMIN"]
 
 router = APIRouter(
@@ -51,28 +50,17 @@ Db = Annotated[Connection, Depends(cooperativa)]
 IdPath = Annotated[int, Path(ge=1, le=2_147_483_647)]
 
 
-def _permiso(usuario: Usuario, permiso: str) -> Usuario:
-    if permiso not in usuario.permisos:
-        raise problema(403, "SIN_PERMISO", "No tiene permiso para esta operacion.")
+Lector = Annotated[Usuario, Depends(require_roles(*_LECTURA))]
+Administrador = Annotated[Usuario, Depends(require_permiso("productos:editar"))]
+
+
+def _exportador(
+    usuario: Lector,
+    _: Annotated[Usuario, Depends(require_permiso("productos:exportar"))],
+) -> Usuario:
     return usuario
 
 
-def _lector(usuario: Annotated[Usuario, Depends(require_roles(*_LECTURA))]) -> Usuario:
-    return _permiso(usuario, "prd-consultar")
-
-
-def _administrador(
-    usuario: Annotated[Usuario, Depends(require_roles(*_ESCRITURA))],
-) -> Usuario:
-    return _permiso(usuario, "prd-editar")
-
-
-def _exportador(usuario: Annotated[Usuario, Depends(_lector)]) -> Usuario:
-    return _permiso(usuario, "prd-exportar")
-
-
-Lector = Annotated[Usuario, Depends(_lector)]
-Administrador = Annotated[Usuario, Depends(_administrador)]
 Exportador = Annotated[Usuario, Depends(_exportador)]
 
 
@@ -105,7 +93,7 @@ def listar_tipos(_: Lector, conn: Db) -> list[TipoProductoInfo]:
     response_model=FichaSubProducto,
     openapi_extra={
         "x-roles": _LECTURA,
-        "x-permissions": ["prd-consultar", "prd-exportar"],
+        "x-permissions": ["productos:exportar"],
     },
 )
 def ficha_imprimible(

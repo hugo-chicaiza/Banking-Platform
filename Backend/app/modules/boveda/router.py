@@ -9,7 +9,7 @@ from sqlalchemy import Connection
 from app.core.api.errors import RESPUESTAS_ERROR, ProblemDetailsRoute, solo_parametros
 from app.core.api.middleware import ip_cliente
 from app.core.database.db import cooperativa
-from app.core.security.auth import Usuario, require_auth, require_roles
+from app.core.security.auth import Usuario, require_auth, require_permiso, require_roles
 from app.core.security.operador import IdInterno
 from app.modules.boveda import service
 from app.modules.boveda.schemas import (
@@ -112,7 +112,7 @@ def registrar_movimiento(
     id_boveda: IdBoveda,
     datos: MovimientoBovedaRequest,
     request: Request,
-    usuario: Annotated[Usuario, Depends(require_roles("SUPERVISOR"))],
+    usuario: Annotated[Usuario, Depends(require_permiso("boveda:operar"))],
     id_interno: IdInterno,
     conn: Conexion,
     _: Annotated[None, Depends(solo_parametros())],
@@ -141,7 +141,7 @@ def registrar_arqueo(
     id_boveda: IdBoveda,
     datos: ArqueoBovedaRequest,
     request: Request,
-    usuario: Annotated[Usuario, Depends(require_roles("SUPERVISOR", "AUDITOR"))],
+    usuario: Annotated[Usuario, Depends(require_permiso("boveda:arqueo"))],
     id_interno: IdInterno,
     conn: Conexion,
     _: Annotated[None, Depends(solo_parametros())],
@@ -159,7 +159,7 @@ def registrar_arqueo(
 def aprobar_arqueo(
     id_arqueo: Annotated[int, Path(alias="idArqueoBoveda", gt=0, le=INT64_MAX)],
     request: Request,
-    usuario: Annotated[Usuario, Depends(require_roles("SUPERVISOR"))],
+    usuario: Annotated[Usuario, Depends(require_permiso("boveda:operar"))],
     id_interno: IdInterno,
     conn: Conexion,
     _: Annotated[None, Depends(solo_parametros())],
