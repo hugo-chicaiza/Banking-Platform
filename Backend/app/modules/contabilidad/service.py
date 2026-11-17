@@ -132,8 +132,9 @@ NIVEL_AUXILIAR = 8
 
 _TABLA_CUENTAS = "Contabilidad.CuentasContables"
 _DUPLICADO_RE = re.compile(r"\((2627|2601)\)")
-# Errores que el trigger trg_CuentasContables_PadreNoImputable lanza con THROW
-_PADRE_IMPUTABLE_BD = 51100
+# THROW de trg_CuentasContables_PadreNoImputable cuando el código no corresponde al
+# padre. El 51100 (padre imputable) no tiene código propio en el contrato: lo
+# traduce traducir_error_bd (422 DB_51100, mensaje genérico).
 _CODIGO_PADRE_BD = 56010
 _DB_NUMERO_RE = re.compile(r"\((\d+)\) \(SQL\w+\)")
 
@@ -158,14 +159,6 @@ def _codigo_duplicado() -> HTTPException:
     return problema(409, "CODIGO_DUPLICADO", "Ya existe una cuenta con ese código.")
 
 
-def _padre_imputable() -> HTTPException:
-    return problema(
-        422,
-        "CUENTA_SUPERIOR_IMPUTABLE",
-        "La cuenta superior es imputable y no puede tener subcuentas.",
-    )
-
-
 def _cuenta_respuesta(fila: dict[str, Any]) -> dict[str, Any]:
     """Fila de la BD -> CuentaContable de CON-03 (estado bit como Activo/Inactivo)."""
     respuesta = {k: v for k, v in fila.items() if k != "es_cuenta_valuacion"}
@@ -184,8 +177,6 @@ def _error_bd_cuenta(exc: DBAPIError) -> HTTPException:
     if "CK_CuentasContables_InactivaSinSaldo" in original:
         return _cuenta_con_saldo()
     numeros = {int(n) for n in _DB_NUMERO_RE.findall(original)}
-    if _PADRE_IMPUTABLE_BD in numeros:
-        return _padre_imputable()
     if _CODIGO_PADRE_BD in numeros:
         return _codigo_no_corresponde()
     return traducir_error_bd(exc)
@@ -197,14 +188,16 @@ def crear_cuenta_contable(
     """Alta de una cuenta auxiliar bajo `idCuentaSuperior`; 201 con la cuenta.
 
     Valida en este orden: el padre existe, el código empieza con el del padre, el
-    código tiene NIVEL_AUXILIAR dígitos, el código no existe y el padre no es
-    imputable (el trigger de la BD no deja hijas bajo una cuenta imputable). Hereda
-    del padre la naturaleza y si es cuenta de valuación; el elemento CUC y el tipo
-    salen solos del código. Entra con Estado = 1 y Saldo = 0. No toca al padre.
+    código tiene NIVEL_AUXILIAR dígitos y el código no existe. Hereda del padre la
+    naturaleza y si es cuenta de valuación; el elemento CUC y el tipo salen solos
+    del código. Entra con Estado = 1 y Saldo = 0. No toca al padre.
+
+    Si el padre es imputable, el trigger de la BD rechaza la hija (THROW 51100) y
+    traducir_error_bd responde 422 DB_51100 con su mensaje genérico.
 
     Raises:
         HTTPException 404 CUENTA_SUPERIOR_NO_ENCONTRADA
-        HTTPException 422 CODIGO_NO_CORRESPONDE_AL_PADRE, CUENTA_SUPERIOR_IMPUTABLE
+        HTTPException 422 CODIGO_NO_CORRESPONDE_AL_PADRE (o DB_51100 del trigger)
         HTTPException 409 CODIGO_DUPLICADO (también si otra petición gana la carrera)
     """
     codigo = datos.codigo_cuenta
@@ -230,8 +223,6 @@ def crear_cuenta_contable(
                     raise _codigo_no_corresponde()
                 if repository.existe_codigo(conn, codigo):
                     raise _codigo_duplicado()
-                if padre["es_imputable"]:
-                    raise _padre_imputable()
                 id_cuenta = repository.insertar_cuenta(
                     conn,
                     {

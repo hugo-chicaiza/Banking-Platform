@@ -226,14 +226,24 @@ def test_alta_codigo_duplicado_es_409(client, repo):
     assert repo["insertados"] == []
 
 
-def test_alta_padre_imputable_es_422(client, repo):
+def test_alta_padre_imputable_la_rechaza_el_trigger(client, repo, monkeypatch):
+    # Sin código propio en el contrato: el servicio no lo valida antes, el trigger
+    # lanza 51100 y traducir_error_bd responde 422 DB_51100 con mensaje genérico.
     repo["cuentas"][9] = _cuenta(es_imputable=True)
+    intentos = []
+
+    def _trigger(conn, datos):
+        intentos.append(datos)
+        raise _error_bd("[42000] Una cuenta con hijas... (51100) (SQLExecDirectW)")
+
+    monkeypatch.setattr(repository, "insertar_cuenta", _trigger)
 
     r = client.post(_BASE, json=_ALTA)
 
     assert r.status_code == 422
-    assert r.json()["code"] == "CUENTA_SUPERIOR_IMPUTABLE"
-    assert repo["insertados"] == []
+    assert r.json()["code"] == "DB_51100"
+    assert r.json()["detail"] == "La operación no cumple una regla de negocio."
+    assert len(intentos) == 1
 
 
 @pytest.mark.parametrize(
@@ -259,7 +269,7 @@ def test_alta_carrera_con_indice_unico_es_409(client, repo, monkeypatch, mensaje
 @pytest.mark.parametrize(
     ("numero", "code"),
     [
-        (51100, "CUENTA_SUPERIOR_IMPUTABLE"),
+        (51100, "DB_51100"),
         (56010, "CODIGO_NO_CORRESPONDE_AL_PADRE"),
     ],
 )
