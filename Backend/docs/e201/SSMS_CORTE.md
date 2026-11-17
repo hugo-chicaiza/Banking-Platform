@@ -230,3 +230,24 @@ del laboratorio local que contiene las dos proyecciones JSON
 ac01-completar-readonly.json y e201-inspect.json. Desde el directorio raíz
 de esta rama, ejecute python Backend/tests/integration/e201_corte_atomico_lab.py.
 El ensayo crea una base con nombre CooperativaDB_E201_Lab_<id>.
+
+## Revisión del CUC Segmento 1
+
+Se revisaron 1.182 códigos únicos del CSV de AC-01, con caracteres numéricos
+ASCII, nivel regulatorio válido y todos los padres esperados presentes.
+110105, 210135, 199025 y 299005 pertenecen al catálogo. Los auxiliares de
+ocho dígitos pertenecen al plan interno. Para efectivo se aplican 11010505,
+11010510 y 11010515 de #371. El catálogo AC-01 asignaba sufijos 01, 02 y 03
+al mismo propósito y esas cuentas deben conciliarse si fueron instaladas.
+
+005_auxiliar_faltantes.sql habilita el código 19902505 citado en #371.
+Puede agregar la subcuenta 199025 bajo 1990 si el mayor está instalado;
+un padre 199025 imputable requiere revisar su reclasificación antes de
+aplicar el script. El código 299005 es una subcuenta CUC. Falta confirmar
+el código auxiliar de sobrantes y los destinos, reglas y saldos del resto
+de la sección 5.2 antes de preparar el corte completo.
+
+El contraste puntual de 110105, 199025, 210135 y 299005 se hizo también
+contra el PDF CUC codificado de octubre de 2023 (páginas PDF 22, 40 y 44)
+y el plan del 24 de septiembre de 2025 (páginas PDF 1, 13 y 16).
+El PDF de 2025 corresponde a la resolución SB-2025-02319 y usa otra matriz de usuarios. El ensayo conserva como base el CSV del CUC del Segmento 1 de SEPS de 2023.

@@ -1,12 +1,12 @@
 {
-  "database": "CooperativaDB_E201_Lab_c7da38098e",
+  "database": "CooperativaDB_E201_Lab_0edae2c8bb",
   "azure_accessed": false,
   "approval_source": "Native SSMS rejection paths tested; successful cut uses a LOCAL FIXTURE. Two independent authenticated logins not available in this runner. E0-08 is not installed.",
   "checks": {
     "structure_does_not_change_accounts_flags_or_balances": true,
     "motor_install_does_not_create_children_or_change_flags": true,
     "unmapped_preparer_rejected": "('42000', '[42000] [Microsoft][ODBC Driver 18 for SQL Server][SQL Server]Preparador sin identidad de contador y permiso SQL efectivo. (56410) (SQLExecDirectW)')",
-    "sql_real_approver_without_role_rejected": "('42000', \"[42000] [Microsoft][ODBC Driver 18 for SQL Server][SQL Server]The EXECUTE permission was denied on the object 'usp_AprobarCorteSSMS', database 'CooperativaDB_E201_Lab_c7da38098e', schema 'E201'. (229) (SQLExecDirectW)\")",
+    "sql_real_approver_without_role_rejected": "('42000', \"[42000] [Microsoft][ODBC Driver 18 for SQL Server][SQL Server]The EXECUTE permission was denied on the object 'usp_AprobarCorteSSMS', database 'CooperativaDB_E201_Lab_0edae2c8bb', schema 'E201'. (229) (SQLExecDirectW)\")",
     "impersonation_same_original_login_rejected": "('42000', '[42000] [Microsoft][ODBC Driver 18 for SQL Server][SQL Server]Autoaprobacion: requiere otro contador con otra identidad SQL autenticada. (56412) (SQLExecDirectW)')",
     "authorized_flag_without_real_authorization_rejected": "('42000', '[42000] [Microsoft][ODBC Driver 18 for SQL Server][SQL Server]Autorizacion real ausente, revocada, alterada o sin permiso efectivo actual. (56414) (SQLExecDirectW)')",
     "approver_without_permission_rejected": "('42000', '[42000] [Microsoft][ODBC Driver 18 for SQL Server][SQL Server]Autorizacion real ausente, revocada, alterada o sin permiso efectivo actual. (56414) (SQLExecDirectW)')",
@@ -19,23 +19,24 @@
       [
         {
           "IdAsientoContable": 879,
-          "Resultado": "YA_EJECUTADA"
-        }
-      ],
-      [
-        {
-          "IdAsientoContable": 879,
           "Resultado": "EJECUTADA"
         },
         {
           "IdAsientoContable": 879,
           "Resultado": "CORTE_EJECUTADO"
         }
+      ],
+      [
+        {
+          "IdAsientoContable": 879,
+          "Resultado": "YA_EJECUTADA"
+        }
       ]
     ],
     "historical_1768_lines_unchanged": true,
     "legacy_account_rejects_new_movements": "('42000', '[42000] [Microsoft][ODBC Driver 18 for SQL Server][SQL Server]Movimientos ordinarios solo en auxiliares de exactamente 8 digitos. (56311) (SQLExecDirectW)')",
-    "automatic_account_rejects_manual_movements": "('42000', '[42000] [Microsoft][ODBC Driver 18 for SQL Server][SQL Server]Cuenta solo automatica: asiento manual sin autorizacion de reclasificacion. (56312) (SQLExecDirectW)')"
+    "automatic_account_rejects_manual_movements": "('42000', '[42000] [Microsoft][ODBC Driver 18 for SQL Server][SQL Server]Cuenta solo automatica: asiento manual sin autorizacion de reclasificacion. (56312) (SQLExecDirectW)')",
+    "shortage_auxiliary_idempotent_without_history_changes": true
   },
   "balances": [
     {

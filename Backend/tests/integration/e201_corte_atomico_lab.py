@@ -245,6 +245,25 @@ def run():
         checks["automatic_account_rejects_manual_movements"] = expect_error(
             c, insertar_linea.format(asiento=borrador, codigo="11010505"), 56312
         )
+        total_lineas = c.execute(
+            "SELECT COUNT(*) FROM Contabilidad.MovimientosContables"
+        ).fetchval()
+        for _ in range(2):
+            batches(c, folder / "005_auxiliar_faltantes.sql")
+        assert (
+            c.execute("""
+            SELECT COUNT(*) FROM Contabilidad.CuentasContables
+            WHERE CodigoCuenta='19902505' AND EsImputable=1 AND EsCatalogoRegulador=0
+        """).fetchval()
+            == 1
+        )
+        assert (
+            c.execute(
+                "SELECT COUNT(*) FROM Contabilidad.MovimientosContables"
+            ).fetchval()
+            == total_lineas
+        )
+        checks["shortage_auxiliary_idempotent_without_history_changes"] = True
         report = {
             "database": db,
             "azure_accessed": False,
