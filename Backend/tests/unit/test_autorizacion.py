@@ -86,6 +86,17 @@ ROLES_POR_RUTA: dict[tuple[str, str], tuple[str, ...]] = {
         "AUDITOR",
         "ADMIN",
     ),
+    # #206: escritura del plan de cuentas, solo CONTADOR (el AUDITOR solo lee)
+    ("POST", "/api/v1/contabilidad/cuentas-contables"): ("CONTADOR",),
+    ("PATCH", "/api/v1/contabilidad/cuentas-contables/{idCuentaContable}"): (
+        "CONTADOR",
+    ),
+    ("PATCH", "/api/v1/contabilidad/cuentas-contables/{idCuentaContable}/estado"): (
+        "CONTADOR",
+    ),
+    ("DELETE", "/api/v1/contabilidad/cuentas-contables/{idCuentaContable}"): (
+        "CONTADOR",
+    ),
     ("GET", "/api/v1/contabilidad/asientos"): ("CONTADOR", "AUDITOR", "ADMIN"),
     ("GET", "/api/v1/contabilidad/asientos/{idAsiento}"): (
         "CONTADOR",
