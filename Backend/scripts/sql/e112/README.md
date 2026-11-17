@@ -78,7 +78,32 @@ La carga por defecto incluye solo:
 | Evento | Canal | Comisión | Valor existente |
 |---|---|---|---|
 | Retiro | ATM (2) | 1 | 0,45 |
-| Transferencia_Enviada | WEB (3) | 2 | 0,20 |
+
+La tarifa TRF-WEB de 0,20 se conserva en el catálogo
+para futuras transferencias interbancarias salientes.
+No debe asociarse a Transferencia_Enviada, ya que
+este evento también representa transferencias internas.
+
+Si existe una asociación activa o futura incorrecta,
+la carga aborta sin modificar ni eliminar registros.
+
+### Diagnóstico de asociaciones WEB incorrectas
+
+```sql
+SELECT p.*, c.CodigoComision, c.Valor
+FROM Transacciones.ComisionTipoTransaccion p
+JOIN Transacciones.Comisiones c
+    ON c.IdComision = p.IdComision
+WHERE p.CodigoTipoTransaccion = 'Transferencia_Enviada'
+  AND p.IdCanal = 3
+  AND (c.IdComision = 2 OR c.CodigoComision = 'TRF-WEB')
+  AND p.Estado = 'A'
+  AND (
+      p.VigenciaHasta IS NULL
+      OR p.VigenciaHasta > CONVERT(date, DATEADD(hour, -5, SYSUTCDATETIME()))
+  );
+```
+
 
 Comprueba código y estado del canal/evento, valor fijo, estado y vigencia de la
 comisión; no crea ni cambia tarifas. En el laboratorio local se verificó mediante
@@ -155,7 +180,7 @@ Para la propuesta de reposición se verifica que el cobrador devuelve una sola
 fila de 5 y que otros eventos VENT devuelven 0. **No es una prueba de débito ni
 del flujo completo de reposición**, que aún no está implementado.
 
-La verificación actual incluye los 14 escenarios SQL de este script y tres
+La verificación actual incluye los 17 escenarios SQL de este script y tres
 escenarios adicionales de API/repositorios/cálculo en SQL local. Los resultados
 de la corrida final se entregan junto al diff. No se ejecutó una reposición con
 débito real ni SQL en Azure.

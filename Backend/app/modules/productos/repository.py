@@ -554,7 +554,16 @@ def eliminar_producto(conn: Connection, id_producto: int) -> None:
         DELETE FROM ProductosFinancieros.ProductoRestriccion
         WHERE IdSubProducto IN (SELECT IdSubProducto FROM ProductosFinancieros.SubProducto WHERE IdProducto = :id)
         """,
-        "DELETE FROM ProductosFinancieros.SubProductoComision WHERE IdSubProducto IN (SELECT IdSubProducto FROM ProductosFinancieros.SubProducto WHERE IdProducto = :id)",
+        # La instalacion puede usar solo ProductoComision; no bloquear el
+        # borrado si aun no existe este vinculo adicional de E3-01.
+        """
+        IF OBJECT_ID(N'ProductosFinancieros.SubProductoComision', N'U') IS NOT NULL
+            EXEC sys.sp_executesql
+                N'DELETE FROM ProductosFinancieros.SubProductoComision
+                  WHERE IdSubProducto IN (SELECT IdSubProducto
+                      FROM ProductosFinancieros.SubProducto WHERE IdProducto = @id)',
+                N'@id int', @id = :id
+        """,
         "DELETE FROM ProductosFinancieros.SubProductoCondicion WHERE IdSubProducto IN (SELECT IdSubProducto FROM ProductosFinancieros.SubProducto WHERE IdProducto = :id)",
         "DELETE FROM ProductosFinancieros.SubProducto WHERE IdProducto = :id",
         "DELETE FROM ProductosFinancieros.Producto WHERE IdProducto = :id",

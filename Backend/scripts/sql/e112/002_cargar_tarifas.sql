@@ -15,7 +15,9 @@ IF SESSION_CONTEXT(N'e112.fecha_efectiva') IS NOT NULL
     THROW 51104, 'Fecha efectiva invalida.', 1;
 
 DECLARE @Tarifas TABLE (Codigo varchar(30) PRIMARY KEY, IdCanal int, Canal varchar(10), IdComision int, Valor decimal(12,4));
-INSERT @Tarifas VALUES ('Retiro',2,'ATM',1,0.45), ('Transferencia_Enviada',3,'WEB',2,0.20);
+/* TRF-WEB (0,20) se conserva en el catalogo para la futura transferencia
+   interbancaria saliente WEB; Transferencia_Enviada tambien representa internas. */
+INSERT @Tarifas VALUES ('Retiro',2,'ATM',1,0.45);
 IF @Reposicion = 1 INSERT @Tarifas VALUES ('Reposicion_Tarjeta',1,'VENT',3,5.00);
 
 BEGIN TRY
@@ -23,6 +25,16 @@ BEGIN TRY
     /* Bloqueo hasta COMMIT: serializa reejecuciones y escritores concurrentes. */
     DECLARE @Filas bigint;
     SELECT @Filas = COUNT_BIG(*) FROM Transacciones.ComisionTipoTransaccion WITH (TABLOCKX, HOLDLOCK);
+    /* No corregir datos previos silenciosamente: identificar con la consulta
+       del README y resolver mediante una correccion revisada por separado. */
+    IF EXISTS (
+        SELECT 1 FROM Transacciones.ComisionTipoTransaccion p
+        JOIN Transacciones.Comisiones c ON c.IdComision=p.IdComision
+        WHERE p.CodigoTipoTransaccion='Transferencia_Enviada' AND p.IdCanal=3
+          AND (c.IdComision=2 OR c.CodigoComision='TRF-WEB') AND p.Estado='A'
+          AND (p.VigenciaHasta IS NULL OR p.VigenciaHasta>@Fecha))
+        THROW 51104, 'Asociacion incorrecta TRF-WEB con Transferencia_Enviada/WEB. Identificar con la consulta del README; no se modifico ni elimino. No se cargo nada.', 1;
+
     IF COALESCE(COLUMNPROPERTY(OBJECT_ID('Transacciones.ComisionTipoTransaccion'), 'IdComisionTipoTransaccion', 'IsIdentity'),0) <> 1
        AND NOT EXISTS (
            SELECT 1 FROM sys.columns c JOIN sys.default_constraints d ON d.object_id=c.default_object_id
