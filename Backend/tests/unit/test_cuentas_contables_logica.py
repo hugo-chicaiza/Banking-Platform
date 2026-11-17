@@ -75,6 +75,9 @@ def repo(monkeypatch):
         "codigos": {"1402"},
         "insertados": [],
         "actualizados": [],
+        "con_movimientos": set(),
+        "desmarcados": [],
+        "orden": [],
     }
 
     def _bloquear(conn, id_cuenta):
@@ -86,7 +89,20 @@ def repo(monkeypatch):
     def _existe(conn, codigo):
         return codigo in estado["codigos"]
 
+    def _tiene_movimientos(conn, id_cuenta):
+        return id_cuenta in estado["con_movimientos"]
+
+    def _desmarcar(conn, id_cuenta):
+        estado["orden"].append("desmarcar")
+        estado["desmarcados"].append(id_cuenta)
+        estado["cuentas"][id_cuenta] = {
+            **estado["cuentas"][id_cuenta],
+            "es_imputable": False,
+        }
+        return 1
+
     def _insertar(conn, datos):
+        estado["orden"].append("insertar")
         estado["insertados"].append(datos)
         estado["cuentas"][2000] = _NUEVA
         return 2000
@@ -102,6 +118,8 @@ def repo(monkeypatch):
     monkeypatch.setattr(repository, "bloquear_cuenta", _bloquear)
     monkeypatch.setattr(repository, "obtener_cuenta", _obtener)
     monkeypatch.setattr(repository, "existe_codigo", _existe)
+    monkeypatch.setattr(repository, "tiene_movimientos", _tiene_movimientos)
+    monkeypatch.setattr(repository, "desmarcar_imputable", _desmarcar)
     monkeypatch.setattr(repository, "insertar_cuenta", _insertar)
     monkeypatch.setattr(repository, "actualizar_estado_cuenta", _actualizar)
     return estado
@@ -226,24 +244,81 @@ def test_alta_codigo_duplicado_es_409(client, repo):
     assert repo["insertados"] == []
 
 
-def test_alta_padre_imputable_la_rechaza_el_trigger(client, repo, monkeypatch):
-    # Sin código propio en el contrato: el servicio no lo valida antes, el trigger
-    # lanza 51100 y traducir_error_bd responde 422 DB_51100 con mensaje genérico.
+def test_alta_padre_imputable_sin_movimientos_se_desmarca_y_crea(
+    client, conn, repo, eventos_auditados
+):
     repo["cuentas"][9] = _cuenta(es_imputable=True)
-    intentos = []
-
-    def _trigger(conn, datos):
-        intentos.append(datos)
-        raise _error_bd("[42000] Una cuenta con hijas... (51100) (SQLExecDirectW)")
-
-    monkeypatch.setattr(repository, "insertar_cuenta", _trigger)
 
     r = client.post(_BASE, json=_ALTA)
 
-    assert r.status_code == 422
-    assert r.json()["code"] == "DB_51100"
-    assert r.json()["detail"] == "La operación no cumple una regla de negocio."
-    assert len(intentos) == 1
+    assert r.status_code == 201
+    assert r.json()["idCuentaContable"] == 2000
+    assert repo["desmarcados"] == [9]
+    assert repo["cuentas"][9]["es_imputable"] is False
+    # Primero el padre deja de ser imputable; si no, el trigger rechaza la hija (51100)
+    assert repo["orden"] == ["desmarcar", "insertar"]
+    conn.begin.assert_called_once()  # padre e hija en la misma transacción
+    (evento,) = eventos_auditados
+    assert (evento.accion, evento.resultado) == ("CON_CUENTA_CREADA", "Exitoso")
+    assert evento.id_registro == "2000"
+    assert "padre_desmarcado=9" in evento.descripcion
+    assert "padre_es_imputable=1->0" in evento.descripcion
+
+
+@pytest.mark.parametrize(
+    ("saldo", "con_movimientos"),
+    [
+        (Decimal("0.00"), True),
+        (Decimal("150.25"), False),
+        (Decimal("-3.10"), False),
+        (Decimal("10.00"), True),
+    ],
+)
+def test_alta_padre_imputable_con_movimientos_o_saldo_es_409(
+    client, repo, eventos_auditados, saldo, con_movimientos
+):
+    repo["cuentas"][9] = _cuenta(es_imputable=True, saldo=saldo)
+    if con_movimientos:
+        repo["con_movimientos"].add(9)
+
+    r = client.post(_BASE, json=_ALTA)
+
+    assert r.status_code == 409
+    assert r.json()["code"] == "CUENTA_SUPERIOR_CON_MOVIMIENTOS"
+    assert r.json()["detail"] == "La cuenta superior tiene movimientos o saldo."
+    assert str(saldo) not in r.json()["detail"]
+    assert repo["desmarcados"] == [] and repo["insertados"] == []
+    assert repo["cuentas"][9]["es_imputable"] is True
+    (evento,) = eventos_auditados
+    assert evento.resultado == "Fallido"
+    assert "motivo=CUENTA_SUPERIOR_CON_MOVIMIENTOS" in evento.descripcion
+    assert "padre_desmarcado" not in evento.descripcion
+
+
+def test_alta_padre_ya_no_imputable_no_lo_toca(
+    client, repo, monkeypatch, eventos_auditados
+):
+    movimientos = Mock(side_effect=AssertionError("no debe consultar movimientos"))
+    desmarcar = Mock(side_effect=AssertionError("no debe tocar al padre"))
+    monkeypatch.setattr(repository, "tiene_movimientos", movimientos)
+    monkeypatch.setattr(repository, "desmarcar_imputable", desmarcar)
+
+    r = client.post(_BASE, json=_ALTA)
+
+    assert r.status_code == 201
+    assert repo["cuentas"][9] == _cuenta()
+    (evento,) = eventos_auditados
+    assert "padre_desmarcado" not in evento.descripcion
+
+
+def test_alta_valida_duplicado_antes_de_desmarcar(client, repo):
+    repo["cuentas"][9] = _cuenta(es_imputable=True)
+    repo["codigos"].add("14020599")
+
+    r = client.post(_BASE, json=_ALTA)
+
+    assert r.json()["code"] == "CODIGO_DUPLICADO"
+    assert repo["desmarcados"] == []
 
 
 @pytest.mark.parametrize(
@@ -286,7 +361,7 @@ def test_alta_errores_del_trigger_se_traducen(client, repo, monkeypatch, numero,
     assert "trigger" not in r.json()["detail"]
 
 
-def test_alta_no_modifica_la_cuenta_padre(client, repo, monkeypatch):
+def test_alta_no_modifica_el_estado_del_padre(client, repo, monkeypatch):
     actualizar = Mock(side_effect=AssertionError("no debe tocar al padre"))
     monkeypatch.setattr(repository, "actualizar_estado_cuenta", actualizar)
 
@@ -445,3 +520,25 @@ def test_repositorio_bloquea_padre_y_codigo():
     assert "WITH (UPDLOCK, HOLDLOCK)" in bloqueo
     assert "WITH (UPDLOCK, HOLDLOCK)" in codigo
     assert conn.execute.call_args.args[1] == {"codigo": "14020599"}
+
+
+def test_repositorio_movimientos_y_desmarcar_parametrizados():
+    conn = Mock()
+    conn.execute.return_value.mappings.return_value.first.return_value = None
+    conn.execute.return_value.rowcount = 1
+
+    assert repository.tiene_movimientos(conn, 9) is False
+    movimientos, p_mov = (
+        str(conn.execute.call_args.args[0]),
+        conn.execute.call_args.args[1],
+    )
+    assert repository.desmarcar_imputable(conn, 9) == 1
+    desmarcar, p_des = (
+        str(conn.execute.call_args.args[0]),
+        conn.execute.call_args.args[1],
+    )
+
+    assert "Contabilidad.MovimientosContables WITH (HOLDLOCK)" in movimientos
+    assert p_mov == {"id": 9} and p_des == {"id": 9}
+    assert "SET EsImputable = 0" in desmarcar
+    assert "WHERE IdCuentaContable = :id AND EsImputable = 1" in desmarcar

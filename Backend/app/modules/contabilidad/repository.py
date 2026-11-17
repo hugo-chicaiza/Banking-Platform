@@ -154,6 +154,41 @@ def existe_codigo(conn: Connection, codigo: str) -> bool:
     return fila is not None
 
 
+def tiene_movimientos(conn: Connection, id_cuenta: int) -> bool:
+    """Si la cuenta tiene filas en MovimientosContables. HOLDLOCK bloquea el rango
+    de IX_MovimientosContables_Cuenta hasta el commit: nadie registra un movimiento
+    en la cuenta entre esta lectura y el cambio de EsImputable."""
+    fila = _one(
+        conn,
+        """
+        SELECT TOP (1) 1 AS existe
+        FROM Contabilidad.MovimientosContables WITH (HOLDLOCK)
+        WHERE IdCuentaContable = :id
+        """,
+        {"id": id_cuenta},
+    )
+    return fila is not None
+
+
+def desmarcar_imputable(conn: Connection, id_cuenta: int) -> int:
+    """Pone EsImputable = 0 y FechaModificacion (hora de Ecuador); filas afectadas."""
+    resultado = conn.execute(
+        text(
+            """
+            UPDATE Contabilidad.CuentasContables
+            SET EsImputable = 0,
+                FechaModificacion = CONVERT(
+                    datetime2,
+                    SYSDATETIMEOFFSET() AT TIME ZONE 'SA Pacific Standard Time'
+                )
+            WHERE IdCuentaContable = :id AND EsImputable = 1
+            """
+        ),
+        {"id": id_cuenta},
+    )
+    return resultado.rowcount
+
+
 def insertar_cuenta(conn: Connection, datos: dict[str, Any]) -> int:
     """Inserta la cuenta con Estado = 1 y Saldo = 0; devuelve su IdCuentaContable.
 

@@ -159,6 +159,14 @@ def _codigo_duplicado() -> HTTPException:
     return problema(409, "CODIGO_DUPLICADO", "Ya existe una cuenta con ese código.")
 
 
+def _padre_con_movimientos() -> HTTPException:
+    return problema(
+        409,
+        "CUENTA_SUPERIOR_CON_MOVIMIENTOS",
+        "La cuenta superior tiene movimientos o saldo.",
+    )
+
+
 def _cuenta_respuesta(fila: dict[str, Any]) -> dict[str, Any]:
     """Fila de la BD -> CuentaContable de CON-03 (estado bit como Activo/Inactivo)."""
     respuesta = {k: v for k, v in fila.items() if k != "es_cuenta_valuacion"}
@@ -190,15 +198,19 @@ def crear_cuenta_contable(
     Valida en este orden: el padre existe, el código empieza con el del padre, el
     código tiene NIVEL_AUXILIAR dígitos y el código no existe. Hereda del padre la
     naturaleza y si es cuenta de valuación; el elemento CUC y el tipo salen solos
-    del código. Entra con Estado = 1 y Saldo = 0. No toca al padre.
+    del código. Entra con Estado = 1 y Saldo = 0.
 
-    Si el padre es imputable, el trigger de la BD rechaza la hija (THROW 51100) y
-    traducir_error_bd responde 422 DB_51100 con su mensaje genérico.
+    Una cuenta con hijas no puede ser imputable (trigger de la BD, THROW 51100). Si
+    el padre es imputable y no tiene movimientos ni saldo, en la misma transacción
+    se pone EsImputable = 0 en el padre y luego se inserta la hija; la auditoría
+    registra `padre_desmarcado=<id>`. Si el padre ya no es imputable, no se toca.
 
     Raises:
         HTTPException 404 CUENTA_SUPERIOR_NO_ENCONTRADA
-        HTTPException 422 CODIGO_NO_CORRESPONDE_AL_PADRE (o DB_51100 del trigger)
+        HTTPException 422 CODIGO_NO_CORRESPONDE_AL_PADRE
         HTTPException 409 CODIGO_DUPLICADO (también si otra petición gana la carrera)
+        HTTPException 409 CUENTA_SUPERIOR_CON_MOVIMIENTOS (padre imputable con
+            movimientos o saldo distinto de 0)
     """
     codigo = datos.codigo_cuenta
     with auditar(
@@ -223,6 +235,13 @@ def crear_cuenta_contable(
                     raise _codigo_no_corresponde()
                 if repository.existe_codigo(conn, codigo):
                     raise _codigo_duplicado()
+                desmarcar = bool(padre["es_imputable"])
+                if desmarcar:
+                    if padre["saldo"] != 0 or repository.tiene_movimientos(
+                        conn, padre["id_cuenta_contable"]
+                    ):
+                        raise _padre_con_movimientos()
+                    repository.desmarcar_imputable(conn, padre["id_cuenta_contable"])
                 id_cuenta = repository.insertar_cuenta(
                     conn,
                     {
@@ -235,6 +254,11 @@ def crear_cuenta_contable(
                     },
                 )
                 auditado.id_registro = str(id_cuenta)
+                if desmarcar:
+                    auditado.detalle = (
+                        f"padre_desmarcado={padre['id_cuenta_contable']}"
+                        " padre_es_imputable=1->0"
+                    )
                 fila = repository.obtener_cuenta(conn, id_cuenta)
         except DBAPIError as exc:
             raise _error_bd_cuenta(exc) from None

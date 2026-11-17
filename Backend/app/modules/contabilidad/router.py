@@ -142,7 +142,12 @@ _NO_EXISTE = {404: _error(404, "CUENTA_NO_ENCONTRADA: la cuenta no existe.")}
     responses={
         **_PENDIENTE,
         404: _error(404, "CUENTA_SUPERIOR_NO_ENCONTRADA: la cuenta padre no existe."),
-        409: _error(409, "CODIGO_DUPLICADO: ya existe una cuenta con ese código."),
+        409: _error(
+            409,
+            "CODIGO_DUPLICADO: ya existe una cuenta con ese código. "
+            "CUENTA_SUPERIOR_CON_MOVIMIENTOS: el padre es imputable y tiene "
+            "movimientos o saldo; si no los tiene, se marca como no imputable.",
+        ),
         422: _error(
             422,
             "CODIGO_NO_CORRESPONDE_AL_PADRE: el código no empieza con el del padre.",

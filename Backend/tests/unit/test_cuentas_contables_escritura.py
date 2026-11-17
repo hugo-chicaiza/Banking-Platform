@@ -73,6 +73,7 @@ def test_contrato_codigos_de_error_documentados():
     baja = paths[_RUTA_ID]["delete"]["responses"]
 
     assert "CODIGO_DUPLICADO" in alta["409"]["description"]
+    assert "CUENTA_SUPERIOR_CON_MOVIMIENTOS" in alta["409"]["description"]
     assert "CODIGO_NO_CORRESPONDE_AL_PADRE" in alta["422"]["description"]
     assert "CUENTA_CON_SALDO" in estado["409"]["description"]
     assert "CUENTA_EN_USO" in baja["409"]["description"]
