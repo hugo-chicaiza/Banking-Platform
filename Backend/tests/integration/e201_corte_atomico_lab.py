@@ -5,7 +5,16 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from decimal import Decimal
 
-from e201_sql_lab import ROOT, batches, connect, expect_error, fixture, quote, rows
+from e201_sql_lab import (
+    ROOT,
+    batches,
+    connect,
+    expect_error,
+    fixture,
+    new_entry,
+    quote,
+    rows,
+)
 
 
 def run():
@@ -222,6 +231,19 @@ def run():
         checks["historical_1768_lines_unchanged"] = history == rows(
             c,
             "SELECT * FROM Contabilidad.MovimientosContables WHERE IdMovimientoContable<=1768 ORDER BY IdMovimientoContable",
+        )
+        borrador = new_entry(c, "E201-REGLAS-LAB")
+        insertar_linea = """
+            INSERT Contabilidad.MovimientosContables
+                (IdCuentaContable, IdAgencia, TipoMovimiento, Monto, FechaHora, IdAsientoContable)
+            SELECT IdCuentaContable, '001', 'DEBITO', 1, '20261014 18:00:00', {asiento}
+            FROM Contabilidad.CuentasContables WHERE CodigoCuenta='{codigo}'
+        """
+        checks["legacy_account_rejects_new_movements"] = expect_error(
+            c, insertar_linea.format(asiento=borrador, codigo="110105"), 56311
+        )
+        checks["automatic_account_rejects_manual_movements"] = expect_error(
+            c, insertar_linea.format(asiento=borrador, codigo="11010505"), 56312
         )
         report = {
             "database": db,
