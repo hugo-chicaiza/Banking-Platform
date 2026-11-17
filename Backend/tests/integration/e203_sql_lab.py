@@ -9,6 +9,8 @@ from fastapi import HTTPException
 from sqlalchemy import create_engine, text
 
 from app.modules.contabilidad.importaciones import aplicar, guardar_revision, leer_csv
+from app.modules.contabilidad.schemas import CuentaContableEditar
+from app.modules.contabilidad.service import editar_cuenta_contable
 
 CABECERA = b"CodigoCuenta,NombreCuenta,CodigoCuentaSuperior,Naturaleza\n"
 
@@ -81,6 +83,27 @@ def probar(database: str) -> None:
             )
         else:
             raise AssertionError("La importación sobrescribió el cambio concurrente.")
+        ids = dict(
+            conn.execute(
+                text("""
+            SELECT CodigoCuenta,IdCuentaContable FROM Contabilidad.CuentasContables
+            WHERE CodigoCuenta IN ('11010505','110197')
+        """)
+            ).all()
+        )
+        conn.rollback()
+        datos = CuentaContableEditar(nombreCuenta="Efectivo en bóveda del ensayo")
+        renombrada = editar_cuenta_contable(conn, ids["11010505"], datos, 101)
+        assert renombrada["nombre_cuenta"] == datos.nombre_cuenta
+        try:
+            editar_cuenta_contable(conn, ids["110197"], datos, 101)
+        except HTTPException as error:
+            assert (
+                error.status_code == 409
+                and error.detail["code"] == "CUENTA_DEL_REGULADOR"
+            )
+        else:
+            raise AssertionError("Se permitió modificar el CUC por mantenimiento.")
     print("Migración repetida, aplicación, reintento y revisión obsoleta: OK")
 
 
