@@ -24,7 +24,7 @@ USUARIO = Usuario(
     nombre="Usuario de prueba",
     email="prueba@example.com",
     roles=ROLES,
-    permisos=(),
+    permisos=("PRD-CONSULTAR", "PRD-EDITAR", "PRD-EXPORTAR"),
     id_agencia="001",
     # Registrado (KeyUsuario): require_auth deja pasar
     id_interno=ID_AUDITORIA,

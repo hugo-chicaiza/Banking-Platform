@@ -254,7 +254,20 @@ def listar_productos(
         if not existe:
             raise problema(404, "CLIENTE_NO_ENCONTRADO", "El cliente no existe.")
         edad = service.edad_en(nacimiento) if nacimiento else -1
-    return repository.listar_productos(conn, tipo, tipo_tarjeta, edad)
+    productos = repository.listar_productos(conn, tipo, tipo_tarjeta, edad)
+    if id_cliente is not None:
+        from app.modules.productos.service import cliente_elegible
+
+        for producto in productos:
+            producto["subproductos"] = [
+                s
+                for s in producto["subproductos"]
+                if cliente_elegible(
+                    conn, id_cliente, s["id_sub_producto"], service.hoy()
+                )[0]
+            ]
+        productos = [p for p in productos if p["subproductos"]]
+    return productos
 
 
 @router.get("/paises/{codigo_pais}/ciudades", response_model=list[Ciudad])
