@@ -16,8 +16,7 @@ evidencia de ese corte real; no se inventó una fecha ni un resultado de consult
    Las llamadas están al final comentadas; las fases son preparación, aprobación
    desde otra identidad y ejecución. No ejecutar aparte el antiguo 002.
 
-Las fuentes `corte_motor_fuente.sql` y `corte_aprobacion_ssms_fuente.sql` son para
-revisión; ya están incluidas en 004. Las rutinas de altas/hash/motor interno no
+El archivo `004_corte_completo_ssms.sql` es la fuente canónica del corte y su aprobación. Las rutinas de altas/hash/motor interno no
 reciben EXEC para los roles de negocio. Se retiró el DML directo del adaptador
 sobre los recibos internos. Ninguna llamada cambia las columnas calculadas.
 

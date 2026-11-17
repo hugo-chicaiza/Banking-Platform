@@ -63,7 +63,9 @@ def probar(database):
         try:
             deny(229, "UPDATE E201.PermisoWorkOS SET Aprobar=1 WHERE UsuarioID=901")
             deny(56411, call, *args[:1], 902, *args[2:])
-            result = run(call, *args)[0]
+            preparado = run(call, *args)
+            assert preparado
+            result = preparado[0]
             assert json.loads(result.Contenido)["PreparadoPor"] == 901
             digest = bytes.fromhex(result.HashPlan)
             deny(
@@ -90,50 +92,20 @@ def probar(database):
                 None,
                 None,
             )
-            deny(
-                56413,
-                call,
-                "APROBAR",
-                902,
-                "local-approver",
-                "org-lab",
-                plan,
-                None,
-                bytes(32),
-                "wrong",
-            )
-            receipt = run(
-                call,
-                "APROBAR",
-                902,
-                "local-approver",
-                "org-lab",
-                plan,
-                None,
-                digest,
-                "review",
-            )[0].IdSolicitud
-            deny(
-                56413,
-                call,
-                "APROBAR",
-                902,
-                "local-approver",
-                "org-lab",
-                plan,
-                None,
-                digest,
-                "repeat",
-            )
+            aprobacion = ("APROBAR", 902, "local-approver", "org-lab", plan, None)
+            deny(56413, call, *aprobacion, bytes(32), "wrong")
+            aprobado = run(call, *aprobacion, digest, "review")
+            assert aprobado
+            receipt = aprobado[0].IdSolicitud
+            deny(56413, call, *aprobacion, digest, "repeat")
         finally:
             db.execute("REVERT")
         assert receipt < 0
-        assert tuple(
-            db.execute(
-                "SELECT PreparadoPor,AprobadoPor FROM E201.ReciboReal WHERE IdSolicitud=?",
-                receipt,
-            ).fetchone()
-        ) == (901, 902)
+        identidades = db.execute(
+            "SELECT PreparadoPor,AprobadoPor FROM E201.ReciboReal WHERE IdSolicitud=?",
+            receipt,
+        ).fetchone()
+        assert identidades is not None and tuple(identidades) == (901, 902)
         db.execute("UPDATE E201.PermisoWorkOS SET Aprobar=0 WHERE UsuarioID=902")
         deny(
             56414,
