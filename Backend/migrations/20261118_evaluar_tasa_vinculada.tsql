@@ -1,9 +1,11 @@
 /* T-SQL (SQL Server). usp_EvaluarSolicitudCredito: la evaluación usa solo las tasas
-   vinculadas al producto de la solicitud (ProductoTasaInteres). Una tasa sin vincular no
+   vinculadas (ProductoTasaInteres): las del subproducto de la solicitud si tiene; si no,
+   las del producto (mismo orden que la simulación). Una tasa sin vincular no
    rige; sin tasa vinculada vigente la solicitud se rechaza con ese motivo. Así el catálogo
    puede tener varias tasas que se cruzan y cada producto elige la suya.
    Único cambio: el WHERE de la consulta de tasas.
-   Requiere 20261117_tasas_y_vinculos y 20261117_evaluar_solicitud_tasa_activa.
+   Requiere 20261117_tasas_y_vinculos, 20261117_evaluar_solicitud_tasa_activa y
+   20261118_solicitud_subproducto.
    Reejecutable (CREATE OR ALTER conserva los permisos).
    Vuelta atrás: ejecutar de nuevo 20261117_evaluar_solicitud_tasa_activa.tsql. */
 SET XACT_ABORT ON;
@@ -14,7 +16,7 @@ CREATE OR ALTER PROCEDURE Credito.usp_EvaluarSolicitudCredito
 AS
 /* CR-06: aplica la política de crédito parametrizada en Credito.ParametroPolitica:
      - producto del tipo de crédito de la solicitud;
-     - tasa activa y vigente para el tipo, el monto y el plazo; si el producto tiene tasas vinculadas, solo esas
+     - tasa activa y vigente para el tipo, el monto y el plazo, vinculada al subproducto o, si no tiene, al producto
        (CR-13: si hay más de una, se detiene por ambigüedad);
      - tasa de la solicitud dentro de la tasa vigente y del tope TASA_MAXIMA_<código del tipo>, si existe;
      - EDAD_MINIMA, SCORE_MINIMO y CUOTA_INGRESO_MAX (porcentaje de la capacidad de pago);
@@ -23,12 +25,12 @@ AS
 BEGIN
     SET NOCOUNT ON;
     SET XACT_ABORT ON;
-    DECLARE @IdCliente int, @IdTipo int, @IdProducto int, @Monto decimal(18,2), @Plazo smallint, @Tasa decimal(6,4), @Cuota decimal(18,2),
+    DECLARE @IdCliente int, @IdTipo int, @IdProducto int, @IdSubProducto int, @Monto decimal(18,2), @Plazo smallint, @Tasa decimal(6,4), @Cuota decimal(18,2),
             @Capacidad decimal(18,2), @Fecha date, @Estado varchar(20), @IdBuro bigint, @Score smallint, @Nacimiento date, @CodigoTipo varchar(15);
     DECLARE @Tasas int, @TasaVigente decimal(6,4), @Ahora datetime2 = CAST(SYSDATETIMEOFFSET() AT TIME ZONE 'SA Pacific Standard Time' AS datetime2);
     DECLARE @P TABLE (Clave varchar(60) PRIMARY KEY, Valor decimal(18,6));
 
-    SELECT @IdCliente = s.IdCliente, @IdTipo = s.IdTipoCredito, @IdProducto = s.IdProducto, @Monto = s.Monto, @Plazo = s.PlazoMeses,
+    SELECT @IdCliente = s.IdCliente, @IdTipo = s.IdTipoCredito, @IdProducto = s.IdProducto, @IdSubProducto = s.IdSubProducto, @Monto = s.Monto, @Plazo = s.PlazoMeses,
            @Tasa = s.TasaNominalAnual, @Cuota = s.CuotaReferencial, @Capacidad = s.CapacidadPago, @Fecha = s.FechaSolicitud,
            @Estado = s.Estado, @IdBuro = s.IdReporteBuro, @CodigoTipo = tc.CodigoTipoCredito
     FROM Credito.CreditoSolicitud s JOIN Credito.TipoCredito tc ON tc.IdTipoCredito = s.IdTipoCredito
@@ -45,9 +47,16 @@ BEGIN
     SELECT @Score = Score FROM Credito.ReporteBuro WHERE IdReporte = @IdBuro;
     SELECT @Tasas = COUNT(*), @TasaVigente = MAX(TasaNominalAnual) FROM Credito.TasaInteres
     WHERE IdTipoCredito = @IdTipo AND TipoTasa = 'CREDITO' AND Estado = 'A' AND @Plazo <= PlazoMaximoMeses
-      -- Solo las tasas vinculadas al producto (ProductosFinancieros.ProductoTasaInteres)
-      AND IdTasaInteres IN (SELECT v.IdTasaInteres FROM ProductosFinancieros.ProductoTasaInteres v
-                            WHERE v.IdProducto = @IdProducto AND v.Estado = 'A')
+      -- Solo tasas vinculadas: las del subproducto si tiene alguna activa; si no, las del producto
+      AND IdTasaInteres IN (
+          SELECT v.IdTasaInteres FROM ProductosFinancieros.ProductoTasaInteres v
+          WHERE v.Estado = 'A'
+            AND ((@IdSubProducto IS NOT NULL AND v.IdSubProducto = @IdSubProducto)
+                 OR (v.IdProducto = @IdProducto
+                     AND NOT EXISTS (SELECT 1 FROM ProductosFinancieros.ProductoTasaInteres vs
+                                     JOIN Credito.TasaInteres ts ON ts.IdTasaInteres = vs.IdTasaInteres
+                                      AND ts.Estado = 'A' AND ts.TipoTasa = 'CREDITO'
+                                     WHERE vs.IdSubProducto = @IdSubProducto AND vs.Estado = 'A'))))
       AND (MontoMinimo IS NULL OR @Monto >= MontoMinimo) AND (MontoMaximo IS NULL OR @Monto <= MontoMaximo)
       AND VigenciaDesde <= @Fecha AND (VigenciaHasta IS NULL OR VigenciaHasta > @Fecha);
     IF @Tasas > 1 THROW 55103, N'CR-13: hay más de una tasa vigente que aplica a este tipo, monto y plazo. Corrija TasaInteres antes de evaluar.', 1;
