@@ -1,7 +1,8 @@
 """Catalogo de productos con roles y permisos de la sesion WorkOS.
 
-ADMIN escribe con PRD-EDITAR; ADMIN/ASESOR consultan con PRD-CONSULTAR.
-La ficha imprimible exige ademas PRD-EXPORTAR. Solo se elimina un Borrador sin uso.
+ADMIN escribe con prd-editar; ADMIN/ASESOR consultan con prd-consultar.
+La ficha imprimible exige ademas prd-exportar. Los slugs de permiso de WorkOS van en
+minusculas (WorkOS no acepta mayusculas). Solo se elimina un Borrador sin uso.
 """
 
 from typing import Annotated
@@ -57,17 +58,17 @@ def _permiso(usuario: Usuario, permiso: str) -> Usuario:
 
 
 def _lector(usuario: Annotated[Usuario, Depends(require_roles(*_LECTURA))]) -> Usuario:
-    return _permiso(usuario, "PRD-CONSULTAR")
+    return _permiso(usuario, "prd-consultar")
 
 
 def _administrador(
     usuario: Annotated[Usuario, Depends(require_roles(*_ESCRITURA))],
 ) -> Usuario:
-    return _permiso(usuario, "PRD-EDITAR")
+    return _permiso(usuario, "prd-editar")
 
 
 def _exportador(usuario: Annotated[Usuario, Depends(_lector)]) -> Usuario:
-    return _permiso(usuario, "PRD-EXPORTAR")
+    return _permiso(usuario, "prd-exportar")
 
 
 Lector = Annotated[Usuario, Depends(_lector)]
@@ -104,7 +105,7 @@ def listar_tipos(_: Lector, conn: Db) -> list[TipoProductoInfo]:
     response_model=FichaSubProducto,
     openapi_extra={
         "x-roles": _LECTURA,
-        "x-permissions": ["PRD-CONSULTAR", "PRD-EXPORTAR"],
+        "x-permissions": ["prd-consultar", "prd-exportar"],
     },
 )
 def ficha_imprimible(
