@@ -2,6 +2,8 @@
 
 import importlib.util
 import sys
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
@@ -36,7 +38,7 @@ def probar(database: str, laboratorio: Path) -> None:
             IF OBJECT_ID('Contabilidad.ConceptoContable','U') IS NULL
                 CREATE TABLE Contabilidad.ConceptoContable(IdConceptoContable int PRIMARY KEY);
             IF NOT EXISTS (SELECT 1 FROM Contabilidad.ConceptoContable WHERE IdConceptoContable=1)
-                INSERT Contabilidad.ConceptoContable VALUES (1);
+                INSERT Contabilidad.ConceptoContable (IdConceptoContable) VALUES (1);
             IF SCHEMA_ID('Organizacion') IS NULL EXEC('CREATE SCHEMA Organizacion');
             IF OBJECT_ID('Organizacion.Agencia','U') IS NULL
                 CREATE TABLE Organizacion.Agencia(IdAgencia char(3) PRIMARY KEY);
@@ -78,18 +80,23 @@ def probar(database: str, laboratorio: Path) -> None:
             ):
                 lab.batches(db, migraciones / nombre)
         db.execute("""
-            IF NOT EXISTS (SELECT 1 FROM Contabilidad.PlantillaAsiento WHERE CodigoPlantilla='E401_DOTACION')
-            BEGIN
-                INSERT Contabilidad.PlantillaAsiento (CodigoPlantilla,IdConceptoContable,Origen,IdTipoAsiento,Nombre,Estado)
-                VALUES ('E401_DOTACION',1,'CAJA',1000,'Dotacion laboratorio',1);
-                DECLARE @id int=SCOPE_IDENTITY();
-                INSERT Contabilidad.PlantillaAsientoDetalle
-                    (IdPlantillaAsiento,Orden,IdCuentaContable,TipoMovimiento,ComponenteImporte)
-                SELECT @id,1,IdCuentaContable,'DEBITO','PRINCIPAL' FROM Contabilidad.CuentasContables WHERE CodigoCuenta='11010510'
-                UNION ALL
-                SELECT @id,2,IdCuentaContable,'CREDITO','PRINCIPAL' FROM Contabilidad.CuentasContables WHERE CodigoCuenta='11010505';
-            END
+            IF COL_LENGTH('Contabilidad.ConceptoContable','CodigoConcepto') IS NULL
+                ALTER TABLE Contabilidad.ConceptoContable ADD CodigoConcepto varchar(30),
+                    ConceptoDetalle varchar(100), Estado varchar(10);
         """)
+        db.execute("""
+            INSERT Contabilidad.TiposAsiento (IdTipoAsiento,Codigo,Nombre,Descripcion,EsManual,Estado)
+            SELECT s.Id,s.Codigo,s.Codigo,s.Codigo,0,'A'
+            FROM (VALUES (1001,'CAJA_DOTACION'),(1002,'CAJA_DEVOLUCION'),
+                         (1003,'ATM_DOTACION'),(1004,'CAJA_DEPOSITO')) s(Id,Codigo)
+            WHERE NOT EXISTS (SELECT 1 FROM Contabilidad.TiposAsiento t WHERE t.Codigo=s.Codigo);
+            INSERT Contabilidad.ConceptoContable (IdConceptoContable,CodigoConcepto,ConceptoDetalle,Estado)
+            SELECT s.Id,s.Codigo,s.Codigo,'Activo'
+            FROM (VALUES (2,'DOT_CAJA'),(3,'DEV_CAJA'),(4,'DOT_ATM'),(5,'DEP_EFECTIVO')) s(Id,Codigo)
+            WHERE NOT EXISTS (SELECT 1 FROM Contabilidad.ConceptoContable c WHERE c.CodigoConcepto=s.Codigo);
+        """)
+        for _ in range(2):
+            lab.batches(db, migraciones / "20261117_e401_versiones_semilla.sql")
 
     def conectar():
         conn = lab.connect(database)
@@ -98,7 +105,7 @@ def probar(database: str, laboratorio: Path) -> None:
 
     engine = create_engine("mssql+pyodbc://", creator=conectar)
     operacion = OperacionContable(
-        "E401_DOTACION",
+        "DOT_CAJA",
         "E401_SQL_DOTACION",
         "001",
         287,
@@ -151,11 +158,75 @@ def probar(database: str, laboratorio: Path) -> None:
             )
         ).scalar_one()
         assert saldo == antes
+        ahorro = conn.execute(
+            text("""
+            SELECT IdCuentaContable FROM Contabilidad.CuentasContables WHERE CodigoCuenta='21013505'
+        """)
+        ).scalar_one()
+        casos = (
+            ("DEV_CAJA", ("11010505", "11010510"), {}),
+            ("DOT_ATM", ("11010515", "11010505"), {}),
+            (
+                "CAJA_DEPOSITO",
+                ("11010510", "21013505"),
+                {("PRODUCTO", "CAPITAL"): ahorro},
+            ),
+        )
+        for codigo, cuentas, roles in casos:
+            escenario = replace(
+                operacion,
+                codigo_plantilla=codigo,
+                clave_evento=f"E401_SQL_{codigo}",
+                importes={"PRINCIPAL": Decimal(100), "COMISION": Decimal(0)},
+                cuentas_por_rol=roles,
+            )
+            id_escenario = generar_asiento(conn, escenario)
+            assert [
+                (m["codigo_cuenta"], m["tipo_movimiento"], m["monto"])
+                for m in repository.movimientos_asiento(conn, id_escenario)
+            ] == [
+                (cuentas[0], "DEBITO", Decimal(100)),
+                (cuentas[1], "CREDITO", Decimal(100)),
+            ]
         tx.rollback()
     with engine.connect() as conn:
         assert repository.obtener_asiento(conn, id_asiento) is None
+
+    with engine.connect() as conn:
+        conn.execute(text("CREATE TABLE #E401_Negocio (Id int PRIMARY KEY)"))
+        conn.commit()
+        try:
+            with conn.begin():
+                conn.execute(text("INSERT #E401_Negocio VALUES (1)"))
+                generar_asiento(
+                    conn,
+                    replace(
+                        operacion,
+                        codigo_plantilla="E401_INEXISTENTE",
+                        clave_evento="E401_SQL_SIN_PLANTILLA",
+                    ),
+                )
+        except HTTPException as error:
+            assert error.detail["code"] == "PLANTILLA_NO_DEFINIDA"
+        else:
+            raise AssertionError("Se permitió un movimiento sin plantilla.")
+        assert (
+            conn.execute(text("SELECT COUNT(*) FROM #E401_Negocio")).scalar_one() == 0
+        )
+
+    def registrar(_):
+        with engine.begin() as conn:
+            return generar_asiento(
+                conn, replace(operacion, clave_evento="E401_SQL_CONCURRENTE")
+            )
+
+    with ThreadPoolExecutor(max_workers=2) as ejecutores:
+        ids = list(ejecutores.map(registrar, range(2)))
+    assert ids[0] == ids[1]
+    with engine.connect() as conn:
+        assert len(repository.movimientos_asiento(conn, ids[0])) == 2
     print(
-        "Migraciones repetibles, dotación 500, idempotencia, saldos, reverso y rollback: OK"
+        "Migraciones repetibles, cuatro plantillas, comisión cero, reverso, idempotencia concurrente y rollback: OK"
     )
 
 
