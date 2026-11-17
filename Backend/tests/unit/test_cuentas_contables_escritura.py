@@ -115,21 +115,18 @@ def test_contrato_estado_solo_acepta_activo_o_inactivo():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize(("metodo", "url", "cuerpo"), _OPERACIONES)
+# Alta y estado ya tienen lógica (test_cuentas_contables_logica.py); edición y baja
+# siguen solo con contrato.
+@pytest.mark.parametrize(
+    ("metodo", "url", "cuerpo"),
+    [op for op in _OPERACIONES if op[0] == "DELETE" or op[1] == f"{_BASE}/7"],
+)
 def test_contador_con_datos_validos_recibe_501(client, metodo, url, cuerpo):
     r = _llamar(client, metodo, url, cuerpo)
 
     assert r.status_code == 501
     assert r.json()["code"] == "OPERACION_NO_HABILITADA"
     assert r.headers["content-type"].startswith("application/problem+json")
-    assert "110105" not in r.json()["detail"]
-
-
-@pytest.mark.parametrize("estado", ["Activo", "Inactivo"])
-def test_estado_acepta_ambos_valores(client, estado):
-    r = client.patch(f"{_BASE}/7/estado", json={"estado": estado})
-
-    assert r.status_code == 501
 
 
 # ---------------------------------------------------------------------------

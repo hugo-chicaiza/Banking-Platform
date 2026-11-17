@@ -1,11 +1,17 @@
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, Path, Query, Response
+from fastapi import APIRouter, Depends, Path, Query, Request, Response
 from sqlalchemy import Connection
 
 from app.core.api.errors import RESPUESTAS_ERROR, ProblemDetailsRoute, solo_parametros
+from app.core.api.middleware import ip_cliente
 from app.core.database.db import cooperativa
-from app.core.security.auth import require_auth, require_permiso, require_roles
+from app.core.security.auth import (
+    UsuarioActual,
+    require_auth,
+    require_permiso,
+    require_roles,
+)
 from app.modules.contabilidad import service
 from app.modules.contabilidad.schemas import (
     INT32_MAX,
@@ -138,9 +144,13 @@ _NO_EXISTE = {404: _error(404, "CUENTA_NO_ENCONTRADA: la cuenta no existe.")}
     },
     openapi_extra={"x-roles": _ROLES_ESCRITURA_CUENTAS},
 )
-def crear_cuenta_contable(conn: Db, datos: CuentaContableCrear) -> Any:
+def crear_cuenta_contable(
+    conn: Db, datos: CuentaContableCrear, request: Request, usuario: UsuarioActual
+) -> Any:
     """Alta de una cuenta del plan: 201 con la cuenta o 202 si queda pendiente."""
-    return service.crear_cuenta_contable(conn, datos)
+    return service.crear_cuenta_contable(
+        conn, usuario, ip_cliente(request.scope), datos
+    )
 
 
 @_cuentas_escritura_router.patch(
@@ -170,10 +180,16 @@ def editar_cuenta_contable(
     openapi_extra={"x-roles": _ROLES_ESCRITURA_CUENTAS},
 )
 def cambiar_estado_cuenta_contable(
-    conn: Db, id_cuenta: IdCuentaContable, datos: CuentaContableEstado
+    conn: Db,
+    id_cuenta: IdCuentaContable,
+    datos: CuentaContableEstado,
+    request: Request,
+    usuario: UsuarioActual,
 ) -> Any:
     """Activa o desactiva la cuenta: 200 con la cuenta o 202 si queda pendiente."""
-    return service.cambiar_estado_cuenta_contable(conn, id_cuenta, datos)
+    return service.cambiar_estado_cuenta_contable(
+        conn, usuario, ip_cliente(request.scope), id_cuenta, datos
+    )
 
 
 @_cuentas_escritura_router.delete(
