@@ -56,7 +56,7 @@ def obtener_condiciones(
     ] = None,
 ) -> CondicionesCredito:
     """CRE-01 · Tasa, plazo máximo, seguros e impuestos vigentes del tipo de crédito.
-    Con idProducto o idSubProducto rige la tasa vinculada a ese producto."""
+    Requiere idProducto o idSubProducto: rige la tasa vinculada a ese producto."""
     return service.obtener_condiciones(
         conn,
         idTipoCredito,

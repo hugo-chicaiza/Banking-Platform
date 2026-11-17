@@ -23,9 +23,8 @@ def tasas_vigentes(
     id_producto: int | None = None,
     id_sub_producto: int | None = None,
 ) -> list[dict[str, Any]]:
-    """Tasas de crédito activas y vigentes del tipo. Si el subproducto tiene tasas
-    vinculadas rigen solo esas; si no, las vinculadas al producto; si ninguno tiene,
-    todas las del tipo (como antes de los vínculos)."""
+    """Tasas de crédito activas y vigentes vinculadas: las del subproducto si tiene; si
+    no, las de su producto. Una tasa sin vincular no rige para nadie."""
     return _rows(
         conn,
         """
@@ -33,9 +32,14 @@ def tasas_vigentes(
             SELECT v.IdTasaInteres,
                    CASE WHEN v.IdSubProducto IS NOT NULL THEN 1 ELSE 2 END AS nivel
             FROM ProductosFinancieros.ProductoTasaInteres AS v
+            JOIN Credito.TasaInteres AS tv
+              ON tv.IdTasaInteres = v.IdTasaInteres
+             AND tv.Estado = 'A' AND tv.TipoTasa = 'CREDITO'
             WHERE v.Estado = 'A'
               AND ((:id_sub IS NOT NULL AND v.IdSubProducto = :id_sub)
-                   OR (:id_producto IS NOT NULL AND v.IdProducto = :id_producto))
+                   OR v.IdProducto = COALESCE(:id_producto,
+                          (SELECT s.IdProducto FROM ProductosFinancieros.SubProducto AS s
+                           WHERE s.IdSubProducto = :id_sub)))
         ),
         nivel AS (SELECT MIN(nivel) AS n FROM vinculadas)
         SELECT t.IdTipoCredito AS id_tipo_credito,
@@ -50,9 +54,8 @@ def tasas_vigentes(
           AND t.Estado = 'A'
           AND t.VigenciaDesde <= :hoy
           AND (t.VigenciaHasta IS NULL OR t.VigenciaHasta >= :hoy)
-          AND (NOT EXISTS (SELECT 1 FROM vinculadas)
-               OR t.IdTasaInteres IN (SELECT IdTasaInteres FROM vinculadas
-                                      WHERE nivel = (SELECT n FROM nivel)))
+          AND t.IdTasaInteres IN (SELECT IdTasaInteres FROM vinculadas
+                                  WHERE nivel = (SELECT n FROM nivel))
         ORDER BY t.IdTasaInteres
         """,
         {

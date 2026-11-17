@@ -96,6 +96,7 @@ def _datos(
 def _cuerpo(**cambios: Any) -> dict[str, Any]:
     cuerpo = {
         "idTipoCredito": 1,
+        "idProducto": 2,
         "monto": 1000.0,
         "plazoMeses": 12,
         "sistemaAmortizacion": "FRANCES",
@@ -112,7 +113,9 @@ def _cuerpo(**cambios: Any) -> dict[str, Any]:
 def test_cre01_caso_feliz(client, monkeypatch):
     _datos(seguros=[_seguro()], impuestos=[_impuesto()], monkeypatch=monkeypatch)
 
-    r = client.get(URL_CONDICIONES, params={"monto": 1000, "plazoMeses": 12})
+    r = client.get(
+        URL_CONDICIONES, params={"idProducto": 2, "monto": 1000, "plazoMeses": 12}
+    )
 
     assert r.status_code == 200
     assert r.json() == {
@@ -148,7 +151,7 @@ def test_cre01_caso_feliz(client, monkeypatch):
 def test_cre01_sin_monto_ni_plazo(client, monkeypatch):
     _datos(monkeypatch=monkeypatch)
 
-    r = client.get(URL_CONDICIONES)
+    r = client.get(URL_CONDICIONES, params={"idProducto": 2})
 
     assert r.status_code == 200
     assert r.json()["seguros"] == [] and r.json()["impuestos"] == []
@@ -157,7 +160,7 @@ def test_cre01_sin_monto_ni_plazo(client, monkeypatch):
 def test_cre01_monto_sin_limites_acepta_cualquier_monto(client, monkeypatch):
     _datos(tasas=[_tasa(monto_minimo=None, monto_maximo=None)], monkeypatch=monkeypatch)
 
-    r = client.get(URL_CONDICIONES, params={"monto": 999999})
+    r = client.get(URL_CONDICIONES, params={"idProducto": 2, "monto": 999999})
 
     assert r.status_code == 200
     assert r.json()["montoMinimo"] is None and r.json()["montoMaximo"] is None
@@ -174,7 +177,7 @@ def test_cre01_monto_sin_limites_acepta_cualquier_monto(client, monkeypatch):
 def test_cre01_sin_tasa_para_monto_o_plazo_es_404(client, monkeypatch, params):
     _datos(monkeypatch=monkeypatch)
 
-    r = client.get(URL_CONDICIONES, params=params)
+    r = client.get(URL_CONDICIONES, params={"idProducto": 2, **params})
 
     assert r.status_code == 404
     assert r.json()["code"] == "TASA_NO_VIGENTE"
@@ -183,7 +186,7 @@ def test_cre01_sin_tasa_para_monto_o_plazo_es_404(client, monkeypatch, params):
 def test_cre01_tipo_sin_ninguna_tasa_vigente_es_404(client, monkeypatch):
     _datos(tasas=[], monkeypatch=monkeypatch)
 
-    r = client.get(URL_CONDICIONES)
+    r = client.get(URL_CONDICIONES, params={"idProducto": 2})
 
     assert r.status_code == 404 and r.json()["code"] == "TASA_NO_VIGENTE"
 
@@ -192,7 +195,7 @@ def test_cre01_dos_tasas_vigentes_es_500_y_alerta(client, monkeypatch, caplog):
     _datos(tasas=[_tasa(), _tasa()], monkeypatch=monkeypatch)
 
     with caplog.at_level(logging.ERROR):
-        r = client.get(URL_CONDICIONES, params={"monto": 1000})
+        r = client.get(URL_CONDICIONES, params={"idProducto": 2, "monto": 1000})
 
     assert r.status_code == 500
     assert r.json()["code"] == "TASA_VIGENTE_DUPLICADA"
@@ -208,7 +211,7 @@ def test_cre01_dos_tasas_pero_solo_una_cubre_el_monto(client, monkeypatch):
         monkeypatch=monkeypatch,
     )
 
-    r = client.get(URL_CONDICIONES, params={"monto": 1500})
+    r = client.get(URL_CONDICIONES, params={"idProducto": 2, "monto": 1500})
 
     assert r.status_code == 200 and r.json()["montoMinimo"] == 1000.0
 
@@ -216,7 +219,7 @@ def test_cre01_dos_tasas_pero_solo_una_cubre_el_monto(client, monkeypatch):
 def test_cre01_parametro_desconocido_es_400(client, monkeypatch):
     _datos(monkeypatch=monkeypatch)
 
-    r = client.get(URL_CONDICIONES, params={"plazo": 12})
+    r = client.get(URL_CONDICIONES, params={"idProducto": 2, "plazo": 12})
 
     assert r.status_code == 400 and r.json()["code"] == "PARAMETRO_INVALIDO"
 
@@ -244,7 +247,7 @@ def test_cre01_rol_sin_permiso_es_403(monkeypatch):
     simular_sesion(app, usuario_con_roles("CAJERO"))
     _datos(monkeypatch=monkeypatch)
     try:
-        r = TestClient(app).get(URL_CONDICIONES)
+        r = TestClient(app).get(URL_CONDICIONES, params={"idProducto": 2})
     finally:
         app.dependency_overrides.clear()
 
@@ -255,7 +258,7 @@ def test_cre01_sin_sesion_es_401(monkeypatch):
     app.dependency_overrides[cooperativa] = lambda: None
     _datos(monkeypatch=monkeypatch)
     try:
-        r = TestClient(app).get(URL_CONDICIONES)
+        r = TestClient(app).get(URL_CONDICIONES, params={"idProducto": 2})
     finally:
         app.dependency_overrides.clear()
 
@@ -417,6 +420,7 @@ def test_cre02_sin_fecha_el_primer_vencimiento_es_un_mes_despues(monkeypatch):
     datos = SimulacionRequest.model_validate(
         {
             "idTipoCredito": 1,
+            "idProducto": 2,
             "monto": Decimal(1000),
             "plazoMeses": 2,
             "sistemaAmortizacion": "FRANCES",
@@ -525,3 +529,13 @@ def test_cre02_rol_sin_permiso_es_403(monkeypatch):
         app.dependency_overrides.clear()
 
     assert r.status_code == 403 and r.json()["code"] == "SIN_PERMISO"
+
+
+def test_sin_producto_no_hay_tasa(client):
+    # Solo rigen las tasas vinculadas: sin producto ni subproducto, 422
+    r = client.get("/api/v1/creditos/tipos/1/condiciones")
+    assert r.status_code == 422 and r.json()["code"] == "PRODUCTO_REQUERIDO"
+    cuerpo = _cuerpo()
+    del cuerpo["idProducto"]
+    r = client.post(URL_SIMULACION, json=cuerpo)
+    assert r.status_code == 422 and r.json()["code"] == "PRODUCTO_REQUERIDO"

@@ -7,6 +7,8 @@ subproducto no la cobra aunque el producto sí. Por ahora solo se guarda el chec
 el cobro y la elección de tasa los aplicará cada módulo después.
 
 Desmarcar no borra: la fila queda en Estado 'I' (historial) y marcar de nuevo la reactiva.
+Un vínculo con un objeto desactivado en Catálogos (tasa, comisión, seguro o sistema) no
+cuenta: no se muestra, no se aplica y al guardar el checklist se desmarca.
 El SQL de cada tabla es fijo.
 """
 
@@ -52,11 +54,13 @@ class _Tabla:
 _TABLAS = {
     "tasas": _Tabla(
         listar="""
-            SELECT IdTasaInteres AS objeto FROM ProductosFinancieros.ProductoTasaInteres
-            WHERE Estado = 'A'
-              AND ISNULL(IdProducto, 0) = ISNULL(:id_producto, 0)
-              AND ISNULL(IdSubProducto, 0) = ISNULL(:id_sub, 0)
-            ORDER BY IdTasaInteres
+            SELECT v.IdTasaInteres AS objeto
+            FROM ProductosFinancieros.ProductoTasaInteres AS v
+            JOIN Credito.TasaInteres AS o ON o.IdTasaInteres = v.IdTasaInteres AND o.Estado = 'A'
+            WHERE v.Estado = 'A'
+              AND ISNULL(v.IdProducto, 0) = ISNULL(:id_producto, 0)
+              AND ISNULL(v.IdSubProducto, 0) = ISNULL(:id_sub, 0)
+            ORDER BY v.IdTasaInteres
         """,
         desactivar="""
             UPDATE ProductosFinancieros.ProductoTasaInteres SET Estado = 'I'
@@ -78,12 +82,13 @@ _TABLAS = {
     ),
     "comisiones": _Tabla(
         listar="""
-            SELECT IdComision AS objeto, Exonerado AS marca
-            FROM ProductosFinancieros.ProductoComision
-            WHERE Estado = 'A'
-              AND ISNULL(IdProducto, 0) = ISNULL(:id_producto, 0)
-              AND ISNULL(IdSubProducto, 0) = ISNULL(:id_sub, 0)
-            ORDER BY IdComision
+            SELECT v.IdComision AS objeto, v.Exonerado AS marca
+            FROM ProductosFinancieros.ProductoComision AS v
+            JOIN Transacciones.Comisiones AS o ON o.IdComision = v.IdComision AND o.Estado = 'A'
+            WHERE v.Estado = 'A'
+              AND ISNULL(v.IdProducto, 0) = ISNULL(:id_producto, 0)
+              AND ISNULL(v.IdSubProducto, 0) = ISNULL(:id_sub, 0)
+            ORDER BY v.IdComision
         """,
         desactivar="""
             UPDATE ProductosFinancieros.ProductoComision SET Estado = 'I'
@@ -106,12 +111,13 @@ _TABLAS = {
     ),
     "seguros": _Tabla(
         listar="""
-            SELECT IdSeguro AS objeto, EsObligatorio AS marca
-            FROM ProductosFinancieros.ProductoSeguro
-            WHERE Estado = 'A'
-              AND ISNULL(IdProducto, 0) = ISNULL(:id_producto, 0)
-              AND ISNULL(IdSubProducto, 0) = ISNULL(:id_sub, 0)
-            ORDER BY IdSeguro
+            SELECT v.IdSeguro AS objeto, v.EsObligatorio AS marca
+            FROM ProductosFinancieros.ProductoSeguro AS v
+            JOIN Credito.Seguro AS o ON o.IdSeguro = v.IdSeguro AND o.Estado = 'A'
+            WHERE v.Estado = 'A'
+              AND ISNULL(v.IdProducto, 0) = ISNULL(:id_producto, 0)
+              AND ISNULL(v.IdSubProducto, 0) = ISNULL(:id_sub, 0)
+            ORDER BY v.IdSeguro
         """,
         desactivar="""
             UPDATE ProductosFinancieros.ProductoSeguro SET Estado = 'I'
@@ -134,12 +140,13 @@ _TABLAS = {
     ),
     "sistemas": _Tabla(
         listar="""
-            SELECT CodigoSistema AS objeto
-            FROM ProductosFinancieros.ProductoSistemaAmortizacion
-            WHERE Estado = 'A'
-              AND ISNULL(IdProducto, 0) = ISNULL(:id_producto, 0)
-              AND ISNULL(IdSubProducto, 0) = ISNULL(:id_sub, 0)
-            ORDER BY CodigoSistema
+            SELECT v.CodigoSistema AS objeto
+            FROM ProductosFinancieros.ProductoSistemaAmortizacion AS v
+            JOIN Catalogo.SistemaAmortizacion AS o ON o.Codigo = v.CodigoSistema AND o.Estado = 'A'
+            WHERE v.Estado = 'A'
+              AND ISNULL(v.IdProducto, 0) = ISNULL(:id_producto, 0)
+              AND ISNULL(v.IdSubProducto, 0) = ISNULL(:id_sub, 0)
+            ORDER BY v.CodigoSistema
         """,
         desactivar="""
             UPDATE ProductosFinancieros.ProductoSistemaAmortizacion SET Estado = 'I'

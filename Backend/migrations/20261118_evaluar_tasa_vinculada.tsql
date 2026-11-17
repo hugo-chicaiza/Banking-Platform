@@ -1,7 +1,8 @@
-/* T-SQL (SQL Server). usp_EvaluarSolicitudCredito: si el producto de la solicitud tiene
-   tasas vinculadas (ProductoTasaInteres), la evaluación usa solo esas; si no, todas las
-   del tipo de crédito, como antes. Así el catálogo puede tener varias tasas que se cruzan
-   y cada producto elige la suya. Único cambio: el WHERE de la consulta de tasas.
+/* T-SQL (SQL Server). usp_EvaluarSolicitudCredito: la evaluación usa solo las tasas
+   vinculadas al producto de la solicitud (ProductoTasaInteres). Una tasa sin vincular no
+   rige; sin tasa vinculada vigente la solicitud se rechaza con ese motivo. Así el catálogo
+   puede tener varias tasas que se cruzan y cada producto elige la suya.
+   Único cambio: el WHERE de la consulta de tasas.
    Requiere 20261117_tasas_y_vinculos y 20261117_evaluar_solicitud_tasa_activa.
    Reejecutable (CREATE OR ALTER conserva los permisos).
    Vuelta atrás: ejecutar de nuevo 20261117_evaluar_solicitud_tasa_activa.tsql. */
@@ -44,11 +45,9 @@ BEGIN
     SELECT @Score = Score FROM Credito.ReporteBuro WHERE IdReporte = @IdBuro;
     SELECT @Tasas = COUNT(*), @TasaVigente = MAX(TasaNominalAnual) FROM Credito.TasaInteres
     WHERE IdTipoCredito = @IdTipo AND TipoTasa = 'CREDITO' AND Estado = 'A' AND @Plazo <= PlazoMaximoMeses
-      -- Con tasas vinculadas al producto rigen solo esas (ProductosFinancieros.ProductoTasaInteres)
-      AND (NOT EXISTS (SELECT 1 FROM ProductosFinancieros.ProductoTasaInteres v
-                       WHERE v.IdProducto = @IdProducto AND v.Estado = 'A')
-           OR IdTasaInteres IN (SELECT v.IdTasaInteres FROM ProductosFinancieros.ProductoTasaInteres v
-                                WHERE v.IdProducto = @IdProducto AND v.Estado = 'A'))
+      -- Solo las tasas vinculadas al producto (ProductosFinancieros.ProductoTasaInteres)
+      AND IdTasaInteres IN (SELECT v.IdTasaInteres FROM ProductosFinancieros.ProductoTasaInteres v
+                            WHERE v.IdProducto = @IdProducto AND v.Estado = 'A')
       AND (MontoMinimo IS NULL OR @Monto >= MontoMinimo) AND (MontoMaximo IS NULL OR @Monto <= MontoMaximo)
       AND VigenciaDesde <= @Fecha AND (VigenciaHasta IS NULL OR VigenciaHasta > @Fecha);
     IF @Tasas > 1 THROW 55103, N'CR-13: hay más de una tasa vigente que aplica a este tipo, monto y plazo. Corrija TasaInteres antes de evaluar.', 1;
@@ -57,7 +56,7 @@ BEGIN
     IF NOT EXISTS (SELECT 1 FROM ProductosFinancieros.Producto WHERE IdProducto = @IdProducto AND IdTipoCredito = @IdTipo)
         SELECT @Resultado = 'RECHAZADA', @Motivo = N'El producto no corresponde al tipo de crédito.';
     ELSE IF @Tasas = 0
-        SELECT @Resultado = 'RECHAZADA', @Motivo = N'No hay una tasa vigente para ese monto y plazo.';
+        SELECT @Resultado = 'RECHAZADA', @Motivo = N'No hay una tasa vigente vinculada al producto para ese monto y plazo.';
     ELSE IF @Tasa > @TasaVigente
         SELECT @Resultado = 'RECHAZADA', @Motivo = N'La tasa de la solicitud supera la tasa vigente.';
     ELSE IF EXISTS (SELECT 1 FROM @P WHERE Clave = 'TASA_MAXIMA_' + @CodigoTipo AND @Tasa * 100 > Valor)
