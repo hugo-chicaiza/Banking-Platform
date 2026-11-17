@@ -17,6 +17,7 @@ from app.core.api.errors import (
 from app.core.api.middleware import ip_cliente
 from app.core.config.settings import get_settings
 from app.core.database.db import cooperativa, get_engine
+from app.core.pdf import respuesta_pdf, respuestas_pdf
 from app.core.security.auth import UsuarioAuditoria, require_auth, require_roles
 from app.modules.tarjetas import service
 from app.modules.tarjetas.schemas import (
@@ -227,12 +228,7 @@ def regenerar_pin(
 @router.get(
     "/{idTarjeta}/sobre-pin",
     response_class=Response,
-    responses={
-        200: {
-            "content": {"application/pdf": {}},
-            "description": "Sobre de PIN (PDF). Se entrega una sola vez.",
-        }
-    },
+    responses=respuestas_pdf("Sobre de PIN (PDF). Se entrega una sola vez."),
     dependencies=[
         Depends(require_roles("ASESOR", "SUPERVISOR", "ADMIN")),
         Depends(solo_parametros()),
@@ -248,15 +244,7 @@ def sobre_pin(
     temporal para entregar al cliente con la tarjeta. Luego queda Entregado.
     """
     pdf = service.entregar_sobre_pin(conn, id_tarjeta, usuario, _ip(request))
-    return Response(
-        content=pdf,
-        media_type="application/pdf",
-        headers={
-            "Content-Disposition": f'attachment; filename="sobre-pin-{id_tarjeta}.pdf"',
-            "Cache-Control": "no-store",
-            "X-Content-Type-Options": "nosniff",
-        },
-    )
+    return respuesta_pdf(pdf, f"sobre-pin-{id_tarjeta}.pdf")
 
 
 # TAR-06. Roles: SUPERVISOR, AUDITOR, ADMIN
