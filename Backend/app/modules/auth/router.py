@@ -5,7 +5,13 @@
 3. AuthKit vuelve a GET /auth/callback; el backend crea la cookie de sesión y
    redirige al FE en return_to.
 4. El FE llama a la API con la cookie (fetch con credentials) y usa GET /auth/me.
+   Un 401 trae el motivo en `code`: NO_AUTENTICADO, SESION_EXPIRADA (8 h),
+   SESION_INACTIVA (15 min sin uso) o SESION_REVOCADA (bloqueo, desactivación o
+   cambio de rol).
 5. Logout: POST /auth/logout y el FE navega a la logoutUrl que recibe.
+
+Una sola sesión abierta por usuario: con otra abierta en otro dispositivo, el login
+vuelve a /login?error=SESION_ABIERTA y la abierta sigue.
 
 AUT-05..09 · Usuarios internos (router_usuarios, /usuarios): solo ADMIN.
 """
@@ -26,6 +32,7 @@ from app.core.security.auth import (
     UsuarioAuditoria,
     borrar_cookie_sesion,
     guardar_cookie_sesion,
+    motivo_rechazo,
     no_autenticado,
     require_auth,
     require_permiso,
@@ -131,8 +138,11 @@ def callback(
     cookie_state: Annotated[
         str | None, Cookie(alias=COOKIE_STATE, max_length=1024)
     ] = None,
+    cookie_sesion: CookieSesion = None,
 ) -> RedirectResponse:
-    """Crea la cookie de sesión y vuelve al FE, o a /login?error=CODIGO si falla."""
+    """Crea la cookie de sesión y vuelve al FE, o a /login?error=CODIGO si falla.
+    SESION_ABIERTA: el usuario ya tiene una sesión abierta en otro dispositivo.
+    """
     destino, sellada = service.completar_login(
         code,
         state,
@@ -141,6 +151,7 @@ def callback(
         _ip(request),
         _user_agent(request),
         resolver_origen_front(request),
+        cookie_sesion,
     )
     respuesta = _redireccion(destino)
     respuesta.delete_cookie(
@@ -157,7 +168,7 @@ def refresh(response: Response, sellada: CookieSesion = None) -> None:
     """Renueva el access token de la sesión y reescribe la cookie."""
     sesion = service.refrescar(sellada)
     if sesion is None or not sesion.sellada_nueva:
-        raise no_autenticado(borrar_cookie=True)
+        raise no_autenticado(borrar_cookie=True, motivo=motivo_rechazo(sellada))
     guardar_cookie_sesion(response, sesion.sellada_nueva)
 
 
@@ -314,7 +325,9 @@ def cambiar_rol(
     conn: ConexionSeguridad,
     conn_coop: ConexionCooperativa,
 ) -> UsuarioDetalle:
-    """Reemplaza el rol del usuario (uno). Regla: no se quita el último ADMIN."""
+    """Reemplaza el rol del usuario (uno) y cierra sus sesiones: vuelve a entrar con
+    el rol nuevo. Regla: no se quita el último ADMIN.
+    """
     return service.cambiar_rol(
         conn, conn_coop, id_usuario, datos, admin, ip_cliente(request.scope)
     )

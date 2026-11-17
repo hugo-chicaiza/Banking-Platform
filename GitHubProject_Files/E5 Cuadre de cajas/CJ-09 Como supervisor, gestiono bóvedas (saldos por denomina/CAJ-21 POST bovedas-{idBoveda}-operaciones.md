@@ -1,6 +1,6 @@
 ---
 number: 179
-title: "BOV-04 | POST /api/v1/boveda/bovedas/{idBoveda}/movimientos"
+title: "BOV-04 | Solicitudes de movimiento y autorizacion independiente"
 type: api
 code: CAJ-21
 parent: "[[CJ-09 Como supervisor, gestiono bóvedas (saldos por denomina]]"
@@ -19,126 +19,47 @@ assignees: []
 url: https://github.com/hugo-chicaiza/Banking-Platform/issues/179
 ---
 
-`POST /api/v1/boveda/bovedas/{idBoveda}/movimientos` · **Roles:** SUPERVISOR · **Historia:** CJ-09 (#63) · **OpenAPI:** `BOV04`
+BOV-04 registra una solicitud pendiente y requiere la confirmacion personal de
+otro usuario habilitado antes de ejecutar. La identidad del autorizador se obtiene
+de su sesion.
 
-Traslado, ajuste o provisión externa.
+## Contrato
 
-| Lee | Escribe | DB |
+Prefijo `/api/v1/boveda`.
+
+| Metodo | Ruta | Resultado |
 |---|---|---|
-| — | `Boveda.MovimientoBoveda`, `Boveda.MovimientoBovedaDenominacion`, `Boveda.BovedaDenominacion`, `Boveda.Boveda` | — |
+| POST | `/bovedas/{idBoveda}/solicitudes-movimiento` | Solicitud PENDIENTE |
+| GET | `/solicitudes-movimiento` | Listado paginado |
+| GET | `/solicitudes-movimiento/{idSolicitudMovimiento}` | Detalle y movimientos relacionados |
+| POST | `/solicitudes-movimiento/{idSolicitudMovimiento}/aprobacion` | Ejecutar y resolver EJECUTADA |
+| POST | `/solicitudes-movimiento/{idSolicitudMovimiento}/rechazo` | Resolver RECHAZADA con motivo |
+| POST | `/solicitudes-movimiento/{idSolicitudMovimiento}/cancelacion` | Resolver CANCELADA por el solicitante |
 
-## Reglas de negocio
+Escrituras con `boveda:operar` (asignacion inicial SUPERVISOR). Consultas con
+SUPERVISOR, CONTADOR, AUDITOR o ADMIN, respetando alcance de agencia.
 
-1. Tipos: Traslado, ProvisionExterna, EnvioExcedente, AjusteFaltante, AjusteSobrante.
-2. Traslado crea dos movimientos relacionados (E en origen, I en destino) con el mismo desglose → sin destino, `422 TRASLADO_REQUIERE_CONTRAPARTE`.
-3. Doble custodia → `409 DOBLE_CUSTODIA_VIOLADA`; egreso sin piezas → `422 SALDO_INSUFICIENTE`.
-4. Actualiza `BovedaDenominacion`, `SaldoActual` y genera asiento, en una transacción.
+La ruta anterior `POST /bovedas/{idBoveda}/movimientos` responde
+410 SOLICITUD_AUTORIZACION_REQUERIDA. Los consumidores deben adoptar este contrato.
 
-## Flujo
+## Reglas
 
-1. Validar tipo, contraparte, custodia y piezas.
-2. Registrar movimientos, desglose, saldos y asiento en una transacción.
-3. Responder 201 con los movimientos.
+- Crear guarda tipo, contraparte, desglose, valores unitarios, monto, observaciones,
+  solicitante y fecha. No altera efectivo ni requiere cuentas contables configuradas.
+- El cuerpo no admite autorizadoPor, identidades, estado ni monto del cliente.
+- Aprobar exige otro usuario, permiso, agencia de origen y solicitud pendiente.
+  Se comprueban otra vez valores, existencias y configuracion contable.
+- Movimientos, inventario, saldos, asientos, vinculos y estado se confirman en una
+  transaccion. Un fallo conserva PENDIENTE y revierte los efectos financieros.
+- Traslado crea dos movimientos ligados con el mismo desglose y solicitud.
+- Rechazar y cancelar requieren motivo. No ejecutan movimientos. Las solicitudes
+  resueltas conservan su contenido y decision.
+- Se soporta Idempotency-Key opcional en creacion y repeticion segura de aprobacion
+  por el mismo aprobador. Las aprobaciones simultaneas no duplican el movimiento.
+- Los ajustes de arqueo BOV-06 y los movimientos de Caja/ATM conservan sus flujos.
 
-## Request
+## Documentacion y validacion
 
-| Parámetro | En | Tipo | Req. | Regla |
-|---|---|---|---|---|
-| idBoveda | path | integer | Sí |  |
-
-Body `MovimientoBovedaRequest`:
-
-| Campo | Tipo | Req. | Regla |
-|---|---|---|---|
-| tipoMovimiento | Traslado \| AjusteFaltante \| AjusteSobrante \| ProvisionExterna \| EnvioExcedente | Sí |  |
-| idBovedaContraparte | integer | No | Obligatorio en Traslado |
-| autorizadoPor | integer | Sí | Distinto del usuario que ejecuta |
-| desglose | Desglose[] | Sí |  |
-| observaciones | string(300) | No |  |
-
-```json
-{
-  "tipoMovimiento": "Traslado",
-  "idBovedaContraparte": 2,
-  "autorizadoPor": 9,
-  "desglose": [
-    {
-      "idDenominacion": 1,
-      "cantidad": 2
-    }
-  ],
-  "observaciones": "Entrega de efectivo"
-}
-```
-
-## Response `201`
-
-`array`
-
-```json
-[
-  {
-    "idMovimiento": 1,
-    "idBoveda": 1,
-    "idBovedaContraparte": 2,
-    "tipoMovimiento": "Traslado",
-    "naturaleza": "E",
-    "monto": 40,
-    "saldoAnterior": 200,
-    "saldoPosterior": 160,
-    "autorizadoPor": 9,
-    "idUsuarioMovimiento": 7,
-    "idMovimientoRelacionado": 2,
-    "fechaMovimiento": "2026-11-16T10:00:00-05:00",
-    "observaciones": null,
-    "idAsientoContable": 1,
-    "desglose": [
-      {
-        "idDenominacion": 1,
-        "cantidad": 2
-      }
-    ]
-  },
-  {
-    "idMovimiento": 2,
-    "idBoveda": 2,
-    "idBovedaContraparte": 1,
-    "tipoMovimiento": "Traslado",
-    "naturaleza": "I",
-    "monto": 40,
-    "saldoAnterior": 200,
-    "saldoPosterior": 240,
-    "autorizadoPor": 9,
-    "idUsuarioMovimiento": 7,
-    "idMovimientoRelacionado": 1,
-    "fechaMovimiento": "2026-11-16T10:00:00-05:00",
-    "observaciones": null,
-    "idAsientoContable": 2,
-    "desglose": [
-      {
-        "idDenominacion": 1,
-        "cantidad": 2
-      }
-    ]
-  }
-]
-```
-
-## Errores
-
-Formato ProblemDetails (ver F-04). Además de 400/401/403:
-
-| HTTP | `code` | Cuándo |
-|---|---|---|
-| 409 | `DOBLE_CUSTODIA_VIOLADA` | Quien autoriza es el mismo que opera |
-| 422 | `SALDO_INSUFICIENTE` | El saldo no cubre la operación |
-| 422 | `TRASLADO_REQUIERE_CONTRAPARTE` | El traslado no indica la bóveda contraparte |
-
-## Definición de terminado
-
-- [x] Contrato implementado en OpenAPI generado (`/api/openapi.json`); no existe `openapi.yaml` en este repositorio
-- [x] Pruebas del caso feliz y errores documentados
-
-## Implementación BOV-01..06
-
-Reglas adicionales, errores, migración y configuración contable: [documentación del módulo](../../../Backend/docs/BOV-01-06-bovedas.md). Los ejemplos anteriores usan datos ficticios coherentes; no son semillas de producción.
+Detalle de request, response, errores, migracion y pruebas en
+[la guia del flujo](../../../Backend/docs/BOV-04-solicitudes-autorizacion.md).
+El contrato ejecutable se genera en `/api/openapi.json`.

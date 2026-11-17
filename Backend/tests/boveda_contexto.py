@@ -14,9 +14,11 @@ from fastapi.testclient import TestClient
 from app.core.api.middleware import TraceIdMiddleware
 from app.core.database.db import cooperativa
 from app.core.security.auth import usuario_actual
+from app.core.security.permisos import permisos_de
 from app.modules.boveda import repository as repo
 from app.modules.boveda import service
 from app.modules.boveda.router import router
+from app.modules.boveda.solicitudes import repository as solicitudes_repo
 from tests.sesion import USUARIO
 
 BASE = "/api/v1/boveda"
@@ -28,7 +30,12 @@ class BovedaContexto:
         self.app.include_router(router, prefix="/api/v1")
         self.app.add_middleware(TraceIdMiddleware)
         self.client = TestClient(self.app)
-        self.usuario = replace(USUARIO, roles=("SUPERVISOR",), id_interno=7)
+        self.usuario = replace(
+            USUARIO,
+            roles=("SUPERVISOR",),
+            permisos=permisos_de(("SUPERVISOR",)),
+            id_interno=7,
+        )
         self.conn = MagicMock()
         self.conn.begin.side_effect = self.transaccion
         self.app.dependency_overrides[cooperativa] = lambda: self.conn
@@ -58,6 +65,8 @@ class BovedaContexto:
             "arqueos": {},
             "detalles": {},
             "asientos": [],
+            "solicitudes": {},
+            "detalle_solicitudes": {},
         }
         self.bloqueos: list[int] = []
         self.fallo_asiento: int | None = None
@@ -85,12 +94,27 @@ class BovedaContexto:
             "desgloses_movimientos",
             "listar_movimientos",
             "crear_arqueo",
+            "listar_arqueos",
+            "ajustes_arqueos",
             "obtener_arqueo",
             "detalle_arqueo",
             "ajustes_arqueo",
             "aprobar_arqueo",
         ):
             monkeypatch.setattr(repo, nombre, getattr(self, nombre))
+        for nombre in (
+            "obtener",
+            "repeticion",
+            "listar",
+            "detalles",
+            "movimientos",
+            "crear",
+            "resolver",
+            "vincular",
+        ):
+            monkeypatch.setattr(
+                solicitudes_repo, nombre, getattr(self, "solicitud_" + nombre)
+            )
 
     @contextmanager
     def transaccion(self):
@@ -103,7 +127,11 @@ class BovedaContexto:
 
     def como(self, *roles: str, actor: int | None = 7, agencia: str | None = "001"):
         self.usuario = replace(
-            self.usuario, roles=roles, id_interno=actor, id_agencia=agencia
+            self.usuario,
+            roles=roles,
+            permisos=permisos_de(roles),
+            id_interno=actor,
+            id_agencia=agencia,
         )
 
     def contabilizar(self, conn, **datos):
@@ -250,6 +278,26 @@ class BovedaContexto:
     def obtener_arqueo(self, conn, i, bloquear=False):
         return deepcopy(self.state["arqueos"].get(i))
 
+    def listar_arqueos(
+        self, conn, id_boveda, desde, hasta, estado, tipo, page, page_size
+    ):
+        filas = [
+            deepcopy(a)
+            for a in self.state["arqueos"].values()
+            if a["id_boveda"] == id_boveda
+            and (desde is None or a["fecha_hora_arqueo"].date() >= desde)
+            and (hasta is None or a["fecha_hora_arqueo"].date() <= hasta)
+            and (estado is None or a["estado"] == estado)
+            and (tipo is None or a["tipo_arqueo"] == tipo)
+        ]
+        filas.sort(
+            key=lambda a: (a["fecha_hora_arqueo"], a["id_arqueo_boveda"]), reverse=True
+        )
+        return filas[(page - 1) * page_size : page * page_size], len(filas)
+
+    def ajustes_arqueos(self, conn, ids):
+        return {i: self.ajustes_arqueo(conn, i) for i in ids}
+
     def detalle_arqueo(self, conn, i):
         return self.state["detalles"][i]
 
@@ -267,7 +315,6 @@ class BovedaContexto:
     def movimiento(self, tipo="ProvisionExterna", **extra):
         return {
             "tipoMovimiento": tipo,
-            "autorizadoPor": 9,
             "desglose": [{"idDenominacion": 1, "cantidad": 2}],
             **extra,
         }
@@ -284,3 +331,91 @@ class BovedaContexto:
         return self.client.post(
             f"{BASE}/bovedas/1/arqueos", json=self.arqueo(cantidad, **extra)
         )
+
+    def ejecutar(self, ruta, json, headers=None):
+        """Ejercita creación y aprobación por dos sesiones diferentes."""
+        creada = self.client.post(
+            ruta.replace("/movimientos", "/solicitudes-movimiento"),
+            json=json,
+            headers=headers,
+        )
+        if creada.status_code != 201:
+            return creada
+        anterior = self.usuario
+        try:
+            self.usuario = replace(anterior, id_interno=9)
+            return self.client.post(
+                f"{BASE}/solicitudes-movimiento/{creada.json()['idSolicitudMovimiento']}/aprobacion"
+            )
+        finally:
+            self.usuario = anterior
+
+    def solicitud_obtener(self, conn, i, bloquear=False):
+        return deepcopy(self.state["solicitudes"].get(i))
+
+    def solicitud_repeticion(self, conn, actor, clave):
+        return next(
+            (
+                deepcopy(s)
+                for s in self.state["solicitudes"].values()
+                if s["id_usuario_solicitante"] == actor and s["clave"] == clave
+            ),
+            None,
+        )
+
+    def solicitud_listar(self, conn, agencia, estado, page, page_size):
+        filas = [
+            deepcopy(s)
+            for s in self.state["solicitudes"].values()
+            if (agencia is None or s["id_agencia"] == agencia)
+            and (estado is None or s["estado"] == estado)
+        ]
+        return filas[(page - 1) * page_size : page * page_size], len(filas)
+
+    def solicitud_detalles(self, conn, ids):
+        return {i: deepcopy(self.state["detalle_solicitudes"][i]) for i in ids}
+
+    def solicitud_movimientos(self, conn, ids):
+        return {
+            i: [
+                m["id_movimiento"]
+                for m in self.state["movimientos"].values()
+                if m.get("solicitud") == i
+            ]
+            for i in ids
+        }
+
+    def solicitud_crear(self, conn, datos, detalle):
+        i = len(self.state["solicitudes"]) + 1
+        self.state["solicitudes"][i] = {
+            "id_solicitud_movimiento": i,
+            "id_boveda": datos["boveda"],
+            "id_boveda_contraparte": datos["contraparte"],
+            "id_agencia": datos["agencia"],
+            "tipo_movimiento": datos["tipo"],
+            "monto": datos["monto"],
+            "id_usuario_solicitante": datos["actor"],
+            "fecha_solicitud": datos["ahora"],
+            "estado": "PENDIENTE",
+            "observaciones": datos["observaciones"],
+            "clave": datos["clave"],
+            "huella_peticion": datos["huella"],
+            "id_usuario_resolucion": None,
+            "fecha_resolucion": None,
+            "motivo_resolucion": None,
+        }
+        self.state["detalle_solicitudes"][i] = deepcopy(detalle)
+        return i
+
+    def solicitud_resolver(self, conn, i, estado, actor, ahora, motivo):
+        self.state["solicitudes"][i].update(
+            estado=estado,
+            id_usuario_resolucion=actor,
+            fecha_resolucion=ahora,
+            motivo_resolucion=motivo,
+        )
+
+    def solicitud_vincular(self, conn, i, ids):
+        for m in ids:
+            self.state["movimientos"][m]["solicitud"] = i
+            self.state["movimientos"][m]["id_solicitud_movimiento"] = i

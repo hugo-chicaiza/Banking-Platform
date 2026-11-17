@@ -10,9 +10,12 @@ from typing import Any, cast
 import pytest
 from fastapi import HTTPException
 from sqlalchemy import text
+from sqlalchemy.exc import DBAPIError
 
 from app.modules.boveda import service
-from app.modules.boveda.schemas import ArqueoBovedaRequest, MovimientoBovedaRequest
+from app.modules.boveda.schemas import ArqueoBovedaRequest
+from app.modules.boveda.solicitudes import service as solicitudes
+from app.modules.boveda.solicitudes.schemas import SolicitudMovimientoRequest
 from tests.integration.boveda_sql_lab import LaboratorioBoveda
 from tests.sesion import USUARIO
 
@@ -62,13 +65,73 @@ def motor(monkeypatch):
 
 
 def movimiento(tipo="ProvisionExterna", cantidad=2, **extra):
-    return MovimientoBovedaRequest.model_validate(
+    return SolicitudMovimientoRequest.model_validate(
         {
             "tipoMovimiento": tipo,
-            "autorizadoPor": 9,
             "desglose": [{"idDenominacion": 1, "cantidad": cantidad}],
             **extra,
         }
+    )
+
+
+def test_sql_historial_arqueos_filtros_paginacion_y_legado(motor):
+    from datetime import date
+
+    datos = ArqueoBovedaRequest.model_validate(
+        {
+            "tipoArqueo": "Programado",
+            "idUsuarioTestigo": 9,
+            "desglose": [{"idDenominacion": 1, "cantidad": 10}],
+        }
+    )
+    with motor.connect() as conn:
+        for _ in range(3):
+            service.registrar_arqueo(conn, OPERADOR, 7, 1, datos, "local")
+        service.aprobar_arqueo(conn, APROBADOR, 9, 1, "local")
+        pagina = service.listar_arqueos(
+            conn,
+            OPERADOR,
+            1,
+            date(2026, 11, 16),
+            date(2026, 11, 16),
+            None,
+            "Programado",
+            1,
+            2,
+        )
+        assert pagina.total == 3
+        assert [a.id_arqueo_boveda for a in pagina.items] == [3, 2]
+        fuera = service.listar_arqueos(conn, OPERADOR, 1, None, None, None, None, 4, 2)
+        assert fuera.total == 3 and fuera.items == []
+        aprobadas = service.listar_arqueos(
+            conn, OPERADOR, 1, None, None, "APROBADO", None, 1, 20
+        )
+        assert aprobadas.total == 1 and aprobadas.items[0].id_usuario_aprobador == 9
+        assert (
+            service.listar_arqueos(
+                conn, OPERADOR, 1, date(2026, 11, 17), None, None, None, 1, 20
+            ).total
+            == 0
+        )
+        with conn.begin():
+            conn.execute(
+                text("""
+                UPDATE Boveda.ArqueoBoveda SET SaldoTeorico=NULL, SaldoFisico=NULL,
+                    IdMovimientoCorte=NULL WHERE IdArqueoBoveda=3
+            """)
+            )
+        historicos = service.listar_arqueos(
+            conn, OPERADOR, 1, None, None, None, None, 1, 20
+        )
+        assert historicos.items[0].saldo_teorico is None
+        assert historicos.items[0].diferencia is None
+
+
+def ejecutar_movimiento(conn, usuario, actor, id_boveda, datos, ip, clave=None):
+    solicitud = solicitudes.crear(conn, usuario, actor, id_boveda, datos, ip, clave)
+    aprobador = replace(usuario, id_interno=9)
+    return solicitudes.aprobar(
+        conn, aprobador, 9, solicitud.id_solicitud_movimiento, ip
     )
 
 
@@ -76,17 +139,15 @@ def test_sql_provision_traslado_paginacion_y_reintento(motor):
     with motor.connect() as conn:
         listado = service.listar_bovedas(conn, OPERADOR, None, None)
         assert len(listado) == 1 and listado[0].total_desglose == 200
-        primera = service.registrar_movimiento(
+        primera = ejecutar_movimiento(
             conn, OPERADOR, 7, 1, movimiento(), "local", "prov-1"
         )
         assert primera[0].saldo_posterior == 240
         assert (
-            service.registrar_movimiento(
-                conn, OPERADOR, 7, 1, movimiento(), "local", "prov-1"
-            )
+            ejecutar_movimiento(conn, OPERADOR, 7, 1, movimiento(), "local", "prov-1")
             == primera
         )
-        par = service.registrar_movimiento(
+        par = ejecutar_movimiento(
             conn, OPERADOR, 7, 1, movimiento("Traslado", idBovedaContraparte=2), "local"
         )
         assert len(par) == 2
@@ -115,7 +176,7 @@ def test_sql_fallo_contable_revierte_ambas_bovedas(motor):
         )
     with motor.connect() as conn:
         with pytest.raises(HTTPException) as error:
-            service.registrar_movimiento(
+            ejecutar_movimiento(
                 conn,
                 OPERADOR,
                 7,
@@ -178,7 +239,7 @@ def test_sql_clave_concurrente_no_duplica_movimientos(motor):
     def provisionar():
         with motor.connect() as conn:
             barrera.wait(timeout=10)
-            return service.registrar_movimiento(
+            return ejecutar_movimiento(
                 conn, OPERADOR, 7, 1, movimiento(), "local", "misma-clave"
             )[0].id_movimiento
 
@@ -205,7 +266,7 @@ def test_sql_movimiento_posterior_impide_aprobar_conteo(motor):
     )
     with motor.connect() as conn:
         arqueo = service.registrar_arqueo(conn, OPERADOR, 7, 1, datos, "local")
-        service.registrar_movimiento(conn, OPERADOR, 7, 1, movimiento(), "local")
+        ejecutar_movimiento(conn, OPERADOR, 7, 1, movimiento(), "local")
         with pytest.raises(HTTPException) as error:
             service.aprobar_arqueo(conn, APROBADOR, 9, arqueo.id_arqueo_boveda, "local")
         detalle = cast(dict[str, Any], error.value.detail)
@@ -224,7 +285,7 @@ def test_sql_dos_egresos_concurrentes_no_sobregiran(motor):
         with motor.connect() as conn:
             barrera.wait(timeout=10)
             try:
-                service.registrar_movimiento(
+                ejecutar_movimiento(
                     conn,
                     OPERADOR,
                     7,
@@ -248,4 +309,118 @@ def test_sql_dos_egresos_concurrentes_no_sobregiran(motor):
                 text("SELECT COUNT(*) FROM Boveda.MovimientoBoveda")
             ).scalar_one()
             == 1
+        )
+
+
+def test_sql_solicitud_pendiente_y_rechazo_no_mueven_efectivo(motor):
+    with motor.connect() as conn:
+        solicitud = solicitudes.crear(conn, OPERADOR, 7, 1, movimiento(), "local", None)
+        assert solicitud.estado == "PENDIENTE"
+        assert service.obtener_boveda(conn, OPERADOR, 1).saldo_actual == 200
+        resuelta = solicitudes.resolver_sin_ejecucion(
+            conn,
+            APROBADOR,
+            9,
+            solicitud.id_solicitud_movimiento,
+            "RECHAZADA",
+            "No procede",
+            "local",
+        )
+        assert resuelta.estado == "RECHAZADA"
+        assert resuelta.id_usuario_resolucion == 9
+        assert (
+            conn.execute(
+                text("SELECT COUNT(*) FROM Boveda.MovimientoBoveda")
+            ).scalar_one()
+            == 0
+        )
+
+
+def test_sql_aprobaciones_simultaneas_de_distintos_usuarios(motor):
+    with motor.connect() as conn:
+        solicitud = solicitudes.crear(conn, OPERADOR, 7, 1, movimiento(), "local", None)
+    barrera = Barrier(2)
+
+    def aprobar(actor):
+        with motor.connect() as conn:
+            barrera.wait(timeout=10)
+            try:
+                resultado = solicitudes.aprobar(
+                    conn,
+                    replace(APROBADOR, id_interno=actor),
+                    actor,
+                    solicitud.id_solicitud_movimiento,
+                    "local",
+                )
+                assert (
+                    resultado[0].id_solicitud_movimiento
+                    == solicitud.id_solicitud_movimiento
+                )
+                return "ok"
+            except HTTPException as error:
+                return cast(dict[str, Any], error.detail)["code"]
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        resultados = list(pool.map(aprobar, [9, 10]))
+    assert sorted(resultados) == ["SOLICITUD_MOVIMIENTO_RESUELTA", "ok"]
+    with motor.connect() as conn:
+        assert service.obtener_boveda(conn, OPERADOR, 1).saldo_actual == 240
+        assert (
+            conn.execute(
+                text("SELECT COUNT(*) FROM Boveda.MovimientoBoveda")
+            ).scalar_one()
+            == 1
+        )
+
+
+@pytest.mark.parametrize(
+    "tabla,asignacion",
+    [
+        ("SolicitudMovimientoBoveda", "Monto=999"),
+        ("SolicitudMovimientoBovedaDenominacion", "Cantidad=99"),
+    ],
+)
+def test_sql_solicitudes_no_se_editan(motor, tabla, asignacion):
+    with motor.connect() as conn:
+        solicitud = solicitudes.crear(conn, OPERADOR, 7, 1, movimiento(), "local", None)
+    with pytest.raises(DBAPIError), motor.begin() as conn:
+        conn.execute(
+            text(
+                f"UPDATE Boveda.{tabla} SET {asignacion} WHERE IdSolicitudMovimiento=:id"
+            ),
+            {"id": solicitud.id_solicitud_movimiento},
+        )
+    with motor.connect() as conn:
+        assert (
+            solicitudes.obtener(conn, OPERADOR, solicitud.id_solicitud_movimiento).monto
+            == 40
+        )
+
+
+def test_sql_fallo_al_vincular_revierte_toda_aprobacion(motor, monkeypatch):
+    from app.modules.boveda.solicitudes import repository as repo
+
+    with motor.connect() as conn:
+        solicitud = solicitudes.crear(conn, OPERADOR, 7, 1, movimiento(), "local", None)
+
+        def fallar(*args):
+            raise RuntimeError("fallo de persistencia simulado")
+
+        monkeypatch.setattr(repo, "vincular", fallar)
+        with pytest.raises(RuntimeError):
+            solicitudes.aprobar(
+                conn, APROBADOR, 9, solicitud.id_solicitud_movimiento, "local"
+            )
+        assert (
+            solicitudes.obtener(
+                conn, OPERADOR, solicitud.id_solicitud_movimiento
+            ).estado
+            == "PENDIENTE"
+        )
+        assert service.obtener_boveda(conn, OPERADOR, 1).saldo_actual == 200
+        assert (
+            conn.execute(
+                text("SELECT COUNT(*) FROM Contabilidad.AsientoContable")
+            ).scalar_one()
+            == 0
         )

@@ -13,6 +13,8 @@ INT64_MAX = 9_223_372_036_854_775_807
 IdInt = Annotated[int, Field(strict=True, gt=0, le=INT32_MAX)]
 Cantidad = Annotated[int, Field(strict=True, ge=0, le=INT32_MAX)]
 TipoBoveda = Literal["General", "Mayor", "Menor"]
+TipoArqueo = Literal["Sorpresivo", "Programado"]
+EstadoArqueo = Literal["REGISTRADO", "APROBADO", "ANULADO"]
 TipoOperacion = Literal[
     "Traslado", "ProvisionExterna", "EnvioExcedente", "AjusteFaltante", "AjusteSobrante"
 ]
@@ -107,6 +109,7 @@ class MovimientoBoveda(CamelModel):
     fecha_movimiento: FechaEc
     observaciones: str | None = None
     id_asiento_contable: int | None = None
+    id_solicitud_movimiento: int | None = None
     desglose: list[Desglose]
 
 
@@ -118,7 +121,7 @@ class PageMovimientoBoveda(CamelModel):
 
 
 class ArqueoBovedaRequest(EntradaDesglose):
-    tipo_arqueo: Literal["Sorpresivo", "Programado"]
+    tipo_arqueo: TipoArqueo
     id_usuario_testigo: IdInt
     observaciones: Annotated[str, Field(max_length=500)] | None = None
 
@@ -132,10 +135,10 @@ class ArqueoBoveda(CamelModel):
     id_arqueo_boveda: int
     id_boveda: int
     fecha_hora_arqueo: FechaEc
-    tipo_arqueo: Literal["Sorpresivo", "Programado"]
+    tipo_arqueo: TipoArqueo
     id_usuario_arqueador: int
     id_usuario_testigo: int
-    estado: Literal["REGISTRADO", "APROBADO", "ANULADO"]
+    estado: EstadoArqueo
     id_movimiento_ajuste: int | None
     ids_movimientos_ajuste: list[int] = Field(default_factory=list)
     diferencia_por_denominacion: list[DiferenciaDenominacion]
@@ -145,3 +148,30 @@ class ArqueoBoveda(CamelModel):
     diferencia: Money
     id_usuario_aprobador: int | None = None
     fecha_hora_aprobacion: FechaEc | None = None
+
+
+class ResumenArqueoBoveda(CamelModel):
+    """Cabecera histórica: los arqueos antiguos pueden carecer de referencia."""
+
+    id_arqueo_boveda: int
+    id_boveda: int
+    fecha_hora_arqueo: FechaEc
+    tipo_arqueo: TipoArqueo
+    id_usuario_arqueador: int
+    id_usuario_testigo: int
+    estado: EstadoArqueo
+    observaciones: str | None
+    saldo_teorico: Money | None
+    saldo_fisico: Money | None
+    diferencia: Money | None
+    id_movimiento_ajuste: int | None
+    ids_movimientos_ajuste: list[int]
+    id_usuario_aprobador: int | None
+    fecha_hora_aprobacion: FechaEc | None
+
+
+class PageArqueoBoveda(CamelModel):
+    items: list[ResumenArqueoBoveda]
+    page: int
+    page_size: int
+    total: int

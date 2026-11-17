@@ -13,6 +13,8 @@ import re
 import secrets
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
+from datetime import UTC, datetime
+from typing import Any
 from urllib.parse import urlsplit
 
 import httpx
@@ -36,6 +38,8 @@ from app.core.security.auth import (
     codigo_agencia,
     normalizar_roles,
     renovar_sesion,
+    revocar_sesion_local,
+    sid_de_cookie,
     slug_rol,
     validar_sesion,
 )
@@ -138,13 +142,65 @@ def _vincular(
         _auditar("VINCULAR", "Exitoso", f"AUT-01 Vínculo workos_user={id_workos}", ip)
 
 
-def _no_habilitado(sellada: str, *, validada: SesionValida | None = None) -> str | None:
+def _descartar(id_sesion: str) -> None:
+    """Revoca en WorkOS la sesión recién creada que no llega a ser cookie."""
+    try:
+        get_workos().user_management.revoke_session(session_id=id_sesion)
+    except Exception as exc:  # noqa: BLE001 - la cookie no se crea igual
+        logger.warning("auth: no se pudo revocar la sesión tipo=%s", type(exc).__name__)
+
+
+def _abierta(sesion: Any) -> bool:
+    """Sesión de WorkOS activa y no vencida. Si expires_at no se entiende, cuenta como
+    abierta (falla cerrado).
+    """
+    if sesion.status != "active":
+        return False
+    try:
+        vence = datetime.fromisoformat(sesion.expires_at)
+    except (AttributeError, TypeError, ValueError):
+        return True
+    return vence > datetime.now(UTC)
+
+
+def _sesion_unica(usuario: Usuario, sid_navegador: str | None) -> str | None:
+    """Una sola sesión abierta por usuario: si ya tiene otra, el login se rechaza
+    (SESION_ABIERTA) y la abierta sigue; así un tercero con la contraseña no expulsa al
+    dueño. Excepción: la sesión anterior de este mismo navegador (su cookie) se cierra
+    y se reemplaza. Si WorkOS no responde, el login falla.
+    """
+    try:
+        with _workos("list_sessions"):
+            gestion = get_workos().user_management
+            abiertas = [
+                s.id
+                for s in gestion.list_sessions(user_id=usuario.id_usuario)
+                if s.id != usuario.id_sesion and _abierta(s)
+            ]
+            if any(sid != sid_navegador for sid in abiertas):
+                logger.warning(
+                    "auth: login rechazado por sesión abierta usuario=%s",
+                    usuario.id_usuario,
+                )
+                return "SESION_ABIERTA"
+            for sid in abiertas:
+                gestion.revoke_session(session_id=sid)
+                revocar_sesion_local(sid)
+    except HTTPException:
+        return "AUTENTICACION_NO_DISPONIBLE"
+    return None
+
+
+def _no_habilitado(
+    sellada: str, sid_navegador: str | None, *, validada: SesionValida | None = None
+) -> str | None:
     """Código de error si la sesión recién creada no puede entrar; None si puede.
 
     Solo entra un usuario interno vinculado y Activo (Bloqueado o Inactivo no), con
     sesión de EnquoCoop: WorkOS no tiene bloqueo de usuario y con la membresía inactiva
-    igual entrega una sesión, sin organización. Si no puede entrar, la sesión se revoca
-    en WorkOS para que no quede viva.
+    igual entrega una sesión, sin organización. Tampoco si ya tiene otra sesión
+    abierta (`_sesion_unica`). Si no puede entrar, la sesión nueva se revoca en WorkOS
+    para que no quede viva.
     """
     try:
         sesion = validada or validar_sesion(sellada)
@@ -158,14 +214,14 @@ def _no_habilitado(sellada: str, *, validada: SesionValida | None = None) -> str
     usuario = sesion.usuario
     organizacion = get_settings().workos_organization_id
     if (
-        not organizacion or usuario.id_organizacion == organizacion
-    ) and usuario.interno() is not None:
-        return None
-    try:
-        get_workos().user_management.revoke_session(session_id=usuario.id_sesion)
-    except Exception as exc:  # noqa: BLE001 - la cookie no se crea igual
-        logger.warning("auth: no se pudo revocar la sesión tipo=%s", type(exc).__name__)
-    return "USUARIO_NO_HABILITADO"
+        organizacion and usuario.id_organizacion != organizacion
+    ) or usuario.interno() is None:
+        _descartar(usuario.id_sesion)
+        return "USUARIO_NO_HABILITADO"
+    codigo = _sesion_unica(usuario, sid_navegador)
+    if codigo is not None:
+        _descartar(usuario.id_sesion)
+    return codigo
 
 
 def iniciar_login(return_to: str | None, origen: str) -> tuple[str, str]:
@@ -213,9 +269,10 @@ def completar_login(
     ip: str | None,
     user_agent: str | None,
     origen: str,
+    cookie_sesion: str | None = None,
 ) -> tuple[str, str | None]:
     """Canjea el code. Devuelve a dónde redirigir (en `origen`, el del FE) y la sesión
-    sellada (None si falló).
+    sellada (None si falló). `cookie_sesion`: la que ya tenía este navegador, si tenía.
     """
     guardado = _leer_cookie_state(cookie_state)
 
@@ -270,7 +327,9 @@ def completar_login(
     _vincular(
         resultado.user.id, resultado.user.email, resultado.user.email_verified, ip
     )
-    codigo = _no_habilitado(resultado.sealed_session, validada=validada)
+    codigo = _no_habilitado(
+        resultado.sealed_session, sid_de_cookie(cookie_sesion), validada=validada
+    )
     if codigo is not None:
         logger.info("auth: login rechazado usuario=%s", resultado.user.id)
         return fallo(codigo, "no_habilitado")
@@ -596,12 +655,16 @@ def _slugs(membresia: OrganizationMembership) -> set[str]:
 
 
 def _revocar_sesiones(id_workos: str) -> None:
-    """Un bloqueo no espera a que venza la sesión de 8 h."""
+    """Cierra las sesiones activas del usuario en WorkOS y las rechaza desde ya
+    (caché de revocadas): un bloqueo o un cambio de rol no espera a que venza el
+    access token.
+    """
     with _workos("revoke_session"):
         gestion = get_workos().user_management
         for sesion in gestion.list_sessions(user_id=id_workos):
             if sesion.status == "active":
                 gestion.revoke_session(session_id=sesion.id)
+                revocar_sesion_local(sesion.id)
 
 
 def _validar_ultimo_admin(conn: Connection, fila: repository.Fila) -> None:
@@ -996,8 +1059,8 @@ def cambiar_rol(
     usuario: Usuario,
     ip: str,
 ) -> UsuarioDetalle:
-    """Reemplaza el rol (uno). La sesión del usuario toma el rol nuevo cuando su
-    access token se renueva (AUT-02, minutos).
+    """Reemplaza el rol (uno) y cierra las sesiones del usuario: el rol nuevo aplica
+    al instante (401 SESION_REVOCADA) y entra de nuevo con él.
     """
     with auditar(
         "CAMBIAR_ROL",
@@ -1013,17 +1076,6 @@ def cambiar_rol(
                 fila = _cargar(conn, id_usuario, bloquear=True)
                 actual = _rol(fila)
                 if actual != datos.rol:
-                    if actual == "CAJERO":
-                        from app.modules.caja import repository as caja_repo
-
-                        if caja_repo.jornada_abierta_de_usuario(
-                            conn_coop, id_usuario, bloquear=False
-                        ):
-                            raise problema(
-                                409,
-                                "CAJERO_CON_JORNADA_ABIERTA",
-                                "Cierre la jornada antes de cambiar el rol.",
-                            )
                     from app.modules.caja import repository as caja_repo
 
                     if caja_repo.jornada_abierta_de_usuario(
@@ -1037,26 +1089,22 @@ def cambiar_rol(
                     if actual == "ADMIN":
                         _validar_ultimo_admin(conn, fila)
                     key = fila["KeyUsuario"] or _resolver_sin_vinculo(conn, fila)
-                    from app.modules.caja import repository as caja_repo
-
-                    if caja_repo.jornada_abierta_de_usuario(
-                        conn_coop, id_usuario, bloquear=False
-                    ):
-                        raise problema(
-                            409,
-                            "CAJERO_CON_JORNADA_ABIERTA",
-                            "Cierre la jornada antes de cambiar el rol.",
-                        )
                     ids = agencias_repo.asignaciones(conn, id_usuario)
                     multiagencia.validar_matriz(
                         (datos.rol,), ids, codigo_agencia(fila["AgenciaID"])
                     )
                     repository.actualizar_rol(conn, id_usuario, datos.rol)
                     _aplicar_rol_en_workos(fila, key, datos.rol, usuario, deshacer)
+                    if key:
+                        _revocar_sesiones(key)
                     # Deja de ser cajero: se cierra su asignación vigente (otra base)
                     if actual == "CAJERO":
-                        with conn_coop.begin():
+                        try:
                             repository.cerrar_asignacion(conn_coop, id_usuario)
+                            conn_coop.commit()
+                        except Exception:
+                            conn_coop.rollback()
+                            raise
         except Exception:
             _deshacer(deshacer)
             raise
