@@ -72,7 +72,8 @@ def test_productos_sin_filtro_y_por_cada_tipo(conn):
     todos = repository.listar_productos(conn, None)
 
     total = _contar(
-        conn, "SELECT COUNT(*) FROM ProductosFinancieros.Producto WHERE Estado = 'A'"
+        conn,
+        "SELECT COUNT(*) FROM ProductosFinancieros.Producto WHERE Estado = 'A' AND EstadoProducto = 'Activo'",
     )
     assert len(todos) == total
     por_tipo = 0
@@ -97,6 +98,7 @@ def test_productos_incluyen_sus_subproductos_activos(conn):
                 SELECT s.IdSubProducto FROM ProductosFinancieros.SubProducto AS s
                 JOIN ProductosFinancieros.Producto AS p ON p.IdProducto = s.IdProducto
                 WHERE s.Estado = 'A' AND p.Estado = 'A' AND p.TipoProducto = 'Tarjeta'
+                  AND s.EstadoSubProducto = 'Activo' AND p.EstadoProducto = 'Activo'
                 """
             )
         )
