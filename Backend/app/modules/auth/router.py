@@ -33,7 +33,17 @@ from app.core.security.auth import (
     verificar_origen,
 )
 from app.core.security.origen import resolver_origen_front
+from app.modules.auth import agencias as multiagencia
+from app.modules.auth import agencias_repository as agencias_repo
 from app.modules.auth import service
+from app.modules.auth.agencias_schemas import (
+    AsignacionesEntrada,
+    AsignacionesUsuario,
+    CambioAgencia,
+    ContextoAgencias,
+    HistorialAgencias,
+    SeleccionAgencia,
+)
 from app.modules.auth.schemas import (
     EstadoUsuario,
     LogoutResponse,
@@ -307,4 +317,94 @@ def cambiar_rol(
     """Reemplaza el rol del usuario (uno). Regla: no se quita el último ADMIN."""
     return service.cambiar_rol(
         conn, conn_coop, id_usuario, datos, admin, ip_cliente(request.scope)
+    )
+
+
+# #450: rutas de asignaciones reutilizan los routers BFF existentes.
+
+
+def _editor_asignaciones(admin: Admin, _: EditorUsuarios) -> Usuario:
+    return admin
+
+
+EditorAsignaciones = Annotated[Usuario, Depends(_editor_asignaciones)]
+
+
+@router_usuarios.get(
+    "/{idUsuario}/agencias",
+    response_model=AsignacionesUsuario,
+    operation_id="AUTAgenciasUsuario",
+)
+def agencias_usuario(
+    _admin: Admin,
+    id_usuario: IdUsuario,
+    conn: ConexionSeguridad,
+    coop: ConexionCooperativa,
+) -> AsignacionesUsuario:
+    return multiagencia.consultar(conn, coop, id_usuario)
+
+
+@router_usuarios.put(
+    "/{idUsuario}/agencias",
+    response_model=AsignacionesUsuario,
+    operation_id="AUTGuardarAgencias",
+)
+def guardar_agencias(
+    request: Request,
+    actor: EditorAsignaciones,
+    id_usuario: IdUsuario,
+    datos: AsignacionesEntrada,
+    conn: ConexionSeguridad,
+    coop: ConexionCooperativa,
+) -> AsignacionesUsuario:
+    return multiagencia.guardar(
+        conn, coop, id_usuario, datos, actor, ip_cliente(request.scope)
+    )
+
+
+@router_usuarios.get(
+    "/{idUsuario}/agencias/historial",
+    response_model=HistorialAgencias,
+    operation_id="AUTHistorialAgencias",
+)
+def historial_agencias(
+    _admin: Admin,
+    id_usuario: IdUsuario,
+    conn: ConexionSeguridad,
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(alias="pageSize", ge=1, le=100)] = 20,
+) -> HistorialAgencias:
+    service._cargar(conn, id_usuario)
+    rows, total = agencias_repo.historial(conn, id_usuario, page, page_size)
+    return HistorialAgencias(
+        items=[CambioAgencia.model_validate(r) for r in rows],
+        page=page,
+        page_size=page_size,
+        total=total,
+    )
+
+
+@router.get(
+    "/agencias", response_model=ContextoAgencias, operation_id="AUTAgenciasSesion"
+)
+def agencias_sesion(
+    actor: Annotated[Usuario, Depends(require_auth)],
+) -> ContextoAgencias:
+    return multiagencia.contexto_usuario(actor)
+
+
+@router.post(
+    "/agencia-activa",
+    response_model=ContextoAgencias,
+    operation_id="AUTSeleccionarAgencia",
+)
+def seleccionar_agencia(
+    request: Request,
+    actor: Annotated[Usuario, Depends(require_auth)],
+    datos: SeleccionAgencia,
+    conn: ConexionSeguridad,
+    coop: ConexionCooperativa,
+) -> ContextoAgencias:
+    return multiagencia.seleccionar(
+        conn, coop, actor, datos.id_agencia, ip_cliente(request.scope)
     )

@@ -115,6 +115,18 @@ class Usuario:
         default_factory=dict, init=False, repr=False, compare=False
     )
 
+    cargar_agencias: Callable[[], tuple[str, ...]] | None = field(
+        default=None, repr=False, compare=False
+    )
+    id_agencias: tuple[str, ...] | None = None
+
+    def agencias_permitidas(self) -> tuple[str, ...]:
+        if self.cargar_agencias is not None:
+            return self.cargar_agencias()
+        if self.id_agencias is not None:
+            return self.id_agencias
+        return (self.id_agencia,) if self.id_agencia else ()
+
     def roles_texto(self) -> str | None:
         """Roles que dio WorkOS, para Organizacion.Usuarios y Auditoria (RolesWorkOS)."""
         return ",".join(self.roles) or None
@@ -338,6 +350,18 @@ def _agencia_db(id_workos: str) -> str | None:
     )
 
 
+def _agencia_operativa_db(llave: str, sid: str, roles: tuple[str, ...]) -> str | None:
+    from app.modules.auth.agencias import resolver_sesion
+
+    return resolver_sesion(llave, sid, roles)
+
+
+def _agencias_permitidas_db(llave: str, roles: tuple[str, ...]) -> tuple[str, ...]:
+    from app.modules.auth.agencias import alcance_sesion
+
+    return alcance_sesion(llave, roles)
+
+
 def _roles_de_la_sesion(sesion: Exito) -> tuple[str, ...]:
     """Roles solo si la sesión es de la organización de la cooperativa (EnquoCoop).
 
@@ -346,11 +370,7 @@ def _roles_de_la_sesion(sesion: Exito) -> tuple[str, ...]:
     """
     organizacion = get_settings().workos_organization_id
     if organizacion and sesion.organization_id != organizacion:
-        logger.warning(
-            "auth: sesión de otra organización usuario=%s organizacion=%s",
-            sesion.user.id,
-            sesion.organization_id,
-        )
+        logger.warning("auth: sesion de organizacion no autorizada")
         return ()
     return normalizar_roles(sesion.roles, sesion.role)
 
@@ -358,6 +378,14 @@ def _roles_de_la_sesion(sesion: Exito) -> tuple[str, ...]:
 def _usuario(sesion: Exito) -> Usuario:
     datos = sesion.user
     nombre = " ".join(p for p in (datos.first_name, datos.last_name) if p)
+    organizacion = get_settings().workos_organization_id
+    if organizacion and sesion.organization_id != organizacion:
+        logger.warning("auth: sesion de organizacion no autorizada")
+        raise problema(
+            403,
+            "ORGANIZACION_NO_AUTORIZADA",
+            "La sesion no pertenece a la organizacion autorizada.",
+        )
     roles = _roles_de_la_sesion(sesion)
     return Usuario(
         id_usuario=datos.id,
@@ -367,7 +395,10 @@ def _usuario(sesion: Exito) -> Usuario:
         email=datos.email,
         roles=roles,
         permisos=tuple(sesion.permissions or ()),
-        cargar_agencia=lambda: _agencia_db(datos.id),
+        cargar_agencia=lambda: _agencia_operativa_db(
+            datos.id, sesion.session_id, roles
+        ),
+        cargar_agencias=lambda: _agencias_permitidas_db(datos.id, roles),
         cargar_interno=lambda: _id_interno_db(datos.id, ",".join(roles) or None),
     )
 
@@ -434,6 +465,19 @@ def validar_sesion(sellada: str) -> SesionValida | None:
 # --- Dependencias ----------------------------------------------------------------
 
 
+def _contexto_pagina_vigente(usuario: Usuario, valor: str) -> bool:
+    if valor == "global":
+        from app.modules.auth.agencias import contexto_usuario
+
+        return contexto_usuario(usuario).alcance_global
+    return (
+        len(valor) == 3
+        and valor.isascii()
+        and valor.isdigit()
+        and valor == usuario.agencia()
+    )
+
+
 def usuario_actual(
     request: Request,
     response: Response,
@@ -448,6 +492,23 @@ def usuario_actual(
         raise no_autenticado(borrar_cookie=True)
     if valida.sellada_nueva:
         guardar_cookie_sesion(response, valida.sellada_nueva)
+    agencia_pagina = request.headers.get("X-Agencia-Contexto")
+    excepciones = {
+        "/api/v1/auth/agencia-activa",
+        "/api/v1/auth/logout",
+        "/api/v1/auth/refresh",
+    }
+    if (
+        request.method not in _METODOS_SEGUROS
+        and agencia_pagina is not None
+        and request.url.path not in excepciones
+    ) and (not _contexto_pagina_vigente(valida.usuario, agencia_pagina)):
+        request.state.usuario = valida.usuario
+        raise problema(
+            409,
+            "CONTEXTO_AGENCIA_DESACTUALIZADO",
+            "La agencia operativa cambio. Recarga la pantalla antes de continuar.",
+        )
     # Para que la auditoría de un 403 posterior sepa quién lo intentó
     request.state.usuario = valida.usuario
     return valida.usuario

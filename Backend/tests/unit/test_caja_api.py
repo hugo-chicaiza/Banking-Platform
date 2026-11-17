@@ -151,7 +151,7 @@ def test_caj01_supervisor_no_ve_otra_agencia(ctx: Contexto) -> None:
 
 
 def test_caj01_admin_puede_ver_todas(ctx: Contexto) -> None:
-    ctx.como("ADMIN", agencia="001")
+    ctx.usuario = usuario("ADMIN", agencia=None)
     ctx.fake("listar_cajas_fisicas", [])
     r = ctx.cliente.get(f"{BASE}/cajas-fisicas")
     assert r.status_code == 200

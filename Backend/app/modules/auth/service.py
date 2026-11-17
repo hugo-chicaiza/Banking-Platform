@@ -47,6 +47,8 @@ from app.integrations.workos_client import (
     get_redirect_uri,
     get_workos,
 )
+from app.modules.auth import agencias as multiagencia
+from app.modules.auth import agencias_repository as agencias_repo
 from app.modules.auth import repository
 from app.modules.auth.schemas import (
     BloqueoVigente,
@@ -136,7 +138,7 @@ def _vincular(
         _auditar("VINCULAR", "Exitoso", f"AUT-01 Vínculo workos_user={id_workos}", ip)
 
 
-def _no_habilitado(sellada: str) -> str | None:
+def _no_habilitado(sellada: str, *, validada: SesionValida | None = None) -> str | None:
     """Código de error si la sesión recién creada no puede entrar; None si puede.
 
     Solo entra un usuario interno vinculado y Activo (Bloqueado o Inactivo no), con
@@ -145,8 +147,10 @@ def _no_habilitado(sellada: str) -> str | None:
     en WorkOS para que no quede viva.
     """
     try:
-        sesion = validar_sesion(sellada)
-    except HTTPException:
+        sesion = validada or validar_sesion(sellada)
+    except HTTPException as exc:
+        if exc.status_code == 403:
+            return "USUARIO_NO_HABILITADO"
         # No se pudieron descargar las llaves de WorkOS
         return "AUTENTICACION_NO_DISPONIBLE"
     if sesion is None:
@@ -254,10 +258,19 @@ def completar_login(
 
     if not resultado.sealed_session:
         return fallo("CREDENCIALES_INVALIDAS", "sin_sesion")
+    # Rechazar otra organizacion antes de vincular o modificar datos locales.
+    try:
+        validada = validar_sesion(resultado.sealed_session)
+    except HTTPException as exc:
+        if exc.status_code == 403:
+            return fallo("USUARIO_NO_HABILITADO", "organizacion")
+        return _url_error("AUTENTICACION_NO_DISPONIBLE", origen), None
+    if validada is None:
+        return fallo("CREDENCIALES_INVALIDAS", "sin_sesion_validada")
     _vincular(
         resultado.user.id, resultado.user.email, resultado.user.email_verified, ip
     )
-    codigo = _no_habilitado(resultado.sealed_session)
+    codigo = _no_habilitado(resultado.sealed_session, validada=validada)
     if codigo is not None:
         logger.info("auth: login rechazado usuario=%s", resultado.user.id)
         return fallo(codigo, "no_habilitado")
@@ -673,7 +686,12 @@ def crear_usuario(
     WorkOS falla → se revierte (503). Falla el commit después de invitar → se revoca
     la invitación.
     """
-    _validar_agencia(conn_coop, datos.id_agencia)
+    asignadas = (
+        datos.id_agencias if datos.id_agencias is not None else [datos.id_agencia]
+    )
+    multiagencia.validar_matriz((datos.rol,), asignadas, datos.id_agencia)
+    for id_agencia in asignadas:
+        _validar_agencia(conn_coop, id_agencia)
     with auditar(
         "CREAR", _TABLA_USUARIOS, usuario, ip, f"AUT-06 rol={datos.rol}"
     ) as registro:
@@ -696,6 +714,9 @@ def crear_usuario(
                     cedula=datos.cedula,
                     agencia_id=int(datos.id_agencia),
                     rol=datos.rol,
+                )
+                multiagencia.inicializar(
+                    conn, id_nuevo, asignadas, datos.id_agencia, usuario
                 )
                 registro.id_registro = str(id_nuevo)
                 invitacion = _invitar(datos.email, datos.rol, usuario)
@@ -793,7 +814,7 @@ def _sincronizar_pendiente(
 def _mover_cajero(
     conn_coop: Connection, id_usuario: int, id_agencia: str, id_admin: int
 ) -> None:
-    with conn_coop.begin():
+    try:
         repository.cerrar_asignacion(conn_coop, id_usuario)
         repository.abrir_asignacion(
             conn_coop,
@@ -802,6 +823,10 @@ def _mover_cajero(
             asignado_por=id_admin,
             motivo="AUT-08 cambio de agencia",
         )
+        conn_coop.commit()
+    except Exception:
+        conn_coop.rollback()
+        raise
 
 
 def actualizar_usuario(
@@ -857,7 +882,24 @@ def actualizar_usuario(
                 ):
                     raise _duplicado()
                 if agencia:
+                    from app.modules.caja import repository as caja_repo
+
+                    if caja_repo.jornada_abierta_de_usuario(
+                        conn_coop, id_usuario, bloquear=False
+                    ):
+                        raise problema(
+                            409,
+                            "CAJERO_CON_JORNADA_ABIERTA",
+                            "Cierre la jornada antes de cambiar la agencia.",
+                        )
                     _validar_agencia(conn_coop, agencia)
+                    multiagencia.sincronizar_traslado(
+                        conn,
+                        id_usuario,
+                        codigo_agencia(fila["AgenciaID"]),
+                        agencia,
+                        usuario,
+                    )
                 key = fila["KeyUsuario"]
                 if not key and (
                     nuevo_estado or nuevo_email or cambios.nombres or cambios.apellidos
@@ -971,9 +1013,44 @@ def cambiar_rol(
                 fila = _cargar(conn, id_usuario, bloquear=True)
                 actual = _rol(fila)
                 if actual != datos.rol:
+                    if actual == "CAJERO":
+                        from app.modules.caja import repository as caja_repo
+
+                        if caja_repo.jornada_abierta_de_usuario(
+                            conn_coop, id_usuario, bloquear=False
+                        ):
+                            raise problema(
+                                409,
+                                "CAJERO_CON_JORNADA_ABIERTA",
+                                "Cierre la jornada antes de cambiar el rol.",
+                            )
+                    from app.modules.caja import repository as caja_repo
+
+                    if caja_repo.jornada_abierta_de_usuario(
+                        conn_coop, id_usuario, bloquear=False
+                    ):
+                        raise problema(
+                            409,
+                            "CAJERO_CON_JORNADA_ABIERTA",
+                            "Cierre la jornada antes de cambiar el rol.",
+                        )
                     if actual == "ADMIN":
                         _validar_ultimo_admin(conn, fila)
                     key = fila["KeyUsuario"] or _resolver_sin_vinculo(conn, fila)
+                    from app.modules.caja import repository as caja_repo
+
+                    if caja_repo.jornada_abierta_de_usuario(
+                        conn_coop, id_usuario, bloquear=False
+                    ):
+                        raise problema(
+                            409,
+                            "CAJERO_CON_JORNADA_ABIERTA",
+                            "Cierre la jornada antes de cambiar el rol.",
+                        )
+                    ids = agencias_repo.asignaciones(conn, id_usuario)
+                    multiagencia.validar_matriz(
+                        (datos.rol,), ids, codigo_agencia(fila["AgenciaID"])
+                    )
                     repository.actualizar_rol(conn, id_usuario, datos.rol)
                     _aplicar_rol_en_workos(fila, key, datos.rol, usuario, deshacer)
                     # Deja de ser cajero: se cierra su asignación vigente (otra base)

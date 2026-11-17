@@ -1,6 +1,7 @@
 """CAJ-05 · GET /api/v1/caja/jornadas/{idJornada} (pruebas sin BD)."""
 
 from collections.abc import Iterator
+from dataclasses import replace
 from datetime import UTC, datetime
 from typing import Any
 
@@ -49,8 +50,9 @@ def test_caj05_fuera_de_alcance_o_inexistente_404(
     assert code(r) == "JORNADA_NO_ENCONTRADA"
 
 
-def test_caj05_contador_ve_cualquier_agencia(ctx: Contexto) -> None:
+def test_caj05_contador_ve_agencia_asignada(ctx: Contexto) -> None:
     ctx.como("CONTADOR", agencia="009")
+    ctx.usuario = replace(ctx.usuario, id_agencias=("001", "009"))
     ctx.fake("obtener_jornada", JORNADA)
     assert ctx.cliente.get(f"{BASE}/jornadas/55").status_code == 200
 

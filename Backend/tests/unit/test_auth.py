@@ -173,6 +173,7 @@ def workos(monkeypatch) -> _UserManagement:
     cliente = SimpleNamespace(user_management=falso)
     monkeypatch.setattr(security, "get_workos", lambda: cliente)
     monkeypatch.setattr(service, "get_workos", lambda: cliente)
+    monkeypatch.setattr(service, "_vincular", lambda *args: None)
 
     def agencia(id_workos: str) -> str | None:
         falso.consultas_base += 1
@@ -184,6 +185,16 @@ def workos(monkeypatch) -> _UserManagement:
         return falso.internos.get(id_workos)
 
     monkeypatch.setattr(security, "_agencia_db", agencia)
+    monkeypatch.setattr(
+        security, "_agencia_operativa_db", lambda llave, sid, roles: agencia(llave)
+    )
+    monkeypatch.setattr(
+        security,
+        "_agencias_permitidas_db",
+        lambda llave, roles: (
+            (falso.agencias[llave],) if llave in falso.agencias else ()
+        ),
+    )
     monkeypatch.setattr(security, "_id_interno_db", interno)
     return falso
 
@@ -305,13 +316,19 @@ def test_callback_sesion_sin_organizacion_no_crea_sesion(client, workos, monkeyp
     # Membresía inactiva: WorkOS entrega la sesión sin organización
     monkeypatch.setenv("WORKOS_ORGANIZATION_ID", "org_enquocoop")
     get_settings.cache_clear()
+
+    def vincular_prohibido(*args):
+        pytest.fail("Una organizacion ajena no debe alcanzar SQL")
+
+    monkeypatch.setattr(service, "_vincular", vincular_prohibido)
     state, cookie = _iniciar(client)
 
     r = _callback(client, cookie, code="code-1", state=state)
 
     assert r.headers["location"] == f"{FRONT}/login?error=USUARIO_NO_HABILITADO"
     assert COOKIE_SESION not in _cookies(r)
-    assert ("revoke_session", {"session_id": "session_1"}) in workos.llamadas
+    # La organizacion se rechaza antes de crear una cookie local, sin mutar WorkOS.
+    assert not any(llamada[0] == "revoke_session" for llamada in workos.llamadas)
 
 
 def test_callback_sin_llaves_de_workos_no_crea_sesion(client, workos):
@@ -444,14 +461,12 @@ def test_slug_rol_es_el_inverso_de_normalizar():
         security.slug_rol("MEMBER")
 
 
-def test_sesion_de_otra_organizacion_no_tiene_roles(client, workos, monkeypatch):
+def test_sesion_de_otra_organizacion_es_rechazada(client, workos, monkeypatch):
     monkeypatch.setenv("WORKOS_ORGANIZATION_ID", "org_enquocoop")
     get_settings.cache_clear()
-
     r = client.get(f"{BASE}/me", headers=_con_sesion())
-
-    assert r.status_code == 200
-    assert r.json()["roles"] == []
+    assert r.status_code == 403
+    assert r.json()["code"] == "ORGANIZACION_NO_AUTORIZADA"
 
 
 def test_me_sin_agencia_vigente(client, workos):
@@ -871,3 +886,16 @@ def test_cookie_password_invalida(monkeypatch):
 
     with pytest.raises(RuntimeError, match="Fernet"):
         workos_client.get_cookie_password()
+
+
+@pytest.mark.parametrize(
+    "agencia,status", [(None, 403), ("001", 403), ("002", 409), ("1", 409)]
+)
+def test_precondicion_agencia_no_concede_permisos(client, workos, agencia, status):
+    headers = _con_sesion(Origin=FRONT)
+    if agencia is not None:
+        headers["X-Agencia-Contexto"] = agencia
+    r = client.post("/api/v1/usuarios", headers=headers, json={})
+    assert r.status_code == status
+    if status == 409:
+        assert r.json()["code"] == "CONTEXTO_AGENCIA_DESACTUALIZADO"
