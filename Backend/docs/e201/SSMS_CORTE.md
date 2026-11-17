@@ -251,3 +251,28 @@ El contraste puntual de 110105, 199025, 210135 y 299005 se hizo también
 contra el PDF CUC codificado de octubre de 2023 (páginas PDF 22, 40 y 44)
 y el plan del 24 de septiembre de 2025 (páginas PDF 1, 13 y 16).
 El PDF de 2025 corresponde a la resolución SB-2025-02319 y usa otra matriz de usuarios. El ensayo conserva como base el CSV del CUC del Segmento 1 de SEPS de 2023.
+
+## Resolución SEPS-IGT-2025-100
+
+El CSV operativo 2025 se encuentra junto a los scripts de E2-01. Al
+contrastar las 71 filas de las dos páginas del Anexo 1 con el CSV y el
+seed AC-01 de 2023, la única alta aplicable a Segmento 1 fue 740640.
+El CSV consolidado contiene 1.183 códigos. Los nombres existentes se
+conservan cuando la diferencia en el anexo es de formato editorial.
+
+Ejecutar 002_cuc_seps_2025_100_segmento_1.sql después de 001 y antes de 004.
+Es el delta sobre el CUC base, no una recarga de la semilla histórica.
+Crea 740640 como subcuenta regulatoria acreedora, no imputable, de 7406.
+El Anexo 2 cambia la descripción y dinámica del grupo 33 y de 7406. El
+script registra resúmenes en Descripcion y el criterio de uso se aplica
+según el anexo. En 7406, el crédito reconoce la deficiencia o el monto del
+diferimiento y el débito reconoce el gasto según el cronograma aprobado.
+En 33 se mantienen los movimientos aplicables al fondo de reserva 3301.
+
+3304, 330405 y 330410 son exclusivos de mutualistas. 3301 y sus subcuentas
+330105, 330110 y 330115 conservan su ubicación. El delta se detiene si
+encuentra una cuenta del prefijo 3304 y no elimina datos. La transitoria
+segunda requiere autorización de la SEPS y sus instrucciones para
+reclasificar provisiones. El delta solo instala el catálogo.
+
+Fuente: https://www.seps.gob.ec/wp-content/uploads/Resolucio%CC%81n-No.-SEPS-IGT-2025-0100.pdf

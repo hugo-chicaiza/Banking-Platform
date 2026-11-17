@@ -42,6 +42,42 @@ def run():
             "SELECT CodigoCuenta,EsImputable,Saldo FROM Contabilidad.CuentasContables ORDER BY CodigoCuenta",
         )
         checks["structure_does_not_change_accounts_flags_or_balances"] = True
+        reserva = rows(
+            c, "SELECT * FROM Contabilidad.CuentasContables WHERE CodigoCuenta='3301'"
+        )
+        for _ in range(2):
+            batches(c, folder / "002_cuc_seps_2025_100_segmento_1.sql")
+        assert reserva == rows(
+            c, "SELECT * FROM Contabilidad.CuentasContables WHERE CodigoCuenta='3301'"
+        )
+        assert (
+            c.execute(
+                "SELECT COUNT(*) FROM Contabilidad.CuentasContables WHERE CodigoCuenta LIKE '3304%'"
+            ).fetchval()
+            == 0
+        )
+        assert (
+            c.execute("""
+            SELECT COUNT(*) FROM Contabilidad.CuentasContables h
+            JOIN Contabilidad.CuentasContables p ON p.IdCuentaContable=h.IdCuentaSuperior
+            WHERE h.CodigoCuenta='740640' AND p.CodigoCuenta='7406'
+              AND h.EsImputable=0 AND h.EsCatalogoRegulador=1 AND h.Saldo=0
+        """).fetchval()
+            == 1
+        )
+        assert history == rows(
+            c,
+            "SELECT * FROM Contabilidad.MovimientosContables ORDER BY IdMovimientoContable",
+        )
+        con_delta = rows(
+            c,
+            "SELECT CodigoCuenta,EsImputable,Saldo FROM Contabilidad.CuentasContables ORDER BY CodigoCuenta",
+        )
+        assert [f for f in con_delta if f["CodigoCuenta"] != "740640"] == original
+        original = con_delta
+        checks["seps_2025_100_delta_idempotent_without_reserve_or_history_changes"] = (
+            True
+        )
         for _ in range(2):
             batches(c, folder / "004_corte_completo_ssms.sql")
         assert original == rows(
