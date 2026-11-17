@@ -14,7 +14,7 @@ from app.core.security.auth import (
 )
 from app.core.security.operador import IdInterno, auditar, exigir_id_interno
 from app.modules.auth.agencias import agencia_consulta_asientos
-from app.modules.contabilidad import importaciones, service
+from app.modules.contabilidad import corte_workos, importaciones, service
 from app.modules.contabilidad.schemas import (
     INT32_MAX,
     Asiento,
@@ -302,3 +302,4 @@ def obtener_asiento(
 router.include_router(_asientos_router)
 
 router.include_router(importaciones.router)
+router.include_router(corte_workos.router)
