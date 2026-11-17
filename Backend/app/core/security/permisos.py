@@ -24,6 +24,7 @@ PERMISOS: dict[str, tuple[str, ...]] = {
     "cuentas:cupos": ("SUPERVISOR", "ADMIN"),
     "tarjetas:emitir": ("ASESOR", "ADMIN"),
     "tarjetas:estado": ("ASESOR", "SUPERVISOR", "ADMIN"),
+    "con-plantilla-editar": ("CONTADOR",),
     "contabilidad:editar": ("CONTADOR",),
     "con-cuenta-editar": ("CONTADOR",),
     "caja:operar": ("CAJERO",),

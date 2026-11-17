@@ -24,6 +24,8 @@ from app.modules.contabilidad.schemas import (
     PageAsiento,
 )
 
+from .plantillas import router as plantillas_router
+
 router = APIRouter(
     prefix="/contabilidad",
     tags=["contabilidad"],
@@ -31,6 +33,8 @@ router = APIRouter(
 )
 
 Db = Annotated[Connection, Depends(cooperativa)]
+
+router.include_router(plantillas_router)
 
 # ---------------------------------------------------------------------------
 # AC-02 · Fecha contable
