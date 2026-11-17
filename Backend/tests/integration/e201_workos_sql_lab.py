@@ -12,25 +12,24 @@ def probar(database):
     if not database.startswith("CooperativaDB_E201_Lab_"):
         raise ValueError("Se requiere una base local de ensayo.")
     with connect(database) as db:
-        db.execute("""
-            IF SCHEMA_ID('Organizacion') IS NULL EXEC('CREATE SCHEMA Organizacion');
-            IF OBJECT_ID('Organizacion.Usuarios') IS NULL
-                CREATE TABLE Organizacion.Usuarios(UsuarioID int PRIMARY KEY,KeyUsuario varchar(128),Estado varchar(12));
-        """)
         for _ in range(2):
             batches(db, ROOT / "Backend/scripts/sql/e201/006_aprobacion_workos.sql")
         db.execute("""
-            IF NOT EXISTS(SELECT 1 FROM Organizacion.Usuarios WHERE UsuarioID=901)
+            IF DATABASE_PRINCIPAL_ID('E201_LabServicio') IS NULL
             BEGIN
-                INSERT Organizacion.Usuarios VALUES(901,'local-prep','Activo'),(902,'local-approver','Activo');
-                INSERT E201.PermisoWorkOS VALUES(901,1,1),(902,0,1);
                 CREATE USER E201_LabServicio WITHOUT LOGIN;
                 ALTER ROLE E201_ServicioWorkOS ADD MEMBER E201_LabServicio;
             END;
-            UPDATE E201.PermisoWorkOS SET Aprobar=1 WHERE UsuarioID=902;
+            INSERT E201.PermisoWorkOS(UsuarioID,Preparar,Aprobar)
+            SELECT n.Id,n.Preparar,1 FROM (VALUES (901,1),(902,0)) n(Id,Preparar)
+            WHERE NOT EXISTS(SELECT 1 FROM E201.PermisoWorkOS WHERE UsuarioID=n.Id);
+            UPDATE E201.PermisoWorkOS
+            SET Aprobar=1,Organizacion='org-lab',
+                Sujeto=CASE WHEN UsuarioID=901 THEN 'local-prep' ELSE 'local-approver' END
+            WHERE UsuarioID IN (901,902);
         """)
         plan = str(uuid4())
-        call = "EXEC E201.usp_PlanWorkOS ?,?,?,?,?,?,?"
+        call = "EXEC E201.usp_PlanWorkOS ?,?,?,?,?,?,?,?"
 
         def run(sql, *args):
             cur = db.execute(sql, *args)
@@ -51,6 +50,7 @@ def probar(database):
 
         args = (
             "PREPARAR",
+            901,
             "local-prep",
             "org-lab",
             plan,
@@ -62,6 +62,7 @@ def probar(database):
         db.execute("EXECUTE AS USER='E201_LabServicio'")
         try:
             deny(229, "UPDATE E201.PermisoWorkOS SET Aprobar=1 WHERE UsuarioID=901")
+            deny(56411, call, *args[:1], 902, *args[2:])
             result = run(call, *args)[0]
             assert json.loads(result.Contenido)["PreparadoPor"] == 901
             digest = bytes.fromhex(result.HashPlan)
@@ -69,6 +70,7 @@ def probar(database):
                 56412,
                 call,
                 "APROBAR",
+                901,
                 "local-prep",
                 "org-lab",
                 plan,
@@ -77,12 +79,22 @@ def probar(database):
                 "same",
             )
             deny(
-                56406, call, "VER", "local-approver", "otro-org", plan, None, None, None
+                56411,
+                call,
+                "VER",
+                902,
+                "local-approver",
+                "otro-org",
+                plan,
+                None,
+                None,
+                None,
             )
             deny(
                 56413,
                 call,
                 "APROBAR",
+                902,
                 "local-approver",
                 "org-lab",
                 plan,
@@ -93,6 +105,7 @@ def probar(database):
             receipt = run(
                 call,
                 "APROBAR",
+                902,
                 "local-approver",
                 "org-lab",
                 plan,
@@ -104,6 +117,7 @@ def probar(database):
                 56413,
                 call,
                 "APROBAR",
+                902,
                 "local-approver",
                 "org-lab",
                 plan,

@@ -1,6 +1,7 @@
 /* Instalar después de 004. Una identidad SQL privada del backend, dos personas WorkOS. */
 IF DB_NAME()<>N'CooperativaDB' AND DB_NAME() NOT LIKE N'CooperativaDB_E201_Lab[_]%'
     THROW 56420,N'Base fuera del alcance E201.',1;
+IF @@TRANCOUNT<>0 THROW 56420,N'Instale sin una transacción externa.',1;
 SET XACT_ABORT ON;
 IF OBJECT_ID('E201.usp_EjecutarCorte','P') IS NULL
  OR OBJECT_ID('E201.usp_ValidarAprobacionCorte','P') IS NULL
@@ -10,9 +11,28 @@ BEGIN TRANSACTION;
 IF DATABASE_PRINCIPAL_ID('E201_ServicioWorkOS') IS NULL CREATE ROLE E201_ServicioWorkOS;
 IF OBJECT_ID('E201.PermisoWorkOS','U') IS NULL
 CREATE TABLE E201.PermisoWorkOS(
-    UsuarioID int PRIMARY KEY REFERENCES Organizacion.Usuarios(UsuarioID),
+    UsuarioID int PRIMARY KEY,
     Preparar bit NOT NULL, Aprobar bit NOT NULL
 );
+-- Compatibilidad con instalaciones anteriores que tenían Usuarios local.
+DECLARE @FK sysname;
+SELECT @FK=f.name FROM sys.foreign_keys f
+WHERE f.parent_object_id=OBJECT_ID('E201.PermisoWorkOS')
+  AND f.referenced_object_id=OBJECT_ID('Organizacion.Usuarios');
+IF @FK IS NOT NULL
+BEGIN
+    DECLARE @QuitarFK nvarchar(400)=N'ALTER TABLE E201.PermisoWorkOS DROP CONSTRAINT '+QUOTENAME(@FK);
+    EXEC sys.sp_executesql @QuitarFK;
+END;
+IF COL_LENGTH('E201.PermisoWorkOS','Sujeto') IS NULL
+    ALTER TABLE E201.PermisoWorkOS ADD Sujeto varchar(128) COLLATE Latin1_General_100_BIN2 NULL;
+IF COL_LENGTH('E201.PermisoWorkOS','Organizacion') IS NULL
+    ALTER TABLE E201.PermisoWorkOS ADD Organizacion varchar(128) COLLATE Latin1_General_100_BIN2 NULL;
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id=OBJECT_ID('E201.PermisoWorkOS')
+               AND name='UX_E201_PermisoWorkOS_Sujeto')
+    EXEC(N'CREATE UNIQUE INDEX UX_E201_PermisoWorkOS_Sujeto
+           ON E201.PermisoWorkOS(Organizacion,Sujeto)
+           WHERE Organizacion IS NOT NULL AND Sujeto IS NOT NULL');
 IF OBJECT_ID('E201.PlanWorkOS','U') IS NULL
 CREATE TABLE E201.PlanWorkOS(
     IdPlan uniqueidentifier PRIMARY KEY REFERENCES E201.PlanCorte(IdPlan),
@@ -55,12 +75,10 @@ BEGIN
  JOIN E201.PlanCorte p WITH (HOLDLOCK) ON p.IdPlan=w.IdPlan
  JOIN E201.PermisoWorkOS gp WITH (HOLDLOCK) ON gp.UsuarioID=w.Preparador AND gp.Preparar=1
  JOIN E201.PermisoWorkOS ga WITH (HOLDLOCK) ON ga.UsuarioID=a.Aprobador AND ga.Aprobar=1
- JOIN Organizacion.Usuarios ip WITH (HOLDLOCK) ON ip.UsuarioID=w.Preparador AND ip.Estado=''Activo''
- JOIN Organizacion.Usuarios ia WITH (HOLDLOCK) ON ia.UsuarioID=a.Aprobador AND ia.Estado=''Activo''
  WHERE a.IdSolicitud=@IdSolicitud AND a.IdPlan=@IdPlan
    AND a.HashPlan=@HashPlan AND p.HashPlan=@HashPlan AND p.HashPlan=HASHBYTES(''SHA2_256'',p.Contenido)
-   AND ip.KeyUsuario COLLATE Latin1_General_100_BIN2=w.Sujeto
-   AND ia.KeyUsuario COLLATE Latin1_General_100_BIN2=a.Sujeto
+   AND gp.Sujeto=w.Sujeto AND gp.Organizacion=w.Organizacion
+   AND ga.Sujeto=a.Sujeto AND ga.Organizacion=w.Organizacion
    AND w.Sujeto<>a.Sujeto AND w.Preparador<>a.Aprobador
    AND TRY_CONVERT(int,JSON_VALUE(p.Contenido,''$.PreparadoPor''))=w.Preparador;
  IF @PreparadoPor IS NULL OR @AprobadoPor IS NULL OR @FechaAprobacion IS NULL
@@ -69,7 +87,7 @@ END;');
 
 EXEC(N'
 CREATE OR ALTER PROCEDURE E201.usp_PlanWorkOS
- @Modo varchar(8),@Sujeto varchar(128),@Organizacion varchar(128),@IdPlan uniqueidentifier,
+ @Modo varchar(8),@Actor int,@Sujeto varchar(128),@Organizacion varchar(128),@IdPlan uniqueidentifier,
  @Contenido nvarchar(max)=NULL,@Hash binary(32)=NULL,@Comentario nvarchar(500)=NULL
 AS
 BEGIN
@@ -80,14 +98,15 @@ BEGIN
     THROW 56420,N''Operación institucional inválida.'',1;
  BEGIN TRY
  BEGIN TRANSACTION;
- DECLARE @Actor int,@Cantidad int,@Version binary(32),@Actual binary(32),
+ DECLARE @Version binary(32),@Actual binary(32),
          @HashPlan binary(32),@Preparador int,@SujetoPlan varchar(128),@IdSolicitud bigint;
- SELECT @Actor=MIN(u.UsuarioID),@Cantidad=COUNT(*)
- FROM Organizacion.Usuarios u WITH (HOLDLOCK)
- JOIN E201.PermisoWorkOS g WITH (HOLDLOCK) ON g.UsuarioID=u.UsuarioID
- WHERE u.KeyUsuario COLLATE Latin1_General_100_BIN2=@Sujeto AND u.Estado=''Activo''
-   AND ((@Modo=''PREPARAR'' AND g.Preparar=1) OR (@Modo IN (''VER'',''APROBAR'') AND g.Aprobar=1));
- IF @Cantidad<>1 THROW 56411,N''Identidad institucional sin vínculo o permiso efectivo.'',1;
+ IF NOT EXISTS (
+    SELECT 1 FROM E201.PermisoWorkOS g WITH(HOLDLOCK)
+    WHERE g.UsuarioID=@Actor AND g.Sujeto=@Sujeto AND g.Organizacion=@Organizacion
+      AND ((@Modo=''PREPARAR'' AND g.Preparar=1)
+        OR (@Modo IN (''VER'',''APROBAR'') AND g.Aprobar=1))
+ )
+    THROW 56411,N''Identidad institucional sin vínculo o permiso efectivo.'',1;
  IF @Modo=''PREPARAR''
  BEGIN
     IF COALESCE(ISJSON(@Contenido),0)<>1 OR COALESCE(JSON_VALUE(@Contenido,''$.Alcance''),'''')<>''EFECTIVO_AHORRO''
@@ -127,7 +146,7 @@ BEGIN
  END;
  COMMIT;
  SELECT CONVERT(varchar(36),@IdPlan) IdPlan,@Contenido Contenido,
-        CONVERT(varchar(64),@HashPlan,2) HashPlan,@IdSolicitud IdSolicitud;
+        CONVERT(varchar(64),@HashPlan,2) HashPlan,@IdSolicitud IdSolicitud,@SujetoPlan SujetoPreparador,@Preparador UsuarioPreparador;
  END TRY BEGIN CATCH IF XACT_STATE()<>0 ROLLBACK; THROW; END CATCH;
 END;');
 EXEC(N'CREATE OR ALTER TRIGGER E201.trg_PlanWorkOS_Inmutable ON E201.PlanWorkOS AFTER UPDATE,DELETE AS

@@ -52,3 +52,36 @@ def test_organizacion_distinta_rechazada_antes_de_sql(monkeypatch):
     with pytest.raises(HTTPException) as fallo:
         corte_workos.operar("APROBAR", usuario, uuid4())
     assert fallo.value.status_code == 403
+
+
+def test_aprobacion_revalida_ambos_vinculos(monkeypatch):
+    from contextlib import nullcontext
+    from types import SimpleNamespace
+
+    usuario = replace(usuario_con_roles("CONTADOR"), id_organizacion="org-dev")
+    consultas = []
+
+    def identidad(sujeto):
+        consultas.append(sujeto)
+        return 10 if sujeto == usuario.id_usuario else 20
+
+    def sql(conn, lote, params):
+        if params[0] == "VER":
+            return {"SujetoPreparador": "user_preparador", "UsuarioPreparador": 20}
+        assert params[:4] == ("APROBAR", 10, usuario.id_usuario, "org-dev")
+        return {"IdSolicitud": -2}
+
+    monkeypatch.setattr(
+        corte_workos,
+        "get_settings",
+        lambda: SimpleNamespace(workos_organization_id="org-dev"),
+    )
+    monkeypatch.setattr(
+        corte_workos,
+        "motor_corte",
+        lambda: SimpleNamespace(begin=lambda: nullcontext(None)),
+    )
+    monkeypatch.setattr(corte_workos, "identidad_vigente", identidad)
+    monkeypatch.setattr(corte_workos, "ejecutar_con_salidas", sql)
+    assert corte_workos.operar("APROBAR", usuario, uuid4()) == {"IdSolicitud": -2}
+    assert consultas == [usuario.id_usuario, "user_preparador"]

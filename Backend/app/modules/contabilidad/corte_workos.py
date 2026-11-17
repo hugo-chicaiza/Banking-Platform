@@ -7,11 +7,12 @@ from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import URL, Engine, create_engine
+from sqlalchemy import URL, Engine, create_engine, text
 from sqlalchemy.exc import DBAPIError
 
 from app.core.api.errors import ProblemDetailsRoute, problema
 from app.core.config.settings import get_settings
+from app.core.database.db import get_engine
 from app.core.database.procedimientos import ejecutar_con_salidas
 from app.core.security.auth import Usuario, require_permiso
 
@@ -69,6 +70,29 @@ def motor_corte() -> Engine:
     return create_engine(url, pool_pre_ping=True, hide_parameters=True)
 
 
+def identidad_vigente(sujeto: str) -> int:
+    """El vínculo y el estado son autoritativos en SeguridadDB."""
+    with get_engine("seguridad").connect() as conn:
+        ids = (
+            conn.execute(
+                text("""
+            SELECT TOP (2) UsuarioID FROM Organizacion.Usuarios
+            WHERE KeyUsuario COLLATE Latin1_General_100_BIN2=:sujeto AND Estado='Activo'
+        """),
+                {"sujeto": sujeto},
+            )
+            .scalars()
+            .all()
+        )
+    if len(ids) != 1:
+        raise problema(
+            403,
+            "USUARIO_INTERNO_NO_VINCULADO",
+            "Falta un vínculo institucional activo y único.",
+        )
+    return int(ids[0])
+
+
 def operar(
     modo: str,
     usuario: Usuario,
@@ -85,21 +109,32 @@ def operar(
             "La sesión debe pertenecer a la institución.",
         )
     try:
+        actor = identidad_vigente(usuario.id_usuario)
         with motor_corte().begin() as conn:
-            return ejecutar_con_salidas(
-                conn,
-                "EXEC E201.usp_PlanWorkOS @Modo=?,@Sujeto=?,@Organizacion=?,@IdPlan=?,"
-                "@Contenido=?,@Hash=?,@Comentario=?",
-                (
-                    modo,
-                    usuario.id_usuario,
-                    organizacion,
-                    str(plan),
-                    contenido,
-                    hash_plan,
-                    comentario,
-                ),
+            sql = (
+                "EXEC E201.usp_PlanWorkOS @Modo=?,@Actor=?,@Sujeto=?,@Organizacion=?,@IdPlan=?,"
+                "@Contenido=?,@Hash=?,@Comentario=?"
             )
+            base = (actor, usuario.id_usuario, organizacion, str(plan))
+            if modo == "APROBAR":
+                revision = ejecutar_con_salidas(
+                    conn, sql, ("VER", *base, None, None, None)
+                )
+                if (
+                    identidad_vigente(revision["SujetoPreparador"])
+                    != revision["UsuarioPreparador"]
+                ):
+                    raise problema(
+                        409,
+                        "VINCULO_PREPARADOR_CAMBIO",
+                        "El vínculo del preparador cambió.",
+                    )
+            resultado = ejecutar_con_salidas(
+                conn, sql, (modo, *base, contenido, hash_plan, comentario)
+            )
+            resultado.pop("SujetoPreparador", None)
+            resultado.pop("UsuarioPreparador", None)
+            return resultado
     except DBAPIError as error:
         codigos = {
             56406: (404, "PLAN_NO_ENCONTRADO", "No existe ese plan de corte."),
