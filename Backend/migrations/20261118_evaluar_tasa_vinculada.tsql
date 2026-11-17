@@ -1,0 +1,90 @@
+/* T-SQL (SQL Server). usp_EvaluarSolicitudCredito: la evaluación usa solo las tasas
+   vinculadas al producto de la solicitud (ProductoTasaInteres). Una tasa sin vincular no
+   rige; sin tasa vinculada vigente la solicitud se rechaza con ese motivo. Así el catálogo
+   puede tener varias tasas que se cruzan y cada producto elige la suya.
+   Único cambio: el WHERE de la consulta de tasas.
+   Requiere 20261117_tasas_y_vinculos y 20261117_evaluar_solicitud_tasa_activa.
+   Reejecutable (CREATE OR ALTER conserva los permisos).
+   Vuelta atrás: ejecutar de nuevo 20261117_evaluar_solicitud_tasa_activa.tsql. */
+SET XACT_ABORT ON;
+GO
+CREATE OR ALTER PROCEDURE Credito.usp_EvaluarSolicitudCredito
+    @IdSolicitud bigint, @EvaluadoPor int, @Aplicar bit = 1,
+    @Resultado varchar(20) = NULL OUTPUT, @Motivo nvarchar(500) = NULL OUTPUT
+AS
+/* CR-06: aplica la política de crédito parametrizada en Credito.ParametroPolitica:
+     - producto del tipo de crédito de la solicitud;
+     - tasa activa y vigente para el tipo, el monto y el plazo; si el producto tiene tasas vinculadas, solo esas
+       (CR-13: si hay más de una, se detiene por ambigüedad);
+     - tasa de la solicitud dentro de la tasa vigente y del tope TASA_MAXIMA_<código del tipo>, si existe;
+     - EDAD_MINIMA, SCORE_MINIMO y CUOTA_INGRESO_MAX (porcentaje de la capacidad de pago);
+     - desde MONTO_REVISION_MANUAL pasa a REVISION_MANUAL.
+   Con @Aplicar = 1 actualiza la solicitud y deja el resultado en CreditoSolicitudHistorialEstado. */
+BEGIN
+    SET NOCOUNT ON;
+    SET XACT_ABORT ON;
+    DECLARE @IdCliente int, @IdTipo int, @IdProducto int, @Monto decimal(18,2), @Plazo smallint, @Tasa decimal(6,4), @Cuota decimal(18,2),
+            @Capacidad decimal(18,2), @Fecha date, @Estado varchar(20), @IdBuro bigint, @Score smallint, @Nacimiento date, @CodigoTipo varchar(15);
+    DECLARE @Tasas int, @TasaVigente decimal(6,4), @Ahora datetime2 = CAST(SYSDATETIMEOFFSET() AT TIME ZONE 'SA Pacific Standard Time' AS datetime2);
+    DECLARE @P TABLE (Clave varchar(60) PRIMARY KEY, Valor decimal(18,6));
+
+    SELECT @IdCliente = s.IdCliente, @IdTipo = s.IdTipoCredito, @IdProducto = s.IdProducto, @Monto = s.Monto, @Plazo = s.PlazoMeses,
+           @Tasa = s.TasaNominalAnual, @Cuota = s.CuotaReferencial, @Capacidad = s.CapacidadPago, @Fecha = s.FechaSolicitud,
+           @Estado = s.Estado, @IdBuro = s.IdReporteBuro, @CodigoTipo = tc.CodigoTipoCredito
+    FROM Credito.CreditoSolicitud s JOIN Credito.TipoCredito tc ON tc.IdTipoCredito = s.IdTipoCredito
+    WHERE s.IdSolicitud = @IdSolicitud;
+    IF @IdCliente IS NULL THROW 55101, N'La solicitud no existe.', 1;
+    IF @Aplicar = 1 AND @Estado <> 'REVISION_MANUAL' THROW 55102, N'Solo se evalúa una solicitud pendiente (REVISION_MANUAL).', 1;
+
+    INSERT INTO @P (Clave, Valor)
+    SELECT Clave, Valor FROM (SELECT p.Clave, p.Valor, ROW_NUMBER() OVER (PARTITION BY p.Clave ORDER BY p.VigenciaDesde DESC) AS rn
+                              FROM Credito.ParametroPolitica p
+                              WHERE p.Estado = 'Activo' AND p.VigenciaDesde <= @Fecha AND (p.VigenciaHasta IS NULL OR p.VigenciaHasta > @Fecha)) x
+    WHERE rn = 1;
+    SELECT @Nacimiento = FechaNacimiento FROM Clientes.Cliente WHERE IdCliente = @IdCliente;
+    SELECT @Score = Score FROM Credito.ReporteBuro WHERE IdReporte = @IdBuro;
+    SELECT @Tasas = COUNT(*), @TasaVigente = MAX(TasaNominalAnual) FROM Credito.TasaInteres
+    WHERE IdTipoCredito = @IdTipo AND TipoTasa = 'CREDITO' AND Estado = 'A' AND @Plazo <= PlazoMaximoMeses
+      -- Solo las tasas vinculadas al producto (ProductosFinancieros.ProductoTasaInteres)
+      AND IdTasaInteres IN (SELECT v.IdTasaInteres FROM ProductosFinancieros.ProductoTasaInteres v
+                            WHERE v.IdProducto = @IdProducto AND v.Estado = 'A')
+      AND (MontoMinimo IS NULL OR @Monto >= MontoMinimo) AND (MontoMaximo IS NULL OR @Monto <= MontoMaximo)
+      AND VigenciaDesde <= @Fecha AND (VigenciaHasta IS NULL OR VigenciaHasta > @Fecha);
+    IF @Tasas > 1 THROW 55103, N'CR-13: hay más de una tasa vigente que aplica a este tipo, monto y plazo. Corrija TasaInteres antes de evaluar.', 1;
+
+    SET @Resultado = NULL;
+    IF NOT EXISTS (SELECT 1 FROM ProductosFinancieros.Producto WHERE IdProducto = @IdProducto AND IdTipoCredito = @IdTipo)
+        SELECT @Resultado = 'RECHAZADA', @Motivo = N'El producto no corresponde al tipo de crédito.';
+    ELSE IF @Tasas = 0
+        SELECT @Resultado = 'RECHAZADA', @Motivo = N'No hay una tasa vigente vinculada al producto para ese monto y plazo.';
+    ELSE IF @Tasa > @TasaVigente
+        SELECT @Resultado = 'RECHAZADA', @Motivo = N'La tasa de la solicitud supera la tasa vigente.';
+    ELSE IF EXISTS (SELECT 1 FROM @P WHERE Clave = 'TASA_MAXIMA_' + @CodigoTipo AND @Tasa * 100 > Valor)
+        SELECT @Resultado = 'RECHAZADA', @Motivo = N'La tasa supera la tasa máxima parametrizada para el tipo de crédito.';
+    ELSE IF EXISTS (SELECT 1 FROM @P WHERE Clave = 'EDAD_MINIMA' AND DATEDIFF(year, @Nacimiento, @Fecha)
+                        - CASE WHEN DATEADD(year, DATEDIFF(year, @Nacimiento, @Fecha), @Nacimiento) > @Fecha THEN 1 ELSE 0 END < Valor)
+        SELECT @Resultado = 'RECHAZADA', @Motivo = N'El solicitante no cumple la edad mínima.';
+    ELSE IF EXISTS (SELECT 1 FROM @P WHERE Clave = 'SCORE_MINIMO' AND @Score IS NOT NULL AND @Score < Valor)
+        SELECT @Resultado = 'RECHAZADA', @Motivo = N'El score de buró es menor al mínimo.';
+    ELSE IF EXISTS (SELECT 1 FROM @P WHERE Clave = 'CUOTA_INGRESO_MAX' AND @Cuota > @Capacidad * Valor / 100)
+        SELECT @Resultado = 'RECHAZADA', @Motivo = N'La cuota supera el porcentaje permitido de la capacidad de pago.';
+    ELSE IF @Score IS NULL AND EXISTS (SELECT 1 FROM @P WHERE Clave = 'SCORE_MINIMO')
+        SELECT @Resultado = 'REVISION_MANUAL', @Motivo = N'No hay reporte de buró: requiere revisión manual.';
+    ELSE IF EXISTS (SELECT 1 FROM @P WHERE Clave = 'MONTO_REVISION_MANUAL' AND @Monto >= Valor)
+        SELECT @Resultado = 'REVISION_MANUAL', @Motivo = N'El monto requiere revisión manual.';
+    ELSE
+        SELECT @Resultado = 'APROBADA', @Motivo = N'Cumple la política de crédito (aprobación automática).';
+
+    IF @Aplicar = 1
+    BEGIN
+        BEGIN TRANSACTION;
+        IF @Resultado = 'APROBADA'
+            UPDATE Credito.CreditoSolicitud SET Estado = 'APROBADA', TipoRevision = 'Automatica', FechaResolucion = @Ahora WHERE IdSolicitud = @IdSolicitud;
+        ELSE IF @Resultado = 'RECHAZADA'
+            UPDATE Credito.CreditoSolicitud SET Estado = 'RECHAZADA', TipoRevision = 'Automatica', FechaResolucion = @Ahora WHERE IdSolicitud = @IdSolicitud;
+        INSERT INTO Credito.CreditoSolicitudHistorialEstado (IdSolicitud, Observacion, ModificadoPor, FechaHora)
+        VALUES (@IdSolicitud, LEFT(CONCAT(N'Evaluación automática: ', @Resultado, N'. ', @Motivo), 500), @EvaluadoPor, @Ahora);
+        COMMIT TRANSACTION;
+    END;
+END;
+GO

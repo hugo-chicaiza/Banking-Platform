@@ -314,6 +314,7 @@ ROLES_POR_RUTA: dict[tuple[str, str], tuple[str, ...]] = {
     ("PATCH", "/api/v1/catalogos/administracion/{clave}/{id_registro}"): ("ADMIN",),
     ("POST", "/api/v1/catalogos/administracion/{clave}"): ("ADMIN",),
     ("DELETE", "/api/v1/catalogos/administracion/{clave}/{id_registro}"): ("ADMIN",),
+    ("POST", "/api/v1/catalogos/administracion/{clave}/confirmacion"): ("ADMIN",),
 }
 
 

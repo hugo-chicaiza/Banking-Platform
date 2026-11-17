@@ -47,6 +47,10 @@ class SimulacionRequest(CamelModel):
     model_config = ConfigDict(extra="forbid", validate_by_name=False)
 
     id_tipo_credito: int = Field(gt=0, le=2147483647)
+    # Obligatorio uno de los dos: rige la tasa vinculada (la del subproducto antes que
+    # la del producto); una tasa sin vincular no aplica
+    id_producto: int | None = Field(default=None, gt=0, le=2147483647)
+    id_sub_producto: int | None = Field(default=None, gt=0, le=2147483647)
     monto: Decimal = Field(gt=0, max_digits=18, decimal_places=2)
     plazo_meses: int = Field(gt=0, le=600)
     sistema_amortizacion: SistemaAmortizacion

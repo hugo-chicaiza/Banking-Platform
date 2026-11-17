@@ -17,25 +17,53 @@ def _rows(
 
 
 def tasas_vigentes(
-    conn: Connection, id_tipo_credito: int, hoy: date
+    conn: Connection,
+    id_tipo_credito: int,
+    hoy: date,
+    id_producto: int | None = None,
+    id_sub_producto: int | None = None,
 ) -> list[dict[str, Any]]:
+    """Tasas de crédito activas y vigentes vinculadas: las del subproducto si tiene; si
+    no, las de su producto. Una tasa sin vincular no rige para nadie."""
     return _rows(
         conn,
         """
-        SELECT IdTipoCredito AS id_tipo_credito,
-               TasaNominalAnual AS tasa_nominal_anual,
-               PlazoMaximoMeses AS plazo_maximo_meses,
-               RecargoMoraSobreTasa AS recargo_mora_sobre_tasa,
-               MontoMinimo AS monto_minimo,
-               MontoMaximo AS monto_maximo
-        FROM Credito.TasaInteres
-        WHERE IdTipoCredito = :id_tipo_credito
-          AND Estado = 'A'
-          AND VigenciaDesde <= :hoy
-          AND (VigenciaHasta IS NULL OR VigenciaHasta >= :hoy)
-        ORDER BY IdTasaInteres
+        WITH vinculadas AS (
+            SELECT v.IdTasaInteres,
+                   CASE WHEN v.IdSubProducto IS NOT NULL THEN 1 ELSE 2 END AS nivel
+            FROM ProductosFinancieros.ProductoTasaInteres AS v
+            JOIN Credito.TasaInteres AS tv
+              ON tv.IdTasaInteres = v.IdTasaInteres
+             AND tv.Estado = 'A' AND tv.TipoTasa = 'CREDITO'
+            WHERE v.Estado = 'A'
+              AND ((:id_sub IS NOT NULL AND v.IdSubProducto = :id_sub)
+                   OR v.IdProducto = COALESCE(:id_producto,
+                          (SELECT s.IdProducto FROM ProductosFinancieros.SubProducto AS s
+                           WHERE s.IdSubProducto = :id_sub)))
+        ),
+        nivel AS (SELECT MIN(nivel) AS n FROM vinculadas)
+        SELECT t.IdTipoCredito AS id_tipo_credito,
+               t.TasaNominalAnual AS tasa_nominal_anual,
+               t.PlazoMaximoMeses AS plazo_maximo_meses,
+               t.RecargoMoraSobreTasa AS recargo_mora_sobre_tasa,
+               t.MontoMinimo AS monto_minimo,
+               t.MontoMaximo AS monto_maximo
+        FROM Credito.TasaInteres AS t
+        WHERE t.IdTipoCredito = :id_tipo_credito
+          AND t.TipoTasa = 'CREDITO'
+          AND t.Estado = 'A'
+          AND t.VigenciaDesde <= :hoy
+          AND (t.VigenciaHasta IS NULL OR t.VigenciaHasta >= :hoy)
+          AND t.IdTasaInteres IN (SELECT IdTasaInteres FROM vinculadas
+                                  WHERE nivel = (SELECT n FROM nivel))
+        ORDER BY t.IdTasaInteres
         """,
-        {"id_tipo_credito": id_tipo_credito, "hoy": hoy},
+        {
+            "id_tipo_credito": id_tipo_credito,
+            "hoy": hoy,
+            "id_producto": id_producto,
+            "id_sub": id_sub_producto,
+        },
     )
 
 

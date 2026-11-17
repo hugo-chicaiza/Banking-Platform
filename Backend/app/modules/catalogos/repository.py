@@ -267,28 +267,6 @@ def obtener_tasa_interes(
     return filas[0] if filas else None
 
 
-def tasas_que_se_solapan(conn: Connection, datos: dict[str, Any]) -> list[int]:
-    """Tasas de crédito activas del mismo tipo cuyo rango de monto y vigencia se cruzan
-    con la nueva: con dos, Credito.usp_EvaluarSolicitudCredito lanza 55103. Desde la
-    migración 20261117_evaluar_solicitud_tasa_activa el procedimiento ignora las inactivas."""
-    return [
-        int(fila["id"])
-        for fila in _rows(
-            conn,
-            """
-            SELECT IdTasaInteres AS id
-            FROM Credito.TasaInteres WITH (UPDLOCK, HOLDLOCK)
-            WHERE IdTipoCredito = :id_tipo_credito AND TipoTasa = 'CREDITO' AND Estado = 'A'
-              AND VigenciaDesde <= ISNULL(:vigencia_hasta, '9999-12-31')
-              AND :vigencia_desde <= ISNULL(VigenciaHasta, '9999-12-31')
-              AND ISNULL(MontoMinimo, 0) <= ISNULL(:monto_maximo, 9999999999999999)
-              AND ISNULL(:monto_minimo, 0) <= ISNULL(MontoMaximo, 9999999999999999)
-            """,
-            datos,
-        )
-    ]
-
-
 def insertar_tasa_interes(conn: Connection, datos: dict[str, Any]) -> int:
     return int(
         conn.execute(

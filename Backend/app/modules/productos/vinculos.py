@@ -7,11 +7,15 @@ subproducto no la cobra aunque el producto sí. Por ahora solo se guarda el chec
 el cobro y la elección de tasa los aplicará cada módulo después.
 
 Desmarcar no borra: la fila queda en Estado 'I' (historial) y marcar de nuevo la reactiva.
+Un vínculo con un objeto desactivado en Catálogos (tasa, comisión, seguro o sistema) no
+cuenta: no se muestra, no se aplica y al guardar el checklist se desmarca.
 El SQL de cada tabla es fijo.
 """
 
 from contextlib import ExitStack
 from dataclasses import dataclass
+from datetime import date
+from decimal import Decimal
 from typing import Any, Literal
 
 from sqlalchemy import Connection, text
@@ -50,11 +54,13 @@ class _Tabla:
 _TABLAS = {
     "tasas": _Tabla(
         listar="""
-            SELECT IdTasaInteres AS objeto FROM ProductosFinancieros.ProductoTasaInteres
-            WHERE Estado = 'A'
-              AND ISNULL(IdProducto, 0) = ISNULL(:id_producto, 0)
-              AND ISNULL(IdSubProducto, 0) = ISNULL(:id_sub, 0)
-            ORDER BY IdTasaInteres
+            SELECT v.IdTasaInteres AS objeto
+            FROM ProductosFinancieros.ProductoTasaInteres AS v
+            JOIN Credito.TasaInteres AS o ON o.IdTasaInteres = v.IdTasaInteres AND o.Estado = 'A'
+            WHERE v.Estado = 'A'
+              AND ISNULL(v.IdProducto, 0) = ISNULL(:id_producto, 0)
+              AND ISNULL(v.IdSubProducto, 0) = ISNULL(:id_sub, 0)
+            ORDER BY v.IdTasaInteres
         """,
         desactivar="""
             UPDATE ProductosFinancieros.ProductoTasaInteres SET Estado = 'I'
@@ -76,12 +82,13 @@ _TABLAS = {
     ),
     "comisiones": _Tabla(
         listar="""
-            SELECT IdComision AS objeto, Exonerado AS marca
-            FROM ProductosFinancieros.ProductoComision
-            WHERE Estado = 'A'
-              AND ISNULL(IdProducto, 0) = ISNULL(:id_producto, 0)
-              AND ISNULL(IdSubProducto, 0) = ISNULL(:id_sub, 0)
-            ORDER BY IdComision
+            SELECT v.IdComision AS objeto, v.Exonerado AS marca
+            FROM ProductosFinancieros.ProductoComision AS v
+            JOIN Transacciones.Comisiones AS o ON o.IdComision = v.IdComision AND o.Estado = 'A'
+            WHERE v.Estado = 'A'
+              AND ISNULL(v.IdProducto, 0) = ISNULL(:id_producto, 0)
+              AND ISNULL(v.IdSubProducto, 0) = ISNULL(:id_sub, 0)
+            ORDER BY v.IdComision
         """,
         desactivar="""
             UPDATE ProductosFinancieros.ProductoComision SET Estado = 'I'
@@ -104,12 +111,13 @@ _TABLAS = {
     ),
     "seguros": _Tabla(
         listar="""
-            SELECT IdSeguro AS objeto, EsObligatorio AS marca
-            FROM ProductosFinancieros.ProductoSeguro
-            WHERE Estado = 'A'
-              AND ISNULL(IdProducto, 0) = ISNULL(:id_producto, 0)
-              AND ISNULL(IdSubProducto, 0) = ISNULL(:id_sub, 0)
-            ORDER BY IdSeguro
+            SELECT v.IdSeguro AS objeto, v.EsObligatorio AS marca
+            FROM ProductosFinancieros.ProductoSeguro AS v
+            JOIN Credito.Seguro AS o ON o.IdSeguro = v.IdSeguro AND o.Estado = 'A'
+            WHERE v.Estado = 'A'
+              AND ISNULL(v.IdProducto, 0) = ISNULL(:id_producto, 0)
+              AND ISNULL(v.IdSubProducto, 0) = ISNULL(:id_sub, 0)
+            ORDER BY v.IdSeguro
         """,
         desactivar="""
             UPDATE ProductosFinancieros.ProductoSeguro SET Estado = 'I'
@@ -132,12 +140,13 @@ _TABLAS = {
     ),
     "sistemas": _Tabla(
         listar="""
-            SELECT CodigoSistema AS objeto
-            FROM ProductosFinancieros.ProductoSistemaAmortizacion
-            WHERE Estado = 'A'
-              AND ISNULL(IdProducto, 0) = ISNULL(:id_producto, 0)
-              AND ISNULL(IdSubProducto, 0) = ISNULL(:id_sub, 0)
-            ORDER BY CodigoSistema
+            SELECT v.CodigoSistema AS objeto
+            FROM ProductosFinancieros.ProductoSistemaAmortizacion AS v
+            JOIN Catalogo.SistemaAmortizacion AS o ON o.Codigo = v.CodigoSistema AND o.Estado = 'A'
+            WHERE v.Estado = 'A'
+              AND ISNULL(v.IdProducto, 0) = ISNULL(:id_producto, 0)
+              AND ISNULL(v.IdSubProducto, 0) = ISNULL(:id_sub, 0)
+            ORDER BY v.CodigoSistema
         """,
         desactivar="""
             UPDATE ProductosFinancieros.ProductoSistemaAmortizacion SET Estado = 'I'
@@ -264,7 +273,9 @@ def _validar(
     tasas = _filas(
         conn,
         """
-        SELECT IdTasaInteres AS id, TipoTasa AS tipo, IdTipoCredito AS tipo_credito
+        SELECT IdTasaInteres AS id, TipoTasa AS tipo, IdTipoCredito AS tipo_credito,
+               MontoMinimo AS minimo, MontoMaximo AS maximo,
+               VigenciaDesde AS desde, VigenciaHasta AS hasta
         FROM Credito.TasaInteres
         WHERE Estado = 'A' AND IdTasaInteres IN (SELECT value FROM OPENJSON(:ids))
         """,
@@ -280,6 +291,18 @@ def _validar(
             "TASA_NO_APLICA",
             "Hay tasas inactivas o que no corresponden a este tipo de producto.",
         )
+    # Varias tasas de crédito del catálogo pueden cruzarse; las vinculadas a un mismo
+    # producto o subproducto no: la simulación y la evaluación exigen una sola
+    credito = [t for t in tasas if t["tipo"] == "CREDITO"]
+    for i, a in enumerate(credito):
+        for b in credito[i + 1 :]:
+            if _se_solapan(a, b):
+                raise problema(
+                    422,
+                    "TASAS_SOLAPADAS",
+                    "Dos tasas de crédito vinculadas se cruzan en monto y fechas: "
+                    "deja solo una para cada rango.",
+                )
     comisiones = [c.id_comision for c in datos.comisiones]
     if len(
         _filas(
@@ -333,6 +356,17 @@ def _validar(
                 "SISTEMA_NO_EXISTE",
                 "Hay sistemas de amortización que no existen o están inactivos.",
             )
+
+
+def _se_solapan(a: dict[str, Any], b: dict[str, Any]) -> bool:
+    """Rangos de monto y de vigencia que se cruzan (sin límite = abierto)."""
+    tope = date.max
+    fechas = a["desde"] <= (b["hasta"] or tope) and b["desde"] <= (a["hasta"] or tope)
+    infinito = Decimal("Infinity")
+    montos = (a["minimo"] or 0) <= (b["maximo"] or infinito) and (b["minimo"] or 0) <= (
+        a["maximo"] or infinito
+    )
+    return fechas and montos
 
 
 def _filas(conn: Connection, sql: str, ids: list[int]) -> list[dict[str, Any]]:

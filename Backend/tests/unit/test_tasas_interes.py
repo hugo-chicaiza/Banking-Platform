@@ -53,11 +53,6 @@ def bd(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
     )
     monkeypatch.setattr(repository, "existe_tipo_credito_activo", lambda _c, t: t == 1)
     monkeypatch.setattr(
-        repository,
-        "tasas_que_se_solapan",
-        lambda _c, d: [1] if (d["monto_minimo"] or 0) <= 20000 else [],
-    )
-    monkeypatch.setattr(
         repository, "insertar_tasa_interes", lambda _c, d: insertadas.append(d) or 7
     )
     monkeypatch.setattr(
@@ -105,7 +100,6 @@ def test_solo_admin_crea_tasa(bd):
 @pytest.mark.parametrize(
     ("cambio", "status", "codigo"),
     [
-        ({"montoMinimo": 1000}, 409, "TASA_SOLAPADA"),
         ({"vigenciaDesde": "2026-11-01"}, 422, "VIGENCIA_PASADA"),
         ({"idTipoCredito": 9}, 422, "TIPO_CREDITO_NO_EXISTE"),
     ],

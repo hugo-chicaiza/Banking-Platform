@@ -79,6 +79,7 @@ def bd(monkeypatch: pytest.MonkeyPatch) -> Conexion:
         "_rows",
         lambda _c, sql: [dict(f) for f in conn.filas.get(sql_a_clave[sql], [])],
     )
+    monkeypatch.setattr(administracion, "_opciones_dinamicas", lambda _c, _o: [])
     monkeypatch.setattr(audit, "registrar", lambda _e: None)
     return conn
 
@@ -153,11 +154,12 @@ def test_validaciones(bd, cuerpo, status):
     assert bd.updates == []
 
 
-def test_tasa_que_se_solapa_al_reactivar(bd):
+def test_varias_tasas_pueden_cruzarse_en_el_catalogo(bd):
+    # El solapamiento se valida al vincularlas a un producto, no en el catálogo
     bd.filas["tasas-interes"][0]["estado"] = "I"
     bd.solapadas = 1
     r = _cliente(bd, "ADMIN").patch(f"{BASE}/tasas-interes/1", json={"estado": "A"})
-    assert r.status_code == 409 and r.json()["code"] == "TASA_SOLAPADA"
+    assert r.status_code == 200, r.text
 
 
 def test_catalogo_o_registro_inexistente(bd):
