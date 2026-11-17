@@ -109,7 +109,7 @@ class _UserManagement:
 
     def __init__(self) -> None:
         self.usuario = _usuario()
-        self.roles: list[str] = ["cajero"]
+        self.roles: list[str] = ["org-cajero"]
         self.sesiones: dict[str, str] = {
             "sellada-vigente": "vigente",
             "sellada-vencida": "vencida",
@@ -413,7 +413,14 @@ def test_me_usuario_con_un_rol(client, workos):
 
 
 def test_me_usuario_con_varios_roles(client, workos):
-    workos.roles = ["asesor", "SUPERVISOR", "aprobador-credito", "member"]
+    # "member" y "admin" son roles propios de WorkOS: no cuentan
+    workos.roles = [
+        "org-asesor",
+        "org-supervisor",
+        "org-aprobador-credito",
+        "member",
+        "admin",
+    ]
 
     r = client.get(f"{BASE}/me", headers=_con_sesion())
 
@@ -809,7 +816,7 @@ def test_require_roles_403_sin_el_rol(workos):
 
 
 def test_require_roles_permite_con_el_rol(workos):
-    workos.roles = ["admin"]
+    workos.roles = ["org-admin"]
 
     r = _app_con_roles().get("/solo-admin", headers=_con_sesion())
 
