@@ -1125,8 +1125,14 @@ def test_token_recien_emitido_con_reloj_local_atrasado_es_valido(monkeypatch):
             .decode(),
             cookie_password=clave,
         )
-        sellada.jwks = SimpleNamespace(
-            get_signing_key_from_jwt=lambda _t: SimpleNamespace(key=llave.public_key())
+        monkeypatch.setattr(
+            sellada,
+            "jwks",
+            SimpleNamespace(
+                get_signing_key_from_jwt=lambda _t: SimpleNamespace(
+                    key=llave.public_key()
+                )
+            ),
         )
 
         resultado = sellada.authenticate()

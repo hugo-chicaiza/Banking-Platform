@@ -106,8 +106,10 @@ def test_sql_contextos_separados_y_inicializacion_no_sobrescribe(conn):
     repo.guardar_contexto(c, a, usuario, "002")
     repo.inicializar_contexto(c, a, usuario, "001")
     repo.inicializar_contexto(c, b, usuario, "001")
-    assert repo.contexto(c, a, usuario)["agencia"] == "002"
-    assert repo.contexto(c, b, usuario)["agencia"] == "001"
+    contexto_a = repo.contexto(c, a, usuario)
+    contexto_b = repo.contexto(c, b, usuario)
+    assert contexto_a is not None and contexto_a["agencia"] == "002"
+    assert contexto_b is not None and contexto_b["agencia"] == "001"
     assert repo.contexto(c, a, ids["administrador"]) is None
 
 

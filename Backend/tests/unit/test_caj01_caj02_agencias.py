@@ -10,7 +10,7 @@ from app.modules.caja import repository, service
 from tests.sesion import usuario_con_roles
 
 
-def usuario_agencia(*roles, agencia="001"):
+def usuario_agencia(*roles: str, agencia: str | None = "001"):
     return replace(
         usuario_con_roles(*roles),
         id_agencia=agencia,
