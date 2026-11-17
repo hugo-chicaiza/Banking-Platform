@@ -174,6 +174,13 @@ class Settings(BaseSettings):
     mongo_uri: SecretStr = SecretStr("")
     mongo_db: str = "banking_platform"
 
+    # Documentos (E5-08, P4-10): contenido cifrado (AES-256-GCM) en la colección
+    # `documentos` de MongoDB; sin clave o sin MONGO_URI responde 503.
+    documentos_clave: SecretStr = SecretStr("")  # AES-256-GCM: 64 hex
+    documentos_max_bytes: Annotated[int, Field(ge=1024, le=15 * 1024 * 1024)] = (
+        5 * 1024 * 1024
+    )
+
     # Vínculos administrados por despliegue, nunca por el navegador ni por email.
     workos_audit_user_ids: dict[
         str, Annotated[int, Field(strict=True, ge=1, le=2147483647)]

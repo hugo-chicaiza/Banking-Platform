@@ -270,13 +270,14 @@ def test_sin_mongo_en_produccion_no_hay_sobres(monkeypatch):
 
 def test_con_mongo_uri_usa_mongo_sin_conectar_al_crear(monkeypatch):
     coleccion = ColeccionFalsa()
-    llamadas: list[tuple[str, str]] = []
+    llamadas: list[str] = []
 
-    def coleccion_mongo(uri: str, base: str) -> ColeccionFalsa:
-        llamadas.append((uri, base))
+    def coleccion_mongo(nombre: str) -> ColeccionFalsa:
+        llamadas.append(nombre)
         return coleccion
 
-    monkeypatch.setattr(sobre_pin, "_coleccion_mongo", coleccion_mongo)
+    # El cliente compartido (app.core.database.mongo) toma URI y base de la configuración
+    monkeypatch.setattr(sobre_pin, "coleccion", coleccion_mongo)
     _configurar(
         monkeypatch,
         app_env="production",
@@ -287,7 +288,7 @@ def test_con_mongo_uri_usa_mongo_sin_conectar_al_crear(monkeypatch):
     servicio = _OBTENER_SERVICIO()
 
     assert servicio is not None and isinstance(servicio.almacen, AlmacenMongo)
-    assert llamadas == [("mongodb://servidor:27017", "coop")]
+    assert llamadas == ["sobres_pin"]
 
 
 def test_servicio_descartar_no_falla_si_el_almacen_cae():

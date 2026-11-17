@@ -22,7 +22,6 @@ import threading
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from functools import lru_cache
 from pathlib import Path
 from typing import Any, Literal, Protocol
 
@@ -31,6 +30,7 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from pydantic import SecretStr
 
 from app.core.config.settings import get_settings
+from app.core.database.mongo import coleccion
 from app.core.pdf import DocumentoPdf
 
 logger = logging.getLogger(__name__)
@@ -39,7 +39,6 @@ OrigenSobre = Literal["Aprobacion", "Regeneracion"]
 
 COLECCION = "sobres_pin"
 _NONCE_GCM = 12
-_TIMEOUT_MONGO_MS = 5000
 
 
 class ErrorSobre(Exception):
@@ -407,16 +406,6 @@ class ServicioSobres:
         return self.cifrador.descifrar(id_tarjeta, sobre.id_sobre, sobre.contenido)
 
 
-@lru_cache
-def _coleccion_mongo(uri: str, base: str) -> Any:
-    from pymongo import MongoClient
-
-    cliente: Any = MongoClient(
-        uri, serverSelectionTimeoutMS=_TIMEOUT_MONGO_MS, tz_aware=True
-    )
-    return cliente[base][COLECCION]
-
-
 def obtener_servicio() -> ServicioSobres | None:
     """None si no se pueden generar sobres: sin SOBRE_PIN_CLAVE, o en producción sin
     MONGO_URI. Nunca conecta a MongoDB sin MONGO_URI.
@@ -435,7 +424,7 @@ def obtener_servicio() -> ServicioSobres | None:
     uri = s.mongo_uri.get_secret_value()
     almacen: Almacen
     if uri:
-        almacen = AlmacenMongo(_coleccion_mongo(uri, s.mongo_db))
+        almacen = AlmacenMongo(coleccion(COLECCION))
     elif s.app_env != "production":
         almacen = AlmacenDisco(Path(s.sobre_pin_dir))
     else:
