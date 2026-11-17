@@ -19,3 +19,7 @@ La cola E0-08 debe autorizar al aprobador y conectar este manejador. El 202
 persiste el estado pendiente. Faltan el envío a la cola, la validación de
 cobertura de roles por subproducto, la asignación del permiso en el tenant, el evento de
 programación y la interfaz de edición y simulación.
+
+Prueba local: con PYTHONPATH apuntando a Backend, ejecute
+tests/integration/e403_sql_lab.py con la base local ya preparada por el
+ensayo de E4-01. Los IDs de usuario del ensayo son datos del laboratorio.
