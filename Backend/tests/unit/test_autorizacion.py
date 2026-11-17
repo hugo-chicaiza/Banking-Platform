@@ -127,6 +127,9 @@ ROLES_POR_RUTA: dict[tuple[str, str], tuple[str, ...]] = {
             "tipos-movimiento-caja",
         )
     },
+    ("POST", "/api/v1/contabilidad/cortes-e201"): ("CONTADOR",),
+    ("GET", "/api/v1/contabilidad/cortes-e201/{id_plan}"): ("CONTADOR",),
+    ("POST", "/api/v1/contabilidad/cortes-e201/{id_plan}/aprobaciones"): ("CONTADOR",),
     ("GET", "/api/v1/contabilidad/fechas-contables/actual"): AUTH,
     ("GET", "/api/v1/contabilidad/fechas-contables/{fecha}"): AUTH,
     ("GET", "/api/v1/contabilidad/cuentas-contables"): (

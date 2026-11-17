@@ -98,6 +98,8 @@ class Settings(BaseSettings):
     cooperativa_db_name: str = "CooperativaDB"
     cooperativa_db_user: str = ""
     cooperativa_db_password: SecretStr = SecretStr("")
+    e201_servicio_sql_user: str = ""
+    e201_servicio_sql_password: SecretStr = SecretStr("")
 
     seguridad_db_server: str = ""
     seguridad_db_name: str = "SeguridadDB"
