@@ -22,3 +22,8 @@ Instalar la migración después del esquema E2-01. El catálogo AC-01 de tres
 columnas requiere agregar naturaleza según la clasificación oficial revisada.
 El contrato de mantenimiento #206 en develop responde 501. Queda pendiente
 compartir la validación con su implementación y conectar una interfaz de usuario.
+
+Prueba local: desde Backend, con PYTHONPATH apuntando a Backend, ejecute
+tests/integration/e203_sql_lab.py con el nombre de la base de ensayo E2-01.
+El ensayo verifica instalación repetida, reaplicación y rechazo de una
+revisión obsoleta cuando cambia la cuenta.

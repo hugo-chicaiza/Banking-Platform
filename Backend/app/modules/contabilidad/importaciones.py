@@ -112,10 +112,14 @@ def revisar(filas: list[dict[str, Any]], plan: dict[str, Any]) -> list[dict[str,
                     and not anterior["imputable"]
                 )
                 resultado = "Igual" if igual else "Cambiada"
+        campos = ("nombre", "naturaleza", "padre", "regulador", "imputable")
         resultados[fila["numeroFila"]] = {
             **fila,
             "resultado": resultado,
             "codigoError": error,
+            "anterior": {campo: anterior.get(campo) for campo in campos}
+            if anterior
+            else None,
         }
     return [resultados[fila["numeroFila"]] for fila in filas]
 
