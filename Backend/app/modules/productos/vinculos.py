@@ -12,6 +12,8 @@ El SQL de cada tabla es fijo.
 
 from contextlib import ExitStack
 from dataclasses import dataclass
+from datetime import date
+from decimal import Decimal
 from typing import Any, Literal
 
 from sqlalchemy import Connection, text
@@ -264,7 +266,9 @@ def _validar(
     tasas = _filas(
         conn,
         """
-        SELECT IdTasaInteres AS id, TipoTasa AS tipo, IdTipoCredito AS tipo_credito
+        SELECT IdTasaInteres AS id, TipoTasa AS tipo, IdTipoCredito AS tipo_credito,
+               MontoMinimo AS minimo, MontoMaximo AS maximo,
+               VigenciaDesde AS desde, VigenciaHasta AS hasta
         FROM Credito.TasaInteres
         WHERE Estado = 'A' AND IdTasaInteres IN (SELECT value FROM OPENJSON(:ids))
         """,
@@ -280,6 +284,18 @@ def _validar(
             "TASA_NO_APLICA",
             "Hay tasas inactivas o que no corresponden a este tipo de producto.",
         )
+    # Varias tasas de crédito del catálogo pueden cruzarse; las vinculadas a un mismo
+    # producto o subproducto no: la simulación y la evaluación exigen una sola
+    credito = [t for t in tasas if t["tipo"] == "CREDITO"]
+    for i, a in enumerate(credito):
+        for b in credito[i + 1 :]:
+            if _se_solapan(a, b):
+                raise problema(
+                    422,
+                    "TASAS_SOLAPADAS",
+                    "Dos tasas de crédito vinculadas se cruzan en monto y fechas: "
+                    "deja solo una para cada rango.",
+                )
     comisiones = [c.id_comision for c in datos.comisiones]
     if len(
         _filas(
@@ -333,6 +349,17 @@ def _validar(
                 "SISTEMA_NO_EXISTE",
                 "Hay sistemas de amortización que no existen o están inactivos.",
             )
+
+
+def _se_solapan(a: dict[str, Any], b: dict[str, Any]) -> bool:
+    """Rangos de monto y de vigencia que se cruzan (sin límite = abierto)."""
+    tope = date.max
+    fechas = a["desde"] <= (b["hasta"] or tope) and b["desde"] <= (a["hasta"] or tope)
+    infinito = Decimal("Infinity")
+    montos = (a["minimo"] or 0) <= (b["maximo"] or infinito) and (b["minimo"] or 0) <= (
+        a["maximo"] or infinito
+    )
+    return fechas and montos
 
 
 def _filas(conn: Connection, sql: str, ids: list[int]) -> list[dict[str, Any]]:

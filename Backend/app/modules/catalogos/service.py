@@ -69,12 +69,6 @@ def crear_tasa_interes(
                     "El tipo de crédito no existe o está inactivo.",
                 )
             valores = datos.model_dump()
-            if es_credito and repository.tasas_que_se_solapan(conn, valores):
-                raise problema(
-                    409,
-                    "TASA_SOLAPADA",
-                    "Ya hay una tasa de ese tipo de crédito para ese rango de monto en esas fechas.",
-                )
             id_tasa = repository.insertar_tasa_interes(conn, valores)
             registro.id_registro = str(id_tasa)
             conn.commit()

@@ -23,6 +23,7 @@ from sqlalchemy.exc import DBAPIError
 from app.core.api.errors import problema, traducir_error_bd
 from app.core.security.auth import Usuario
 from app.core.security.operador import auditar
+from app.modules.catalogos.confirmacion import CATALOGOS_CON_CONFIRMACION
 
 # numero: >= 0 con hasta 6 decimales (valor de comisión o seguro; en % si es Porcentaje)
 # opcion: uno de `opciones` (p. ej. Billete o Moneda)
@@ -44,6 +45,8 @@ class Campo:
     minimo: int | None = None
     opciones: tuple[str, ...] = ()
     patron: str | None = None  # formato del texto (códigos); se guarda en mayúsculas
+    # Opciones que salen de la base al armar el descriptor (p. ej. "canales")
+    opciones_de: str | None = None
 
 
 @dataclass(frozen=True)
@@ -502,11 +505,30 @@ def _campo_json(f: Campo, *, editable: bool | None = None) -> dict[str, Any]:
     }
 
 
-def descriptores() -> list[dict[str, Any]]:
+def _opciones_dinamicas(conn: Connection | None, origen: str) -> list[str]:
+    if conn is None or origen != "canales":
+        return []
+    return [
+        str(c)
+        for c in conn.execute(
+            text(
+                "SELECT CodigoCanal FROM Canal.Canal WHERE Estado = 'A' ORDER BY CodigoCanal"
+            )
+        ).scalars()
+    ]
+
+
+def descriptores(conn: Connection | None = None) -> list[dict[str, Any]]:
     """Catálogos y sus campos: el frontend dibuja la tabla, la edición y el alta con esto."""
     salida = []
     for c in CATALOGOS.values():
         alta_baja = _ALTA_BAJA.get(c.clave, AltaBaja())
+        campos_alta = []
+        for f in alta_baja.campos:
+            campo = _campo_json(f, editable=True)
+            if f.opciones_de:
+                campo["opciones"] = _opciones_dinamicas(conn, f.opciones_de)
+            campos_alta.append(campo)
         salida.append(
             {
                 "clave": c.clave,
@@ -515,8 +537,10 @@ def descriptores() -> list[dict[str, Any]]:
                 "permiteCrear": c.permite_crear,
                 "campos": [_campo_json(f) for f in c.campos],
                 # Alta genérica (vacío = sin alta desde esta pantalla)
-                "camposAlta": [_campo_json(f, editable=True) for f in alta_baja.campos],
+                "camposAlta": campos_alta,
                 "permiteEliminar": bool(alta_baja.eliminar),
+                # Crear o eliminar pide el código de confirmación (confirmacion.py)
+                "requiereConfirmacion": c.clave in CATALOGOS_CON_CONFIRMACION,
             }
         )
     return salida
@@ -554,6 +578,10 @@ def _valor(campo: Campo, valor: Any) -> Any:
                 campo.etiqueta, f"usa {campo.maximo} caracteres como máximo."
             )
         return valor
+    if campo.tipo == "opcion" and campo.opciones_de:
+        if not isinstance(valor, str) or not valor.strip():
+            raise _invalido(campo.etiqueta, "es obligatorio.")
+        return valor.strip().upper()
     if campo.tipo == "opcion":
         if valor not in campo.opciones:
             raise _invalido(campo.etiqueta, f"elige {' o '.join(campo.opciones)}.")
@@ -664,11 +692,10 @@ def _validar_fila(final: dict[str, Any]) -> None:
 
 
 def _validar_tasa(
-    conn: Connection, actual: dict[str, Any], cambios: dict[str, Any]
+    _conn: Connection, actual: dict[str, Any], cambios: dict[str, Any]
 ) -> None:
-    """Una tasa de crédito necesita plazo y, si queda activa, no puede solaparse con otra
-    activa del mismo tipo de crédito (usp_EvaluarSolicitudCredito lanzaría 55103). Ahorro y
-    tarjeta pueden coexistir: cada producto vincula la suya."""
+    """Una tasa de crédito necesita plazo. Pueden coexistir varias tasas del mismo tipo:
+    el solapamiento se valida al vincularlas a un producto o subproducto."""
     final = {**actual, **cambios}
     minimo, maximo = final["montoMinimo"], final["montoMaximo"]
     if minimo is not None and maximo is not None and maximo < minimo:
@@ -677,37 +704,6 @@ def _validar_tasa(
         return
     if final["plazoMaximoMeses"] is None:
         raise _invalido("Plazo máximo (meses)", "es obligatorio en tasas de crédito.")
-    if final["estado"] != "A":
-        return
-    hasta = final["vigenciaHasta"]
-    solapadas = conn.execute(
-        text(
-            """
-            SELECT COUNT(*)
-            FROM Credito.TasaInteres WITH (UPDLOCK, HOLDLOCK)
-            WHERE IdTipoCredito = :tipo AND TipoTasa = 'CREDITO' AND Estado = 'A'
-              AND IdTasaInteres <> TRY_CAST(:id AS int)
-              AND VigenciaDesde <= ISNULL(:hasta, '9999-12-31')
-              AND :desde <= ISNULL(VigenciaHasta, '9999-12-31')
-              AND ISNULL(MontoMinimo, 0) <= ISNULL(:maximo, 9999999999999999)
-              AND ISNULL(:minimo, 0) <= ISNULL(MontoMaximo, 9999999999999999)
-            """
-        ),
-        {
-            "tipo": actual["idTipoCredito"],
-            "id": actual["id"],
-            "desde": final["vigenciaDesde"],
-            "hasta": hasta,
-            "minimo": minimo,
-            "maximo": maximo,
-        },
-    ).scalar_one()
-    if solapadas:
-        raise problema(
-            409,
-            "TASA_SOLAPADA",
-            "Ya hay una tasa activa de ese tipo de crédito para ese rango de monto en esas fechas.",
-        )
 
 
 def actualizar(
@@ -782,6 +778,44 @@ _ALTA_BAJA: dict[str, AltaBaja] = {
         eliminar="DELETE FROM Credito.TasaInteres WHERE IdTasaInteres = TRY_CAST(:id AS int)",
     ),
     "comisiones": AltaBaja(
+        campos=(
+            Campo("codigo", "Código", maximo=10, patron=_CODIGO),
+            Campo(
+                "tipoComision",
+                "Tipo",
+                "opcion",
+                opciones=(
+                    "Retiro",
+                    "Transferencia",
+                    "Consulta",
+                    "Mantenimiento",
+                    "Emision Tarjeta",
+                    "Reposicion Tarjeta",
+                    "Otro",
+                ),
+            ),
+            Campo("tipoCalculo", "Cálculo", "opcion", opciones=("Fijo", "Porcentaje")),
+            Campo("valor", "Valor (USD o %)", "numero", minimo=0),
+            Campo(
+                "montoMinimo", "Cobro mínimo (solo %)", "dinero", nulo=True, minimo=0
+            ),
+            Campo(
+                "montoMaximo", "Cobro máximo (solo %)", "dinero", nulo=True, minimo=0
+            ),
+            Campo("codigoCanal", "Canal", "opcion", opciones_de="canales"),
+            Campo("descripcion", "Descripción", maximo=250),
+            Campo("vigenciaDesde", "Vigente desde", "fecha"),
+        ),
+        # El canal se busca por su código: si no existe o está inactivo, no inserta
+        insertar="""
+            INSERT INTO Transacciones.Comisiones (CodigoComision, TipoComision, TipoCalculo,
+                Valor, MontoMinimo, MontoMaximo, IdCanal, Descripcion, VigenciaDesde)
+            OUTPUT CAST(inserted.IdComision AS varchar(10))
+            SELECT :codigo, :tipoComision, :tipoCalculo, :valor, :montoMinimo, :montoMaximo,
+                   c.IdCanal, :descripcion, :vigenciaDesde
+            FROM Canal.Canal AS c
+            WHERE c.CodigoCanal = :codigoCanal AND c.Estado = 'A'
+        """,
         en_uso="""
             SELECT CASE WHEN EXISTS (SELECT 1 FROM ProductosFinancieros.ProductoComision
                     WHERE IdComision = TRY_CAST(:id AS int))
@@ -792,6 +826,46 @@ _ALTA_BAJA: dict[str, AltaBaja] = {
             THEN 1 ELSE 0 END
         """,
         eliminar="DELETE FROM Transacciones.Comisiones WHERE IdComision = TRY_CAST(:id AS int)",
+    ),
+    "sistemas-amortizacion": AltaBaja(
+        campos=(
+            Campo("codigo", "Código", maximo=10, patron=r"^[A-Za-z]{3,10}$"),
+            Campo("nombre", "Nombre", maximo=60),
+            Campo("descripcion", "Descripción", maximo=250),
+        ),
+        insertar="""
+            INSERT INTO Catalogo.SistemaAmortizacion (Codigo, Nombre, Descripcion)
+            OUTPUT inserted.Codigo
+            VALUES (:codigo, :nombre, :descripcion)
+        """,
+        en_uso="""
+            SELECT CASE WHEN EXISTS (SELECT 1 FROM ProductosFinancieros.ProductoSistemaAmortizacion
+                    WHERE CodigoSistema = :id)
+                OR EXISTS (SELECT 1 FROM Credito.CreditoSolicitud WHERE SistemaAmortizacion = :id)
+            THEN 1 ELSE 0 END
+        """,
+        eliminar="DELETE FROM Catalogo.SistemaAmortizacion WHERE Codigo = :id",
+    ),
+    "canales": AltaBaja(
+        campos=(
+            Campo("codigo", "Código", maximo=10, patron=_CODIGO),
+            Campo("nombre", "Nombre", maximo=50),
+            Campo("descripcion", "Descripción", maximo=200),
+            Campo(
+                "modo", "Modo", "opcion", opciones=("Digital", "Presencial", "Ambos")
+            ),
+            Campo("requiereTarjeta", "Requiere tarjeta", "booleano"),
+            Campo("requierePin", "Requiere PIN", "booleano"),
+            Campo("requiereTerminal", "Requiere terminal", "booleano"),
+            Campo("requiereJornadaCaja", "Requiere jornada de caja", "booleano"),
+        ),
+        insertar="""
+            INSERT INTO Canal.Canal (CodigoCanal, NombreCanal, Descripcion, ModoDigitalPresencial,
+                RequiereTarjeta, RequierePin, RequiereTerminal, RequiereJornadaCaja)
+            OUTPUT CAST(inserted.IdCanal AS varchar(10))
+            VALUES (:codigo, :nombre, :descripcion, :modo, :requiereTarjeta, :requierePin,
+                    :requiereTerminal, :requiereJornadaCaja)
+        """,
     ),
     "seguros": AltaBaja(
         campos=(
@@ -1022,6 +1096,29 @@ def _json(datos: dict[str, Any]) -> str:
     )
 
 
+def _validar_alta(clave: str, valores: dict[str, Any]) -> None:
+    """Reglas que cruzan campos, antes de que la base las rechace con un CK (500)."""
+    if valores.get("tipoCalculo") == "Porcentaje":
+        if valores["valor"] > 100:
+            raise _invalido("Valor", "en porcentaje no puede pasar de 100.")
+        if clave == "comisiones":
+            minimo, maximo = valores["montoMinimo"], valores["montoMaximo"]
+            if minimo is None or maximo is None:
+                raise _invalido(
+                    "Cobro mínimo y máximo", "son obligatorios en una comisión en %."
+                )
+            if maximo < minimo:
+                raise _invalido("Cobro máximo", "debe ser mayor o igual que el mínimo.")
+    if (
+        clave == "comisiones"
+        and valores.get("tipoCalculo") == "Fijo"
+        and (valores["montoMinimo"] is not None or valores["montoMaximo"] is not None)
+    ):
+        raise _invalido("Cobro mínimo y máximo", "solo aplican a comisiones en %.")
+    if clave == "canales" and valores["requierePin"] and not valores["requiereTarjeta"]:
+        raise _invalido("Requiere PIN", "un canal que pide PIN también pide tarjeta.")
+
+
 def crear(
     conn: Connection, clave: str, cuerpo: dict[str, Any], usuario: Usuario, ip: str
 ) -> dict[str, Any]:
@@ -1043,8 +1140,7 @@ def crear(
     for c in alta.campos:
         if c.patron and isinstance(valores[c.nombre], str):
             valores[c.nombre] = valores[c.nombre].upper()
-    if valores.get("tipoCalculo") == "Porcentaje" and valores["valor"] > 100:
-        raise _invalido("Valor", "en porcentaje no puede pasar de 100.")
+    _validar_alta(clave, valores)
     with auditar(
         "CREAR",
         catalogo.tabla,
@@ -1053,7 +1149,14 @@ def crear(
         f"CAT-CREAR {clave} despues={_json(valores)}",
     ) as registro:
         try:
-            id_ = str(conn.execute(text(alta.insertar), valores).scalar_one())
+            nuevo = conn.execute(text(alta.insertar), valores).scalar()
+            if nuevo is None:  # INSERT ... SELECT sin la fila de referencia (el canal)
+                raise problema(
+                    422,
+                    "REFERENCIA_INVALIDA",
+                    "Hay un dato que apunta a un registro que no existe o está inactivo.",
+                )
+            id_ = str(nuevo)
             registro.id_registro = id_
             conn.commit()
         except DBAPIError as exc:

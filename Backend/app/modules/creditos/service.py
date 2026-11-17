@@ -57,6 +57,8 @@ def obtener_condiciones(
     monto: Decimal | None = None,
     plazo_meses: int | None = None,
     hoy: date | None = None,
+    id_producto: int | None = None,
+    id_sub_producto: int | None = None,
 ) -> CondicionesCredito:
     """CRE-01: tasa, plazo máximo, seguros e impuestos vigentes de un tipo de crédito.
 
@@ -65,7 +67,9 @@ def obtener_condiciones(
         HTTPException 500 TASA_VIGENTE_DUPLICADA
     """
     hoy = hoy or _hoy()
-    tasas = repository.tasas_vigentes(conn, id_tipo_credito, hoy)
+    tasas = repository.tasas_vigentes(
+        conn, id_tipo_credito, hoy, id_producto, id_sub_producto
+    )
     candidatas = [
         t
         for t in tasas
@@ -100,7 +104,9 @@ def simular(
         HTTPException 500 TASA_VIGENTE_DUPLICADA
     """
     hoy = hoy or _hoy()
-    tasas = repository.tasas_vigentes(conn, datos.id_tipo_credito, hoy)
+    tasas = repository.tasas_vigentes(
+        conn, datos.id_tipo_credito, hoy, datos.id_producto, datos.id_sub_producto
+    )
     if not tasas:
         raise _sin_tasa_vigente()
     por_monto = [t for t in tasas if _monto_en_rango(t, datos.monto)]

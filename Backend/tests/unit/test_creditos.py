@@ -79,7 +79,7 @@ def _datos(
     monkeypatch.setattr(
         repository,
         "tasas_vigentes",
-        lambda conn, id_tipo, hoy: [_tasa()] if tasas is None else tasas,
+        lambda conn, id_tipo, hoy, *_vinculo: [_tasa()] if tasas is None else tasas,
     )
     monkeypatch.setattr(
         repository,

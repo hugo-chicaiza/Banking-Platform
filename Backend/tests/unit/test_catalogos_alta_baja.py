@@ -55,7 +55,7 @@ class Conexion:
                     **{k: v for k, v in params.items() if k != "vigenciaDesde"},
                 }
             )
-            r.scalar_one.return_value = "9"
+            r.scalar_one.return_value = r.scalar.return_value = "9"
         elif "CASE WHEN EXISTS" in texto:
             r.scalar_one.return_value = 1 if self.en_uso else 0
         elif texto.lstrip().startswith("DELETE"):
@@ -81,6 +81,7 @@ def bd(monkeypatch: pytest.MonkeyPatch) -> Conexion:
         lambda _c, sql: [dict(f) for f in conn.filas.get(sql_a_clave[sql], [])],
     )
     EVENTOS.clear()
+    monkeypatch.setattr(administracion, "_opciones_dinamicas", lambda _c, _o: [])
     monkeypatch.setattr(audit, "registrar", EVENTOS.append)
     return conn
 
@@ -108,8 +109,7 @@ def test_descriptor_dice_que_se_crea_y_que_se_elimina(bd):
     assert [c["nombre"] for c in d["seguros"]["camposAlta"]][:2] == ["codigo", "nombre"]
     assert d["denominaciones"]["camposAlta"][0]["opciones"] == ["Billete", "Moneda"]
     assert (
-        d["sistemas-amortizacion"]["camposAlta"] == []
-        and not d["canales"]["permiteEliminar"]
+        d["tasas-interes"]["camposAlta"] == [] and not d["canales"]["permiteEliminar"]
     )
     assert d["ciudades"]["permiteEliminar"]
 
@@ -136,7 +136,7 @@ def test_codigo_duplicado_es_409(bd):
 @pytest.mark.parametrize(
     ("clave", "cuerpo", "status", "codigo"),
     [
-        ("sistemas-amortizacion", {}, 422, "ALTA_NO_PERMITIDA"),
+        ("tasas-interes", {}, 422, "ALTA_NO_PERMITIDA"),  # se crean con su propio POST
         ("seguros", {**SEGURO, "tipoCalculo": "Otro"}, 422, "DATOS_INVALIDOS"),
         (
             "seguros",
@@ -173,8 +173,9 @@ def test_baja_solo_sin_uso(bd):
         EVENTOS[-1].accion == "ELIMINAR"
         and '"nombre":"Quito"' in EVENTOS[-1].descripcion
     )
+    # Canales pide el código antes que nada; sin él, 428
     r = admin.delete(f"{BASE}/canales/1")
-    assert r.status_code == 422 and r.json()["code"] == "BAJA_NO_PERMITIDA"
+    assert r.status_code == 428 and r.json()["code"] == "CONFIRMACION_REQUERIDA"
     assert admin.delete(f"{BASE}/ciudades/99").status_code == 404
 
 

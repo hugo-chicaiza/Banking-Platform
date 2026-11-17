@@ -12,7 +12,7 @@ from app.core.api.errors import (
 from app.core.api.middleware import ip_cliente
 from app.core.database.db import cooperativa
 from app.core.security.auth import Usuario, require_auth, require_roles
-from app.modules.catalogos import administracion, repository, service
+from app.modules.catalogos import administracion, confirmacion, repository, service
 from app.modules.catalogos.schemas import (
     ActividadEconomica,
     Agencia,
@@ -131,9 +131,28 @@ IdRegistro = Annotated[str, Path(pattern=r"^[A-Za-z0-9]{1,15}$")]
 )
 def listar_catalogos_administrables(
     _: Annotated[Usuario, Depends(require_roles(*_ADMIN_LECTURA))],
+    conn: Db,
 ) -> list[dict[str, Any]]:
     """Catálogos que se administran y la descripción de sus campos."""
-    return administracion.descriptores()
+    return administracion.descriptores(conn)
+
+
+@router.post(
+    "/administracion/{clave}/confirmacion",
+    openapi_extra={"x-roles": ["ADMIN"]},
+)
+def pedir_confirmacion(
+    clave: Clave,
+    usuario: Annotated[Usuario, Depends(require_roles("ADMIN"))],
+) -> dict[str, Any]:
+    """Código de 4 caracteres y su token para crear o eliminar en un catálogo que puede
+    alterar la lógica de negocio. Se envían en X-Confirmacion-Codigo y
+    X-Confirmacion-Token; vencen a los 5 minutos."""
+    if clave not in confirmacion.CATALOGOS_CON_CONFIRMACION:
+        raise problema(
+            422, "CONFIRMACION_NO_APLICA", "Este catálogo no pide confirmación."
+        )
+    return confirmacion.emitir(usuario.id_usuario, clave)
 
 
 @router.get(
@@ -162,6 +181,12 @@ def crear_registro(
     conn: Db,
 ) -> dict[str, Any]:
     """Alta con los campos de `camposAlta`; código repetido: 409 CODIGO_DUPLICADO."""
+    confirmacion.exigir(
+        usuario.id_usuario,
+        clave,
+        request.headers.get("x-confirmacion-token"),
+        request.headers.get("x-confirmacion-codigo"),
+    )
     return administracion.crear(
         conn, clave, payload, usuario, ip_cliente(request.scope)
     )
@@ -180,6 +205,12 @@ def eliminar_registro(
     conn: Db,
 ) -> Response:
     """Solo lo que nadie usa; si se usa, 409 ITEM_EN_USO y se desactiva en su lugar."""
+    confirmacion.exigir(
+        usuario.id_usuario,
+        clave,
+        request.headers.get("x-confirmacion-token"),
+        request.headers.get("x-confirmacion-codigo"),
+    )
     administracion.eliminar(
         conn, clave, id_registro, usuario, ip_cliente(request.scope)
     )

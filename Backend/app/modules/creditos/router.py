@@ -38,7 +38,9 @@ _simulacion_router = APIRouter(
     "/tipos/{idTipoCredito}/condiciones",
     operation_id="CRE01",
     response_model=CondicionesCredito,
-    dependencies=[Depends(solo_parametros("monto", "plazoMeses"))],
+    dependencies=[
+        Depends(solo_parametros("monto", "plazoMeses", "idProducto", "idSubProducto"))
+    ],
     openapi_extra={"x-roles": _ROLES_SIMULACION},
 )
 def obtener_condiciones(
@@ -46,9 +48,23 @@ def obtener_condiciones(
     conn: Db,
     monto: Annotated[Decimal | None, Query(gt=0)] = None,
     plazo_meses: Annotated[int | None, Query(alias="plazoMeses", gt=0)] = None,
+    id_producto: Annotated[
+        int | None, Query(alias="idProducto", gt=0, le=2147483647)
+    ] = None,
+    id_sub_producto: Annotated[
+        int | None, Query(alias="idSubProducto", gt=0, le=2147483647)
+    ] = None,
 ) -> CondicionesCredito:
-    """CRE-01 · Tasa, plazo máximo, seguros e impuestos vigentes del tipo de crédito."""
-    return service.obtener_condiciones(conn, idTipoCredito, monto, plazo_meses)
+    """CRE-01 · Tasa, plazo máximo, seguros e impuestos vigentes del tipo de crédito.
+    Con idProducto o idSubProducto rige la tasa vinculada a ese producto."""
+    return service.obtener_condiciones(
+        conn,
+        idTipoCredito,
+        monto,
+        plazo_meses,
+        id_producto=id_producto,
+        id_sub_producto=id_sub_producto,
+    )
 
 
 @_simulacion_router.post(
