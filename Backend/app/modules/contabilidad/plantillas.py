@@ -45,6 +45,7 @@ class Linea(BaseModel):
 class Version(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    codigoPlantilla: str | None = Field(None, min_length=1, max_length=50)
     vigenciaDesde: date
     nombre: str = Field(min_length=1, max_length=100)
     lineas: list[Linea] = Field(min_length=2, max_length=100)
@@ -159,10 +160,10 @@ def crear(
                 text("""
             SELECT TOP (1) CodigoPlantilla, Version, Origen, IdConceptoContable
             FROM Contabilidad.PlantillaAsiento WITH (UPDLOCK,HOLDLOCK)
-            WHERE IdTipoAsiento=:tipo
+            WHERE IdTipoAsiento=:tipo AND (:codigo IS NULL OR CodigoPlantilla=:codigo)
             ORDER BY Version DESC, IdPlantillaAsiento DESC
         """),
-                {"tipo": id_tipo},
+                {"tipo": id_tipo, "codigo": datos.codigoPlantilla},
             )
             .mappings()
             .one_or_none()
@@ -174,13 +175,15 @@ def crear(
         familias = conn.execute(
             text("""
             SELECT COUNT(DISTINCT CodigoPlantilla) FROM Contabilidad.PlantillaAsiento
-            WHERE IdTipoAsiento=:tipo
+            WHERE IdTipoAsiento=:tipo AND (:codigo IS NULL OR CodigoPlantilla=:codigo)
         """),
-            {"tipo": id_tipo},
+            {"tipo": id_tipo, "codigo": datos.codigoPlantilla},
         ).scalar_one()
         if familias != 1:
             raise problema(
-                409, "TIPO_AMBIGUO", "El tipo tiene varias familias de plantillas."
+                409,
+                "TIPO_AMBIGUO",
+                "Indique codigoPlantilla para seleccionar una familia.",
             )
         id_plantilla = conn.execute(
             text("""

@@ -51,7 +51,7 @@ def probar(database: str) -> None:
                 for lado, codigo in (("DEBITO", "11010510"), ("CREDITO", "11010505"))
             ],
         )
-        nueva = plantillas.crear(conn, 1000, datos, 101)["idPlantillaAsiento"]
+        nueva = plantillas.crear(conn, 1001, datos, 101)["idPlantillaAsiento"]
         try:
             with conn.begin():
                 plantillas.confirmar_aprobacion(conn, nueva, 101, hoy)
@@ -60,11 +60,11 @@ def probar(database: str) -> None:
         else:
             raise AssertionError("Se permitió la autoaprobación.")
         with conn.begin() as transaccion:
-            anterior = repository.obtener_plantilla(conn, "E401_DOTACION", futuro)
+            anterior = repository.obtener_plantilla(conn, "DOT_CAJA", futuro)
             assert anterior and anterior["IdPlantillaAsiento"] != nueva
             plantillas.confirmar_aprobacion(conn, nueva, 102, hoy)
-            actual = repository.obtener_plantilla(conn, "E401_DOTACION", hoy)
-            programada = repository.obtener_plantilla(conn, "E401_DOTACION", futuro)
+            actual = repository.obtener_plantilla(conn, "DOT_CAJA", hoy)
+            programada = repository.obtener_plantilla(conn, "DOT_CAJA", futuro)
             assert (
                 actual
                 and actual["IdPlantillaAsiento"] == anterior["IdPlantillaAsiento"]

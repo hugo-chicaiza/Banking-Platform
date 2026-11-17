@@ -23,3 +23,6 @@ programación y la interfaz de edición y simulación.
 Prueba local: con PYTHONPATH apuntando a Backend, ejecute
 tests/integration/e403_sql_lab.py con la base local ya preparada por el
 ensayo de E4-01. Los IDs de usuario del ensayo son datos del laboratorio.
+
+Cuando un tipo tenga varias familias, indique codigoPlantilla al crear su
+versión. El GET del tipo devuelve este código para seleccionar la familia.
