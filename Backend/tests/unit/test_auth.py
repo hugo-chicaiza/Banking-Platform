@@ -25,7 +25,7 @@ from workos.types.user_management.session import (
 from app.core.api.errors import ProblemDetailsRoute
 from app.core.config.settings import get_settings
 from app.core.security import auth as security
-from app.core.security.auth import COOKIE_SESION, require_roles
+from app.core.security.auth import COOKIE_SESION, require_permiso, require_roles
 from app.integrations import workos_client
 from app.main import app
 from app.modules.auth import service
@@ -65,7 +65,7 @@ class _Sesion:
             "organization_id": "org_1",
             "role": self._workos.roles[0] if self._workos.roles else None,
             "roles": self._workos.roles,
-            "permissions": ["cuentas:crear"],
+            "permissions": self._workos.permisos,
             # Como en WorkOS real: la copia del usuario en la cookie no trae metadatos
             "user": self._workos.usuario.model_copy(update={"metadata": {}}),
         }
@@ -109,7 +109,8 @@ class _UserManagement:
 
     def __init__(self) -> None:
         self.usuario = _usuario()
-        self.roles: list[str] = ["cajero"]
+        self.roles: list[str] = ["org-cajero"]
+        self.permisos: list[str] = ["caja:operar"]
         self.sesiones: dict[str, str] = {
             "sellada-vigente": "vigente",
             "sellada-vencida": "vencida",
@@ -406,7 +407,7 @@ def test_me_usuario_con_un_rol(client, workos):
         "email": "maria.lopez@correo.ec",
         "idOrganizacion": "org_1",
         "roles": ["CAJERO"],
-        "permisos": ["cuentas:crear"],
+        "permisos": ["caja:operar"],
         "idAgencia": "001",
     }
     assert "set-cookie" not in r.headers
@@ -814,6 +815,33 @@ def test_require_roles_permite_con_el_rol(workos):
     r = _app_con_roles().get("/solo-admin", headers=_con_sesion())
 
     assert r.status_code == 200
+
+
+def _app_con_permiso() -> TestClient:
+    rutas = APIRouter(route_class=ProblemDetailsRoute)
+
+    @rutas.post("/editar", dependencies=[Depends(require_permiso("catalogos:editar"))])
+    def editar() -> dict[str, bool]:
+        return {"ok": True}
+
+    prueba = FastAPI()
+    prueba.include_router(rutas)
+    return TestClient(prueba)
+
+
+def test_require_permiso_lo_decide_el_permiso_no_el_rol(workos):
+    # Escribir depende del permiso de WorkOS: ADMIN sin él no pasa; CAJERO con él sí
+    workos.roles, workos.permisos = ["org-admin"], ["productos:editar"]
+    r = _app_con_permiso().post("/editar", headers=_con_sesion())
+    assert r.status_code == 403 and r.json()["code"] == "SIN_PERMISO"
+
+    workos.roles, workos.permisos = ["org-cajero"], ["catalogos:editar"]
+    assert _app_con_permiso().post("/editar", headers=_con_sesion()).status_code == 200
+
+
+def test_require_permiso_rechaza_permisos_desconocidos():
+    with pytest.raises(ValueError, match="prd-editar"):
+        require_permiso("prd-editar")
 
 
 def test_require_roles_rechaza_roles_desconocidos():

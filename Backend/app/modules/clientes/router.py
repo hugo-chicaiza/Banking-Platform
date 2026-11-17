@@ -10,6 +10,7 @@ from app.core.security.auth import (
     Usuario,
     UsuarioAuditoria,
     require_auth,
+    require_permiso,
     require_roles,
 )
 from app.modules.clientes import service
@@ -43,6 +44,7 @@ Db = Annotated[Connection, Depends(cooperativa)]
 
 # Roles de cada tarea (GitHubProject_Files): 403 SIN_PERMISO si no tiene ninguno
 _ASESOR_ADMIN = [Depends(require_roles("ASESOR", "ADMIN"))]
+_EDITAR_CLIENTE = [Depends(require_permiso("clientes:editar"))]
 
 _consultas_router = APIRouter(route_class=ProblemDetailsRoute)
 _ROLES_CONSULTA = ["ASESOR", "CAJERO", "SUPERVISOR", "ADMIN"]
@@ -150,7 +152,7 @@ def validar_identificacion(
     operation_id="CLI02",
     response_model=Cliente,
     status_code=201,
-    dependencies=_ASESOR_ADMIN,
+    dependencies=_EDITAR_CLIENTE,
 )
 def registrar_cliente(
     payload: ClienteCreate,
@@ -199,7 +201,7 @@ def listar_direcciones(
     operation_id="CLI10",
     response_model=Direccion,
     status_code=201,
-    dependencies=_ASESOR_ADMIN,
+    dependencies=_EDITAR_CLIENTE,
 )
 def agregar_direccion(
     idCliente: int,
@@ -225,7 +227,7 @@ def agregar_direccion(
     "/{idCliente}/direcciones/{idDireccion}",
     operation_id="CLI11",
     response_model=Direccion,
-    dependencies=_ASESOR_ADMIN,
+    dependencies=_EDITAR_CLIENTE,
 )
 def editar_direccion(
     idCliente: int,
@@ -252,7 +254,7 @@ def editar_direccion(
     "/{idCliente}/direcciones/{idDireccion}",
     operation_id="CLI12",
     status_code=204,
-    dependencies=_ASESOR_ADMIN,
+    dependencies=_EDITAR_CLIENTE,
 )
 def eliminar_direccion(
     idCliente: int,
@@ -288,7 +290,7 @@ _riesgo_router = APIRouter(route_class=ProblemDetailsRoute)
     response_model=RiesgoRegistrado,
     status_code=201,
     responses=RESPUESTAS_ERROR,
-    dependencies=[Depends(require_roles("ASESOR", "SUPERVISOR", "ADMIN"))],
+    dependencies=[Depends(require_permiso("clientes:riesgo"))],
     openapi_extra={"x-roles": ["ASESOR", "SUPERVISOR", "ADMIN"]},
 )
 def registrar_evaluacion_riesgo(
@@ -324,10 +326,8 @@ _edicion_router = APIRouter(
         503: {**RESPUESTAS_ERROR[500], "description": "Service Unavailable"},
     },
 )
-EditorCliente = Annotated[Usuario, Depends(require_roles("ASESOR", "ADMIN"))]
-GestorEstado = Annotated[
-    Usuario, Depends(require_roles("ASESOR", "SUPERVISOR", "ADMIN"))
-]
+EditorCliente = Annotated[Usuario, Depends(require_permiso("clientes:editar"))]
+GestorEstado = Annotated[Usuario, Depends(require_permiso("clientes:estado"))]
 LectorHistorial = Annotated[
     Usuario, Depends(require_roles("SUPERVISOR", "AUDITOR", "ADMIN"))
 ]

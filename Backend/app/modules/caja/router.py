@@ -19,6 +19,7 @@ from app.core.security.auth import (
     Usuario,
     UsuarioActual,
     require_auth,
+    require_permiso,
     require_roles,
 )
 from app.core.security.operador import IdInterno
@@ -304,7 +305,7 @@ def obtener_cuadre(
     "/jornadas/{idJornada}/cancelacion",
     response_model=Jornada,
     operation_id="CAJ06",
-    dependencies=[Depends(require_roles("SUPERVISOR"))],
+    dependencies=[Depends(require_permiso("caja:autorizar"))],
 )
 def cancelar_jornada(
     request: Request,
@@ -332,7 +333,7 @@ def cancelar_jornada(
     status_code=201,
     operation_id="CAJ03",
     dependencies=[
-        Depends(require_roles("CAJERO")),
+        Depends(require_permiso("caja:operar")),
     ],
 )
 def abrir_jornada(
@@ -360,7 +361,7 @@ def abrir_jornada(
     response_model=Dotacion,
     status_code=201,
     operation_id="CAJ07",
-    dependencies=[Depends(require_roles("CAJERO", "SUPERVISOR"))],
+    dependencies=[Depends(require_permiso("caja:operar", "caja:autorizar"))],
 )
 def registrar_dotacion(
     request: Request,
@@ -388,7 +389,7 @@ def registrar_dotacion(
     response_model=CuadreCaja,
     status_code=201,
     operation_id="CAJ13",
-    dependencies=[Depends(require_roles("CAJERO"))],
+    dependencies=[Depends(require_permiso("caja:operar"))],
 )
 def generar_cuadre(
     request: Request,
@@ -416,7 +417,7 @@ def generar_cuadre(
     "/jornadas/{idJornada}/cuadre/conteo",
     response_model=CuadreCaja,
     operation_id="CAJ16",
-    dependencies=[Depends(require_roles("CAJERO"))],
+    dependencies=[Depends(require_permiso("caja:operar"))],
 )
 def registrar_conteo(
     request: Request,
@@ -445,7 +446,7 @@ def registrar_conteo(
     response_model=Devolucion,
     status_code=201,
     operation_id="CAJ15",
-    dependencies=[Depends(require_roles("CAJERO", "SUPERVISOR"))],
+    dependencies=[Depends(require_permiso("caja:operar", "caja:autorizar"))],
 )
 def registrar_devolucion(
     request: Request,
@@ -474,7 +475,7 @@ def registrar_devolucion(
     "/jornadas/{idJornada}/cuadre/autorizacion",
     response_model=CuadreCaja,
     operation_id="CAJ17",
-    dependencies=[Depends(require_roles("SUPERVISOR"))],
+    dependencies=[Depends(require_permiso("caja:autorizar"))],
 )
 def autorizar_cuadre(
     request: Request,
@@ -502,7 +503,7 @@ def autorizar_cuadre(
     "/jornadas/{idJornada}/cierre",
     response_model=Jornada,
     operation_id="CAJ18",
-    dependencies=[Depends(require_roles("CAJERO"))],
+    dependencies=[Depends(require_permiso("caja:operar"))],
 )
 def cerrar_jornada(
     request: Request,
@@ -529,7 +530,7 @@ def cerrar_jornada(
     response_model=Comprobante,
     status_code=201,
     operation_id="CAJ09",
-    dependencies=[Depends(require_roles("CAJERO"))],
+    dependencies=[Depends(require_permiso("caja:operar"))],
 )
 def registrar_deposito(
     request: Request,
@@ -571,7 +572,7 @@ def registrar_deposito(
     status_code=204,
     response_class=Response,
     operation_id="CAJ10",
-    dependencies=[Depends(require_roles("CAJERO"))],
+    dependencies=[Depends(require_permiso("caja:operar"))],
 )
 def registrar_series(
     request: Request,
@@ -608,7 +609,7 @@ def registrar_series(
     response_model=Comprobante,
     status_code=201,
     operation_id="CAJ11",
-    dependencies=[Depends(require_roles("CAJERO"))],
+    dependencies=[Depends(require_permiso("caja:operar"))],
 )
 def registrar_retiro(
     request: Request,

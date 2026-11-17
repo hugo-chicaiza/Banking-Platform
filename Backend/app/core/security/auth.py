@@ -40,6 +40,7 @@ from app.core.api.errors import problema
 from app.core.config.settings import get_settings
 from app.core.database.db import DbName, get_engine
 from app.core.security.origen import resolver_origen_front
+from app.core.security.permisos import PERMISOS
 from app.integrations.workos_client import (
     get_cookie_password,
     get_frontend_url,
@@ -490,6 +491,34 @@ def require_roles(*permitidos: str) -> Callable[..., Usuario]:
                 "auth: acceso denegado usuario=%s roles=%s requeridos=%s",
                 usuario.id_usuario,
                 ",".join(usuario.roles),
+                ",".join(permitidos),
+            )
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "code": "SIN_PERMISO",
+                    "message": "No tiene permiso para esta operación.",
+                },
+            )
+        return usuario
+
+    return verificar
+
+
+def require_permiso(*permitidos: str) -> Callable[..., Usuario]:
+    """Dependencia de las escrituras: 403 si la sesión de WorkOS no trae ninguno de los
+    permisos. Las consultas siguen por rol (require_roles); ver permisos.py.
+    """
+    desconocidos = set(permitidos) - set(PERMISOS)
+    if not permitidos or desconocidos:
+        raise ValueError(f"Permisos no válidos: {sorted(desconocidos)}")
+
+    def verificar(usuario: UsuarioActual) -> Usuario:
+        if not set(usuario.permisos) & set(permitidos):
+            logger.warning(
+                "auth: acceso denegado usuario=%s permisos=%s requeridos=%s",
+                usuario.id_usuario,
+                ",".join(usuario.permisos),
                 ",".join(permitidos),
             )
             raise HTTPException(

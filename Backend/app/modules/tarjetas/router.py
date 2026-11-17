@@ -18,7 +18,12 @@ from app.core.api.middleware import ip_cliente
 from app.core.config.settings import get_settings
 from app.core.database.db import cooperativa, get_engine
 from app.core.pdf import respuesta_pdf, respuestas_pdf
-from app.core.security.auth import UsuarioAuditoria, require_auth, require_roles
+from app.core.security.auth import (
+    UsuarioAuditoria,
+    require_auth,
+    require_permiso,
+    require_roles,
+)
 from app.modules.tarjetas import service
 from app.modules.tarjetas.schemas import (
     MAX_INT,
@@ -116,7 +121,7 @@ def _ip(request: Request) -> str | None:
     "",
     response_model=Tarjeta,
     status_code=201,
-    dependencies=[Depends(require_roles("ASESOR", "ADMIN"))],
+    dependencies=[Depends(require_permiso("tarjetas:emitir"))],
 )
 def emitir_tarjeta(
     payload: TarjetaCreate,
@@ -187,7 +192,7 @@ def detalle_tarjeta(id_tarjeta: IdTarjetaPath, conn: Db) -> Any:
 @router.post(
     "/{idTarjeta}/estado",
     response_model=Tarjeta,
-    dependencies=[Depends(require_roles("ASESOR", "SUPERVISOR", "ADMIN"))],
+    dependencies=[Depends(require_permiso("tarjetas:estado"))],
 )
 def cambiar_estado(
     id_tarjeta: IdTarjetaPath,
@@ -209,7 +214,7 @@ def cambiar_estado(
 @router.post(
     "/{idTarjeta}/pin",
     status_code=204,
-    dependencies=[Depends(require_roles("ASESOR", "ADMIN")), Depends(_sin_body)],
+    dependencies=[Depends(require_permiso("tarjetas:emitir")), Depends(_sin_body)],
 )
 def regenerar_pin(
     id_tarjeta: IdTarjetaPath,

@@ -11,7 +11,7 @@ from app.core.api.errors import (
 )
 from app.core.api.middleware import ip_cliente
 from app.core.database.db import cooperativa
-from app.core.security.auth import Usuario, require_auth, require_roles
+from app.core.security.auth import Usuario, require_auth, require_permiso, require_roles
 from app.modules.catalogos import administracion, confirmacion, repository, service
 from app.modules.catalogos.schemas import (
     ActividadEconomica,
@@ -113,14 +113,14 @@ def listar_seguros(conn: Db) -> Any:
 def crear_tasa_interes(
     payload: TasaInteresCreate,
     request: Request,
-    usuario: Annotated[Usuario, Depends(require_roles("ADMIN"))],
+    usuario: Annotated[Usuario, Depends(require_permiso("catalogos:editar"))],
     conn: Db,
 ) -> Any:
     """Las tasas no se editan: una nueva con su vigencia reemplaza a la anterior."""
     return service.crear_tasa_interes(conn, payload, usuario, ip_cliente(request.scope))
 
 
-_ADMIN_LECTURA = ("ADMIN", "ASESOR")
+_ADMIN_LECTURA = ("ADMIN", "SUPERVISOR", "ASESOR")
 Clave = Annotated[str, Path(pattern=r"^[a-z-]{3,40}$")]
 IdRegistro = Annotated[str, Path(pattern=r"^[A-Za-z0-9]{1,15}$")]
 
@@ -143,7 +143,7 @@ def listar_catalogos_administrables(
 )
 def pedir_confirmacion(
     clave: Clave,
-    usuario: Annotated[Usuario, Depends(require_roles("ADMIN"))],
+    usuario: Annotated[Usuario, Depends(require_permiso("catalogos:editar"))],
 ) -> dict[str, Any]:
     """Código de 4 caracteres y su token para crear o eliminar en un catálogo que puede
     alterar la lógica de negocio. Se envían en X-Confirmacion-Codigo y
@@ -177,7 +177,7 @@ def crear_registro(
     clave: Clave,
     payload: dict[str, Any],
     request: Request,
-    usuario: Annotated[Usuario, Depends(require_roles("ADMIN"))],
+    usuario: Annotated[Usuario, Depends(require_permiso("catalogos:editar"))],
     conn: Db,
 ) -> dict[str, Any]:
     """Alta con los campos de `camposAlta`; código repetido: 409 CODIGO_DUPLICADO."""
@@ -201,7 +201,7 @@ def eliminar_registro(
     clave: Clave,
     id_registro: IdRegistro,
     request: Request,
-    usuario: Annotated[Usuario, Depends(require_roles("ADMIN"))],
+    usuario: Annotated[Usuario, Depends(require_permiso("catalogos:editar"))],
     conn: Db,
 ) -> Response:
     """Solo lo que nadie usa; si se usa, 409 ITEM_EN_USO y se desactiva en su lugar."""
@@ -226,7 +226,7 @@ def actualizar_registro(
     id_registro: IdRegistro,
     payload: dict[str, Any],
     request: Request,
-    usuario: Annotated[Usuario, Depends(require_roles("ADMIN"))],
+    usuario: Annotated[Usuario, Depends(require_permiso("catalogos:editar"))],
     conn: Db,
 ) -> dict[str, Any]:
     """Edita los campos editables o el estado (A/I). Nada se borra."""

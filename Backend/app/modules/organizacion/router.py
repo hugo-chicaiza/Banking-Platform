@@ -17,6 +17,7 @@ from app.core.security.auth import (
     Usuario,
     UsuarioAuditoria,
     require_auth,
+    require_permiso,
     require_roles,
 )
 from app.core.security.operador import auditar
@@ -50,7 +51,10 @@ IdAgenciaPath = Annotated[str, Path(pattern=r"^[0-9A-Z]{3}$")]
     operation_id="ORG01",
     response_model=Agencia,
     status_code=201,
-    dependencies=[Depends(solo_parametros()), Depends(require_roles(*_ROLES))],
+    dependencies=[
+        Depends(solo_parametros()),
+        Depends(require_permiso("agencias:editar")),
+    ],
     openapi_extra={"x-roles": _ROLES},
 )
 def crear_agencia(
@@ -87,7 +91,10 @@ def obtener_agencia(id_agencia: IdAgenciaPath, conn: Db) -> Agencia:
     tags=["organizacion"],
     operation_id="ORG02",
     response_model=Agencia,
-    dependencies=[Depends(solo_parametros()), Depends(require_roles(*_ROLES))],
+    dependencies=[
+        Depends(solo_parametros()),
+        Depends(require_permiso("agencias:editar")),
+    ],
     openapi_extra={"x-roles": _ROLES},
 )
 def actualizar_agencia(
@@ -128,7 +135,7 @@ def cambiar_estado(
     datos: AgenciaEstadoUpdate,
     conn: Db,
     request: Request,
-    usuario: Annotated[Usuario, Depends(require_roles("ADMIN"))],
+    usuario: Annotated[Usuario, Depends(require_permiso("agencias:editar"))],
 ):
     resultado, anterior = service.cambiar_estado(conn, id_agencia, datos.estado)
     if anterior != resultado.estado:
@@ -181,7 +188,7 @@ def crear_entidad(
     conn: Db,
     request: Request,
     modificado_por: UsuarioAuditoria,
-    usuario: Annotated[Usuario, Depends(require_roles("ADMIN"))],
+    usuario: Annotated[Usuario, Depends(require_permiso("organizacion:editar"))],
 ) -> Entidad:
     """Crea el registro inicial con IdEntidad = 1. Requiere ADMIN.
 
@@ -221,7 +228,7 @@ def editar_entidad(
     conn: Db,
     request: Request,
     modificado_por: UsuarioAuditoria,
-    usuario: Annotated[Usuario, Depends(require_roles("ADMIN"))],
+    usuario: Annotated[Usuario, Depends(require_permiso("organizacion:editar"))],
 ) -> Entidad:
     """Actualiza IdEntidad = 1 y devuelve todos sus datos persistidos.
 
