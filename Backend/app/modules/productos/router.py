@@ -1,7 +1,7 @@
-"""Productos y subproductos (plan E3-02): ADMIN crea y edita; ADMIN y ASESOR consultan.
+"""Catalogo de productos con roles y permisos de la sesion WorkOS.
 
-Mientras no existan los permisos en tablas (E0-04), el acceso es por rol, como el resto
-de los módulos. Sin DELETE: la baja es lógica por Estado.
+ADMIN escribe con PRD-EDITAR; ADMIN/ASESOR consultan con PRD-CONSULTAR.
+La ficha imprimible exige ademas PRD-EXPORTAR. Solo se elimina un Borrador sin uso.
 """
 
 from typing import Annotated
@@ -9,7 +9,12 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Path, Request, Response
 from sqlalchemy import Connection
 
-from app.core.api.errors import RESPUESTAS_ERROR, ProblemDetailsRoute, solo_parametros
+from app.core.api.errors import (
+    RESPUESTAS_ERROR,
+    ProblemDetailsRoute,
+    problema,
+    solo_parametros,
+)
 from app.core.api.middleware import ip_cliente
 from app.core.database.db import cooperativa
 from app.core.security.auth import Usuario, require_auth, require_roles
@@ -43,8 +48,31 @@ router = APIRouter(
 )
 Db = Annotated[Connection, Depends(cooperativa)]
 IdPath = Annotated[int, Path(ge=1, le=2_147_483_647)]
-Lector = Annotated[Usuario, Depends(require_roles(*_LECTURA))]
-Administrador = Annotated[Usuario, Depends(require_roles(*_ESCRITURA))]
+
+
+def _permiso(usuario: Usuario, permiso: str) -> Usuario:
+    if permiso not in usuario.permisos:
+        raise problema(403, "SIN_PERMISO", "No tiene permiso para esta operacion.")
+    return usuario
+
+
+def _lector(usuario: Annotated[Usuario, Depends(require_roles(*_LECTURA))]) -> Usuario:
+    return _permiso(usuario, "PRD-CONSULTAR")
+
+
+def _administrador(
+    usuario: Annotated[Usuario, Depends(require_roles(*_ESCRITURA))],
+) -> Usuario:
+    return _permiso(usuario, "PRD-EDITAR")
+
+
+def _exportador(usuario: Annotated[Usuario, Depends(_lector)]) -> Usuario:
+    return _permiso(usuario, "PRD-EXPORTAR")
+
+
+Lector = Annotated[Usuario, Depends(_lector)]
+Administrador = Annotated[Usuario, Depends(_administrador)]
+Exportador = Annotated[Usuario, Depends(_exportador)]
 
 
 @router.get(
@@ -65,9 +93,24 @@ def listar_productos(_: Lector, conn: Db) -> list[Producto]:
     response_model=list[TipoProductoInfo],
     openapi_extra={"x-roles": _LECTURA},
 )
-def listar_tipos(_: Lector) -> list[TipoProductoInfo]:
+def listar_tipos(_: Lector, conn: Db) -> list[TipoProductoInfo]:
     """Tipos de producto que trae el software (no se crean desde la API)."""
-    return service.TIPOS_PRODUCTO
+    return service.listar_tipos(conn)
+
+
+@router.get(
+    "/subproductos/{id_sub_producto}/ficha/imprimible",
+    operation_id="PRDSubFichaImprimible",
+    response_model=FichaSubProducto,
+    openapi_extra={
+        "x-roles": _LECTURA,
+        "x-permissions": ["PRD-CONSULTAR", "PRD-EXPORTAR"],
+    },
+)
+def ficha_imprimible(
+    id_sub_producto: IdPath, _: Exportador, conn: Db
+) -> FichaSubProducto:
+    return service.ficha_subproducto(conn, id_sub_producto)
 
 
 @router.get(

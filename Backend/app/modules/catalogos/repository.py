@@ -152,7 +152,7 @@ def listar_productos(
                CASE WHEN TipoProducto = 'Cuenta' THEN TipoCuenta END AS tipo_cuenta,
                PermiteOperacionesPresenciales AS permite_operaciones_presenciales
         FROM ProductosFinancieros.Producto
-        WHERE Estado = 'A' AND (:tipo IS NULL OR TipoProducto = :tipo)
+        WHERE Estado = 'A' AND EstadoProducto = 'Activo' AND (:tipo IS NULL OR TipoProducto = :tipo)
         ORDER BY TipoProducto, NombreProducto
         """,
         {"tipo": tipo},
@@ -185,6 +185,7 @@ def listar_productos(
                          (pol.Valor)) AS x (v)
         ) AS e
         WHERE s.Estado = 'A' AND p.Estado = 'A'
+          AND s.EstadoSubProducto = 'Activo' AND p.EstadoProducto = 'Activo'
           AND (:tipo IS NULL OR p.TipoProducto = :tipo)
           -- Elegibilidad: edad -1 = cliente sin fecha de nacimiento (solo sin límites)
           AND (:edad IS NULL

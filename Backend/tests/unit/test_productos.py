@@ -7,7 +7,7 @@ UQ_Producto_Codigo, UQ_SubProducto_Codigo, Estado A/I, TipoCuenta solo en Cuenta
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any
+from typing import Any, cast
 from unittest.mock import MagicMock
 
 import pytest
@@ -85,6 +85,7 @@ class BdFalsa:
             "nombre_red": "Mastercard" if d["id_red"] else None,
             "permite_operaciones_presenciales": d["permite_operaciones_presenciales"],
             "estado": "I",
+            "estado_catalogo": "Borrador",
         }
         return self.siguiente
 
@@ -99,6 +100,7 @@ class BdFalsa:
         nombre: str,
         edad_minima: int | None = None,
         edad_maxima: int | None = None,
+        **elegibilidad: Any,
     ) -> int:
         if any(s["codigo_sub_producto"] == codigo for s in self.subs.values()):
             raise _duplicado("UQ_SubProducto_Codigo")
@@ -108,7 +110,9 @@ class BdFalsa:
             "id_producto": id_producto,
             "codigo_sub_producto": codigo,
             "nombre_sub_producto": nombre,
-            "estado": "A",
+            "estado": "I",
+            "estado_catalogo": "Borrador",
+            **elegibilidad,
             "fecha_registro": datetime(2026, 11, 15, 10, 0),
             "edad_minima": edad_minima,
             "edad_maxima": edad_maxima,
@@ -123,6 +127,29 @@ class BdFalsa:
 def bd(monkeypatch: pytest.MonkeyPatch) -> BdFalsa:
     falsa = BdFalsa()
     for nombre, funcion in {
+        "listar_tipos": lambda _c: [
+            {
+                "id_tipo_producto": 1,
+                "codigo": "CUENTA_AHORRO",
+                "nombre": "Cuenta de ahorro",
+                "tipo_producto": "Cuenta",
+                "tipo_cuenta": "Ahorro",
+            },
+            {
+                "id_tipo_producto": 4,
+                "codigo": "CREDITO",
+                "nombre": "Credito",
+                "tipo_producto": "Credito",
+                "tipo_cuenta": None,
+            },
+            {
+                "id_tipo_producto": 5,
+                "codigo": "TARJETA",
+                "nombre": "Tarjeta",
+                "tipo_producto": "Tarjeta",
+                "tipo_cuenta": None,
+            },
+        ],
         "obtener_producto": falsa.obtener,
         "listar_productos": falsa.listar,
         "listar_subproductos": falsa.listar_subs,
@@ -248,7 +275,7 @@ def test_activar_exige_subproducto_y_luego_se_activa(bd, admin):
             "nombreSubProducto": "Programado natural",
         },
     )
-    assert s.status_code == 201 and s.json()["estado"] == "A"
+    assert s.status_code == 201 and s.json()["estado"] == "I"
     r = admin.patch(f"{BASE}/{id_}", json={"estado": "A", "descripcion": None})
     assert r.status_code == 200
     assert r.json()["estado"] == "A" and r.json()["descripcion"] is None
@@ -320,7 +347,7 @@ def test_eliminar_solo_en_borrador_sin_uso(bd, admin, asesor):
 
 def test_tipos_de_producto_vienen_con_el_software(bd, asesor):
     r = asesor.get(f"{BASE}/tipos")
-    assert [t["codigo"] for t in r.json()] == ["Cuenta", "Credito", "Tarjeta"]
+    assert [t["codigo"] for t in r.json()] == ["CUENTA_AHORRO", "CREDITO", "TARJETA"]
 
 
 def test_monto_solo_en_cuenta(bd, admin):
@@ -373,6 +400,12 @@ def test_desactivar_subproducto(bd, admin, asesor):
             f"{BASE}/subproductos/{sub['idSubProducto']}", json={"estado": "I"}
         ).status_code
         == 403
+    )
+    assert (
+        admin.patch(
+            f"{BASE}/subproductos/{sub['idSubProducto']}", json={"estado": "A"}
+        ).status_code
+        == 200
     )
     r = admin.patch(f"{BASE}/subproductos/{sub['idSubProducto']}", json={"estado": "I"})
     assert r.status_code == 200 and r.json()["estado"] == "I"
@@ -546,3 +579,117 @@ def test_restricciones_de_cuenta(bd, cupos, admin, asesor):
     assert r.json()["diasSinRetiros"] is None
     assert asesor.put(url, json={}).status_code == 403
     assert admin.put(url, json={"saldoMinimo": 0}).status_code in (400, 422)
+
+
+@pytest.mark.parametrize("estado", ["Activo", "Suspendido", "Retirado"])
+@pytest.mark.parametrize(
+    "campo,valor",
+    [
+        ("codigoProducto", "AHO009"),
+        ("nombreProducto", "Nombre nuevo"),
+        ("descripcion", "Otra descripcion"),
+        ("montoAperturaMinimo", 5),
+        ("permiteOperacionesPresenciales", False),
+    ],
+)
+def test_datos_dejan_de_ser_editables_tras_activar(bd, admin, estado, campo, valor):
+    id_ = admin.post(BASE, json=AHORRO).json()["idProducto"]
+    bd.productos[id_]["estado_catalogo"] = estado
+    r = admin.patch(f"{BASE}/{id_}", json={campo: valor})
+    assert r.status_code == 409 and r.json()["code"] == "PRODUCTO_NO_EDITABLE"
+
+
+def test_no_se_elimina_suspendido_ni_se_regresa_a_borrador(bd, admin):
+    id_ = admin.post(BASE, json=AHORRO).json()["idProducto"]
+    bd.productos[id_]["estado_catalogo"] = "Suspendido"
+    assert admin.delete(f"{BASE}/{id_}").status_code == 409
+    r = admin.patch(f"{BASE}/{id_}", json={"estadoCatalogo": "Borrador"})
+    assert r.status_code == 409 and r.json()["code"] == "ESTADO_INVALIDO"
+
+
+def test_subproducto_nace_borrador_y_guarda_elegibilidad(bd, admin):
+    id_ = admin.post(BASE, json=AHORRO).json()["idProducto"]
+    sub = admin.post(
+        f"{BASE}/{id_}/subproductos",
+        json={
+            "codigoSubProducto": "AHO-MN",
+            "nombreSubProducto": "Menores",
+            "edadMinima": 0,
+            "edadMaxima": 17,
+            "tipoClientePermitido": "Natural",
+            "requiereTutor": True,
+            "maximoPorCliente": 1,
+        },
+    ).json()
+    assert sub["estadoCatalogo"] == "Borrador" and sub["estado"] == "I"
+    assert sub["requiereTutor"] and sub["maximoPorCliente"] == 1
+    url = f"{BASE}/subproductos/{sub['idSubProducto']}"
+    assert admin.patch(url, json={"estadoCatalogo": "Activo"}).status_code == 200
+    r = admin.patch(url, json={"edadMaxima": 18})
+    assert r.status_code == 409 and r.json()["code"] == "PRODUCTO_NO_EDITABLE"
+
+
+def test_tipos_sin_ruta_de_alta(bd, admin):
+    assert admin.post(f"{BASE}/tipos", json={"codigo": "NUEVO"}).status_code == 405
+
+
+def test_estado_inconsistente_no_se_guarda(bd, admin):
+    id_ = admin.post(BASE, json=AHORRO).json()["idProducto"]
+    r = admin.patch(f"{BASE}/{id_}", json={"estado": "I", "estadoCatalogo": "Activo"})
+    assert r.status_code == 422 and r.json()["code"] == "ESTADO_INVALIDO"
+
+
+@pytest.mark.parametrize(
+    "metodo,path,body",
+    [
+        ("get", "", None),
+        ("get", "/tipos", None),
+        ("post", "", AHORRO),
+        ("patch", "/1", {"nombreProducto": "Nuevo nombre"}),
+        ("get", "/subproductos/1/ficha/imprimible", None),
+    ],
+)
+def test_permiso_workos_exigido_aunque_sea_admin(bd, metodo, path, body):
+    from dataclasses import replace
+
+    from app.core.security.auth import usuario_actual
+
+    client = _cliente("ADMIN")
+    cast(FastAPI, client.app).dependency_overrides[usuario_actual] = lambda: replace(
+        usuario_con_roles("ADMIN"), permisos=()
+    )
+    r = client.request(metodo, BASE + path, json=body)
+    assert r.status_code == 403 and r.json()["code"] == "SIN_PERMISO"
+
+
+def test_historial_central_conserva_antes_y_despues_sin_truncar(bd, admin, eventos):
+    import json
+
+    id_ = admin.post(BASE, json=AHORRO).json()["idProducto"]
+    antes = dict(bd.productos[id_])
+    descripcion = "Descripcion de producto " * 10
+    r = admin.patch(f"{BASE}/{id_}", json={"descripcion": descripcion})
+    assert r.status_code == 200
+    partes = [e for e in eventos if e.accion == "PRD_PRODUCTO_EDITADO"]
+    assert len(partes) > 1 and all(len(e.descripcion) <= 500 for e in partes)
+    reconstruido = json.loads(
+        "".join(e.descripcion.split(" datos=", 1)[1] for e in partes)
+    )
+    assert reconstruido["antes"]["descripcion"] == antes["descripcion"]
+    assert reconstruido["despues"]["descripcion"] == descripcion.strip()
+    assert all(e.id_registro == str(id_) and "ADMIN" in (e.roles or "") for e in partes)
+
+
+def test_sql_elegibilidad_conserva_aliases_y_estados_del_producto(monkeypatch):
+    consultas = []
+
+    def rows(conn, sql, params=None):
+        consultas.append(sql)
+        return []
+
+    monkeypatch.setattr(repo, "_rows", rows)
+    assert repo.datos_elegibilidad(MagicMock(), 1, 2) is None
+    sql = consultas[0]
+    assert "p.Estado AS estado_producto" in sql
+    assert "p.EstadoProducto AS estado_producto_nuevo" in sql
+    assert "p.EstadoSubProducto" not in sql

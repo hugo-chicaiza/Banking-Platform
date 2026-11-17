@@ -8,7 +8,7 @@ Descripcion varchar(250) NULL (migración 20261115). SubProducto: CodigoSubProdu
 varchar(15) único, NombreSubProducto varchar(100), Estado A/I.
 """
 
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Annotated, Any, Literal, Self
 
@@ -20,6 +20,8 @@ from app.modules.catalogos.subproductos import TipoTarjeta
 
 INT32_MAX = 2_147_483_647
 Estado = Literal["A", "I"]
+EstadoCatalogo = Literal["Borrador", "Activo", "Suspendido", "Retirado"]
+TipoClientePermitido = Literal["Natural", "Juridico", "Ambos"]
 TipoCuenta = Literal["Ahorro", "Corriente"]
 # Sin caracteres de control: termina en pantallas, PDF, reportes y auditoría
 _TEXTO = r"^[^\x00-\x1f\x7f]+$"
@@ -66,6 +68,7 @@ class ProductoCreate(_Entrada):
     nombre_producto: Nombre
     descripcion: Descripcion | None = None
     tipo_producto: TipoProducto
+    id_tipo_producto: IdPositivo | None = None
     # Cuenta
     tipo_cuenta: TipoCuenta | None = None
     monto_apertura_minimo: Monto | None = None
@@ -113,6 +116,7 @@ class ProductoUpdate(_Entrada):
     monto_apertura_minimo: Monto | None = None
     permite_operaciones_presenciales: bool | None = None
     estado: Estado | None = None
+    estado_catalogo: EstadoCatalogo | None = None
 
     @model_validator(mode="after")
     def _algo(self) -> Self:
@@ -124,6 +128,7 @@ class ProductoUpdate(_Entrada):
             "monto_apertura_minimo",
             "permite_operaciones_presenciales",
             "estado",
+            "estado_catalogo",
         ):
             if campo in self.model_fields_set and getattr(self, campo) is None:
                 raise ValueError(f"{campo} no admite null.")
@@ -139,20 +144,35 @@ class SubProductoCreate(_Entrada):
     nombre_sub_producto: Nombre
     edad_minima: Edad | None = None
     edad_maxima: Edad | None = None
+    tipo_cliente_permitido: TipoClientePermitido = "Ambos"
+    requiere_tutor: bool = False
+    id_sub_producto_requerido: IdPositivo | None = None
+    maximo_por_cliente: Annotated[int, Field(ge=1, le=32767)] | None = None
 
 
 class SubProductoUpdate(_Entrada):
     nombre_sub_producto: Nombre | None = None
     estado: Estado | None = None
+    estado_catalogo: EstadoCatalogo | None = None
     # null quita el límite
     edad_minima: Edad | None = None
     edad_maxima: Edad | None = None
+    tipo_cliente_permitido: TipoClientePermitido = "Ambos"
+    requiere_tutor: bool = False
+    id_sub_producto_requerido: IdPositivo | None = None
+    maximo_por_cliente: Annotated[int, Field(ge=1, le=32767)] | None = None
 
     @model_validator(mode="after")
     def _algo(self) -> Self:
         if not self.model_fields_set:
             raise ValueError("Envíe al menos un campo para actualizar.")
-        sin_null = {"nombre_sub_producto", "estado"} & self.model_fields_set
+        sin_null = {
+            "nombre_sub_producto",
+            "estado",
+            "estado_catalogo",
+            "tipo_cliente_permitido",
+            "requiere_tutor",
+        } & self.model_fields_set
         if any(getattr(self, c) is None for c in sin_null):
             raise ValueError("nombreSubProducto y estado no admiten null.")
         return self
@@ -169,10 +189,15 @@ class SubProducto(CamelModel):
     codigo_sub_producto: str
     nombre_sub_producto: str
     estado: Estado
+    estado_catalogo: EstadoCatalogo | None = None
     fecha_registro: datetime
     tipo_tarjeta: TipoTarjeta | None = None
     edad_minima: int | None = None
     edad_maxima: int | None = None
+    tipo_cliente_permitido: TipoClientePermitido = "Ambos"
+    requiere_tutor: bool = False
+    id_sub_producto_requerido: int | None = None
+    maximo_por_cliente: int | None = None
 
 
 class Producto(CamelModel):
@@ -181,6 +206,7 @@ class Producto(CamelModel):
     nombre_producto: str
     descripcion: str | None = None
     tipo_producto: TipoProducto
+    id_tipo_producto: int | None = None
     tipo_cuenta: TipoCuenta | None = None
     monto_apertura_minimo: Money | None = None
     id_tipo_credito: int | None = None
@@ -189,6 +215,7 @@ class Producto(CamelModel):
     nombre_red: str | None = None
     permite_operaciones_presenciales: bool
     estado: Estado
+    estado_catalogo: EstadoCatalogo | None = None
     subproductos: list[SubProducto] = Field(default_factory=list)
 
 
@@ -325,9 +352,11 @@ class VinculosVista(VinculosBase):
 class TipoProductoInfo(CamelModel):
     """Los tipos vienen con el software: no se crean desde la API (E3-02 AC 2)."""
 
-    codigo: TipoProducto
+    id_tipo_producto: int
+    codigo: str
     nombre: str
-    descripcion: str
+    tipo_producto: TipoProducto
+    tipo_cuenta: TipoCuenta | None = None
 
 
 class TasaFicha(CamelModel):
@@ -369,6 +398,22 @@ class ElegibilidadFicha(CamelModel):
     edad_minima_subproducto: int | None = None
     edad_minima_red: int | None = None
     edad_minima_politica: int | None = None
+    tipo_cliente_permitido: TipoClientePermitido = "Ambos"
+    requiere_tutor: bool = False
+    id_sub_producto_requerido: int | None = None
+    maximo_por_cliente: int | None = None
+
+
+class CondicionesFicha(CamelModel):
+    monto_apertura_minimo: Money
+    saldo_minimo: Money
+    tasa_interes_anual: Money
+    costo_mantenimiento: Money
+    periodicidad_interes: str | None = None
+    periodicidad_costo: str | None = None
+    meses_inactividad: int | None = None
+    vigencia_desde: date
+    vigencia_hasta: date | None = None
 
 
 class FichaSubProducto(CamelModel):
@@ -376,6 +421,8 @@ class FichaSubProducto(CamelModel):
 
     producto: Producto
     subproducto: SubProducto
+    fecha: date
+    condiciones: CondicionesFicha | None = None
     elegibilidad: ElegibilidadFicha
     cupos: list[CupoCanalVista]
     restricciones: RestriccionesVista | None = None

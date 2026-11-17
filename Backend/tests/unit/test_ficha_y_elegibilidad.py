@@ -55,6 +55,7 @@ def _cliente(router: Any) -> TestClient:
 
 @pytest.fixture
 def ficha(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(repo, "condiciones_vigentes", lambda *a: None)
     vacio = {
         "tasas_interes": [],
         "comisiones": [],
@@ -220,3 +221,91 @@ def test_cliente_inexistente(monkeypatch):
 def test_edad_cumplida():
     assert catalogos_service.edad_en(date(2008, 11, 16), date(2026, 11, 15)) == 17
     assert catalogos_service.edad_en(date(2008, 11, 15), date(2026, 11, 15)) == 18
+
+
+def test_catalogo_exige_estados_activos_nuevos_y_legados(monkeypatch):
+    consultas = []
+
+    def filas(_conn, sql, _params=None):
+        consultas.append(sql)
+        return []
+
+    monkeypatch.setattr(catalogos_repo, "_rows", filas)
+    catalogos_repo.listar_productos(MagicMock(), None)
+    assert "EstadoProducto = 'Activo'" in consultas[0]
+    assert "s.EstadoSubProducto = 'Activo'" in consultas[1]
+    assert "p.EstadoProducto = 'Activo'" in consultas[1]
+
+
+def test_catalogo_reutiliza_elegibilidad_completa_y_descarta_vacios(monkeypatch):
+    from app.modules.productos import service as productos_service
+
+    monkeypatch.setattr(
+        catalogos_repo, "fecha_nacimiento_cliente", lambda *_a: (True, date(2010, 1, 1))
+    )
+    monkeypatch.setattr(
+        catalogos_repo,
+        "listar_productos",
+        lambda *_a: [
+            {
+                "id_producto": 1,
+                "codigo_producto": "AHO001",
+                "nombre_producto": "Ahorro",
+                "tipo_producto": "Cuenta",
+                "permite_operaciones_presenciales": True,
+                "subproductos": [
+                    {
+                        "id_sub_producto": 1,
+                        "codigo_sub_producto": "AHO-MN",
+                        "nombre_sub_producto": "Menores",
+                    },
+                    {
+                        "id_sub_producto": 2,
+                        "codigo_sub_producto": "AHO-AD",
+                        "nombre_sub_producto": "Adultos",
+                    },
+                ],
+            },
+            {"id_producto": 2, "subproductos": [{"id_sub_producto": 3}]},
+        ],
+    )
+    llamados = []
+
+    def elegible(conn, cliente, sub, fecha):
+        llamados.append((cliente, sub, fecha))
+        return sub == 1, [] if sub == 1 else ["NO_ELEGIBLE"]
+
+    monkeypatch.setattr(productos_service, "cliente_elegible", elegible)
+    r = _cliente(catalogos_router).get(
+        "https://testserver/api/v1/catalogos/productos?idCliente=3"
+    )
+    assert r.status_code == 200, r.text
+    assert [[s["idSubProducto"] for s in p["subproductos"]] for p in r.json()] == [[1]]
+    assert [c[1] for c in llamados] == [1, 2, 3]
+
+
+def test_ficha_incluye_condiciones_vigentes_y_no_tasas_futuras(ficha, monkeypatch):
+    originales = catalogos_repo.listar_tasas_interes(MagicMock(), date(2026, 11, 15))
+    monkeypatch.setattr(
+        catalogos_repo,
+        "listar_tasas_interes",
+        lambda *_a: [*originales, {**originales[0], "vigente": False}],
+    )
+    monkeypatch.setattr(
+        repo,
+        "condiciones_vigentes",
+        lambda *_a: {
+            "monto_apertura_minimo": 10,
+            "saldo_minimo": 5,
+            "tasa_interes_anual": 0,
+            "costo_mantenimiento": 0,
+            "vigencia_desde": date(2026, 1, 1),
+        },
+    )
+    r = _cliente(productos_router).get(
+        "https://testserver/api/v1/productos/subproductos/10/ficha"
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["condiciones"]["montoAperturaMinimo"] == 10
+    assert r.json()["condiciones"]["tasaInteresAnual"] == 0
+    assert all(t["vigente"] for t in r.json()["tasas"])

@@ -5,16 +5,19 @@ plan E3). Desactivar es suspender la venta: las cuentas, tarjetas y créditos qu
 usan siguen operando. Nada se elimina.
 """
 
+import json
 import logging
 import re
 from datetime import date
 from typing import Any
+from uuid import uuid4
 
 from fastapi import HTTPException
 from sqlalchemy import Connection
 from sqlalchemy.exc import DBAPIError
 
 from app.core.api.errors import problema, traducir_error_bd
+from app.core.security import audit
 from app.core.security.auth import Usuario
 from app.core.security.operador import auditar, exigir_id_interno
 from app.modules.catalogos import repository as catalogos_repo
@@ -24,6 +27,7 @@ from app.modules.productos import repository as repo
 from app.modules.productos import vinculos
 from app.modules.productos.schemas import (
     ComisionFicha,
+    CondicionesFicha,
     CupoCanalVista,
     CuposSubProducto,
     ElegibilidadFicha,
@@ -47,6 +51,44 @@ _TABLA_SUBPRODUCTO = "ProductosFinancieros.SubProducto"
 _RESTRICCION = re.compile(
     r"'(UQ_Producto_Codigo|UQ_SubProducto_Codigo|UQ_SubProducto_SubProducto_Producto)'"
 )
+
+
+def _historial(
+    evento: str,
+    tabla: str,
+    id_: int,
+    usuario: Usuario,
+    ip: str,
+    antes: dict[str, Any] | None,
+    despues: dict[str, Any] | None,
+) -> None:
+    """Central audit is the only history. Correlated chunks fit its 500-char column.
+
+    Product configuration only: no customer, account, session or credential data.
+    Reassemble datos in parte order for the same evento to read the complete JSON.
+    Keeps the existing best-effort audit behavior, without a schema migration.
+    """
+    datos = json.dumps(
+        {"antes": antes, "despues": despues},
+        ensure_ascii=True,
+        default=str,
+        separators=(",", ":"),
+    )
+    partes = [datos[i : i + 240] for i in range(0, len(datos), 240)]
+    correlacion = uuid4().hex
+    for indice, parte in enumerate(partes, 1):
+        audit.registrar(
+            audit.EventoAuditoria(
+                accion=evento,
+                tabla=tabla,
+                id_registro=str(id_),
+                resultado="Exitoso",
+                usuario=None,
+                ip=ip,
+                descripcion=f"operador={usuario.id_usuario} evento={correlacion} parte={indice}/{len(partes)} datos={parte}",
+                roles=usuario.roles_texto(),
+            )
+        )
 
 
 def _no_leido() -> HTTPException:
@@ -131,11 +173,32 @@ def crear_producto(
         _TABLA_PRODUCTO,
         usuario,
         ip,
-        f"PRD-CREAR codigo={datos.codigo_producto} tipo={datos.tipo_producto}",
+        f"PRD_PRODUCTO_CREADO codigo={datos.codigo_producto} tipo={datos.tipo_producto}",
     ) as registro:
         try:
             _verificar_referencias(conn, datos)
             valores = datos.model_dump()
+            tipos = repo.listar_tipos(conn)
+            candidatos = [
+                t
+                for t in tipos
+                if t["tipo_producto"] == datos.tipo_producto
+                and (
+                    datos.tipo_producto != "Cuenta"
+                    or t["tipo_cuenta"] == datos.tipo_cuenta
+                )
+                and (
+                    datos.id_tipo_producto is None
+                    or t["id_tipo_producto"] == datos.id_tipo_producto
+                )
+            ]
+            if not candidatos:
+                raise problema(
+                    422,
+                    "TIPO_PRODUCTO_INVALIDO",
+                    "El tipo de producto no existe o no corresponde a los datos.",
+                )
+            valores["id_tipo_producto"] = candidatos[0]["id_tipo_producto"]
             if (
                 datos.tipo_producto == "Cuenta"
                 and valores["monto_apertura_minimo"] is None
@@ -147,7 +210,17 @@ def crear_producto(
                 )
             id_producto = repo.insertar_producto(conn, valores)
             registro.id_registro = str(id_producto)
+            despues = repo.obtener_producto(conn, id_producto)
             conn.commit()
+            _historial(
+                "PRD_PRODUCTO_CREADO",
+                _TABLA_PRODUCTO,
+                id_producto,
+                usuario,
+                ip,
+                None,
+                despues,
+            )
         except DBAPIError as exc:
             conn.rollback()
             raise _traducir(exc) from None
@@ -166,7 +239,7 @@ def actualizar_producto(
         _TABLA_PRODUCTO,
         usuario,
         ip,
-        f"PRD-EDITAR campos={','.join(campos)}",
+        f"PRD_PRODUCTO_EDITADO campos={','.join(campos)}",
         str(id_producto),
     ):
         try:
@@ -174,8 +247,10 @@ def actualizar_producto(
             if actual is None:
                 raise problema(404, "PRODUCTO_NO_ENCONTRADO", "El producto no existe.")
             cambios = {c: getattr(datos, c) for c in campos}
-            if "codigo_producto" in cambios and (
-                str(actual["estado"]).strip() == "A"
+            _sincronizar_estado(actual, cambios)
+            if set(cambios) - {"estado", "estado_catalogo"} and (
+                actual.get("estado_catalogo", "Borrador") != "Borrador"
+                or str(actual["estado"]).strip() == "A"
                 or repo.producto_en_uso(conn, id_producto)
             ):
                 raise problema(
@@ -201,7 +276,17 @@ def actualizar_producto(
                     "Agregue al menos un subproducto antes de activar el producto.",
                 )
             repo.actualizar_producto(conn, id_producto, cambios)
+            despues = repo.obtener_producto(conn, id_producto)
             conn.commit()
+            _historial(
+                "PRD_PRODUCTO_EDITADO",
+                _TABLA_PRODUCTO,
+                id_producto,
+                usuario,
+                ip,
+                actual,
+                despues,
+            )
         except DBAPIError as exc:
             conn.rollback()
             raise _traducir(exc) from None
@@ -241,6 +326,7 @@ def crear_subproducto(
                     f"El código de un subproducto de tarjeta debe empezar por {prefijos}.",
                 )
             _validar_edades(datos.edad_minima, datos.edad_maxima)
+            _validar_requerido(conn, datos.id_sub_producto_requerido)
             id_sub = repo.insertar_subproducto(
                 conn,
                 id_producto,
@@ -248,9 +334,23 @@ def crear_subproducto(
                 datos.nombre_sub_producto,
                 datos.edad_minima,
                 datos.edad_maxima,
+                tipo_cliente_permitido=datos.tipo_cliente_permitido,
+                requiere_tutor=datos.requiere_tutor,
+                id_sub_producto_requerido=datos.id_sub_producto_requerido,
+                maximo_por_cliente=datos.maximo_por_cliente,
             )
             registro.id_registro = str(id_sub)
+            despues = repo.obtener_subproducto(conn, id_sub)
             conn.commit()
+            _historial(
+                "PRD_SUBPRODUCTO_EDITADO",
+                _TABLA_SUBPRODUCTO,
+                id_sub,
+                usuario,
+                ip,
+                None,
+                despues,
+            )
         except DBAPIError as exc:
             conn.rollback()
             raise _traducir(exc) from None
@@ -272,7 +372,7 @@ def actualizar_subproducto(
         _TABLA_SUBPRODUCTO,
         usuario,
         ip,
-        f"PRD-SUB-EDITAR campos={','.join(campos)}",
+        f"PRD_SUBPRODUCTO_EDITADO campos={','.join(campos)}",
         str(id_sub),
     ):
         try:
@@ -282,12 +382,33 @@ def actualizar_subproducto(
                     404, "SUBPRODUCTO_NO_ENCONTRADO", "El subproducto no existe."
                 )
             cambios = {c: getattr(datos, c) for c in campos}
+            _sincronizar_estado(actual, cambios)
+            if (
+                set(cambios) - {"estado", "estado_catalogo"}
+                and actual.get("estado_catalogo", "Borrador") != "Borrador"
+            ):
+                raise problema(
+                    409,
+                    "PRODUCTO_NO_EDITABLE",
+                    "Los datos solo se cambian en Borrador.",
+                )
+            _validar_requerido(conn, cambios.get("id_sub_producto_requerido"), id_sub)
             _validar_edades(
                 cambios.get("edad_minima", actual["edad_minima"]),
                 cambios.get("edad_maxima", actual["edad_maxima"]),
             )
             repo.actualizar_subproducto(conn, id_sub, cambios)
+            despues = repo.obtener_subproducto(conn, id_sub)
             conn.commit()
+            _historial(
+                "PRD_SUBPRODUCTO_EDITADO",
+                _TABLA_SUBPRODUCTO,
+                id_sub,
+                usuario,
+                ip,
+                actual,
+                despues,
+            )
         except DBAPIError as exc:
             conn.rollback()
             raise _traducir(exc) from None
@@ -439,23 +560,49 @@ def guardar_restricciones(
 
 # ---------- Tipos, eliminación en borrador y ficha (E3-02) ----------
 
-TIPOS_PRODUCTO = [
-    TipoProductoInfo(
-        codigo="Cuenta",
-        nombre="Cuenta",
-        descripcion="Cuentas de ahorro y corriente: cupos por canal, restricciones y tasa de ahorro.",
-    ),
-    TipoProductoInfo(
-        codigo="Credito",
-        nombre="Crédito",
-        descripcion="Créditos de un tipo de crédito: tasas, seguros y tablas de amortización.",
-    ),
-    TipoProductoInfo(
-        codigo="Tarjeta",
-        nombre="Tarjeta",
-        descripcion="Tarjetas de débito y crédito de una red: cupos por canal y tasas de tarjeta.",
-    ),
-]
+
+def listar_tipos(conn: Connection) -> list[TipoProductoInfo]:
+    return [TipoProductoInfo.model_validate(t) for t in repo.listar_tipos(conn)]
+
+
+def _sincronizar_estado(actual: dict[str, Any], cambios: dict[str, Any]) -> None:
+    estado = cambios.get("estado_catalogo")
+    if estado is None and "estado" in cambios:
+        estado = "Activo" if cambios["estado"] == "A" else "Suspendido"
+    if estado is None:
+        return
+    anterior = actual.get("estado_catalogo") or (
+        "Activo" if actual["estado"] == "A" else "Suspendido"
+    )
+    transiciones = {
+        "Borrador": {"Activo"},
+        "Activo": {"Suspendido", "Retirado"},
+        "Suspendido": {"Activo", "Retirado"},
+        "Retirado": set(),
+    }
+    if estado != anterior and estado not in transiciones[anterior]:
+        raise problema(
+            409, "ESTADO_INVALIDO", "La transicion de estado no esta permitida."
+        )
+    legado = "A" if estado == "Activo" else "I"
+    if "estado" in cambios and cambios["estado"] != legado:
+        raise problema(
+            422, "ESTADO_INVALIDO", "Los estados enviados son incompatibles."
+        )
+    cambios.update(estado=legado, estado_catalogo=estado)
+
+
+def _validar_requerido(
+    conn: Connection, requerido: int | None, id_sub: int | None = None
+) -> None:
+    if requerido is not None and (
+        requerido == id_sub or repo.obtener_subproducto(conn, requerido) is None
+    ):
+        raise problema(
+            422,
+            "ELEGIBILIDAD_INVALIDA",
+            "El subproducto requerido no existe o es el mismo.",
+        )
 
 
 def eliminar_producto(
@@ -469,7 +616,10 @@ def eliminar_producto(
             actual = repo.obtener_producto(conn, id_producto, bloquear=True)
             if actual is None:
                 raise problema(404, "PRODUCTO_NO_ENCONTRADO", "El producto no existe.")
-            if str(actual["estado"]).strip() == "A":
+            if (
+                str(actual["estado"]).strip() == "A"
+                or actual.get("estado_catalogo", "Borrador") != "Borrador"
+            ):
                 raise problema(
                     409,
                     "PRODUCTO_ACTIVO",
@@ -509,7 +659,7 @@ def ficha_subproducto(conn: Connection, id_sub: int) -> FichaSubProducto:
     tasas = [
         TasaFicha.model_validate({**t, "del_producto": tasas_ids[t["id_tasa_interes"]]})
         for t in catalogos_repo.listar_tasas_interes(conn, hoy)
-        if t["id_tasa_interes"] in tasas_ids
+        if t["id_tasa_interes"] in tasas_ids and t["vigente"]
     ]
     exonerados = {c["id_comision"] for c in propios["comisiones"] if c["exonerado"]}
     comisiones_ids = origen(
@@ -563,7 +713,17 @@ def ficha_subproducto(conn: Connection, id_sub: int) -> FichaSubProducto:
     return FichaSubProducto(
         producto=producto,
         subproducto=_subproducto(sub, tipo),
+        fecha=hoy,
+        condiciones=(
+            CondicionesFicha.model_validate(c)
+            if (c := repo.condiciones_vigentes(conn, id_sub, hoy, "FICHA")) is not None
+            else None
+        ),
         elegibilidad=ElegibilidadFicha(
+            tipo_cliente_permitido=sub.get("tipo_cliente_permitido", "Ambos"),
+            requiere_tutor=sub.get("requiere_tutor", False),
+            id_sub_producto_requerido=sub.get("id_sub_producto_requerido"),
+            maximo_por_cliente=sub.get("maximo_por_cliente"),
             edad_minima=edades.get("efectiva"),
             edad_maxima=edades.get("maxima"),
             edad_minima_subproducto=edades.get("subproducto"),
@@ -612,7 +772,7 @@ def cliente_elegible(
     """Evalúa elegibilidad sin modificar datos; rechaza cuando falta prueba de tutor."""
     if id_cliente <= 0 or id_subproducto <= 0:
         raise ValueError("Los identificadores deben ser positivos")
-    fecha = fecha_contable or date.today()
+    fecha = fecha_contable or catalogos_service.hoy()
     if not isinstance(fecha, date):
         raise TypeError("fecha_contable debe ser date")
     datos = repo.datos_elegibilidad(conn, id_cliente, id_subproducto)

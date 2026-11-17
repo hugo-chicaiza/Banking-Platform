@@ -14,7 +14,8 @@ _PRODUCTO = """
            p.IdTipoCredito AS id_tipo_credito, tc.Nombre AS nombre_tipo_credito,
            p.IdRed AS id_red, r.Nombre AS nombre_red,
            p.PermiteOperacionesPresenciales AS permite_operaciones_presenciales,
-           p.Estado AS estado
+           p.Estado AS estado, p.EstadoProducto AS estado_catalogo,
+           p.IdTipoProducto AS id_tipo_producto
     FROM ProductosFinancieros.Producto AS p{bloqueo}
     LEFT JOIN Credito.TipoCredito AS tc ON tc.IdTipoCredito = p.IdTipoCredito
     LEFT JOIN ProductosFinancieros.Red AS r ON r.IdRed = p.IdRed
@@ -25,7 +26,10 @@ _SUBPRODUCTO = """
            CodigoSubProducto AS codigo_sub_producto,
            NombreSubProducto AS nombre_sub_producto, Estado AS estado,
            FechaRegistro AS fecha_registro, EdadMinima AS edad_minima,
-           EdadMaxima AS edad_maxima
+           EdadMaxima AS edad_maxima, EstadoSubProducto AS estado_catalogo,
+           TipoClientePermitido AS tipo_cliente_permitido, RequiereTutor AS requiere_tutor,
+           IdSubProductoRequerido AS id_sub_producto_requerido,
+           MaximoPorCliente AS maximo_por_cliente
     FROM ProductosFinancieros.SubProducto{bloqueo}
 """
 
@@ -34,6 +38,21 @@ def _rows(
     conn: Connection, sql: str, params: dict[str, Any] | None = None
 ) -> list[dict[str, Any]]:
     return [dict(row) for row in conn.execute(text(sql), params or {}).mappings()]
+
+
+def listar_tipos(conn: Connection) -> list[dict[str, Any]]:
+    return _rows(
+        conn,
+        """
+        SELECT IdTipoProducto AS id_tipo_producto, Codigo AS codigo, Nombre AS nombre,
+            CASE Codigo WHEN 'CREDITO' THEN 'Credito' WHEN 'TARJETA' THEN 'Tarjeta'
+                 ELSE 'Cuenta' END AS tipo_producto,
+            CASE Codigo WHEN 'CUENTA_CORRIENTE' THEN 'Corriente'
+                 WHEN 'CUENTA_AHORRO' THEN 'Ahorro'
+                 WHEN 'CERTIFICADO_APORTACION' THEN 'Ahorro' END AS tipo_cuenta
+        FROM ProductosFinancieros.TipoProducto WHERE Estado = 'A' ORDER BY IdTipoProducto
+    """,
+    )
 
 
 def listar_productos(conn: Connection) -> list[dict[str, Any]]:
@@ -107,11 +126,11 @@ def insertar_producto(conn: Connection, datos: dict[str, Any]) -> int:
                 INSERT INTO ProductosFinancieros.Producto (
                     CodigoProducto, NombreProducto, Descripcion, TipoProducto,
                     MontoAperturaMinimo, IdTipoCredito, IdRed, TipoCuenta,
-                    PermiteOperacionesPresenciales, Estado)
+                    PermiteOperacionesPresenciales, Estado, EstadoProducto, IdTipoProducto)
                 OUTPUT inserted.IdProducto
                 VALUES (:codigo_producto, :nombre_producto, :descripcion, :tipo_producto,
                         :monto_apertura_minimo, :id_tipo_credito, :id_red, :tipo_cuenta,
-                        :permite_operaciones_presenciales, 'I')
+                        :permite_operaciones_presenciales, 'I', 'Borrador', :id_tipo_producto)
                 """
             ),
             datos,
@@ -126,8 +145,19 @@ _CAMPOS_PRODUCTO = (
     "monto_apertura_minimo",
     "permite_operaciones_presenciales",
     "estado",
+    "estado_catalogo",
 )
-_CAMPOS_SUBPRODUCTO = ("nombre_sub_producto", "estado", "edad_minima", "edad_maxima")
+_CAMPOS_SUBPRODUCTO = (
+    "nombre_sub_producto",
+    "estado",
+    "estado_catalogo",
+    "edad_minima",
+    "edad_maxima",
+    "tipo_cliente_permitido",
+    "requiere_tutor",
+    "id_sub_producto_requerido",
+    "maximo_por_cliente",
+)
 
 
 def _parametros(
@@ -166,7 +196,8 @@ def actualizar_producto(
                     CASE WHEN :cambia_permite_operaciones_presenciales = 1
                     THEN :permite_operaciones_presenciales
                     ELSE PermiteOperacionesPresenciales END,
-                Estado = CASE WHEN :cambia_estado = 1 THEN :estado ELSE Estado END
+                Estado = CASE WHEN :cambia_estado = 1 THEN :estado ELSE Estado END,
+                EstadoProducto = CASE WHEN :cambia_estado_catalogo = 1 THEN :estado_catalogo ELSE EstadoProducto END
             WHERE IdProducto = :id
             """
         ),
@@ -181,15 +212,22 @@ def insertar_subproducto(
     nombre: str,
     edad_minima: int | None = None,
     edad_maxima: int | None = None,
+    *,
+    tipo_cliente_permitido: str = "Ambos",
+    requiere_tutor: bool = False,
+    id_sub_producto_requerido: int | None = None,
+    maximo_por_cliente: int | None = None,
 ) -> int:
     return int(
         conn.execute(
             text(
                 """
                 INSERT INTO ProductosFinancieros.SubProducto (IdProducto, CodigoSubProducto,
-                    NombreSubProducto, Estado, EdadMinima, EdadMaxima)
+                    NombreSubProducto, Estado, EdadMinima, EdadMaxima, EstadoSubProducto,
+                    TipoClientePermitido, RequiereTutor, IdSubProductoRequerido, MaximoPorCliente)
                 OUTPUT inserted.IdSubProducto
-                VALUES (:id_producto, :codigo, :nombre, 'A', :edad_minima, :edad_maxima)
+                VALUES (:id_producto, :codigo, :nombre, 'I', :edad_minima, :edad_maxima, 'Borrador',
+                        :tipo_cliente_permitido, :requiere_tutor, :id_sub_producto_requerido, :maximo_por_cliente)
                 """
             ),
             {
@@ -198,6 +236,10 @@ def insertar_subproducto(
                 "nombre": nombre,
                 "edad_minima": edad_minima,
                 "edad_maxima": edad_maxima,
+                "tipo_cliente_permitido": tipo_cliente_permitido,
+                "requiere_tutor": requiere_tutor,
+                "id_sub_producto_requerido": id_sub_producto_requerido,
+                "maximo_por_cliente": maximo_por_cliente,
             },
         ).scalar_one()
     )
@@ -213,10 +255,15 @@ def actualizar_subproducto(
                 NombreSubProducto = CASE WHEN :cambia_nombre_sub_producto = 1
                     THEN :nombre_sub_producto ELSE NombreSubProducto END,
                 Estado = CASE WHEN :cambia_estado = 1 THEN :estado ELSE Estado END,
+                EstadoSubProducto = CASE WHEN :cambia_estado_catalogo = 1 THEN :estado_catalogo ELSE EstadoSubProducto END,
                 EdadMinima = CASE WHEN :cambia_edad_minima = 1
                     THEN :edad_minima ELSE EdadMinima END,
                 EdadMaxima = CASE WHEN :cambia_edad_maxima = 1
-                    THEN :edad_maxima ELSE EdadMaxima END
+                    THEN :edad_maxima ELSE EdadMaxima END,
+                TipoClientePermitido = CASE WHEN :cambia_tipo_cliente_permitido = 1 THEN :tipo_cliente_permitido ELSE TipoClientePermitido END,
+                RequiereTutor = CASE WHEN :cambia_requiere_tutor = 1 THEN :requiere_tutor ELSE RequiereTutor END,
+                IdSubProductoRequerido = CASE WHEN :cambia_id_sub_producto_requerido = 1 THEN :id_sub_producto_requerido ELSE IdSubProductoRequerido END,
+                MaximoPorCliente = CASE WHEN :cambia_maximo_por_cliente = 1 THEN :maximo_por_cliente ELSE MaximoPorCliente END
             WHERE IdSubProducto = :id
             """
         ),
@@ -507,6 +554,8 @@ def eliminar_producto(conn: Connection, id_producto: int) -> None:
         DELETE FROM ProductosFinancieros.ProductoRestriccion
         WHERE IdSubProducto IN (SELECT IdSubProducto FROM ProductosFinancieros.SubProducto WHERE IdProducto = :id)
         """,
+        "DELETE FROM ProductosFinancieros.SubProductoComision WHERE IdSubProducto IN (SELECT IdSubProducto FROM ProductosFinancieros.SubProducto WHERE IdProducto = :id)",
+        "DELETE FROM ProductosFinancieros.SubProductoCondicion WHERE IdSubProducto IN (SELECT IdSubProducto FROM ProductosFinancieros.SubProducto WHERE IdProducto = :id)",
         "DELETE FROM ProductosFinancieros.SubProducto WHERE IdProducto = :id",
         "DELETE FROM ProductosFinancieros.Producto WHERE IdProducto = :id",
     ):
