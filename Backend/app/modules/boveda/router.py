@@ -1,9 +1,9 @@
-"""Las seis rutas BOV: sesión, roles, CSRF y errores F-04."""
+"""Rutas de bóveda: sesión, roles, permisos, CSRF y errores F-04."""
 
 from datetime import date
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Header, Path, Query, Request, Response
+from fastapi import APIRouter, Depends, Path, Query, Request, Response
 from sqlalchemy import Connection
 
 from app.core.api.errors import RESPUESTAS_ERROR, ProblemDetailsRoute, solo_parametros
@@ -18,12 +18,14 @@ from app.modules.boveda.schemas import (
     ArqueoBoveda,
     ArqueoBovedaRequest,
     Boveda,
-    MovimientoBoveda,
-    MovimientoBovedaRequest,
+    EstadoArqueo,
+    PageArqueoBoveda,
     PageMovimientoBoveda,
+    TipoArqueo,
     TipoBoveda,
     TipoMovimiento,
 )
+from app.modules.boveda.solicitudes.router import router as solicitudes_router
 
 
 def _sin_cache(response: Response) -> None:
@@ -77,7 +79,7 @@ def obtener_boveda(
 def listar_movimientos(
     id_boveda: IdBoveda,
     usuario: Annotated[
-        Usuario, Depends(require_roles("SUPERVISOR", "CONTADOR", "AUDITOR"))
+        Usuario, Depends(require_roles("SUPERVISOR", "CONTADOR", "AUDITOR", "ADMIN"))
     ],
     conn: Conexion,
     _: Annotated[
@@ -104,30 +106,54 @@ def listar_movimientos(
 
 @router.post(
     "/bovedas/{idBoveda}/movimientos",
-    response_model=list[MovimientoBoveda],
-    status_code=201,
+    response_model=None,
+    status_code=410,
     operation_id="BOV04",
+    deprecated=True,
+    responses={
+        410: {
+            **RESPUESTAS_ERROR[409],
+            "description": "Crear una solicitud y obtener aprobación independiente.",
+        }
+    },
 )
 def registrar_movimiento(
     id_boveda: IdBoveda,
-    datos: MovimientoBovedaRequest,
-    request: Request,
     usuario: Annotated[Usuario, Depends(require_permiso("boveda:operar"))],
-    id_interno: IdInterno,
-    conn: Conexion,
     _: Annotated[None, Depends(solo_parametros())],
-    clave: Annotated[
-        str | None,
-        Header(
-            alias="Idempotency-Key",
-            min_length=1,
-            max_length=64,
-            pattern=r"^[A-Za-z0-9_-]+$",
+) -> None:
+    service.registrar_movimiento()
+
+
+@router.get(
+    "/bovedas/{idBoveda}/arqueos",
+    response_model=PageArqueoBoveda,
+    operation_id="BOVArqueos",
+)
+def listar_arqueos(
+    id_boveda: IdBoveda,
+    usuario: Annotated[
+        Usuario, Depends(require_roles("SUPERVISOR", "CONTADOR", "AUDITOR", "ADMIN"))
+    ],
+    conn: Conexion,
+    _: Annotated[
+        None,
+        Depends(
+            solo_parametros(
+                "desde", "hasta", "estado", "tipoArqueo", "page", "pageSize"
+            )
         ),
-    ] = None,
-) -> list[MovimientoBoveda]:
-    return service.registrar_movimiento(
-        conn, usuario, id_interno, id_boveda, datos, ip_cliente(request.scope), clave
+    ],
+    desde: date | None = None,
+    hasta: date | None = None,
+    estado: EstadoArqueo | None = None,
+    tipo_arqueo: Annotated[TipoArqueo | None, Query(alias="tipoArqueo")] = None,
+    page: Annotated[int, Query(ge=1, le=INT32_MAX)] = 1,
+    page_size: Annotated[int, Query(alias="pageSize", ge=1, le=100)] = 20,
+) -> PageArqueoBoveda:
+    """Historial por bóveda, de más reciente a más antiguo, con días inclusivos."""
+    return service.listar_arqueos(
+        conn, usuario, id_boveda, desde, hasta, estado, tipo_arqueo, page, page_size
     )
 
 
@@ -167,3 +193,6 @@ def aprobar_arqueo(
     return service.aprobar_arqueo(
         conn, usuario, id_interno, id_arqueo, ip_cliente(request.scope)
     )
+
+
+router.include_router(solicitudes_router)

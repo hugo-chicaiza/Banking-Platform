@@ -100,6 +100,11 @@ class LaboratorioBoveda:
             migracion = BACKEND / "migrations/20261114_boveda_bov01_06.tsql"
             self.ejecutar_script(raw, migracion)
             self.ejecutar_script(raw, migracion)  # También comprueba reejecución.
+            solicitudes = (
+                BACKEND / "migrations/20261117_boveda_solicitudes_autorizacion.tsql"
+            )
+            self.ejecutar_script(raw, solicitudes)
+            self.ejecutar_script(raw, solicitudes)
         self.engine = create_engine(
             "mssql+pyodbc://", creator=lambda: self.abrir(self.database)
         )

@@ -1,9 +1,8 @@
 """BOV-01..06. Inventario e historial siempre se confirman junto con el asiento."""
 
-import hashlib
-import json
 from datetime import date
 from decimal import Decimal
+from typing import Never
 
 from sqlalchemy import Connection
 
@@ -21,14 +20,16 @@ from app.modules.boveda.schemas import (
     DenominacionBoveda,
     Desglose,
     DiferenciaDenominacion,
+    EstadoArqueo,
     MovimientoBoveda,
-    MovimientoBovedaRequest,
+    PageArqueoBoveda,
     PageMovimientoBoveda,
+    ResumenArqueoBoveda,
+    TipoArqueo,
 )
 from app.modules.contabilidad import service as contabilidad
 
 _GLOBALES = frozenset({"ADMIN", "CONTADOR", "AUDITOR"})
-_SUPERVISOR = frozenset({"SUPERVISOR"})
 _TESTIGOS = frozenset({"SUPERVISOR", "AUDITOR"})
 _MAX_DINERO = Decimal("9999999999999999.99")
 
@@ -244,149 +245,115 @@ def _aplicar(
     return movimiento
 
 
-def registrar_movimiento(
+def registrar_movimiento() -> Never:
+    """BOV04 legado. El movimiento requiere una solicitud y otra sesión."""
+    raise problema(
+        410,
+        "SOLICITUD_AUTORIZACION_REQUERIDA",
+        "Registre una solicitud de movimiento y solicite su aprobación independiente.",
+    )
+
+
+def ejecutar_movimiento_autorizado(
+    conn: Connection,
+    bovedas: dict[int, Fila],
+    solicitud: Fila,
+    autorizador: int,
+    piezas: dict[int, int],
+    valores: dict[int, Decimal],
+) -> list[MovimientoBoveda]:
+    """Ejecución compartida, dentro de la transacción de aprobación."""
+    if not conn.in_transaction():
+        raise RuntimeError("La ejecución requiere una transacción")
+    origen = bovedas[solicitud["id_boveda"]]
+    destino = solicitud["id_boveda_contraparte"]
+    tipo = solicitud["tipo_movimiento"]
+    fecha = contabilidad.resolver_id_fecha_contable(conn, contabilidad.ahora_ecuador())
+    id_origen = _aplicar(
+        conn,
+        origen,
+        tipo,
+        tipo in {"ProvisionExterna", "AjusteSobrante"},
+        piezas,
+        valores,
+        solicitud["id_usuario_solicitante"],
+        autorizador,
+        fecha,
+        solicitud["observaciones"],
+        contraparte=destino,
+    )
+    movimientos = [id_origen]
+    if tipo == "Traslado":
+        id_destino = _aplicar(
+            conn,
+            bovedas[destino],
+            tipo,
+            True,
+            piezas,
+            valores,
+            solicitud["id_usuario_solicitante"],
+            autorizador,
+            fecha,
+            solicitud["observaciones"],
+            contraparte=origen["id_boveda"],
+            relacionado=id_origen,
+        )
+        repo.relacionar_movimiento(conn, id_origen, id_destino)
+        movimientos.append(id_destino)
+    return _movimientos(conn, [repo.obtener_movimiento(conn, i) for i in movimientos])
+
+
+def listar_arqueos(
     conn: Connection,
     usuario: Usuario,
-    id_interno: int | None,
     id_boveda: int,
-    datos: MovimientoBovedaRequest,
-    ip: str,
-    clave: str | None = None,
-) -> list[MovimientoBoveda]:
-    with auditar(
-        "MOVIMIENTO_BOVEDA",
-        "Boveda.MovimientoBoveda",
-        usuario,
-        ip,
-        f"boveda={id_boveda} tipo={datos.tipo_movimiento}",
-    ) as auditado:
-        actor = exigir_id_interno(id_interno)
-        if actor == datos.autorizado_por:
-            raise problema(
-                409,
-                "DOBLE_CUSTODIA_VIOLADA",
-                "Quien autoriza debe ser distinto de quien opera.",
-            )
-        traslado = datos.tipo_movimiento == "Traslado"
-        destino = datos.id_boveda_contraparte
-        if traslado and destino is None:
-            raise problema(
-                422,
-                "TRASLADO_REQUIERE_CONTRAPARTE",
-                "El traslado requiere una bóveda destino.",
-            )
-        if destino == id_boveda or (not traslado and destino is not None):
-            raise problema(
-                422,
-                "CONTRAPARTE_INVALIDA",
-                "La bóveda contraparte no es válida para esta operación.",
-            )
-        canonico = {
-            **datos.model_dump(mode="json"),
-            "desglose": sorted(
-                [d.model_dump() for d in datos.desglose],
-                key=lambda d: d["id_denominacion"],
-            ),
-            "boveda": id_boveda,
-        }
-        huella = hashlib.sha256(
-            json.dumps(canonico, sort_keys=True).encode()
-        ).hexdigest()
-        with conn.begin():
-            # Orden de ids estable: traslados opuestos no bloquean A->B y B->A a la vez.
-            ids = sorted(
-                {id_boveda, destino}
-                if traslado and destino is not None
-                else {id_boveda}
-            )
-            bovedas = {
-                i: _exigir_boveda(
-                    repo.obtener_boveda(conn, i, bloquear=True), cuerpo=i != id_boveda
-                )
-                for i in ids
+    desde: date | None,
+    hasta: date | None,
+    estado: EstadoArqueo | None,
+    tipo: TipoArqueo | None,
+    page: int,
+    page_size: int,
+) -> PageArqueoBoveda:
+    if desde and hasta and desde > hasta:
+        raise problema(
+            400, "RANGO_FECHAS_INVALIDO", "Desde no puede ser posterior a hasta."
+        )
+    if hasta == date.max or any(d and d.year < 1753 for d in (desde, hasta)):
+        raise problema(
+            400, "FECHA_FUERA_RANGO", "La fecha está fuera del rango permitido."
+        )
+    with conn.begin():
+        # Mismo orden que registro/aprobación: cabeceras y ajustes de una sola versión.
+        boveda = _exigir_boveda(repo.obtener_boveda(conn, id_boveda, bloquear=True))
+        _alcance(usuario, boveda["id_agencia"])
+        filas, total = repo.listar_arqueos(
+            conn, id_boveda, desde, hasta, estado, tipo, page, page_size
+        )
+        ajustes = repo.ajustes_arqueos(conn, [f["id_arqueo_boveda"] for f in filas])
+        items = []
+        for fila in filas:
+            teorico, fisico = fila["saldo_teorico"], fila["saldo_fisico"]
+            vinculados = set(ajustes[fila["id_arqueo_boveda"]])
+            if fila["id_movimiento_ajuste"] is not None:
+                # El legado puede tener solo el vínculo desde la cabecera del arqueo.
+                vinculados.add(fila["id_movimiento_ajuste"])
+            datos = {
+                k: v
+                for k, v in fila.items()
+                if k not in {"id_movimiento_corte", "numero_fila", "total"}
             }
-            origen = bovedas[id_boveda]
-            _alcance(usuario, origen["id_agencia"], escritura=True)
-            if clave:
-                anterior = repo.repeticion(conn, actor, clave)
-                if anterior is not None:
-                    if (
-                        repo.huella_movimiento(conn, anterior["id_movimiento"])
-                        != huella
-                    ):
-                        raise problema(
-                            409,
-                            "IDEMPOTENCIA_CONFLICTO",
-                            "La clave ya se utilizó con otros datos.",
-                        )
-                    repetidos = [anterior]
-                    if anterior["tipo_movimiento"] == "Traslado":
-                        repetidos.append(
-                            repo.obtener_movimiento(
-                                conn, anterior["id_movimiento_relacionado"]
-                            )
-                        )
-                    auditado.id_registro = str(anterior["id_movimiento"])
-                    return _movimientos(conn, repetidos)
-            for boveda in bovedas.values():
-                _exigir_boveda(boveda, estado=True)
-            validar_participante_boveda(
-                datos.autorizado_por, origen["id_agencia"], _SUPERVISOR
-            )
-            catalogo = repo.denominaciones(
-                conn, [d.id_denominacion for d in datos.desglose]
-            )
-            if len(catalogo) != len(datos.desglose):
-                raise problema(
-                    422, "DENOMINACION_NO_ENCONTRADA", "Una denominación no existe."
+            items.append(
+                ResumenArqueoBoveda(
+                    **datos,
+                    diferencia=fisico - teorico
+                    if fisico is not None and teorico is not None
+                    else None,
+                    ids_movimientos_ajuste=sorted(vinculados),
                 )
-            if any(d["estado"] != "A" for d in catalogo.values()):
-                raise problema(
-                    409, "DENOMINACION_NO_ACTIVA", "Una denominación no está activa."
-                )
-            valores = {i: d["valor"] for i, d in catalogo.items()}
-            piezas = {d.id_denominacion: d.cantidad for d in datos.desglose}
-            fecha = contabilidad.resolver_id_fecha_contable(
-                conn, contabilidad.ahora_ecuador()
             )
-            id_origen = _aplicar(
-                conn,
-                origen,
-                datos.tipo_movimiento,
-                datos.tipo_movimiento in {"ProvisionExterna", "AjusteSobrante"},
-                piezas,
-                valores,
-                actor,
-                datos.autorizado_por,
-                fecha,
-                datos.observaciones,
-                contraparte=destino,
-                clave=clave,
-                huella=huella if clave else None,
-            )
-            movimientos = [id_origen]
-            if traslado and destino is not None:
-                id_destino = _aplicar(
-                    conn,
-                    bovedas[destino],
-                    "Traslado",
-                    True,
-                    piezas,
-                    valores,
-                    actor,
-                    datos.autorizado_por,
-                    fecha,
-                    datos.observaciones,
-                    contraparte=id_boveda,
-                    relacionado=id_origen,
-                )
-                # También se vincula la salida para recuperar el par en un reintento.
-                repo.relacionar_movimiento(conn, id_origen, id_destino)
-                movimientos.append(id_destino)
-            auditado.id_registro = str(id_origen)
-            return _movimientos(
-                conn, [repo.obtener_movimiento(conn, i) for i in movimientos]
-            )
+        return PageArqueoBoveda(
+            items=items, page=page, page_size=page_size, total=total
+        )
 
 
 def _arqueo(conn: Connection, fila: Fila) -> ArqueoBoveda:

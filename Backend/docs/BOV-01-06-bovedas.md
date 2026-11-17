@@ -1,6 +1,6 @@
 # Bóvedas: BOV-01 a BOV-06
 
-Las seis rutas gestionan el efectivo de bóvedas existentes: consultas, movimientos
+Las rutas gestionan el efectivo de bóvedas existentes: consultas, movimientos
 con doble custodia y arqueos con aprobación. Caja conserva sus dotaciones y
 devoluciones. No se añaden los siete endpoints de administración y consulta
 discutidos como ampliación.
@@ -15,16 +15,29 @@ Prefijo: `/api/v1/boveda`. El contrato ejecutable se genera en
 |---|---|---|
 | BOV01 | GET `/bovedas` | SUPERVISOR, CONTADOR, ADMIN |
 | BOV02 | GET `/bovedas/{idBoveda}` | SUPERVISOR, CONTADOR, ADMIN |
-| BOV03 | GET `/bovedas/{idBoveda}/movimientos` | SUPERVISOR, CONTADOR, AUDITOR |
-| BOV04 | POST `/bovedas/{idBoveda}/movimientos` | SUPERVISOR |
-| BOV05 | POST `/bovedas/{idBoveda}/arqueos` | SUPERVISOR, AUDITOR |
-| BOV06 | POST `/arqueos/{idArqueoBoveda}/aprobacion` | SUPERVISOR |
+| BOV03 | GET `/bovedas/{idBoveda}/movimientos` | SUPERVISOR, CONTADOR, AUDITOR, ADMIN |
+| BOV04 legado (410) | POST `/bovedas/{idBoveda}/movimientos` | permiso boveda:operar |
+| BOV05 | POST `/bovedas/{idBoveda}/arqueos` | permiso boveda:arqueo (SUPERVISOR, AUDITOR, ADMIN) |
+| BOV06 | POST `/arqueos/{idArqueoBoveda}/aprobacion` | permiso boveda:operar (SUPERVISOR, ADMIN) |
+| Listado de arqueos | GET `/bovedas/{idBoveda}/arqueos` | SUPERVISOR, CONTADOR, AUDITOR, ADMIN |
 
 Se reutilizan sesión WorkOS, CSRF, ProblemDetails y auditoría de éxitos/fallos.
 Las respuestas no se almacenan en caché. Supervisor consulta su agencia; contador,
 auditor y administrador pueden consultar otras según los roles de cada ruta.
 Los movimientos y aprobaciones exigen la agencia del supervisor incluso si tiene
 además otro rol global. Un auditor puede registrar un arqueo en otra agencia.
+
+ADMIN dispone de todas las rutas del módulo. Las consultas tienen alcance global;
+las solicitudes y aprobaciones mantienen el alcance de escritura de la agencia
+asignada al usuario. ADMIN también debe respetar las identidades distintas para
+aprobar y la cancelación exclusiva del solicitante. El testigo de un arqueo sigue
+siendo un SUPERVISOR de la agencia o un AUDITOR, conforme al contrato BOV-05.
+
+Antes de desplegar, asignar **boveda:operar** y **boveda:arqueo** al rol **org-admin**
+en WorkOS. `core/security/permisos.py` documenta la asignación inicial y las pruebas;
+no modifica el tenant automáticamente. Las escrituras comprueban los permisos del
+token, también para ADMIN. Renovar la sesión tras configurar los permisos y
+comprobarlos en `/api/v1/auth/me`. No se requiere otra migración SQL para este acceso.
 
 BOV01 filtra por `idAgencia` y `tipo`. BOV02 incluye `saldoActual`, inventario,
 valor/subtotal por denominación y `totalDesglose`. BOV03 filtra por
@@ -35,48 +48,38 @@ e `idAsientoContable`, nullable para operaciones históricas y de otros módulos
 
 ### Movimiento
 
-```json
-{
-  "tipoMovimiento": "Traslado",
-  "idBovedaContraparte": 2,
-  "autorizadoPor": 9,
-  "desglose": [{"idDenominacion": 1, "cantidad": 2}],
-  "observaciones": "Entrega de efectivo"
-}
-```
-
-Tipos: `Traslado`, `ProvisionExterna`, `EnvioExcedente`, `AjusteFaltante`,
-`AjusteSobrante`. La contraparte solo se admite en traslados y debe ser distinta.
-Se permiten traslados inmediatos entre agencias desde la agencia supervisada;
-se requiere configuración contable en ambas. No representan transporte en tránsito.
-
-Se deriva el monto del desglose; no se acepta saldo, monto o naturaleza enviados
-por el cliente. Se rechazan cantidades no enteras/positivas, denominaciones
-duplicadas, inexistentes o inactivas, insuficiencia de piezas y desbordamientos.
-Máximo 100 denominaciones. Una bóveda cuyo saldo no coincide con su inventario
-requiere investigación antes de operar. Los mínimos/máximos son referencias
-operativas, no bloquean efectivo, igual que los SP existentes de Caja.
-
-El autorizador debe ser distinto del operador, estar activo, vinculado, sin bloqueo
-y tener rol SUPERVISOR de la agencia. Esta validación usa RolesWorkOS persistido,
-como Caja: **no autentica una segunda sesión ni demuestra presencia física**.
-Una confirmación independiente del autorizador queda para una ampliación del flujo.
-
-Bóvedas se bloquean por id ascendente, compatible con los bloqueos de los SP de
-Caja. Traslado crea salida/entrada mutuamente ligadas con el mismo desglose.
-Movimiento, inventario, saldo, asientos, líneas y saldos contables comparten la
-conexión y transacción. Un fallo revierte toda la operación.
-
-Header opcional `Idempotency-Key`: 1..64 caracteres `[A-Za-z0-9_-]`, sensible a
-mayúsculas. Repetir la clave del operador con los mismos datos devuelve los mismos
-movimientos; otros datos producen 409. El orden de denominaciones no altera la
-identidad de la petición. Para reintentos de BOV04 el cliente debe conservar esta
-clave: sin ella, dos solicitudes son dos operaciones. No reemplaza un reverso.
-
-Los ajustes manuales de BOV04 siguen permitidos por el subissue, con custodia y
-contabilidad. BOV06 genera sus propios ajustes ligados al arqueo.
+BOV-04 ahora utiliza solicitudes y una segunda sesión para aprobar y ejecutar.
+El POST directo a `/bovedas/{idBoveda}/movimientos` está obsoleto y responde 410.
+Contrato completo, migración y guía para clientes en
+[BOV-04 solicitudes y autorización](BOV-04-solicitudes-autorizacion.md).
 
 ### Arqueo y aprobación
+
+`GET /api/v1/boveda/bovedas/{idBoveda}/arqueos` devuelve el historial paginado
+de la bóveda, incluyendo las inactivas. SUPERVISOR consulta únicamente su agencia;
+CONTADOR, AUDITOR y ADMIN tienen alcance global de lectura. Bóveda inexistente
+responde 404; acceso a otra agencia sin alcance global responde 403.
+
+Filtros opcionales combinables: `desde`, `hasta` (fechas de Ecuador, días inclusivos),
+`estado` (REGISTRADO, APROBADO, ANULADO), `tipoArqueo` (Programado, Sorpresivo).
+`page` inicia en 1 y `pageSize` por defecto es 20, con máximo 100. El orden es
+`fechaHoraArqueo` descendente y, para fechas iguales, `idArqueoBoveda` descendente.
+Se rechazan fechas invertidas, anteriores a 1753, `hasta=9999-12-31`, parámetros
+desconocidos/repetidos y valores fuera de los tipos/rangos documentados.
+
+```http
+GET /api/v1/boveda/bovedas/1/arqueos?desde=2026-11-01&hasta=2026-11-17&estado=REGISTRADO&page=1&pageSize=20
+```
+
+La respuesta tiene `{items, page, pageSize, total}`. Cada item es una cabecera con
+id y fecha del arqueo, bóveda, tipo, estado, arqueador, testigo, observaciones,
+saldoTeorico, saldoFisico, diferencia (físico menos teórico), aprobador/fecha de
+aprobación e identificadores de sus movimientos de ajuste. Los saldos y la
+diferencia pueden ser null en registros anteriores a la migración de referencia;
+no se completan con el saldo actual. El listado no incorpora el detalle de piezas
+por denominación. Una página fuera de rango devuelve `items: []` y conserva total.
+No modifica efectivo ni estados y no requiere una migración SQL adicional; utiliza
+las tablas y columnas de las migraciones existentes de bóvedas.
 
 BOV05 recibe `tipoArqueo` (Programado/Sorpresivo), `idUsuarioTestigo`, `desglose`
 y `observaciones`. El arqueador proviene de la sesión. El testigo debe ser distinto,
@@ -157,7 +160,7 @@ F-04 de BD:
 Pruebas HTTP con repositorio transaccional en memoria: roles, agencia, formatos,
 inventario, traslados, claves repetidas, arqueos, aprobación y rollback. Pruebas de
 configuración contable y participantes. La matriz global de autorización incluye
-las seis rutas.
+todas las rutas del módulo.
 
 Laboratorio opcional SQL Server: fixture estructural sin datos de negocio derivado
 del SQL proporcionado, migración ejecutada dos veces, cuentas y usuarios ficticios,
@@ -174,7 +177,6 @@ Remove-Item Env:BOV_LOCAL_SQL
 
 ## Ampliaciones
 
-Crear/editar/activar bóvedas; listar/consultar/anular arqueos; conciliación dedicada
-o integrada en BOV02. Después: remesas en tránsito, confirmación independiente del
-autorizador/testigo, reversos, jornadas, custodios y monedas. Las operaciones
+Crear/editar/activar bóvedas; consultar el detalle individual/anular arqueos; conciliación dedicada
+o integrada en BOV02. Después: remesas en tránsito, confirmación del testigo, reversos, jornadas, custodios y monedas. Las operaciones
 externas también pueden ampliarse con contraparte y comprobante estructurados.

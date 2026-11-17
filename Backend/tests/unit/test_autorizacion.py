@@ -42,6 +42,34 @@ _VALORES_PATH = {
 
 # Roles de cada tarea (GitHubProject_Files)
 ROLES_POR_RUTA: dict[tuple[str, str], tuple[str, ...]] = {
+    ("POST", "/api/v1/boveda/bovedas/{idBoveda}/solicitudes-movimiento"): (
+        "SUPERVISOR",
+        "ADMIN",
+    ),
+    ("GET", "/api/v1/boveda/solicitudes-movimiento"): (
+        "SUPERVISOR",
+        "CONTADOR",
+        "AUDITOR",
+        "ADMIN",
+    ),
+    ("GET", "/api/v1/boveda/solicitudes-movimiento/{idSolicitudMovimiento}"): (
+        "SUPERVISOR",
+        "CONTADOR",
+        "AUDITOR",
+        "ADMIN",
+    ),
+    (
+        "POST",
+        "/api/v1/boveda/solicitudes-movimiento/{idSolicitudMovimiento}/aprobacion",
+    ): ("SUPERVISOR", "ADMIN"),
+    ("POST", "/api/v1/boveda/solicitudes-movimiento/{idSolicitudMovimiento}/rechazo"): (
+        "SUPERVISOR",
+        "ADMIN",
+    ),
+    (
+        "POST",
+        "/api/v1/boveda/solicitudes-movimiento/{idSolicitudMovimiento}/cancelacion",
+    ): ("SUPERVISOR", "ADMIN"),
     ("GET", "/api/v1/parametros/comisiones"): ("ADMIN", "SUPERVISOR", "ASESOR"),
     ("POST", "/api/v1/parametros/comisiones"): ("ADMIN",),
     ("PATCH", "/api/v1/parametros/comisiones/{idComision}"): ("ADMIN",),
@@ -54,10 +82,24 @@ ROLES_POR_RUTA: dict[tuple[str, str], tuple[str, ...]] = {
         "SUPERVISOR",
         "CONTADOR",
         "AUDITOR",
+        "ADMIN",
     ),
-    ("POST", "/api/v1/boveda/bovedas/{idBoveda}/movimientos"): ("SUPERVISOR",),
-    ("POST", "/api/v1/boveda/bovedas/{idBoveda}/arqueos"): ("SUPERVISOR", "AUDITOR"),
-    ("POST", "/api/v1/boveda/arqueos/{idArqueoBoveda}/aprobacion"): ("SUPERVISOR",),
+    ("POST", "/api/v1/boveda/bovedas/{idBoveda}/movimientos"): ("SUPERVISOR", "ADMIN"),
+    ("POST", "/api/v1/boveda/bovedas/{idBoveda}/arqueos"): (
+        "SUPERVISOR",
+        "AUDITOR",
+        "ADMIN",
+    ),
+    ("GET", "/api/v1/boveda/bovedas/{idBoveda}/arqueos"): (
+        "SUPERVISOR",
+        "CONTADOR",
+        "AUDITOR",
+        "ADMIN",
+    ),
+    ("POST", "/api/v1/boveda/arqueos/{idArqueoBoveda}/aprobacion"): (
+        "SUPERVISOR",
+        "ADMIN",
+    ),
     ("GET", "/api/v1/auth/me"): AUTH,
     # AUT-05..09 (C-05): usuarios internos
     ("GET", "/api/v1/usuarios"): ("ADMIN",),
@@ -503,6 +545,19 @@ def test_roles_de_la_tarea_pasan_el_control(client, ruta):
         return
 
     assert r.status_code not in {401, 403}
+
+
+@pytest.mark.parametrize(
+    "ruta",
+    [r for r in ROLES_POR_RUTA if r[1].startswith("/api/v1/boveda/")],
+    ids=" ".join,
+)
+def test_admin_pasa_control_de_todas_las_rutas_de_boveda(client, ruta):
+    simular_sesion(app, usuario_con_roles("ADMIN"))
+
+    respuesta = _llamar(client, *ruta)
+
+    assert respuesta.status_code not in {401, 403}
 
 
 def test_require_auth_entrega_el_usuario_de_la_sesion():

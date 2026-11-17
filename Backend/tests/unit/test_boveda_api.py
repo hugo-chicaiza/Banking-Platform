@@ -53,7 +53,7 @@ def test_filtros_movimientos_invalidos(ctx, query, code):
 
 
 def test_movimiento_y_consulta_publican_desglose_fecha_y_asiento(ctx):
-    r = ctx.client.post(f"{BASE}/bovedas/1/movimientos", json=ctx.movimiento())
+    r = ctx.ejecutar(f"{BASE}/bovedas/1/movimientos", json=ctx.movimiento())
     assert r.status_code == 201, r.text
     assert r.json()[0]["saldoPosterior"] == 240
     assert r.json()[0]["fechaMovimiento"].endswith("-05:00")
@@ -77,14 +77,14 @@ def test_movimiento_y_consulta_publican_desglose_fecha_y_asiento(ctx):
     ],
 )
 def test_tipos_movimiento_y_naturaleza(ctx, tipo, esperado):
-    r = ctx.client.post(f"{BASE}/bovedas/1/movimientos", json=ctx.movimiento(tipo))
+    r = ctx.ejecutar(f"{BASE}/bovedas/1/movimientos", json=ctx.movimiento(tipo))
     assert r.status_code == 201
     assert ctx.state["bovedas"][1]["saldo_actual"] == esperado
     assert len(ctx.state["asientos"]) == 1
 
 
 def test_traslado_liga_ambos_movimientos_y_conserva_efectivo(ctx):
-    r = ctx.client.post(
+    r = ctx.ejecutar(
         f"{BASE}/bovedas/1/movimientos",
         json=ctx.movimiento("Traslado", idBovedaContraparte=2),
     )
@@ -95,14 +95,13 @@ def test_traslado_liga_ambos_movimientos_y_conserva_efectivo(ctx):
     assert b["idMovimientoRelacionado"] == a["idMovimiento"]
     assert a["desglose"] == b["desglose"]
     assert sum(v["saldo_actual"] for v in ctx.state["bovedas"].values()) == 400
-    assert ctx.bloqueos == [1, 2]
+    assert ctx.bloqueos == [1, 2, 1, 2]
     assert len(ctx.state["asientos"]) == 2
 
 
 @pytest.mark.parametrize(
     "datos,code",
     [
-        ({"autorizadoPor": 7}, "DOBLE_CUSTODIA_VIOLADA"),
         ({"tipoMovimiento": "Traslado"}, "TRASLADO_REQUIERE_CONTRAPARTE"),
         (
             {"tipoMovimiento": "Traslado", "idBovedaContraparte": 1},
@@ -128,10 +127,18 @@ def test_traslado_liga_ambos_movimientos_y_conserva_efectivo(ctx):
 )
 def test_rechazos_no_mueven_efectivo(ctx, datos, code):
     antes = deepcopy(ctx.state)
-    r = ctx.client.post(f"{BASE}/bovedas/1/movimientos", json=ctx.movimiento(**datos))
+    r = ctx.ejecutar(f"{BASE}/bovedas/1/movimientos", json=ctx.movimiento(**datos))
     assert r.status_code in (409, 422), r.text
     assert r.json()["code"] == code
-    assert ctx.state == antes
+    assert {
+        k: v
+        for k, v in ctx.state.items()
+        if k not in {"solicitudes", "detalle_solicitudes"}
+    } == {
+        k: v
+        for k, v in antes.items()
+        if k not in {"solicitudes", "detalle_solicitudes"}
+    }
 
 
 @pytest.mark.parametrize(
@@ -149,7 +156,7 @@ def test_inconsistencias_impiden_movimiento(ctx, modificacion, code):
         ctx.state["bovedas"][1]["saldo_actual"] = Decimal(999)
     else:
         ctx.state["catalogo"][1]["estado"] = "I"
-    r = ctx.client.post(f"{BASE}/bovedas/1/movimientos", json=ctx.movimiento())
+    r = ctx.ejecutar(f"{BASE}/bovedas/1/movimientos", json=ctx.movimiento())
     assert r.json()["code"] == code
     assert not ctx.state["movimientos"]
 
@@ -157,26 +164,34 @@ def test_inconsistencias_impiden_movimiento(ctx, modificacion, code):
 def test_fallo_segundo_asiento_revierte_traslado_completo(ctx):
     antes = deepcopy(ctx.state)
     ctx.fallo_asiento = 2
-    r = ctx.client.post(
+    r = ctx.ejecutar(
         f"{BASE}/bovedas/1/movimientos",
         json=ctx.movimiento("Traslado", idBovedaContraparte=2),
     )
     assert r.status_code == 409
-    assert ctx.state == antes
+    assert {
+        k: v
+        for k, v in ctx.state.items()
+        if k not in {"solicitudes", "detalle_solicitudes"}
+    } == {
+        k: v
+        for k, v in antes.items()
+        if k not in {"solicitudes", "detalle_solicitudes"}
+    }
 
 
 def test_reintento_traslado_no_duplica_y_clave_reutilizada_conflicto(ctx):
     ruta = f"{BASE}/bovedas/1/movimientos"
     headers = {"Idempotency-Key": "traslado_123"}
     datos = ctx.movimiento("Traslado", idBovedaContraparte=2)
-    primera = ctx.client.post(ruta, json=datos, headers=headers)
-    segunda = ctx.client.post(ruta, json=datos, headers=headers)
+    primera = ctx.ejecutar(ruta, json=datos, headers=headers)
+    segunda = ctx.ejecutar(ruta, json=datos, headers=headers)
     assert primera.json() == segunda.json()
     assert len(ctx.state["movimientos"]) == 2
     assert len(ctx.state["asientos"]) == 2
     datos["desglose"][0]["cantidad"] = 3
     assert (
-        ctx.client.post(ruta, json=datos, headers=headers).json()["code"]
+        ctx.ejecutar(ruta, json=datos, headers=headers).json()["code"]
         == "IDEMPOTENCIA_CONFLICTO"
     )
 
@@ -184,19 +199,15 @@ def test_reintento_traslado_no_duplica_y_clave_reutilizada_conflicto(ctx):
 @pytest.mark.parametrize("cantidad", [0, -1, 1.5, True, "2", 2_147_483_648])
 def test_movimiento_rechaza_cantidades_invalidas(ctx, cantidad):
     datos = ctx.movimiento(desglose=[{"idDenominacion": 1, "cantidad": cantidad}])
-    assert (
-        ctx.client.post(f"{BASE}/bovedas/1/movimientos", json=datos).status_code == 400
-    )
+    assert ctx.ejecutar(f"{BASE}/bovedas/1/movimientos", json=datos).status_code == 400
 
 
 def test_desglose_duplicado_o_campos_extra_se_rechazan(ctx):
     datos = ctx.movimiento()
     datos["desglose"] *= 2
+    assert ctx.ejecutar(f"{BASE}/bovedas/1/movimientos", json=datos).status_code == 400
     assert (
-        ctx.client.post(f"{BASE}/bovedas/1/movimientos", json=datos).status_code == 400
-    )
-    assert (
-        ctx.client.post(
+        ctx.ejecutar(
             f"{BASE}/bovedas/1/movimientos", json=ctx.movimiento(saldoActual=900)
         ).status_code
         == 400
@@ -214,6 +225,20 @@ def test_arqueo_guarda_referencia_inmutable_y_no_actualiza_saldo(ctx):
     assert ctx.state["detalles"][1][0]["cantidad_esperada"] == 10
     assert ctx.state["bovedas"][1]["saldo_actual"] == 200
     assert not ctx.state["movimientos"]
+
+
+def test_admin_registra_arqueo_y_otro_admin_aprueba(ctx):
+    ctx.como("ADMIN", actor=7)
+    assert ctx.registrar_conteo(9, idUsuarioTestigo=12).status_code == 201
+    assert (
+        ctx.client.post(f"{BASE}/arqueos/1/aprobacion").json()["code"]
+        == "APROBADOR_IGUAL_ARQUEADOR"
+    )
+    ctx.como("ADMIN", actor=9)
+    respuesta = ctx.client.post(f"{BASE}/arqueos/1/aprobacion")
+    assert respuesta.status_code == 200, respuesta.text
+    assert respuesta.json()["idUsuarioAprobador"] == 9
+    assert ctx.state["bovedas"][1]["saldo_actual"] == 180
 
 
 def test_arqueo_omite_denominaciones_como_cero_y_admite_conteo_cero(ctx):
@@ -282,7 +307,15 @@ def test_fallo_contable_revierte_ajustes_y_aprobacion(ctx):
     ctx.fallo_asiento = 1
     antes = deepcopy(ctx.state)
     assert ctx.client.post(f"{BASE}/arqueos/1/aprobacion").status_code == 409
-    assert ctx.state == antes
+    assert {
+        k: v
+        for k, v in ctx.state.items()
+        if k not in {"solicitudes", "detalle_solicitudes"}
+    } == {
+        k: v
+        for k, v in antes.items()
+        if k not in {"solicitudes", "detalle_solicitudes"}
+    }
 
 
 def test_aprobacion_rechaza_autoria_y_arqueo_desactualizado(ctx):
@@ -291,7 +324,7 @@ def test_aprobacion_rechaza_autoria_y_arqueo_desactualizado(ctx):
         ctx.client.post(f"{BASE}/arqueos/1/aprobacion").json()["code"]
         == "APROBADOR_IGUAL_ARQUEADOR"
     )
-    ctx.client.post(f"{BASE}/bovedas/1/movimientos", json=ctx.movimiento())
+    ctx.ejecutar(f"{BASE}/bovedas/1/movimientos", json=ctx.movimiento())
     ctx.como("SUPERVISOR", actor=9)
     assert (
         ctx.client.post(f"{BASE}/arqueos/1/aprobacion").json()["code"]
@@ -321,9 +354,7 @@ def test_usuario_sin_vinculo_o_agencia_no_escribe(ctx):
 def test_exceso_limites_no_bloquea_efectivo(ctx):
     ctx.state["bovedas"][1]["limite_maximo"] = Decimal(210)
     assert (
-        ctx.client.post(
-            f"{BASE}/bovedas/1/movimientos", json=ctx.movimiento()
-        ).status_code
+        ctx.ejecutar(f"{BASE}/bovedas/1/movimientos", json=ctx.movimiento()).status_code
         == 201
     )
 
@@ -331,9 +362,7 @@ def test_exceso_limites_no_bloquea_efectivo(ctx):
 def test_escritura_fuera_de_agencia_se_denega_incluso_con_rol_global(ctx):
     ctx.como("SUPERVISOR", "AUDITOR", agencia="002")
     assert (
-        ctx.client.post(
-            f"{BASE}/bovedas/1/movimientos", json=ctx.movimiento()
-        ).status_code
+        ctx.ejecutar(f"{BASE}/bovedas/1/movimientos", json=ctx.movimiento()).status_code
         == 403
     )
 
@@ -341,7 +370,7 @@ def test_escritura_fuera_de_agencia_se_denega_incluso_con_rol_global(ctx):
 def test_movimiento_impide_desbordamiento_de_cantidad(ctx):
     ctx.state["inventarios"][1][1] = 2_147_483_647
     ctx.state["bovedas"][1]["saldo_actual"] = Decimal(20) * 2_147_483_647
-    r = ctx.client.post(f"{BASE}/bovedas/1/movimientos", json=ctx.movimiento())
+    r = ctx.ejecutar(f"{BASE}/bovedas/1/movimientos", json=ctx.movimiento())
     assert r.json()["code"] == "CANTIDAD_FUERA_RANGO"
     assert not ctx.state["movimientos"]
 
@@ -349,7 +378,7 @@ def test_movimiento_impide_desbordamiento_de_cantidad(ctx):
 def test_movimiento_impide_desbordamiento_de_monto(ctx):
     ctx.state["catalogo"][1]["valor"] = Decimal("99999999.99")
     ctx.state["bovedas"][1]["saldo_actual"] = Decimal("99999999.99") * 10
-    r = ctx.client.post(
+    r = ctx.ejecutar(
         f"{BASE}/bovedas/1/movimientos",
         json=ctx.movimiento(
             desglose=[{"idDenominacion": 1, "cantidad": 2_147_483_647}]
