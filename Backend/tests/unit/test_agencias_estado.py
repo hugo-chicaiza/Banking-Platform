@@ -191,9 +191,13 @@ def test_guard_no_permite_validar_fuera_de_transaccion(ctx):
 
 
 def test_slugs_no_amplian_permisos():
-    assert normalizar_roles(["admin"], None) == ("ADMIN",)
+    # Los roles propios de WorkOS (admin, member) o sin prefijo no dan acceso
+    assert normalizar_roles(["admin", "member", "contador"], None) == ()
     assert normalizar_roles(["org-contador"], None) == ("CONTADOR",)
-    assert normalizar_roles(["contador"], None) == ("CONTADOR",)
+    assert normalizar_roles(["org-aprobador-credito"], None) == ("APROBADOR_CREDITO",)
+    # Lo guardado en RolesWorkOS es el nombre del sistema
+    assert normalizar_roles(["ADMIN", "CONTADOR"], None) == ("ADMIN", "CONTADOR")
+    assert normalizar_roles(None, "org-admin") == ("ADMIN",)
 
 
 def test_no_desactivar_matriz(ctx, monkeypatch):

@@ -51,7 +51,8 @@ logger = logging.getLogger(__name__)
 
 # Roles del sistema. En WorkOS son roles de organización con slug "org-" + el rol en
 # minúsculas y con guiones: org-cajero -> CAJERO, org-aprobador-credito ->
-# APROBADOR_CREDITO (también se leen sin el prefijo "org-").
+# APROBADOR_CREDITO. Sin el prefijo no cuentan: "admin" y "member" son roles propios de
+# WorkOS y no dan acceso a la plataforma.
 # Única fuente: los schemas (AUT-05..09) usan `Rol` y la autorización `ROLES`.
 Rol = Literal[
     "ADMIN",
@@ -66,7 +67,7 @@ ROLES: tuple[Rol, ...] = get_args(Rol)
 
 # __Host-: el navegador exige Secure y Path=/ y no permite Domain, así un subdominio
 # no puede plantar ni pisar la cookie.
-_PREFIJO_ROL = "ORG_"
+_PREFIJO_ROL = "org-"
 
 COOKIE_SESION = "__Host-session"
 DURACION_SESION = 8 * 60 * 60  # AUT-01: 8 h. Igualar a la sesión configurada en WorkOS
@@ -237,15 +238,21 @@ def verificar_origen(request: Request) -> None:
 
 
 def normalizar_roles(roles: Sequence[str] | None, rol: str | None) -> tuple[str, ...]:
-    """Lee `roles` o, si no viene, `role`. Ignora los que no son del sistema, como el
-    "member" que WorkOS asigna por defecto.
+    """Lee `roles` o, si no viene, `role`. Acepta el slug de WorkOS (org-cajero) o el
+    nombre del sistema tal como se guarda en RolesWorkOS (CAJERO). Ignora el resto,
+    incluidos "admin" y "member", los roles propios de WorkOS: WorkOS exige slugs en
+    minúsculas, así que nunca llega un nombre del sistema desde allí.
     """
     crudos = list(roles) if roles else [rol]
     resultado: list[str] = []
     for crudo in crudos:
         if not isinstance(crudo, str):
             continue
-        nombre = crudo.strip().upper().replace("-", "_").removeprefix(_PREFIJO_ROL)
+        crudo = crudo.strip()
+        if crudo.startswith(_PREFIJO_ROL):
+            nombre = crudo.removeprefix(_PREFIJO_ROL).upper().replace("-", "_")
+        else:
+            nombre = crudo
         if nombre in ROLES and nombre not in resultado:
             resultado.append(nombre)
     return tuple(resultado)
@@ -255,7 +262,7 @@ def slug_rol(rol: str) -> str:
     """Slug del rol en WorkOS: CAJERO -> org-cajero."""
     if rol not in ROLES:
         raise ValueError(f"Rol no válido: {rol}")
-    return "org-" + rol.lower().replace("_", "-")
+    return _PREFIJO_ROL + rol.lower().replace("_", "-")
 
 
 def _vinculo(base: DbName, consulta: str, llave: str) -> Any:
