@@ -127,7 +127,7 @@ def generar_asiento(conn: Connection, operacion: OperacionContable) -> int:
     calendario = repository.obtener_por_id(conn, operacion.id_fecha_contable)
     if (
         calendario is None
-        or calendario.get("es_dia_contable") is False
+        or not calendario["es_dia_contable"]
         or not repository.periodo_abierto(conn, calendario["fecha"])
     ):
         raise ErrorContable("La fecha contable debe pertenecer a un período abierto.")

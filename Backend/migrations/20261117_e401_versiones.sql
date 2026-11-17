@@ -47,6 +47,20 @@ BEGIN TRY
                    AND name='UX_E401_TransaccionTipo')
         EXEC ('CREATE UNIQUE INDEX UX_E401_TransaccionTipo ON Contabilidad.AsientoContable (IdTransaccion,IdTipoAsiento)
                WHERE IdTransaccion IS NOT NULL');
+    IF NOT EXISTS (
+        SELECT 1 FROM sys.indexes i
+        JOIN sys.index_columns c ON c.object_id=i.object_id AND c.index_id=i.index_id
+        WHERE i.object_id=OBJECT_ID('Contabilidad.AsientoContable') AND i.is_unique=1
+          AND i.has_filter=0 AND i.is_disabled=0 AND c.key_ordinal=1
+          AND COL_NAME(c.object_id,c.column_id)='NumeroAsiento'
+          AND NOT EXISTS (SELECT 1 FROM sys.index_columns x
+                          WHERE x.object_id=c.object_id AND x.index_id=c.index_id AND x.key_ordinal>1)
+    )
+        CREATE UNIQUE INDEX UX_E401_Numero ON Contabilidad.AsientoContable (NumeroAsiento);
+    IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id=OBJECT_ID('Contabilidad.AsientoContable')
+                   AND name='UX_E401_AsientoReversado')
+        CREATE UNIQUE INDEX UX_E401_AsientoReversado ON Contabilidad.AsientoContable (IdAsientoReversion)
+        WHERE IdAsientoReversion IS NOT NULL;
     COMMIT;
 END TRY
 BEGIN CATCH

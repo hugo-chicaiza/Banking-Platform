@@ -5,11 +5,17 @@ import sys
 from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
+from unittest.mock import patch
 
+from fastapi import HTTPException
 from sqlalchemy import create_engine, text
 
 from app.modules.contabilidad import repository
-from app.modules.contabilidad.asientos import OperacionContable, generar_asiento
+from app.modules.contabilidad.asientos import (
+    OperacionContable,
+    generar_asiento,
+    reversar,
+)
 
 
 def probar(database: str, laboratorio: Path) -> None:
@@ -24,6 +30,9 @@ def probar(database: str, laboratorio: Path) -> None:
             IF COL_LENGTH('Contabilidad.FechaContable','EsFeriado') IS NULL
                 ALTER TABLE Contabilidad.FechaContable ADD EsFeriado bit NOT NULL DEFAULT (0),
                     EsFinDeSemana bit NOT NULL DEFAULT (0), HoraCorte time NULL;
+            IF NOT EXISTS (SELECT 1 FROM Contabilidad.FechaContable WHERE IdFechaContable=9998)
+                INSERT Contabilidad.FechaContable (IdFechaContable,Fecha,EsDiaContable)
+                VALUES (9998,'20261015',1);
             IF OBJECT_ID('Contabilidad.ConceptoContable','U') IS NULL
                 CREATE TABLE Contabilidad.ConceptoContable(IdConceptoContable int PRIMARY KEY);
             IF NOT EXISTS (SELECT 1 FROM Contabilidad.ConceptoContable WHERE IdConceptoContable=1)
@@ -118,10 +127,36 @@ def probar(database: str, laboratorio: Path) -> None:
             )
         ).scalar_one()
         assert despues == antes + 500
+        with patch(
+            "app.modules.contabilidad.service.resolver_id_fecha_contable",
+            return_value=9998,
+        ):
+            espejo = reversar(conn, id_asiento, "Prueba local", actor=102)
+        cabecera = repository.obtener_asiento(conn, espejo)
+        assert cabecera["fecha_asiento"].isoformat() == "2026-10-15"
+        assert cabecera["id_asiento_reversion"] == id_asiento
+        assert repository.obtener_asiento(conn, id_asiento)["estado"] == "REVERSADO"
+        try:
+            reversar(conn, id_asiento, "Reintento", actor=102)
+        except HTTPException as error:
+            assert (
+                error.status_code == 409
+                and error.detail["code"] == "ASIENTO_YA_REVERSADO"
+            )
+        else:
+            raise AssertionError("Se permitió un segundo reverso.")
+        saldo = conn.execute(
+            text(
+                "SELECT Saldo FROM Contabilidad.CuentasContables WHERE CodigoCuenta='11010510'"
+            )
+        ).scalar_one()
+        assert saldo == antes
         tx.rollback()
     with engine.connect() as conn:
         assert repository.obtener_asiento(conn, id_asiento) is None
-    print("Migraciones repetibles, dotación 500, idempotencia, saldos y rollback: OK")
+    print(
+        "Migraciones repetibles, dotación 500, idempotencia, saldos, reverso y rollback: OK"
+    )
 
 
 if __name__ == "__main__":

@@ -46,7 +46,9 @@ def contabilidad(monkeypatch):
         ),
     )
     monkeypatch.setattr(
-        repository, "obtener_por_id", Mock(return_value={"fecha": date(2026, 11, 10)})
+        repository,
+        "obtener_por_id",
+        Mock(return_value={"fecha": date(2026, 11, 10), "es_dia_contable": True}),
     )
     monkeypatch.setattr(repository, "periodo_abierto", Mock(return_value=True))
     lineas = [

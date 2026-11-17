@@ -333,10 +333,11 @@ def obtener_plantilla(
     return _one(
         conn,
         """
-        SELECT TOP (1) IdPlantillaAsiento, IdConceptoContable, Origen, IdTipoAsiento,
-               Nombre, Estado
-        FROM Contabilidad.PlantillaAsiento WITH (HOLDLOCK)
-        WHERE CodigoPlantilla = :codigo AND Estado = 1
+        SELECT TOP (1) p.IdPlantillaAsiento, p.IdConceptoContable, p.Origen, p.IdTipoAsiento,
+               p.Nombre, p.Estado
+        FROM Contabilidad.PlantillaAsiento p WITH (HOLDLOCK)
+        JOIN Contabilidad.TiposAsiento t WITH (HOLDLOCK) ON t.IdTipoAsiento=p.IdTipoAsiento
+        WHERE p.CodigoPlantilla = :codigo AND p.Estado = 1 AND t.Estado = 'A' AND t.EsManual = 0
           AND VigenciaDesde <= :fecha AND (VigenciaHasta IS NULL OR VigenciaHasta >= :fecha)
         ORDER BY VigenciaDesde DESC, Version DESC
         """,
