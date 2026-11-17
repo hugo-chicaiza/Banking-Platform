@@ -3,6 +3,7 @@
 import os
 import sys
 from datetime import date
+from typing import Literal
 
 import pyodbc
 from fastapi import HTTPException
@@ -22,7 +23,9 @@ def probar(database: str) -> None:
 
     def conectar():
         db = pyodbc.connect(cadena)
-        base, instancia = db.execute("SELECT DB_NAME(), @@SERVERNAME").fetchone()
+        identidad = db.execute("SELECT DB_NAME(), @@SERVERNAME").fetchone()
+        assert identidad is not None
+        base, instancia = identidad
         assert base.casefold() == database.casefold()
         assert instancia.casefold() == servidor.casefold()
         db.rollback()
@@ -30,6 +33,10 @@ def probar(database: str) -> None:
 
     engine = create_engine("mssql+pyodbc://", creator=conectar)
     hoy, futuro = date(2026, 10, 14), date(2026, 10, 15)
+    lados: tuple[tuple[Literal["DEBITO", "CREDITO"], str], ...] = (
+        ("DEBITO", "11010510"),
+        ("CREDITO", "11010505"),
+    )
     with engine.connect() as conn:
         cuentas = {
             codigo: cuenta
@@ -48,7 +55,7 @@ def probar(database: str) -> None:
                 plantillas.Linea(
                     lado=lado, origen="FIJA", base="PRINCIPAL", cuenta=cuentas[codigo]
                 )
-                for lado, codigo in (("DEBITO", "11010510"), ("CREDITO", "11010505"))
+                for lado, codigo in lados
             ],
         )
         nueva = plantillas.crear(conn, 1001, datos, 101)["idPlantillaAsiento"]
@@ -56,7 +63,8 @@ def probar(database: str) -> None:
             with conn.begin():
                 plantillas.confirmar_aprobacion(conn, nueva, 101, hoy)
         except HTTPException as error:
-            assert error.detail["code"] == "AUTOAPROBACION_PROHIBIDA"
+            assert isinstance(error.detail, dict)
+            assert error.detail.get("code") == "AUTOAPROBACION_PROHIBIDA"
         else:
             raise AssertionError("Se permitió la autoaprobación.")
         with conn.begin() as transaccion:
