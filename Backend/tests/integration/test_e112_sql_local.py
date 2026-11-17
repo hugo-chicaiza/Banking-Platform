@@ -7,6 +7,7 @@ para contrastar la carga con el cobrador existente, sin modificar ese laboratori
 import os
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
+from decimal import Decimal
 from pathlib import Path
 from uuid import uuid4
 
@@ -48,7 +49,7 @@ INSERT Transacciones.TipoTransaccion VALUES
  ('Retiro','Retiro','D',1,NULL,'A'),('Transferencia_Enviada','Transferencia','D',1,NULL,'A'),
  ('Cobro_Comision','Cobro generico','D',1,NULL,'A'),('Deposito','Deposito','C',1,NULL,'A');
 INSERT Transacciones.Comisiones (CodigoComision,TipoCalculo,Valor,IdCanal,VigenciaDesde,Estado)
- VALUES ('RET','Fijo',0.45,2,'20200101','A'),('TRF','Fijo',0.20,3,'20200101','A'),('REP','Fijo',5,1,'20200101','A');
+ VALUES ('RET-ATM','Fijo',0.45,2,'20200101','A'),('TRF-WEB','Fijo',0.20,3,'20200101','A'),('REP','Fijo',5,1,'20200101','A');
 """
 
 
@@ -191,10 +192,10 @@ def test_carga_repetible_fecha_real_y_aislamiento(sql):
             "SELECT COUNT(*) FROM Transacciones.ComisionTipoTransaccion WHERE VigenciaDesde=? AND RegistradoPor=900104",
             fecha,
         ).fetchval()
-        == 2
+        == 1
     )
     assert str(monto(conn, "Retiro", 2, fecha)) == "0.45"
-    assert str(monto(conn, "Transferencia_Enviada", 3, fecha)) == "0.20"
+    assert monto(conn, "Transferencia_Enviada", 3, fecha) == 0
     assert monto(conn, "Cobro_Comision", 1, fecha) == 0
     assert monto(conn, "Deposito", 1, fecha) == 0
     contexto(conn, "fecha_efectiva", "2099-01-01")
@@ -203,7 +204,7 @@ def test_carga_repetible_fecha_real_y_aislamiento(sql):
         conn.execute(
             "SELECT COUNT(*) FROM Transacciones.ComisionTipoTransaccion"
         ).fetchval()
-        == 2
+        == 1
     )
 
 
@@ -244,7 +245,7 @@ def test_historia_fin_exclusivo_no_solapa(sql):
         conn.execute(
             "SELECT COUNT(*) FROM Transacciones.ComisionTipoTransaccion"
         ).fetchval()
-        == 3
+        == 2
     )
 
 
@@ -312,7 +313,7 @@ def test_cargas_concurrentes(sql):
         conn.execute(
             "SELECT COUNT(*) FROM Transacciones.ComisionTipoTransaccion"
         ).fetchval()
-        == 2
+        == 1
     )
 
 
@@ -370,7 +371,7 @@ def test_generador_id(sql, secuencia):
             conn.execute(
                 "SELECT COUNT(DISTINCT IdComisionTipoTransaccion) FROM Transacciones.ComisionTipoTransaccion"
             ).fetchval()
-            == 2
+            == 1
         )
     else:
         with pytest.raises(pyodbc.Error, match="ID sin IDENTITY"):
@@ -408,3 +409,54 @@ def test_duplicados_existentes_y_tarifa_distinta_aborta(sql):
         ).fetchval()
         == 2
     )
+
+
+def test_transferencia_interna_web_gratis_conserva_catalogo_y_retiro_atm(sql):
+    conn, _ = sql
+    contexto(conn, "fecha_efectiva", "2026-11-16")
+    catalogo = list(
+        conn.execute("SELECT * FROM Transacciones.Comisiones ORDER BY IdComision")
+    )
+    ejecutar(conn, "002_cargar_tarifas.sql")
+    ejecutar(conn, "002_cargar_tarifas.sql")
+    assert monto(conn, "Transferencia_Enviada", 3, "20261116") == 0
+    assert (
+        conn.execute(
+            "SELECT COUNT(*) FROM Transacciones.ComisionTipoTransaccion WHERE CodigoTipoTransaccion='Transferencia_Enviada' AND IdCanal=3"
+        ).fetchval()
+        == 0
+    )
+    assert conn.execute(
+        "SELECT Valor FROM Transacciones.Comisiones WHERE CodigoComision='TRF-WEB' AND IdCanal=3 AND Estado='A'"
+    ).fetchval() == Decimal("0.20")
+    assert (
+        list(conn.execute("SELECT * FROM Transacciones.Comisiones ORDER BY IdComision"))
+        == catalogo
+    )
+    assert monto(conn, "Retiro", 2, "20261116") == Decimal("0.45")
+    assert (
+        conn.execute(
+            "SELECT c.CodigoComision FROM Transacciones.ComisionTipoTransaccion p JOIN Transacciones.Comisiones c ON c.IdComision=p.IdComision WHERE p.CodigoTipoTransaccion='Retiro' AND p.IdCanal=2"
+        ).fetchval()
+        == "RET-ATM"
+    )
+
+
+@pytest.mark.parametrize("inicio", ["20200101", "20990101"])
+def test_asociacion_web_incorrecta_aborta_sin_borrar(sql, inicio):
+    conn, _ = sql
+    contexto(conn, "fecha_efectiva", "2026-11-16")
+    conn.execute(
+        "INSERT Transacciones.ComisionTipoTransaccion (CodigoTipoTransaccion,IdCanal,IdComision,VigenciaDesde,RegistradoPor) VALUES ('Transferencia_Enviada',3,2,?,900104)",
+        inicio,
+    )
+    antes = list(conn.execute("SELECT * FROM Transacciones.ComisionTipoTransaccion"))
+    with pytest.raises(pyodbc.Error, match="Asociacion incorrecta TRF-WEB"):
+        ejecutar(conn, "002_cargar_tarifas.sql")
+    assert (
+        list(conn.execute("SELECT * FROM Transacciones.ComisionTipoTransaccion"))
+        == antes
+    )
+    assert conn.execute(
+        "SELECT Valor FROM Transacciones.Comisiones WHERE CodigoComision='TRF-WEB'"
+    ).fetchval() == Decimal("0.20")
