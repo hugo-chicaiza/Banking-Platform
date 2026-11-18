@@ -1,7 +1,7 @@
-"""F-03 en todos los módulos: sesión obligatoria, roles de cada tarea y auditoría de
+"""F-03 en todos los mÃ³dulos: sesiÃ³n obligatoria, roles de cada tarea y auditorÃ­a de
 los accesos denegados.
 
-Las rutas salen del OpenAPI de la app, así que una ruta nueva sin require_auth hace
+Las rutas salen del OpenAPI de la app, asÃ­ que una ruta nueva sin require_auth hace
 fallar test_toda_ruta_de_la_api_exige_sesion.
 """
 
@@ -21,13 +21,13 @@ from tests.sesion import USUARIO, simular_sesion, usuario_con_roles
 
 CONSULTA_PRODUCTOS = PERMISOS["prd-consultar"]
 
-AUTH = ()  # Cualquier usuario autenticado, sin rol específico
+AUTH = ()  # Cualquier usuario autenticado, sin rol especÃ­fico
 _PUBLICAS = {
     ("GET", "/api/v1/auth/login"),
     ("GET", "/api/v1/auth/callback"),
-    ("POST", "/api/v1/auth/logout"),  # AUT-03: idempotente, sin sesión responde 200
+    ("POST", "/api/v1/auth/logout"),  # AUT-03: idempotente, sin sesiÃ³n responde 200
 }
-# ATM usa credencial de terminal y/o JWT propios, sin sesión WorkOS.
+# ATM usa credencial de terminal y/o JWT propios, sin sesiÃ³n WorkOS.
 _TERMINALES = {
     ("POST", "/api/v1/atm/auth"),
     ("POST", "/api/v1/atm/logout"),
@@ -39,12 +39,18 @@ _TERMINALES = {
 }
 _VALORES_PATH = {
     "codigo_pais": "ECU",
+    "clave": "PARAMETRO_QA",
     "fecha": "2026-11-04",
     "id_agencia": "002",
 }
 
 # Roles de cada tarea (GitHubProject_Files)
 ROLES_POR_RUTA: dict[tuple[str, str], tuple[str, ...]] = {
+    ("GET", "/api/v1/parametros"): AUTH,
+    ("GET", "/api/v1/parametros/{clave}"): AUTH,
+    ("POST", "/api/v1/parametros/{clave}/valores"): AUTH,
+    ("DELETE", "/api/v1/parametros/{clave}/valores/{id_valor}"): AUTH,
+    ("PATCH", "/api/v1/parametros/{clave}/valores/{id_valor}"): AUTH,
     # E0-08 usa permisos efectivos por operacion y propiedad; no un rol fijo.
     ("GET", "/api/v1/aprobaciones"): AUTH,
     ("POST", "/api/v1/aprobaciones"): AUTH,
@@ -248,7 +254,7 @@ ROLES_POR_RUTA: dict[tuple[str, str], tuple[str, ...]] = {
         "AUDITOR",
         "ADMIN",
     ),
-    # CAJ-01: listado de cajas físicas
+    # CAJ-01: listado de cajas fÃ­sicas
     ("GET", "/api/v1/caja/cajas-fisicas"): (
         "CAJERO",
         "SUPERVISOR",
@@ -387,7 +393,7 @@ ROLES_POR_RUTA: dict[tuple[str, str], tuple[str, ...]] = {
 # Cobertura de las rutas aditivas y de los contratos incorporados desde develop.
 ROLES_POR_RUTA.update(
     {
-        # Seguridad: permisos de roles (WorkOS) y pestañas por rol
+        # Seguridad: permisos de roles (WorkOS) y pestaÃ±as por rol
         ("GET", "/api/v1/seguridad/permisos"): ("ADMIN",),
         ("PATCH", "/api/v1/seguridad/permisos/{slug}"): ("ADMIN",),
         ("POST", "/api/v1/seguridad/permisos"): ("ADMIN",),
@@ -453,7 +459,7 @@ def _pin_pad_simulado_habilitado(monkeypatch):
 
 @pytest.fixture
 def client():
-    # Sin BD real: lo que llegue al repositorio falla, pero el control de acceso ya pasó
+    # Sin BD real: lo que llegue al repositorio falla, pero el control de acceso ya pasÃ³
     app.dependency_overrides[cooperativa] = lambda: None
     app.dependency_overrides[tarjetas_router.seguridad] = lambda: None
     yield TestClient(app, raise_server_exceptions=False)
@@ -465,7 +471,7 @@ def _llamar(client: TestClient, metodo: str, ruta: str):
 
 
 def _code(respuesta) -> str:
-    # Clientes (gestión) y contabilidad aún no usan ProblemDetailsRoute (F-04): ahí
+    # Clientes (gestiÃ³n) y contabilidad aÃºn no usan ProblemDetailsRoute (F-04): ahÃ­
     # FastAPI responde {"detail": {"code": ...}}. Cuando migren, basta con ["code"].
     cuerpo = respuesta.json()
     return cuerpo.get("code") or cuerpo["detail"]["code"]
@@ -572,7 +578,12 @@ def test_rol_fuera_de_la_tarea_recibe_403(client, ruta, roles):
 def test_roles_de_la_tarea_pasan_el_control(client, ruta, monkeypatch):
     roles = ROLES_POR_RUTA[ruta]
     usuario = usuario_con_roles(*roles)
-    if ruta[1].startswith("/api/v1/aprobaciones"):
+    if ruta[1].startswith("/api/v1/aprobaciones") or ruta[1] in {
+        "/api/v1/parametros",
+        "/api/v1/parametros/{clave}",
+        "/api/v1/parametros/{clave}/valores",
+        "/api/v1/parametros/{clave}/valores/{id_valor}",
+    }:
         from app.modules.aprobaciones import identidad
 
         # Esta matriz comprueba el guarda comun. La revalidacion WorkOS y el
@@ -585,7 +596,7 @@ def test_roles_de_la_tarea_pasan_el_control(client, ruta, monkeypatch):
 
     r = _llamar(client, *ruta)
 
-    # D-01: estos endpoints requieren vinculación
+    # D-01: estos endpoints requieren vinculaciÃ³n
     # WorkOS -> IdUsuario interno.
     rutas_con_vinculacion = {
         ("GET", "/api/v1/caja/jornadas/actual"),
@@ -638,7 +649,7 @@ def test_require_auth_entrega_el_usuario_de_la_sesion():
 def test_403_auditado_con_el_usuario_vinculado(client, eventos_auditados, monkeypatch):
 
     usuario = replace(usuario_con_roles("CAJERO"), id_interno=12)
-    # La sesión real deja el usuario en request.state; aquí se simula ese paso
+    # La sesiÃ³n real deja el usuario en request.state; aquÃ­ se simula ese paso
 
     def sesion(request: Request) -> Usuario:
         request.state.usuario = usuario
@@ -674,7 +685,7 @@ def test_403_de_usuario_sin_vinculo_registra_su_id_de_workos(client, eventos_aud
     evento = eventos_auditados[-1]
     assert evento.usuario is None
     assert evento.descripcion.endswith(f"usuario={usuario.id_usuario}")
-    # Los roles de WorkOS con que se negó quedan en la auditoría
+    # Los roles de WorkOS con que se negÃ³ quedan en la auditorÃ­a
     assert evento.roles == "CAJERO"
 
 

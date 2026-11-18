@@ -1,6 +1,6 @@
-"""Restricción adicional por sección: nunca reemplaza roles, permisos o agencia.
+"""RestricciÃ³n adicional por secciÃ³n: nunca reemplaza roles, permisos o agencia.
 
-La clasificación usa método y ruta completa. Los selectores compartidos conservan
+La clasificaciÃ³n usa mÃ©todo y ruta completa. Los selectores compartidos conservan
 sus reglas anteriores; una API sensible no acepta un origen/pantalla del cliente
 como excusa para eludir el acceso retirado.
 """
@@ -15,6 +15,7 @@ from app.core.security.auth import Usuario
 from app.modules.seguridad.accesos import efectivos
 
 RUTAS_SECCION = {
+    "parametros.consultar": "/parametros",
     "clientes.registrar": "/registrar-cliente",
     "clientes.consultar": "/clientes-busqueda",
     "cuentas.abrir": "/cuentas/abrir",
@@ -33,6 +34,13 @@ RUTAS_SECCION = {
 }
 
 RUTAS_POR_SECCION: dict[str, tuple[tuple[str, str], ...]] = {
+    "parametros.consultar": (
+        ("GET", "/api/v1/parametros"),
+        ("GET", "/api/v1/parametros/{clave}"),
+        ("POST", "/api/v1/parametros/{clave}/valores"),
+        ("DELETE", "/api/v1/parametros/{clave}/valores/{id_valor}"),
+        ("PATCH", "/api/v1/parametros/{clave}/valores/{id_valor}"),
+    ),
     "clientes.registrar": (
         ("GET", "/api/v1/clientes/validar-identificacion"),
         ("POST", "/api/v1/clientes"),
@@ -139,8 +147,8 @@ RUTAS_POR_SECCION: dict[str, tuple[tuple[str, str], ...]] = {
     ),
 }
 
-# Consultas mínimas reutilizadas por varios formularios. No son APIs públicas:
-# conservan autenticación y sus restricciones actuales.
+# Consultas mÃ­nimas reutilizadas por varios formularios. No son APIs pÃºblicas:
+# conservan autenticaciÃ³n y sus restricciones actuales.
 COMPARTIDAS = tuple(
     ("GET", "/api/v1/catalogos/" + nombre)
     for nombre in (
@@ -162,8 +170,8 @@ COMPARTIDAS = tuple(
     )
 )
 
-# Sin sección equivalente en el editor actual. No se inventa una asignación;
-# mantienen su autorización anterior hasta acordar su catálogo de navegación.
+# Sin secciÃ³n equivalente en el editor actual. No se inventa una asignaciÃ³n;
+# mantienen su autorizaciÃ³n anterior hasta acordar su catÃ¡logo de navegaciÃ³n.
 FUERA_DEL_EDITOR = (
     ("POST", "/api/v1/contabilidad/cortes-e201"),
     ("GET", "/api/v1/contabilidad/cortes-e201/{id_plan}"),
@@ -218,7 +226,7 @@ CLASIFICACION = tuple(
 
 
 def seccion_api(metodo: str, ruta: str) -> str | None:
-    """Vacío = excepción explícita; None = no clasificada."""
+    """VacÃ­o = excepciÃ³n explÃ­cita; None = no clasificada."""
     return next(
         (
             seccion
@@ -241,7 +249,7 @@ def verificar_seccion(request: Request, usuario: Usuario) -> None:
             raise problema(
                 503,
                 "RUTA_SIN_CLASIFICAR",
-                "Esta operación necesita revisión de su acceso de sección.",
+                "Esta operaciÃ³n necesita revisiÃ³n de su acceso de secciÃ³n.",
             )
         return
     if not seccion:
@@ -254,5 +262,5 @@ def verificar_seccion(request: Request, usuario: Usuario) -> None:
         raise problema(
             403,
             "ACCESO_SECCION_RETIRADO",
-            "El acceso a esta sección no está habilitado para su usuario.",
+            "El acceso a esta secciÃ³n no estÃ¡ habilitado para su usuario.",
         )
