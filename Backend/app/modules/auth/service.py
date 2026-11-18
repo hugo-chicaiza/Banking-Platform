@@ -386,6 +386,8 @@ def cerrar_sesion(sellada: str | None, ip: str | None, origen: str) -> str:
 
 
 def perfil(usuario: Usuario) -> UsuarioSesion:
+    from app.modules.seguridad import accesos
+
     return UsuarioSesion(
         id_usuario=usuario.id_usuario,
         nombre=usuario.nombre,
@@ -394,6 +396,7 @@ def perfil(usuario: Usuario) -> UsuarioSesion:
         roles=list(usuario.roles),
         permisos=list(usuario.permisos),
         id_agencia=usuario.agencia(),
+        accesos_secciones=accesos.efectivos(usuario) if accesos.activa() else None,
     )
 
 

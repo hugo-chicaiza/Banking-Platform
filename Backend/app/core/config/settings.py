@@ -82,6 +82,7 @@ class Settings(BaseSettings):
     # Por minuto y por IP. Mientras no se configure el proxy en Azure, todos llegan con
     # la misma IP y comparten el límite.
     limite_peticiones_activo: bool = True
+    editor_accesos_activo: bool = False
     limite_lectura_por_minuto: int = 300
     limite_escritura_por_minuto: int = 60
     limite_sensible_por_minuto: int = 5

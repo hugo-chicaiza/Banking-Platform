@@ -249,6 +249,10 @@ def guardar_pestanas(
         raise problema(
             422, "PESTANA_NO_CONFIGURABLE", f"No se configura: {', '.join(fijas)}."
         )
+    from app.modules.seguridad import accesos
+
+    if accesos.activa() or config.version is not None:
+        return accesos.guardar(conn, config, usuario, id_usuario, ip)
     filas = [
         (p.pestana, ",".join(r for r in ROLES if r in p.roles)) for p in config.pestanas
     ]

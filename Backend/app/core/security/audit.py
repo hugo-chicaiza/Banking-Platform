@@ -83,6 +83,11 @@ def _persistir(evento: EventoAuditoria) -> None:
         _insertar(conn, evento)
 
 
+def registrar_en_transaccion(conn: Connection, evento: EventoAuditoria) -> None:
+    """Cambios administrativos SQL que deben revertirse si falla su auditoría."""
+    _insertar(conn, evento)
+
+
 def registrar(evento: EventoAuditoria) -> None:
     """Si falla, solo queda en el log: la operación auditada ya terminó y devolver un
     error haría creer al usuario que no se hizo.
