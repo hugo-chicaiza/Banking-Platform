@@ -379,6 +379,15 @@ ROLES_POR_RUTA: dict[tuple[str, str], tuple[str, ...]] = {
 # Cobertura de las rutas aditivas y de los contratos incorporados desde develop.
 ROLES_POR_RUTA.update(
     {
+        # Seguridad: permisos de roles (WorkOS) y pestañas por rol
+        ("GET", "/api/v1/seguridad/permisos"): ("ADMIN",),
+        ("PATCH", "/api/v1/seguridad/permisos/{slug}"): ("ADMIN",),
+        ("GET", "/api/v1/seguridad/roles"): ("ADMIN",),
+        ("POST", "/api/v1/seguridad/roles/{rol}/permisos"): ("ADMIN",),
+        ("DELETE", "/api/v1/seguridad/roles/{rol}/permisos/{permiso}"): ("ADMIN",),
+        ("PUT", "/api/v1/seguridad/roles/{rol}/permisos"): ("ADMIN",),
+        ("GET", "/api/v1/seguridad/pestanas"): AUTH,
+        ("PUT", "/api/v1/seguridad/pestanas"): ("ADMIN",),
         ("GET", "/api/v1/auth/agencias"): (),
         ("POST", "/api/v1/auth/agencia-activa"): (),
         ("GET", "/api/v1/usuarios/{idUsuario}/agencias"): ("ADMIN",),

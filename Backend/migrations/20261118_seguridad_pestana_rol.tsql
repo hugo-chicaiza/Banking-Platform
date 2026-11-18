@@ -1,0 +1,24 @@
+/* T-SQL (SQL Server), SeguridadDB. Pestañas del menú por rol (Seguridad › Pestañas por rol).
+   Una fila por pestaña personalizada; las que no tienen fila usan el menú por defecto del
+   frontend. Solo decide qué muestra el menú: cada API sigue validando rol o permiso.
+   Ejecutar ANTES de desplegar el backend con /seguridad/pestanas (sin la tabla, el menú
+   usa el valor por defecto). Reejecutable. Usar sqlcmd -b o equivalente. */
+SET XACT_ABORT ON;
+GO
+IF DB_NAME() <> N'SeguridadDB'
+    THROW 51460, 'La migracion requiere SeguridadDB.', 1;
+GO
+IF OBJECT_ID(N'Seguridad.PestanaRol', N'U') IS NULL
+    CREATE TABLE Seguridad.PestanaRol (
+        -- Ruta del frontend, p. ej. /cuentas/abrir
+        Pestana varchar(80) NOT NULL CONSTRAINT PK_PestanaRol PRIMARY KEY,
+        -- Roles separados por coma (ADMIN,ASESOR,...); vacío = ningún rol la ve
+        Roles varchar(200) NOT NULL,
+        ModificadoPor int NOT NULL,
+        FechaModificacion datetime2 NOT NULL CONSTRAINT DF_PestanaRol_Fecha DEFAULT SYSUTCDATETIME(),
+        CONSTRAINT FK_PestanaRol_Usuario FOREIGN KEY (ModificadoPor) REFERENCES Organizacion.Usuarios(UsuarioID),
+        CONSTRAINT CK_PestanaRol_Pestana CHECK (Pestana LIKE '/%' AND Pestana NOT IN ('/', '/seguridad/roles', '/seguridad/pestanas'))
+    );
+GO
+
+/* Vuelta atrás: DROP TABLE Seguridad.PestanaRol; (el menú vuelve al valor por defecto) */
