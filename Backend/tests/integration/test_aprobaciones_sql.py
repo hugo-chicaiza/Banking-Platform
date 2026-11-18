@@ -252,6 +252,24 @@ def test_recuperar_despues_commit_destino_sin_duplicar(motores, caso, monkeypatc
         )
 
 
+def test_comprobante_de_otro_contenido_no_autoriza_repetir_el_efecto(motores, caso):
+    from app.modules.aprobaciones.congelacion import congelar
+
+    servicio, id_, clave, _ = caso
+    servicio.aprobar(APROBADOR, id_, None, CONTEXTO)
+    copia = fila(motores, id_)
+    contenido = json.loads(copia["Contenido"])
+    contenido["cambio"]["valor"] = "30"
+    alterado = congelar(contenido)
+    copia["Contenido"], copia["HashContenido"] = alterado.texto, alterado.huella
+    operacion = servicio.registro.obtener("PAR-EDITAR", "Parametro")
+    with motores["cooperativa"].begin() as c:
+        with pytest.raises(HTTPException, match="CONTENIDO_ALTERADO") as e:
+            servicio._aplicar(c, copia, operacion, APROBADOR, CONTEXTO)
+        assert e.value.status_code == 409
+    assert valor(motores, clave) == 20
+
+
 def test_hash_invalido_denegado_tras_fault_injection_solo_local(motores, caso):
     servicio, id_, clave, _ = caso
     # Esta suite y sus motores estan limitados a lpc y bases propias. Nunca Azure.

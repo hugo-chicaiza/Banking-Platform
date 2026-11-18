@@ -3,6 +3,7 @@
 import json
 from collections.abc import Callable
 from datetime import date
+from hmac import compare_digest
 from typing import Any, cast
 
 from fastapi import HTTPException
@@ -273,7 +274,7 @@ class Servicio:
             {"org": fila["IdOrganizacion"], "id": fila["IdSolicitud"]},
         ).scalar()
         if comprobante is not None:
-            if bytes(comprobante) != bytes(fila["HashContenido"]):
+            if not compare_digest(bytes(comprobante), bytes(fila["HashContenido"])):
                 raise problema(
                     409,
                     "CONTENIDO_ALTERADO",
