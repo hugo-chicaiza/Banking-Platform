@@ -88,8 +88,15 @@ def test_patch_invalido(api, ruta, cuerpo):
 
 def test_contrato_openapi_sin_actor_en_entradas(api):
     contrato = api.openapi()
-    assert len(contrato["paths"]) == 4
+    esperadas = {
+        BASE + "/comisiones",
+        BASE + "/comisiones/{idComision}",
+        BASE + "/exoneraciones",
+        BASE + "/exoneraciones/{idExoneracion}",
+    }
+    assert esperadas <= contrato["paths"].keys()
     for nombre in (
+        "ValorNuevo",
         "ComisionCreate",
         "AsociarComision",
         "ComisionUpdate",

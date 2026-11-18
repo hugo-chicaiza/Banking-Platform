@@ -1,7 +1,7 @@
-"""F-03 en todos los mÃ³dulos: sesiÃ³n obligatoria, roles de cada tarea y auditorÃ­a de
+"""F-03 en todos los módulos: sesión obligatoria, roles de cada tarea y auditoría de
 los accesos denegados.
 
-Las rutas salen del OpenAPI de la app, asÃ­ que una ruta nueva sin require_auth hace
+Las rutas salen del OpenAPI de la app, así que una ruta nueva sin require_auth hace
 fallar test_toda_ruta_de_la_api_exige_sesion.
 """
 
@@ -21,13 +21,13 @@ from tests.sesion import USUARIO, simular_sesion, usuario_con_roles
 
 CONSULTA_PRODUCTOS = PERMISOS["prd-consultar"]
 
-AUTH = ()  # Cualquier usuario autenticado, sin rol especÃ­fico
+AUTH = ()  # Cualquier usuario autenticado, sin rol específico
 _PUBLICAS = {
     ("GET", "/api/v1/auth/login"),
     ("GET", "/api/v1/auth/callback"),
-    ("POST", "/api/v1/auth/logout"),  # AUT-03: idempotente, sin sesiÃ³n responde 200
+    ("POST", "/api/v1/auth/logout"),  # AUT-03: idempotente, sin sesión responde 200
 }
-# ATM usa credencial de terminal y/o JWT propios, sin sesiÃ³n WorkOS.
+# ATM usa credencial de terminal y/o JWT propios, sin sesión WorkOS.
 _TERMINALES = {
     ("POST", "/api/v1/atm/auth"),
     ("POST", "/api/v1/atm/logout"),
@@ -254,7 +254,7 @@ ROLES_POR_RUTA: dict[tuple[str, str], tuple[str, ...]] = {
         "AUDITOR",
         "ADMIN",
     ),
-    # CAJ-01: listado de cajas fÃ­sicas
+    # CAJ-01: listado de cajas físicas
     ("GET", "/api/v1/caja/cajas-fisicas"): (
         "CAJERO",
         "SUPERVISOR",
@@ -398,7 +398,7 @@ ROLES_POR_RUTA: dict[tuple[str, str], tuple[str, ...]] = {
 # Cobertura de las rutas aditivas y de los contratos incorporados desde develop.
 ROLES_POR_RUTA.update(
     {
-        # Seguridad: permisos de roles (WorkOS) y pestaÃ±as por rol
+        # Seguridad: permisos de roles (WorkOS) y pestañas por rol
         ("GET", "/api/v1/seguridad/permisos"): ("ADMIN",),
         ("PATCH", "/api/v1/seguridad/permisos/{slug}"): ("ADMIN",),
         ("POST", "/api/v1/seguridad/permisos"): ("ADMIN",),
@@ -464,7 +464,7 @@ def _pin_pad_simulado_habilitado(monkeypatch):
 
 @pytest.fixture
 def client():
-    # Sin BD real: lo que llegue al repositorio falla, pero el control de acceso ya pasÃ³
+    # Sin BD real: lo que llegue al repositorio falla, pero el control de acceso ya pasó
     app.dependency_overrides[cooperativa] = lambda: None
     app.dependency_overrides[tarjetas_router.seguridad] = lambda: None
     yield TestClient(app, raise_server_exceptions=False)
@@ -476,7 +476,7 @@ def _llamar(client: TestClient, metodo: str, ruta: str):
 
 
 def _code(respuesta) -> str:
-    # Clientes (gestiÃ³n) y contabilidad aÃºn no usan ProblemDetailsRoute (F-04): ahÃ­
+    # Clientes (gestión) y contabilidad aún no usan ProblemDetailsRoute (F-04): ahí
     # FastAPI responde {"detail": {"code": ...}}. Cuando migren, basta con ["code"].
     cuerpo = respuesta.json()
     return cuerpo.get("code") or cuerpo["detail"]["code"]
@@ -601,7 +601,7 @@ def test_roles_de_la_tarea_pasan_el_control(client, ruta, monkeypatch):
 
     r = _llamar(client, *ruta)
 
-    # D-01: estos endpoints requieren vinculaciÃ³n
+    # D-01: estos endpoints requieren vinculación
     # WorkOS -> IdUsuario interno.
     rutas_con_vinculacion = {
         ("GET", "/api/v1/caja/jornadas/actual"),
@@ -654,7 +654,7 @@ def test_require_auth_entrega_el_usuario_de_la_sesion():
 def test_403_auditado_con_el_usuario_vinculado(client, eventos_auditados, monkeypatch):
 
     usuario = replace(usuario_con_roles("CAJERO"), id_interno=12)
-    # La sesiÃ³n real deja el usuario en request.state; aquÃ­ se simula ese paso
+    # La sesión real deja el usuario en request.state; aquí se simula ese paso
 
     def sesion(request: Request) -> Usuario:
         request.state.usuario = usuario
@@ -690,7 +690,7 @@ def test_403_de_usuario_sin_vinculo_registra_su_id_de_workos(client, eventos_aud
     evento = eventos_auditados[-1]
     assert evento.usuario is None
     assert evento.descripcion.endswith(f"usuario={usuario.id_usuario}")
-    # Los roles de WorkOS con que se negÃ³ quedan en la auditorÃ­a
+    # Los roles de WorkOS con que se negó quedan en la auditoría
     assert evento.roles == "CAJERO"
 
 

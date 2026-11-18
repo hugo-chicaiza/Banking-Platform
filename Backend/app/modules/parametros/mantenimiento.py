@@ -3,7 +3,6 @@
 import json
 from datetime import UTC, date, timedelta
 from typing import Annotated, Any
-from uuid import uuid4
 
 from fastapi import APIRouter, Depends, Path, Query, Request, Response
 from pydantic import ConfigDict, Field, field_validator
@@ -20,6 +19,7 @@ from app.core.database.db import cooperativa
 from app.core.security.auth import UsuarioActual, require_auth
 from app.core.security.operador import agencia_de_consulta
 from app.modules.aprobaciones import router as aprobaciones
+from app.modules.aprobaciones.auditoria import encolar
 from app.modules.aprobaciones.contratos import SolicitudAceptada
 from app.modules.aprobaciones.identidad import Actor
 from app.modules.aprobaciones.motores import motor
@@ -87,7 +87,6 @@ def auditar(
     antes: list[dict],
     despues: list[dict],
 ) -> None:
-    contexto = aprobaciones.contexto(request, usuario)
     anteriores = {v["IdParametroValor"]: v for v in antes}
     nuevos = {v["IdParametroValor"]: v for v in despues}
     modificados = {
@@ -95,34 +94,20 @@ def auditar(
         for id_ in anteriores.keys() | nuevos.keys()
         if anteriores.get(id_) != nuevos.get(id_)
     }
-    contenido = {
-        "codigo": codigo,
-        "sujeto": actor.sujeto,
-        "idInterno": actor.id_interno,
-        "organizacion": actor.organizacion,
-        "roles": list(actor.roles),
-        "agencia": agencia,
-        "sesion": contexto.sesion,
-        "origen": contexto.origen,
-        "correlacion": contexto.correlacion,
-        "canal": contexto.canal,
-        "tipoObjetivo": "Parametros.Parametro",
-        "idObjetivo": clave,
-        "resultado": "Exitoso",
-        "cambios": {
-            "antes": [v for id_, v in anteriores.items() if id_ in modificados],
-            "despues": [v for id_, v in nuevos.items() if id_ in modificados],
-        },
+    cambios = {
+        "antes": [v for id_, v in anteriores.items() if id_ in modificados],
+        "despues": [v for id_, v in nuevos.items() if id_ in modificados],
     }
-    conn.execute(
-        text(
-            "INSERT Auditoria.EventoPendiente(IdEvento,CodigoEvento,Contenido) VALUES(:id,:codigo,:contenido)"
-        ),
-        {
-            "id": str(uuid4()),
-            "codigo": codigo,
-            "contenido": json.dumps(contenido, default=str, ensure_ascii=False),
-        },
+    encolar(
+        conn,
+        codigo,
+        actor,
+        None,
+        agencia,
+        aprobaciones.contexto(request, usuario),
+        json.loads(json.dumps(cambios, default=str)),
+        tabla="Parametros.Parametro",
+        objetivo=clave,
     )
 
 
@@ -185,7 +170,17 @@ def detalle(
 ) -> dict[str, Any]:
     p = general.definicion(conn, clave)
     historial = general.historial(conn, clave, agencia)
-    responsables = nombres(historial, actor)
+    return presentar(p, historial, agencia, fecha, actor, nombres(historial, actor))
+
+
+def presentar(
+    p: dict[str, Any],
+    historial: list[dict[str, Any]],
+    agencia: str | None,
+    fecha: date,
+    actor: Actor,
+    responsables: dict[str | None, str],
+) -> dict[str, Any]:
     vigentes = [
         v
         for v in historial
@@ -250,11 +245,7 @@ def listar(
     agencia = alcance(actor, usuario, id_agencia)
     # Parametros son pocos; no se interpolan filtros del usuario en SQL.
     filas = (
-        conn.execute(
-            text(
-                "SELECT Clave,Modulo,Descripcion,Estado FROM Parametros.Parametro ORDER BY Modulo,Clave"
-            )
-        )
+        conn.execute(text("SELECT * FROM Parametros.Parametro ORDER BY Modulo,Clave"))
         .mappings()
         .all()
     )
@@ -265,10 +256,31 @@ def listar(
         and (estado is None or f["Estado"] == estado)
         and (buscar.casefold() in (f["Clave"] + " " + f["Descripcion"]).casefold())
     ]
+    seleccion = filtradas[(page - 1) * page_size : page * page_size]
+    general._validar_agencia(agencia)
+    valores = []
+    if seleccion:
+        valores = [
+            dict(v)
+            for v in conn.execute(
+                text(
+                    "SELECT * FROM Parametros.ParametroValor WHERE IdParametro IN :ids AND (IdAgencia=CAST(:agencia AS char(3)) OR IdAgencia IS NULL) ORDER BY VigenciaDesde DESC,IdParametroValor DESC"
+                ).bindparams(bindparam("ids", expanding=True)),
+                {"ids": [p["IdParametro"] for p in seleccion], "agencia": agencia},
+            ).mappings()
+        ]
+    responsables = nombres(valores, actor)
     return {
         "items": [
-            detalle(conn, f["Clave"], agencia, hoy(), actor)
-            for f in filtradas[(page - 1) * page_size : page * page_size]
+            presentar(
+                dict(p),
+                [v for v in valores if v["IdParametro"] == p["IdParametro"]],
+                agencia,
+                hoy(),
+                actor,
+                responsables,
+            )
+            for p in seleccion
         ],
         "total": len(filtradas),
         "page": page,

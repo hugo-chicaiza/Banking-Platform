@@ -8,7 +8,13 @@ from app.modules.aprobaciones.congelacion import congelar
 from app.modules.aprobaciones.repositorio import consulta
 
 
-def entregar(origen: Engine, seguridad: Engine, limite: int = 100, *, ids_evento: list[str] | None = None) -> int:
+def entregar(
+    origen: Engine,
+    seguridad: Engine,
+    limite: int = 100,
+    *,
+    ids_evento: list[str] | None = None,
+) -> int:
     enviados = 0
     with origen.begin() as fuente:
         filas = (
@@ -16,7 +22,12 @@ def entregar(origen: Engine, seguridad: Engine, limite: int = 100, *, ids_evento
                 consulta("""SELECT TOP(:limite) IdEvento,CodigoEvento,Contenido,FechaCreacionUTC
             FROM Auditoria.EventoPendiente WITH(UPDLOCK,READPAST,ROWLOCK)
             WHERE Enviado=0 AND (CAST(:eventos AS nvarchar(max)) IS NULL OR IdEvento IN (SELECT CONVERT(uniqueidentifier,[value]) FROM OPENJSON(CAST(:eventos AS nvarchar(max))))) ORDER BY FechaCreacionUTC,IdEvento"""),
-                {"limite": limite, "eventos": json.dumps(ids_evento) if ids_evento is not None else None},
+                {
+                    "limite": limite,
+                    "eventos": json.dumps(ids_evento)
+                    if ids_evento is not None
+                    else None,
+                },
             )
             .mappings()
             .all()

@@ -1,4 +1,4 @@
-"""PolÃ­tica de secciones sobre PestanaRol; nunca concede operaciones de negocio."""
+"""Política de secciones sobre PestanaRol; nunca concede operaciones de negocio."""
 
 import hashlib
 import json
@@ -37,7 +37,7 @@ SECCIONES = (
     Seccion("/organizacion/entidad", "Datos de la cooperativa", ("ADMIN", "ASESOR")),
     Seccion("/organizacion/agencias", "Agencias", ("ADMIN",)),
     Seccion("/productos", "Productos", ROLES, "prd-consultar"),
-    Seccion("/catalogos", "CatÃ¡logos", ("ADMIN", "ASESOR", "SUPERVISOR")),
+    Seccion("/catalogos", "Catálogos", ("ADMIN", "ASESOR", "SUPERVISOR")),
     Seccion("/registrar-cliente", "Registrar cliente", ("ADMIN", "ASESOR")),
     Seccion("/clientes-busqueda", "Consultar clientes", ATENCION),
     Seccion("/cuentas", "Consultar cuentas", ATENCION),
@@ -48,11 +48,11 @@ SECCIONES = (
     Seccion("/contabilidad/asientos", "Asientos contables", CONTABLES),
     Seccion("/contabilidad/fecha-contable", "Fecha contable", CONTABLES),
     Seccion("/usuarios", "Usuarios del sistema", ("ADMIN",)),
-    Seccion("/creditos", "Solicitudes de crÃ©dito", ("ADMIN", "ASESOR")),
+    Seccion("/creditos", "Solicitudes de crédito", ("ADMIN", "ASESOR")),
 )
 POR_RUTA = {s.ruta: s for s in SECCIONES}
 FIJAS = frozenset({"/", "/seguridad/roles", "/seguridad/pestanas"})
-# CrÃ©ditos es una pantalla en preparaciÃ³n, sin APIs administradas por esta polÃ­tica.
+# Créditos es una pantalla en preparación, sin APIs administradas por esta política.
 SOLO_MENU = frozenset({"/creditos"})
 
 
@@ -127,17 +127,17 @@ def validar(config: PestanasConfig) -> None:
     for pestana in config.pestanas:
         if pestana.pestana not in POR_RUTA and pestana.pestana not in SOLO_MENU:
             raise problema(
-                422, "SECCION_DESCONOCIDA", "La secciÃ³n no pertenece al catÃ¡logo."
+                422, "SECCION_DESCONOCIDA", "La sección no pertenece al catálogo."
             )
         if len(pestana.roles) != len(set(pestana.roles)):
-            raise problema(422, "ROL_DUPLICADO", "No repitas un rol en la secciÃ³n.")
+            raise problema(422, "ROL_DUPLICADO", "No repitas un rol en la sección.")
         # No permite ampliar las restricciones vigentes. Las APIs conservan su control propio.
         seccion = POR_RUTA.get(pestana.pestana)
         if seccion and set(pestana.roles) - set(seccion.roles):
             raise problema(
                 422,
                 "ROL_INCOMPATIBLE",
-                "Una secciÃ³n no concede operaciones a roles incompatibles.",
+                "Una sección no concede operaciones a roles incompatibles.",
             )
 
 
@@ -148,13 +148,13 @@ def guardar(
     id_usuario: int,
     ip: str | None,
 ) -> list[PestanaRoles]:
-    """Misma tabla y transacciÃ³n para configuraciÃ³n y auditorÃ­a; control optimista."""
+    """Misma tabla y transacción para configuración y auditoría; control optimista."""
     validar(config)
     if config.version is None or config.motivo is None:
         raise problema(
             409,
             "VERSION_Y_MOTIVO_REQUERIDOS",
-            "Consulta la configuraciÃ³n e indica el motivo antes de guardar.",
+            "Consulta la configuración e indica el motivo antes de guardar.",
         )
     try:
         with conn.begin():
@@ -170,7 +170,7 @@ def guardar(
                 raise problema(
                     409,
                     "EDICION_EN_CURSO",
-                    "Otra persona estÃ¡ guardando. Consulta de nuevo.",
+                    "Otra persona está guardando. Consulta de nuevo.",
                 )
             if lock not in (0, 1):
                 raise problema(
@@ -183,18 +183,18 @@ def guardar(
                 raise problema(
                     409,
                     "CONFIGURACION_DESACTUALIZADA",
-                    "La configuraciÃ³n cambiÃ³. Consulta de nuevo.",
+                    "La configuración cambió. Consulta de nuevo.",
                 )
             nuevas = [
                 (p.pestana, ",".join(r for r in ROLES if r in p.roles))
                 for p in config.pestanas
             ]
-            # No eliminar silenciosamente personalizaciones ajenas al catÃ¡logo.
+            # No eliminar silenciosamente personalizaciones ajenas al catálogo.
             if any(p not in POR_RUTA and p not in SOLO_MENU for p, _ in anteriores):
                 raise problema(
                     409,
                     "CATALOGO_DESACTUALIZADO",
-                    "Existen secciones no reconocidas. Revisa el catÃ¡logo antes de guardar.",
+                    "Existen secciones no reconocidas. Revisa el catálogo antes de guardar.",
                 )
             repository.reemplazar_pestanas(conn, nuevas, id_usuario)
             antes, despues = dict(anteriores), dict(nuevas)

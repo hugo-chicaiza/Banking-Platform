@@ -1,4 +1,4 @@
-"""HTTP E1-12. Las escrituras de parÃ¡metros son del rol ADMIN (sin permiso de WorkOS propio)."""
+"""HTTP E1-12. Las escrituras de parámetros son del rol ADMIN (sin permiso de WorkOS propio)."""
 
 from typing import Annotated
 
@@ -57,7 +57,7 @@ def crear_comision(
     request: Request,
     conn: Db,
 ) -> Comision:
-    """Crea tarifa y asociaciÃ³n, o asocia una tarifa existente por idComision."""
+    """Crea tarifa y asociación, o asocia una tarifa existente por idComision."""
     return service.crear_comision(conn, payload, actor, ip_cliente(request.scope))
 
 

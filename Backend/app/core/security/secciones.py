@@ -1,6 +1,6 @@
-"""RestricciÃ³n adicional por secciÃ³n: nunca reemplaza roles, permisos o agencia.
+"""Restricción adicional por sección: nunca reemplaza roles, permisos o agencia.
 
-La clasificaciÃ³n usa mÃ©todo y ruta completa. Los selectores compartidos conservan
+La clasificación usa método y ruta completa. Los selectores compartidos conservan
 sus reglas anteriores; una API sensible no acepta un origen/pantalla del cliente
 como excusa para eludir el acceso retirado.
 """
@@ -152,8 +152,8 @@ RUTAS_POR_SECCION: dict[str, tuple[tuple[str, str], ...]] = {
     ),
 }
 
-# Consultas mÃ­nimas reutilizadas por varios formularios. No son APIs pÃºblicas:
-# conservan autenticaciÃ³n y sus restricciones actuales.
+# Consultas mínimas reutilizadas por varios formularios. No son APIs públicas:
+# conservan autenticación y sus restricciones actuales.
 COMPARTIDAS = tuple(
     ("GET", "/api/v1/catalogos/" + nombre)
     for nombre in (
@@ -175,8 +175,8 @@ COMPARTIDAS = tuple(
     )
 )
 
-# Sin secciÃ³n equivalente en el editor actual. No se inventa una asignaciÃ³n;
-# mantienen su autorizaciÃ³n anterior hasta acordar su catÃ¡logo de navegaciÃ³n.
+# Sin sección equivalente en el editor actual. No se inventa una asignación;
+# mantienen su autorización anterior hasta acordar su catálogo de navegación.
 FUERA_DEL_EDITOR = (
     ("POST", "/api/v1/contabilidad/cortes-e201"),
     ("GET", "/api/v1/contabilidad/cortes-e201/{id_plan}"),
@@ -231,7 +231,7 @@ CLASIFICACION = tuple(
 
 
 def seccion_api(metodo: str, ruta: str) -> str | None:
-    """VacÃ­o = excepciÃ³n explÃ­cita; None = no clasificada."""
+    """Vacío = excepción explícita; None = no clasificada."""
     return next(
         (
             seccion
@@ -254,7 +254,7 @@ def verificar_seccion(request: Request, usuario: Usuario) -> None:
             raise problema(
                 503,
                 "RUTA_SIN_CLASIFICAR",
-                "Esta operaciÃ³n necesita revisiÃ³n de su acceso de secciÃ³n.",
+                "Esta operación necesita revisión de su acceso de sección.",
             )
         return
     if not seccion:
@@ -267,5 +267,5 @@ def verificar_seccion(request: Request, usuario: Usuario) -> None:
         raise problema(
             403,
             "ACCESO_SECCION_RETIRADO",
-            "El acceso a esta secciÃ³n no estÃ¡ habilitado para su usuario.",
+            "El acceso a esta sección no está habilitado para su usuario.",
         )
