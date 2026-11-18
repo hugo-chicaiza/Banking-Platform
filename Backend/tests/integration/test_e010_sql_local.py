@@ -487,3 +487,26 @@ def test_ediciones_concurrentes_conservan_campos_e_invalidan_baja(cola):
         cola.aprobar(replace(CHECKER, agencias=(agencia,)), id_, None, CONTEXTO)
     assert _error(desactualizada)["code"] == "SOLICITUD_DESACTUALIZADA"
     assert _estado(cola, agencia) == "A"
+
+
+def test_version_agencia_es_hexadecimal_y_cambia_con_edicion(cola):
+    agencia = _alta(cola)
+    with cola.cooperativa.connect() as conn:
+        anterior = agencias.version_agencia(conn, agencia)
+        assert isinstance(anterior, str) and len(anterior) == 16
+        assert all(c in "0123456789ABCDEF" for c in anterior)
+        assert anterior == agencias.version_agencia(conn, agencia)
+        conn.rollback()
+        service.actualizar_agencia(
+            conn,
+            agencia,
+            AgenciaUpdate.model_validate({"telefono": "123456"}),
+            1,
+            None,
+            "local",
+            USUARIO,
+        )
+        posterior = agencias.version_agencia(conn, agencia)
+        assert isinstance(posterior, str) and len(posterior) == 16
+        assert all(c in "0123456789ABCDEF" for c in posterior)
+        assert posterior != anterior
