@@ -142,8 +142,11 @@ def _vincular(
         _auditar("VINCULAR", "Exitoso", f"AUT-01 Vínculo workos_user={id_workos}", ip)
 
 
-def _descartar(id_sesion: str) -> None:
+def _descartar(id_sesion: str | None) -> None:
     """Revoca en WorkOS la sesión recién creada que no llega a ser cookie."""
+    if not id_sesion:
+        logger.warning("auth: sesión rechazada sin sid, no se pudo revocar")
+        return
     try:
         get_workos().user_management.revoke_session(session_id=id_sesion)
     except Exception as exc:  # noqa: BLE001 - la cookie no se crea igual
@@ -243,6 +246,12 @@ def iniciar_login(return_to: str | None, origen: str) -> tuple[str, str]:
         state=state,
         code_challenge=desafio,
     )
+    # max_age=0: AuthKit pide credenciales y 2FA en cada login aunque su sesión del
+    # navegador siga viva. Sin esto, tras un login rechazado (usuario inactivo, sesión
+    # abierta) AuthKit vuelve a entrar solo con el mismo usuario y no deja cambiarlo;
+    # en un equipo compartido (caja) el siguiente usuario entraría como el anterior.
+    # El SDK 5.46 no tiene el parámetro.
+    url = f"{url}&max_age=0"
     return url, f"{state}.{verificador}.{destino}"
 
 
@@ -320,6 +329,9 @@ def completar_login(
         validada = validar_sesion(resultado.sealed_session)
     except HTTPException as exc:
         if exc.status_code == 403:
+            # Membresía inactiva (usuario Inactivo o Bloqueado): WorkOS igual crea la
+            # sesión, sin organización. Se revoca para que no quede viva.
+            _descartar(sid_de_cookie(resultado.sealed_session))
             return fallo("USUARIO_NO_HABILITADO", "organizacion")
         return _url_error("AUTENTICACION_NO_DISPONIBLE", origen), None
     if validada is None:
