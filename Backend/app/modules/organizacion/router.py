@@ -1,4 +1,4 @@
-"""Organización · Agencias: ORG-01 (POST) y ORG-02 (PATCH, incluye desactivación).
+"""Organización · Mantenimiento de agencias y entidad.
 
 Sin DELETE: la baja es lógica por Estado. Solo ADMIN (decisión del responsable,
 2026-11-12). La identidad es la sesión de WorkOS; el UsuarioID de auditoría es el mismo
@@ -27,9 +27,11 @@ from app.modules.organizacion.schemas import (
     AgenciaEstado,
     AgenciaEstadoUpdate,
     AgenciaUpdate,
+    DesactivacionAceptada,
     Entidad,
     EntidadCreate,
     EntidadUpdate,
+    EstadoAgencia,
 )
 
 _ROLES = ["ADMIN"]
@@ -44,6 +46,30 @@ Db = Annotated[Connection, Depends(cooperativa)]
 IdAgenciaPath = Annotated[str, Path(pattern=r"^[0-9A-Z]{3}$")]
 
 
+@router.get(
+    "/organizacion/agencias",
+    tags=["organizacion"],
+    operation_id="AgenciaListar",
+    response_model=list[Agencia],
+    dependencies=[Depends(require_roles(*_ROLES)), Depends(solo_parametros("estado"))],
+    openapi_extra={"x-roles": _ROLES},
+)
+def listar_agencias(conn: Db, estado: EstadoAgencia | None = None) -> list[Agencia]:
+    return service.listar_agencias(conn, estado)
+
+
+@router.post(
+    "/organizacion/agencias",
+    tags=["organizacion"],
+    operation_id="OrganizacionAgenciaCrear",
+    response_model=Agencia,
+    status_code=201,
+    dependencies=[
+        Depends(require_roles(*_ROLES)),
+        Depends(solo_parametros()),
+    ],
+    openapi_extra={"x-roles": _ROLES},
+)
 @router.post(
     "/agencias",
     tags=["organizacion"],
@@ -51,8 +77,8 @@ IdAgenciaPath = Annotated[str, Path(pattern=r"^[0-9A-Z]{3}$")]
     response_model=Agencia,
     status_code=201,
     dependencies=[
+        Depends(require_roles(*_ROLES)),
         Depends(solo_parametros()),
-        Depends(require_roles("ADMIN")),
     ],
     openapi_extra={"x-roles": _ROLES},
 )
@@ -63,16 +89,25 @@ def crear_agencia(
     creado_por: UsuarioAuditoria,
     conn: Db,
 ) -> Agencia:
-    """Crea una agencia en Estado 'A'. SQL genera idAgencia automáticamente."""
+    """Crea una agencia en Estado 'I'. SQL genera idAgencia automáticamente."""
     return service.crear_agencia(
         conn,
         payload,
         creado_por,
         ip_cliente(request.scope),
         obtener_trace_id(request.scope),
+        usuario,
     )
 
 
+@router.get(
+    "/organizacion/agencias/{id_agencia}",
+    tags=["organizacion"],
+    operation_id="OrganizacionAgenciaObtener",
+    response_model=Agencia,
+    dependencies=[Depends(require_roles(*_ROLES)), Depends(solo_parametros())],
+    openapi_extra={"x-roles": _ROLES},
+)
 @router.get(
     "/agencias/{id_agencia}",
     tags=["organizacion"],
@@ -86,13 +121,24 @@ def obtener_agencia(id_agencia: IdAgenciaPath, conn: Db) -> Agencia:
 
 
 @router.patch(
+    "/organizacion/agencias/{id_agencia}",
+    tags=["organizacion"],
+    operation_id="OrganizacionAgenciaEditar",
+    response_model=Agencia,
+    dependencies=[
+        Depends(require_roles(*_ROLES)),
+        Depends(solo_parametros()),
+    ],
+    openapi_extra={"x-roles": _ROLES},
+)
+@router.patch(
     "/agencias/{id_agencia}",
     tags=["organizacion"],
     operation_id="ORG02",
     response_model=Agencia,
     dependencies=[
+        Depends(require_roles(*_ROLES)),
         Depends(solo_parametros()),
-        Depends(require_roles("ADMIN")),
     ],
     openapi_extra={"x-roles": _ROLES},
 )
@@ -104,7 +150,7 @@ def actualizar_agencia(
     modificado_por: UsuarioAuditoria,
     conn: Db,
 ) -> Agencia:
-    """Actualización parcial. estado='I' desactiva (con motivo); estado='A' reactiva."""
+    """Actualiza datos y permite reactivar la agencia. La baja requiere E0-08."""
     return service.actualizar_agencia(
         conn,
         id_agencia,
@@ -112,6 +158,7 @@ def actualizar_agencia(
         modificado_por,
         ip_cliente(request.scope),
         obtener_trace_id(request.scope),
+        usuario,
     )
 
 
@@ -122,31 +169,51 @@ def _sin_cache(response: Response) -> None:
 
 
 @router.patch(
+    "/organizacion/agencias/{id_agencia}/estado",
+    response_model=AgenciaEstado,
+    responses={
+        202: {
+            "model": DesactivacionAceptada,
+            "description": "Solicitud pendiente (E0-08)",
+        }
+    },
+    tags=["organizacion"],
+    operation_id="OrganizacionAgenciaCambiarEstado",
+    openapi_extra={"x-roles": _ROLES},
+    dependencies=[
+        Depends(require_roles(*_ROLES)),
+        Depends(solo_parametros()),
+        Depends(_sin_cache),
+    ],
+)
+@router.patch(
     "/agencias/{id_agencia}/estado",
     response_model=AgenciaEstado,
     tags=["organizacion"],
     operation_id="AgenciaCambiarEstado",
-    openapi_extra={"x-roles": ["ADMIN"]},
-    dependencies=[Depends(solo_parametros()), Depends(_sin_cache)],
+    openapi_extra={"x-roles": _ROLES},
+    dependencies=[
+        Depends(require_roles(*_ROLES)),
+        Depends(solo_parametros()),
+        Depends(_sin_cache),
+    ],
 )
 def cambiar_estado(
     id_agencia: Annotated[str, Path(min_length=3, max_length=3)],
     datos: AgenciaEstadoUpdate,
     conn: Db,
     request: Request,
-    usuario: Annotated[Usuario, Depends(require_roles("ADMIN"))],
-):
-    resultado, anterior = service.cambiar_estado(conn, id_agencia, datos.estado)
-    if anterior != resultado.estado:
-        with auditar(
-            "CAMBIAR_ESTADO_AGENCIA",
-            "Organizacion.Agencia",
-            usuario,
-            ip_cliente(request.scope),
-            f"estado_anterior={anterior} estado_nuevo={resultado.estado}",
-            id_agencia,
-        ):
-            pass
+    usuario: Annotated[Usuario, Depends(require_auth)],
+) -> AgenciaEstado:
+    resultado, _ = service.cambiar_estado(
+        conn,
+        id_agencia,
+        datos.estado,
+        actor=usuario,
+        ip=ip_cliente(request.scope),
+        trace_id=obtener_trace_id(request.scope),
+        motivo=datos.motivo,
+    )
     return resultado
 
 

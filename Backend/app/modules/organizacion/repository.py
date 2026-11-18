@@ -56,13 +56,29 @@ def _fila(conn: Connection, sql: str, parametros: dict[str, Any]) -> Fila | None
     return dict(fila) if fila is not None else None
 
 
-_SELECT_AGENCIA = """
+_PROYECCION_AGENCIA = """
     SELECT IdAgencia, Codigo, TipoAgencia, Estado, IdCiudad, Telefono, Direccion,
            FechaCreacion,
            CAST(CASE WHEN KeyAgencia IS NULL THEN 0 ELSE 1 END AS bit) AS VinculadaWorkos
-    FROM Organizacion.Agencia {pista}
-    WHERE IdAgencia = :id
+    FROM Organizacion.Agencia
 """
+_SELECT_AGENCIA = _PROYECCION_AGENCIA + " {pista} WHERE IdAgencia = :id"
+
+
+def listar_agencias(conn: Connection, estado: str | None) -> list[Fila]:
+    resultado = conn.execute(
+        text(
+            _PROYECCION_AGENCIA
+            + """
+            WHERE (:estado IS NULL OR Estado = :estado)
+            ORDER BY CASE WHEN TipoAgencia = 'Matriz' THEN 0 ELSE 1 END, Codigo
+        """
+        ),
+        {"estado": estado},
+    )
+    return [dict(fila) for fila in resultado.mappings()]
+
+
 _LEER_AGENCIA = text(_SELECT_AGENCIA.replace("{pista}", ""))
 # Bloqueo exclusivo hasta el commit: dos PATCH de la misma agencia se serializan
 _LEER_AGENCIA_BLOQUEADA = text(
@@ -145,6 +161,7 @@ def insertar_agencia(conn: Connection, datos: dict[str, Any]) -> str:
                 IdAgencia,
                 Codigo,
                 TipoAgencia,
+                Estado,
                 IdCiudad,
                 Telefono,
                 Direccion,
@@ -154,6 +171,7 @@ def insertar_agencia(conn: Connection, datos: dict[str, Any]) -> str:
                 :id_agencia,
                 :codigo,
                 :tipo_agencia,
+                'I',
                 :id_ciudad,
                 :telefono,
                 :direccion,

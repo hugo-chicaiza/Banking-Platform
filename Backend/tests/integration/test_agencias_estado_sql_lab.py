@@ -5,6 +5,7 @@ WorkOS ni tablas contables. Las fixtures se eliminan al terminar.
 """
 
 import os
+from typing import cast
 
 import pyodbc
 import pytest
@@ -111,7 +112,7 @@ def poner_estado(engine, estado):
 @pytest.mark.parametrize(
     "anterior,nuevo,esperado",
     [
-        ("A", "I", 200),
+        ("A", "I", 503),
         ("I", "A", 200),
         ("A", "A", 200),
         ("I", "I", 200),
@@ -131,7 +132,7 @@ def test_transiciones_reales(engine, anterior, nuevo, esperado):
         else:
             with pytest.raises(HTTPException) as error:
                 service.cambiar_estado(conn, AGENCIA, nuevo)
-            assert error.value.status_code == 409
+            assert error.value.status_code == esperado
     with engine.connect() as conn:
         final = conn.execute(
             text("SELECT Estado FROM Organizacion.Agencia WHERE IdAgencia=:id"),
@@ -166,10 +167,10 @@ def test_guard_impide_desactivar_hasta_terminar_escritura_local(engine):
                 text("UPDATE Organizacion.Agencia SET Estado='I' WHERE IdAgencia=:id"),
                 {"id": AGENCIA},
             )
-    # Una vez liberado el lock, la otra sesión sí puede desactivar.
-    with engine.connect() as otra:
-        resultado, _ = service.cambiar_estado(otra, AGENCIA, "I")
-        assert resultado.estado == "I"
+    with engine.connect() as otra, pytest.raises(HTTPException) as error:
+        service.cambiar_estado(otra, AGENCIA, "I")
+    detalle = cast(dict[str, object], error.value.detail)
+    assert detalle["code"] == "APROBACIONES_NO_DISPONIBLES"
 
 
 def test_guard_404_real(engine):

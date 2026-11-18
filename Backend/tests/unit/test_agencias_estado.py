@@ -1,4 +1,5 @@
 from contextlib import contextmanager
+from datetime import datetime
 from unittest.mock import MagicMock, Mock
 
 import pytest
@@ -24,13 +25,30 @@ def ctx(monkeypatch):
     app.dependency_overrides[cooperativa] = lambda: conn
     simular_sesion(app, usuario_con_roles("ADMIN"))
     leer = Mock(return_value={"id_agencia": "001", "estado": "A"})
-    escribir = Mock(return_value=True)
+
+    def guardar(_conn, id_agencia, _anterior, nuevo):
+        leer.return_value = {"id_agencia": id_agencia, "estado": nuevo}
+        return True
+
+    escribir = Mock(side_effect=guardar)
     auditoria = Mock()
     monkeypatch.setattr(repository, "bloquear_agencia", leer)
     monkeypatch.setattr(
         repository,
         "obtener_agencia",
-        Mock(return_value={"TipoAgencia": "Sucursal"}),
+        Mock(
+            side_effect=lambda _conn, id_agencia, **_: {
+                "IdAgencia": id_agencia,
+                "Codigo": "SUC-001",
+                "TipoAgencia": "Sucursal",
+                "Estado": leer.return_value["estado"],
+                "IdCiudad": 1,
+                "Telefono": None,
+                "Direccion": None,
+                "FechaCreacion": datetime(2026, 1, 1),
+                "VinculadaWorkos": False,
+            }
+        ),
     )
     monkeypatch.setattr(
         repository,
@@ -43,8 +61,8 @@ def ctx(monkeypatch):
         yield app, cliente, conn, leer, escribir, auditoria
 
 
-@pytest.mark.parametrize("anterior,nuevo", [("A", "I"), ("I", "A")])
-def test_admin_activa_y_desactiva(ctx, anterior, nuevo):
+def test_admin_reactiva(ctx):
+    anterior, nuevo = "I", "A"
     _, cliente, conn, leer, escribir, auditoria = ctx
     leer.return_value = {"id_agencia": "001", "estado": anterior}
     r = cliente.patch(RUTA, json={"estado": nuevo})
@@ -132,10 +150,23 @@ def test_body_solo_estado(ctx, payload):
 
 
 def test_actualizacion_no_confirmada_no_informa_exito(ctx):
-    _, cliente, _, _, escribir, auditoria = ctx
+    _, cliente, _, leer, escribir, auditoria = ctx
+    leer.return_value["estado"] = "I"
+    escribir.side_effect = None
     escribir.return_value = False
-    r = cliente.patch(RUTA, json={"estado": "I"})
+    r = cliente.patch(RUTA, json={"estado": "A"})
     assert r.status_code == 409
+    auditoria.assert_not_called()
+
+
+@pytest.mark.parametrize("ruta", [RUTA, "/api/v1/organizacion/agencias/001/estado"])
+def test_no_desactiva_sin_cola(ctx, ruta):
+    _, cliente, _, leer, escribir, auditoria = ctx
+    r = cliente.patch(ruta, json={"estado": "I"})
+    assert r.status_code == 503
+    assert r.json()["code"] == "APROBACIONES_NO_DISPONIBLES"
+    assert leer.return_value["estado"] == "A"
+    escribir.assert_not_called()
     auditoria.assert_not_called()
 
 
@@ -229,6 +260,7 @@ def test_no_desactivar_agencia_con_actividad(ctx, monkeypatch):
     respuesta = cliente.patch(RUTA, json={"estado": "I"})
 
     assert respuesta.status_code == 409
-    assert respuesta.json()["code"] == "AGENCIA_CON_ACTIVIDAD"
+    assert respuesta.json()["code"] == "AGENCIA_CON_OPERACION"
+    assert respuesta.json()["bloqueos"] == ["Caja.JornadasCaja"]
     escribir.assert_not_called()
     auditoria.assert_not_called()
