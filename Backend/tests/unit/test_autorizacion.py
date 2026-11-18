@@ -411,6 +411,8 @@ ROLES_POR_RUTA.update(
         ("PUT", "/api/v1/seguridad/pestanas"): ("ADMIN",),
         ("GET", "/api/v1/seguridad/pestanas/configuracion"): ("ADMIN",),
         ("PUT", "/api/v1/seguridad/pestanas/configuracion"): ("ADMIN",),
+        ("GET", "/api/v1/seguridad/accesos/configuracion"): ("ADMIN",),
+        ("PATCH", "/api/v1/seguridad/accesos/configuracion"): ("ADMIN",),
         ("GET", "/api/v1/auth/agencias"): (),
         ("POST", "/api/v1/auth/agencia-activa"): (),
         ("GET", "/api/v1/usuarios/{idUsuario}/agencias"): ("ADMIN",),

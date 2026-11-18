@@ -369,6 +369,13 @@ def cambiar_estado_cliente(
     conn: Db,
 ) -> Cliente:
     """Transición explícita, con comprobación de productos para la baja."""
+    from app.modules.seguridad import funciones
+
+    autorizacion = (
+        {"funcion_autorizada": True}
+        if funciones.autorizar_operacion(request, usuario)
+        else {}
+    )
     return service.cambiar_estado_cliente(
         conn,
         idCliente,
@@ -376,6 +383,7 @@ def cambiar_estado_cliente(
         modificado_por,
         ip_cliente(request.scope),
         usuario.roles,
+        **autorizacion,
     )
 
 

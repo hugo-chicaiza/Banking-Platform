@@ -28,7 +28,7 @@ import threading
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
-from typing import Annotated, Any, Literal, get_args
+from typing import Annotated, Any, Literal, cast, get_args
 
 import jwt
 from cryptography.fernet import Fernet, InvalidToken
@@ -644,6 +644,7 @@ def usuario_actual(
 
 # Para recibir el usuario en un endpoint: def ver(usuario: UsuarioActual)
 UsuarioActual = Annotated[Usuario, Depends(usuario_actual)]
+_SIN_PETICION = cast(Request, None)
 
 
 def id_usuario_auditoria(usuario: UsuarioActual) -> int:
@@ -672,19 +673,32 @@ def require_auth(request: Request, usuario: UsuarioActual) -> Usuario:
             "USUARIO_NO_REGISTRADO",
             "Su usuario no está registrado o no está activo.",
         )
-    from app.core.security.secciones import verificar_seccion
+    from app.modules.seguridad import funciones
 
-    verificar_seccion(request, usuario)
+    if funciones.activa():
+        funciones.verificar_peticion(request, usuario)
+    else:
+        from app.core.security.secciones import verificar_seccion
+
+        verificar_seccion(request, usuario)
     return usuario
 
 
 def require_roles(*permitidos: str) -> Callable[..., Usuario]:
-    """Dependencia que responde 403 si el usuario no tiene ninguno de los roles."""
+    """Rol anterior o función SQL para una operación explícitamente migrada.
+
+    No amplía autorizaciones en rutas ajenas al catálogo ni con el modelo apagado.
+    """
     desconocidos = set(permitidos) - set(ROLES)
     if not permitidos or desconocidos:
         raise ValueError(f"Roles no válidos: {sorted(desconocidos)}")
 
-    def verificar(usuario: UsuarioActual) -> Usuario:
+    # FastAPI inyecta Request. Sin petición, conserva las llamadas internas previas.
+    def verificar(usuario: UsuarioActual, request: Request = _SIN_PETICION) -> Usuario:
+        from app.modules.seguridad import funciones
+
+        if request is not None and funciones.autorizar_operacion(request, usuario):
+            return usuario
         if not set(usuario.roles) & set(permitidos):
             logger.warning(
                 "auth: acceso denegado usuario=%s roles=%s requeridos=%s",
@@ -705,14 +719,19 @@ def require_roles(*permitidos: str) -> Callable[..., Usuario]:
 
 
 def require_permiso(*permitidos: str) -> Callable[..., Usuario]:
-    """Dependencia de las escrituras: 403 si la sesión de WorkOS no trae ninguno de los
-    permisos. Las consultas siguen por rol (require_roles); ver permisos.py.
+    """Permiso WorkOS anterior o función SQL en una operación migrada.
+
+    La sustitución es por método/ruta, nunca una concesión global del permiso remoto.
     """
     desconocidos = set(permitidos) - set(PERMISOS)
     if not permitidos or desconocidos:
         raise ValueError(f"Permisos no válidos: {sorted(desconocidos)}")
 
-    def verificar(usuario: UsuarioActual) -> Usuario:
+    def verificar(usuario: UsuarioActual, request: Request = _SIN_PETICION) -> Usuario:
+        from app.modules.seguridad import funciones
+
+        if request is not None and funciones.autorizar_operacion(request, usuario):
+            return usuario
         if not set(usuario.permisos) & set(permitidos):
             logger.warning(
                 "auth: acceso denegado usuario=%s permisos=%s requeridos=%s",
