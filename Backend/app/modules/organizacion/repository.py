@@ -97,7 +97,7 @@ def obtener_agencia(
 def version_agencia(conn: Connection, id_agencia: str) -> str | None:
     return conn.execute(
         text("""
-            SELECT CONVERT(varchar(16), VersionFila, 2)
+            SELECT CONVERT(varchar(16), CAST(VersionFila AS binary(8)), 2)
             FROM Organizacion.Agencia WITH (UPDLOCK, HOLDLOCK)
             WHERE IdAgencia = :id
         """),
