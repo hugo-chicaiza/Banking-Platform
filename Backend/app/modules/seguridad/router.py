@@ -6,7 +6,7 @@ sesión: el menú de cada uno lo necesita.
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Path, Request
+from fastapi import APIRouter, Depends, Path, Request, Response
 from sqlalchemy import Connection
 
 from app.core.api.errors import RESPUESTAS_ERROR, ProblemDetailsRoute, solo_parametros
@@ -22,6 +22,7 @@ from app.core.security.auth import (
 from app.modules.seguridad import service
 from app.modules.seguridad.schemas import (
     PermisoAsignar,
+    PermisoCreate,
     PermisosRol,
     PermisoUpdate,
     PermisoVista,
@@ -52,6 +53,27 @@ _ADMIN = {"x-roles": ["ADMIN"]}
 def listar_permisos(_: Admin) -> list[PermisoVista]:
     """Catálogo de permisos de WorkOS (los de sistema van marcados y al final)."""
     return service.listar_permisos()
+
+
+@router.post(
+    "/permisos",
+    response_model=PermisoVista,
+    status_code=201,
+    operation_id="SEG09",
+    openapi_extra=_ADMIN,
+)
+def crear_permiso(request: Request, datos: PermisoCreate, admin: Admin) -> PermisoVista:
+    """Crea un permiso general en WorkOS (sin asignarlo a ningún rol)."""
+    return service.crear_permiso(datos, admin, ip_cliente(request.scope))
+
+
+@router.delete(
+    "/permisos/{slug}", status_code=204, operation_id="SEG10", openapi_extra=_ADMIN
+)
+def borrar_permiso(request: Request, slug: SlugPath, admin: Admin) -> Response:
+    """Borra el permiso y lo quita de los roles. No borra los que exige la aplicación."""
+    service.borrar_permiso(slug, admin, ip_cliente(request.scope))
+    return Response(status_code=204)
 
 
 @router.patch(

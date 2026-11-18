@@ -21,6 +21,19 @@ class PermisoVista(CamelModel):
     sistema: bool
 
 
+class PermisoCreate(CamelModel):
+    # Permisos generales: prefijo del área y acción, p. ej. prd-aprobar o con-cerrar
+    slug: Annotated[
+        str, StringConstraints(pattern=r"^[a-z][a-z0-9]{1,9}-[a-z0-9][a-z0-9-]{1,40}$")
+    ]
+    nombre: Annotated[
+        str, StringConstraints(strip_whitespace=True, min_length=1, max_length=80)
+    ]
+    descripcion: (
+        Annotated[str, StringConstraints(strip_whitespace=True, max_length=255)] | None
+    ) = None
+
+
 class PermisoUpdate(CamelModel):
     nombre: (
         Annotated[

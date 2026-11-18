@@ -46,6 +46,20 @@ class _Autorizacion:
             slug=slug, name=nombre, description=description, system=False
         )
 
+    def create_permission(self, slug, name, description=None):
+        self.llamadas.append(("create", slug))
+        self.permisos[slug] = (name, False)
+        return SimpleNamespace(
+            slug=slug, name=name, description=description, system=False
+        )
+
+    def delete_permission(self, slug):
+        self.llamadas.append(("delete", slug))
+        del self.permisos[slug]
+        for permisos in self.roles.values():
+            if slug in permisos:
+                permisos.remove(slug)
+
     def list_organization_roles(self, organizacion):
         datos = [
             SimpleNamespace(slug=s, name=s, description=None, permissions=list(p))
@@ -272,3 +286,63 @@ def test_pestanas_ignora_roles_desconocidos_guardados(client, pestanas):
     assert client.get(f"{BASE}/pestanas").json() == [
         {"pestana": "/cuentas", "roles": ["ADMIN"]}
     ]
+
+
+def test_crear_y_borrar_permiso(client, workos, eventos_auditados):
+    r = client.post(
+        f"{BASE}/permisos",
+        json={
+            "slug": "prd-aprobar",
+            "nombre": "Aprobar productos",
+            "descripcion": "Revisión",
+        },
+    )
+    assert r.status_code == 201 and r.json()["slug"] == "prd-aprobar"
+    client.post(f"{BASE}/roles/CAJERO/permisos", json={"permiso": "prd-aprobar"})
+    assert client.delete(f"{BASE}/permisos/prd-aprobar").status_code == 204
+    assert "prd-aprobar" not in workos.roles["org-cajero"]
+    assert {"CREAR_PERMISO", "BORRAR_PERMISO"} <= {e.accion for e in eventos_auditados}
+
+
+def test_crear_permiso_duplicado_es_409(client, workos):
+    r = client.post(f"{BASE}/permisos", json={"slug": "prd-editar", "nombre": "Otro"})
+    assert r.status_code == 409 and r.json()["code"] == "PERMISO_DUPLICADO"
+    assert not [x for x in workos.llamadas if x[0] == "create"]
+
+
+@pytest.mark.parametrize(
+    "slug", ["prdeditar", "PRD-editar", "widgets:x-y", "a-b", "prd-"]
+)
+def test_crear_permiso_exige_formato_general(client, workos, slug):
+    assert (
+        client.post(f"{BASE}/permisos", json={"slug": slug, "nombre": "X"}).status_code
+        == 400
+    )
+
+
+@pytest.mark.parametrize(
+    ("slug", "status", "code"),
+    [
+        ("prd-editar", 409, "PERMISO_EN_USO"),  # lo exige la aplicación (permisos.py)
+        ("widgets:users-table:manage", 409, "PERMISO_DE_SISTEMA"),
+        ("prd-inventado", 404, "PERMISO_NO_ENCONTRADO"),
+    ],
+)
+def test_no_borra_permisos_en_uso_ni_de_sistema(client, workos, slug, status, code):
+    r = client.delete(f"{BASE}/permisos/{slug}")
+    assert r.status_code == status and r.json()["code"] == code
+    assert not [x for x in workos.llamadas if x[0] == "delete"]
+
+
+def test_solo_admin_crea_y_borra_permisos(client, workos):
+    simular_sesion(
+        app, usuario_con_roles("SUPERVISOR", "CONTADOR", "AUDITOR", "ASESOR", "CAJERO")
+    )
+    assert (
+        client.post(
+            f"{BASE}/permisos", json={"slug": "prd-x1", "nombre": "X"}
+        ).status_code
+        == 403
+    )
+    assert client.delete(f"{BASE}/permisos/con-cuenta-editar").status_code == 403
+    assert not workos.llamadas
