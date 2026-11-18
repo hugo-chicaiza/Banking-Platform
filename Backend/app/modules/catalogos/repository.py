@@ -342,6 +342,7 @@ def listar_agencias(conn: Connection) -> list[dict[str, Any]]:
                a.Estado AS estado
         FROM Organizacion.Agencia AS a
         JOIN Catalogo.Ciudad AS c ON c.IdCiudad = a.IdCiudad
+        WHERE a.Estado = 'A'
         ORDER BY CASE a.TipoAgencia WHEN 'Matriz' THEN 0 ELSE 1 END, a.Codigo
         """,
     )

@@ -87,6 +87,11 @@ RUTAS_POR_SECCION: dict[str, tuple[tuple[str, str], ...]] = {
         ("GET", "/api/v1/agencias/{id_agencia}"),
         ("PATCH", "/api/v1/agencias/{id_agencia}"),
         ("PATCH", "/api/v1/agencias/{id_agencia}/estado"),
+        ("GET", "/api/v1/organizacion/agencias"),
+        ("POST", "/api/v1/organizacion/agencias"),
+        ("GET", "/api/v1/organizacion/agencias/{id_agencia}"),
+        ("PATCH", "/api/v1/organizacion/agencias/{id_agencia}"),
+        ("PATCH", "/api/v1/organizacion/agencias/{id_agencia}/estado"),
     ),
     "productos.consultar": (
         ("GET", "/api/v1/productos"),

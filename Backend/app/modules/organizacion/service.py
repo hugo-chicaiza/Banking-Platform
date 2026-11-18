@@ -1,18 +1,8 @@
-"""Reglas de Organización · Agencias.
-
-Reglas adoptadas (INFORME_ORGANIZACION_AGENCIAS.md §2):
-- IdAgencia lo envía el cliente y es inmutable; FechaCreacion y Estado inicial ('A') los
-  pone la tabla.
-- Una sola Matriz (UX_Agencia_UnaMatriz). Matriz -> Sucursal no se permite sin decisión
-  funcional; Sucursal -> Matriz solo si no existe otra Matriz.
-- Estados: A <-> I. 'C' no está definido: ni se llega ni se sale de él por la API.
-- A -> I se rechaza si la agencia es la Matriz o tiene recursos activos u operaciones en
-  curso (repository.DEPENDENCIAS_ACTIVAS). Nada de otros módulos se modifica.
-- Repetir el estado actual no escribe y responde 200 (idempotente).
-"""
+"""Reglas de mantenimiento y estado de las agencias."""
 
 import logging
 import re
+from collections.abc import Callable
 from typing import Any
 
 from fastapi import HTTPException
@@ -22,6 +12,10 @@ from sqlalchemy.exc import DBAPIError
 
 from app.core.api.errors import problema, traducir_error_bd
 from app.core.security import audit
+from app.core.security.auth import Usuario
+from app.modules.aprobaciones.auditoria import ContextoAuditoria, encolar
+from app.modules.aprobaciones.contratos import SolicitudAceptada
+from app.modules.aprobaciones.identidad import Actor
 from app.modules.organizacion import repository as repo
 from app.modules.organizacion.schemas import (
     Agencia,
@@ -37,6 +31,7 @@ from app.modules.organizacion.schemas import (
 logger = logging.getLogger(__name__)
 
 TABLA = "Organizacion.Agencia"
+SolicitarBaja = Callable[[str | None], SolicitudAceptada]
 
 _TRANSICIONES: dict[str, frozenset[str]] = {
     "A": frozenset({"I"}),
@@ -113,6 +108,10 @@ def a_respuesta(fila: dict[str, Any]) -> Agencia:
     )
 
 
+def listar_agencias(conn: Connection, estado: EstadoAgencia | None) -> list[Agencia]:
+    return [a_respuesta(fila) for fila in repo.listar_agencias(conn, estado)]
+
+
 def obtener_agencia(conn: Connection, id_agencia: str) -> Agencia:
     fila = repo.obtener_agencia(conn, id_agencia, bloquear=False)
     if fila is None:
@@ -165,6 +164,46 @@ class _Auditoria:
         self.ip = ip
         self.trace_id = trace_id
         self.detalle = ""
+        self.antes: Agencia | None = None
+        self.despues: Agencia | None = None
+        self.agencia_actor: str | None = None
+
+    def registrar_cambio(
+        self, conn: Connection, actor: Usuario, motivo: str | None = None
+    ) -> None:
+        identidad = Actor(
+            actor.id_usuario,
+            actor.id_organizacion or "",
+            actor.nombre,
+            self.usuario,
+            actor.roles,
+            frozenset(),
+            (),
+        )
+        encolar(
+            conn,
+            self.accion,
+            identidad,
+            None,
+            self.id_agencia,
+            ContextoAuditoria(
+                actor.id_sesion,
+                self.ip or "",
+                self.trace_id,
+                agencia_actor=self.agencia_actor,
+            ),
+            cambios={
+                "antes": self.antes.model_dump(mode="json", by_alias=True)
+                if self.antes
+                else None,
+                "despues": self.despues.model_dump(mode="json", by_alias=True)
+                if self.despues
+                else None,
+                "motivo": motivo,
+            },
+            tabla=TABLA,
+            objetivo=self.id_agencia,
+        )
 
     def registrar(self, resultado: audit.Resultado, motivo: str | None = None) -> None:
         partes = [self.detalle, f"traceId={self.trace_id[:64]}"]
@@ -189,14 +228,18 @@ def crear_agencia(
     creado_por: int,
     ip: str | None,
     trace_id: str,
+    actor: Usuario,
 ) -> Agencia:
-    auditoria = _Auditoria("INSERT", "NO_ASIGNADO", creado_por, ip, trace_id)
+    auditoria = _Auditoria(
+        "ORG_AGENCIA_CREADA", "NO_ASIGNADO", creado_por, ip, trace_id
+    )
     auditoria.detalle = (
         f"ORG01 codigo={datos.codigo} tipo={datos.tipo_agencia} "
         f"ciudad={datos.id_ciudad} workos={datos.key_agencia is not None}"
     )
 
     try:
+        auditoria.agencia_actor = actor.agencia()
         _verificar_ciudad(conn, datos.id_ciudad)
 
         _verificar_unicidad(
@@ -219,6 +262,8 @@ def crear_agencia(
                 "Error interno del servidor.",
             )
 
+        auditoria.despues = a_respuesta(fila)
+        auditoria.registrar_cambio(conn, actor)
         conn.commit()
 
     except DBAPIError as exc:
@@ -231,7 +276,6 @@ def crear_agencia(
         auditoria.registrar("Fallido")
         raise
 
-    auditoria.registrar("Exitoso")
     return a_respuesta(fila)
 
 
@@ -272,11 +316,27 @@ def _verificar_estado(
     if activas:
         raise problema(
             409,
-            "AGENCIA_CON_ACTIVIDAD",
+            "AGENCIA_CON_OPERACION",
             "La agencia tiene recursos u operaciones activas: "
             + ", ".join(activas)
             + ".",
+            bloqueos=activas,
         )
+
+
+def validar_desactivacion(
+    conn: Connection, id_agencia: str, actual: dict[str, Any]
+) -> None:
+    """Validacion compartida con el futuro manejador E0-08, bajo el lock del objetivo."""
+    _verificar_estado(conn, id_agencia, actual, "I")
+
+
+def _aprobacion_requerida() -> HTTPException:
+    return problema(
+        409,
+        "APROBACION_REQUERIDA",
+        "La desactivación requiere el servicio de aprobación de dos personas.",
+    )
 
 
 def _verificar_tipo(actual: dict[str, Any], nuevo: str) -> None:
@@ -295,9 +355,14 @@ def actualizar_agencia(
     modificado_por: int,
     ip: str | None,
     trace_id: str,
-) -> Agencia:
-    auditoria = _Auditoria("UPDATE", id_agencia, modificado_por, ip, trace_id)
+    actor: Usuario,
+    solicitar_baja: SolicitarBaja | None = None,
+) -> Agencia | SolicitudAceptada:
+    auditoria = _Auditoria(
+        "ORG_AGENCIA_EDITADA", id_agencia, modificado_por, ip, trace_id
+    )
     try:
+        auditoria.agencia_actor = actor.agencia()
         actual = repo.obtener_agencia(conn, id_agencia, bloquear=True)
         if actual is None:
             raise problema(404, "AGENCIA_NO_ENCONTRADA", "La agencia no existe.")
@@ -319,20 +384,32 @@ def actualizar_agencia(
             conn.rollback()
             return a_respuesta(actual)
 
-        if "estado" in cambios:
-            _verificar_estado(conn, id_agencia, actual, cambios["estado"])
-        if "tipo_agencia" in cambios:
-            _verificar_tipo(actual, cambios["tipo_agencia"])
-        # La Matriz siempre queda Activa, también al promover una Sucursal
         if (
-            cambios.get("tipo_agencia", actual["TipoAgencia"]) == "Matriz"
+            cambios.get("tipo_agencia") == "Matriz"
             and cambios.get("estado", estado_actual) != "A"
         ):
             raise problema(
                 409,
                 "MATRIZ_NO_DESACTIVABLE",
-                "La agencia Matriz no se puede desactivar.",
+                "Active la agencia antes de promoverla a Matriz.",
             )
+        if cambios.get("estado") == "I":
+            validar_desactivacion(conn, id_agencia, actual)
+            if cambios.keys() != {"estado"}:
+                raise problema(
+                    409,
+                    "BAJA_CON_EDICION",
+                    "Envíe los cambios de datos por separado de la solicitud de baja.",
+                )
+            if solicitar_baja is None:
+                raise _aprobacion_requerida()
+            conn.rollback()
+            return solicitar_baja(datos.motivo)
+        if "estado" in cambios:
+            auditoria.accion = "ORG_AGENCIA_ESTADO"
+            _verificar_estado(conn, id_agencia, actual, cambios["estado"])
+        if "tipo_agencia" in cambios:
+            _verificar_tipo(actual, cambios["tipo_agencia"])
         if "id_ciudad" in cambios:
             _verificar_ciudad(conn, cambios["id_ciudad"])
         _verificar_unicidad(
@@ -350,6 +427,9 @@ def actualizar_agencia(
             fila is None
         ):  # pragma: no cover - la fila está bloqueada por esta transacción
             raise problema(404, "AGENCIA_NO_ENCONTRADA", "La agencia no existe.")
+        auditoria.antes = a_respuesta(actual)
+        auditoria.despues = a_respuesta(fila)
+        auditoria.registrar_cambio(conn, actor, datos.motivo)
         conn.commit()
     except DBAPIError as exc:
         conn.rollback()
@@ -359,7 +439,6 @@ def actualizar_agencia(
         conn.rollback()
         auditoria.registrar("Fallido", datos.motivo)
         raise
-    auditoria.registrar("Exitoso", datos.motivo)
     return a_respuesta(fila)
 
 
@@ -394,8 +473,37 @@ def _agencia_bloqueada(conn: Connection, id_agencia: str) -> AgenciaEstado:
     return AgenciaEstado(**fila)
 
 
+def solicitar_estado_inactivo(
+    conn: Connection, id_agencia: str, motivo: str | None, solicitar: SolicitarBaja
+) -> AgenciaEstado | SolicitudAceptada:
+    with conn.begin():
+        agencia = _agencia_bloqueada(conn, id_agencia)
+        if agencia.estado == "I":
+            return agencia
+        if agencia.estado == "C":
+            raise problema(
+                409, "AGENCIA_CERRADA", "Una agencia cerrada no se puede reabrir."
+            )
+        validar_desactivacion(
+            conn,
+            id_agencia,
+            {
+                "Estado": agencia.estado,
+                "TipoAgencia": _tipo_agencia_bloqueada(conn, id_agencia),
+            },
+        )
+    return solicitar(motivo)
+
+
 def cambiar_estado(
-    conn: Connection, id_agencia: str, estado: EstadoAgencia
+    conn: Connection,
+    id_agencia: str,
+    estado: EstadoAgencia,
+    *,
+    actor: Usuario | None = None,
+    ip: str | None = None,
+    trace_id: str = "",
+    motivo: str | None = None,
 ) -> tuple[AgenciaEstado, str]:
     """Solo A ⇄ I; C es terminal. El lock dura hasta commit/rollback."""
     with conn.begin():
@@ -414,22 +522,32 @@ def cambiar_estado(
                 "El cierre de agencias aún no está definido.",
             )
         if estado == "I":
-            _verificar_estado(
+            validar_desactivacion(
                 conn,
                 id_agencia,
                 {
                     "Estado": anterior,
                     "TipoAgencia": _tipo_agencia_bloqueada(conn, id_agencia),
                 },
-                estado,
             )
+            raise _aprobacion_requerida()
+        usuario = actor.interno() if actor is not None else None
+        if actor is None or usuario is None:
+            raise problema(
+                403, "USUARIO_NO_VINCULADO", "El usuario no tiene un vinculo interno."
+            )
+        auditoria = _Auditoria("ORG_AGENCIA_ESTADO", id_agencia, usuario, ip, trace_id)
+        auditoria.agencia_actor = actor.agencia()
+        auditoria.antes = obtener_agencia(conn, id_agencia)
         if not repo.actualizar_estado(conn, id_agencia, anterior, estado):
             raise problema(
                 409,
                 "ESTADO_AGENCIA_MODIFICADO",
                 "El estado de la agencia cambió; vuelva a consultar.",
             )
-        return AgenciaEstado(id_agencia=id_agencia, estado=estado), anterior
+        auditoria.despues = obtener_agencia(conn, id_agencia)
+        auditoria.registrar_cambio(conn, actor, motivo)
+    return AgenciaEstado(id_agencia=id_agencia, estado=estado), anterior
 
 
 def exigir_agencia_destino_activa(conn: Connection, id_agencia: str) -> AgenciaEstado:

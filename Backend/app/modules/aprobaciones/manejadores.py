@@ -8,6 +8,7 @@ from sqlalchemy import Connection
 from app.core.api.errors import problema
 from app.core.api.schemas import CamelModel
 from app.modules.aprobaciones.registro import Objetivo, Operacion, Plan, Registro
+from app.modules.organizacion.aprobacion import OPERACION_BAJA
 from app.modules.parametros import general
 
 
@@ -115,4 +116,5 @@ def registro_inicial() -> Registro:
             Parametro(),
         )
     )
+    registro.agregar(OPERACION_BAJA)
     return registro

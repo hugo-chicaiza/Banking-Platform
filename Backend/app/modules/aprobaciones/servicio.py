@@ -2,6 +2,7 @@
 
 import json
 from collections.abc import Callable
+from dataclasses import replace
 from datetime import date
 from hmac import compare_digest
 from typing import Any, cast
@@ -173,7 +174,10 @@ class Servicio:
         with self.seguridad.connect() as seg:
             fila = repo.obtener(seg, id_, actor.organizacion)
         actor.alcance(fila["IdAgencia"])
-        if actor.sujeto == fila["SolicitadoPor"]:
+        if (
+            actor.sujeto == fila["SolicitadoPor"]
+            or actor.id_interno == fila["IdInternoSolicitante"]
+        ):
             self._intento_propio(actor, id_, contexto)
             raise problema(
                 403, "APROBADOR_ES_SOLICITANTE", "Debe aprobar otra persona."
@@ -235,7 +239,11 @@ class Servicio:
                 id_,
                 fila["IdAgencia"],
                 contexto,
-                {"solicitante": fila["SolicitadoPor"], "estado": "Aprobada"},
+                {
+                    "solicitante": fila["SolicitadoPor"],
+                    "estado": "Aprobada",
+                    "idSolicitud": id_,
+                },
             )
             if operacion.base == "seguridad":
                 self._aplicar(seg, fila, operacion, actor, contexto)
@@ -308,7 +316,7 @@ class Servicio:
         )
         encolar(
             conn,
-            "APR_OPERACION_EJECUTADA",
+            operacion.evento_ejecucion,
             actor,
             fila["IdSolicitud"],
             fila["IdAgencia"],
@@ -318,7 +326,14 @@ class Servicio:
                 "aprobador": actor.sujeto if actor else fila["ResueltoPor"],
                 "antes": contenido["antes"],
                 "despues": contenido["despues"],
+                **(
+                    {"motivo": contenido["cambio"].get("motivo")}
+                    if operacion.tabla_auditada
+                    else {}
+                ),
             },
+            tabla=operacion.tabla_auditada or "Seguridad.SolicitudAprobacion",
+            objetivo=objetivo.id if operacion.tabla_auditada else None,
         )
 
     @staticmethod
@@ -350,6 +365,46 @@ class Servicio:
             {"estado": "Ejecutada"},
         )
 
+    def _evidencia_aprobacion(
+        self, fila: dict[str, Any], contexto: ContextoAuditoria
+    ) -> tuple[Actor, ContextoAuditoria]:
+        with self.seguridad.connect() as seg:
+            registro = seg.execute(
+                repo.consulta("""SELECT TOP(1) Contenido FROM Auditoria.EventoPendiente
+                    WHERE CodigoEvento='APR_SOLICITUD_RESUELTA'
+                    AND JSON_VALUE(Contenido,'$.idObjetivo')=:id
+                    AND JSON_VALUE(Contenido,'$.organizacion')=:org
+                    AND JSON_VALUE(Contenido,'$.sujeto')=:aprobador
+                    AND JSON_VALUE(Contenido,'$.cambios.estado')='Aprobada'
+                    ORDER BY FechaCreacionUTC"""),
+                {
+                    "id": str(fila["IdSolicitud"]),
+                    "org": fila["IdOrganizacion"],
+                    "aprobador": fila["ResueltoPor"],
+                },
+            ).scalar()
+        if registro is None:
+            raise problema(
+                503, "APROBACION_SIN_EVIDENCIA", "Falta la evidencia del aprobador."
+            )
+        evidencia = json.loads(registro)
+        actor = Actor(
+            fila["ResueltoPor"],
+            fila["IdOrganizacion"],
+            fila["NombreResolutor"],
+            fila["IdInternoResolutor"],
+            tuple(evidencia["roles"]),
+            frozenset(),
+            (),
+        )
+        return actor, replace(
+            contexto,
+            sesion=evidencia["sesion"],
+            origen=evidencia["origen"],
+            correlacion=evidencia["correlacion"],
+            agencia_actor=evidencia.get("agenciaActor"),
+        )
+
     def ejecutar(
         self, id_: int, org: str, actor: Actor | None, contexto: ContextoAuditoria
     ) -> dict[str, Any]:
@@ -366,6 +421,8 @@ class Servicio:
         operacion = self.registro.obtener(
             fila["CodigoTransaccion"], fila["TipoObjetivo"]
         )
+        if actor is None and operacion.tabla_auditada:
+            actor, contexto = self._evidencia_aprobacion(fila, contexto)
         try:
             with self._motor(operacion).begin() as conn:
                 self._aplicar(conn, fila, operacion, actor, contexto)
