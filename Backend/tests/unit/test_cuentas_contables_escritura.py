@@ -1,6 +1,6 @@
 """Contrato de #206: alta, edición, estado y baja de cuentas contables.
 
-Los cambios sujetos a aprobación conservan su respuesta 501.
+La baja pendiente devuelve 404 FUNCION_NO_DISPONIBLE; las operaciones funcionales conservan sus contratos.
 """
 
 import pytest
@@ -63,7 +63,7 @@ def test_contrato_en_openapi(ruta, metodo, operation_id, estados):
     assert operacion["operationId"] == operation_id
     assert operacion["x-roles"] == ["CONTADOR"]
     assert estados <= set(operacion["responses"])
-    assert ("501" in operacion["responses"]) == (operation_id != "CON03Editar")
+    assert "501" not in operacion["responses"]
 
 
 def test_contrato_codigos_de_error_documentados():
@@ -112,7 +112,7 @@ def test_contrato_estado_solo_acepta_activo_o_inactivo():
 
 
 # ---------------------------------------------------------------------------
-# Sin lógica: 501
+# Baja pendiente: 404 FUNCION_NO_DISPONIBLE
 # ---------------------------------------------------------------------------
 
 
@@ -121,11 +121,11 @@ def test_contrato_estado_solo_acepta_activo_o_inactivo():
     ("metodo", "url", "cuerpo"),
     [op for op in _OPERACIONES if op[0] == "DELETE"],
 )
-def test_contador_con_datos_validos_recibe_501(client, metodo, url, cuerpo):
+def test_contador_con_datos_validos_recibe_404(client, metodo, url, cuerpo):
     r = _llamar(client, metodo, url, cuerpo)
 
-    assert r.status_code == 501
-    assert r.json()["code"] == "OPERACION_NO_HABILITADA"
+    assert r.status_code == 404
+    assert r.json()["code"] == "FUNCION_NO_DISPONIBLE"
     assert r.headers["content-type"].startswith("application/problem+json")
 
 

@@ -26,8 +26,8 @@ def cliente(request, monkeypatch):
 def test_cerrado_sin_efectos_y_sin_datos_sensibles(cliente, caplog):
     for _ in range(2):
         r = cliente.client.post(URL, json=BODY, headers=cliente.headers)
-        assert r.status_code == 501
-        assert r.json()["code"] == "OPERACION_NO_HABILITADA"
+        assert r.status_code == 404
+        assert r.json()["code"] == "FUNCION_NO_DISPONIBLE"
         assert r.headers["content-type"].startswith("application/problem+json")
         assert r.headers["cache-control"] == "no-store"
         assert "idTransaccion" not in r.json()
@@ -39,7 +39,7 @@ def test_cerrado_sin_efectos_y_sin_datos_sensibles(cliente, caplog):
 def test_deps_de_otro_modulo_no_habilitan(cliente):
     cliente.app.dependency_overrides[dependencias_operacion] = lambda: MagicMock()
     assert (
-        cliente.client.post(URL, json=BODY, headers=cliente.headers).status_code == 501
+        cliente.client.post(URL, json=BODY, headers=cliente.headers).status_code == 404
     )
     cliente.prohibido.assert_not_called()
 
@@ -114,7 +114,7 @@ def test_lector_acotado_y_seguro(cliente):
 def test_openapi_parcial_sin_exito_ficticio(cliente):
     op = cliente.app.openapi()["paths"][URL]["post"]
     assert op["operationId"] == "ATM08"
-    assert "501" in op["responses"] and not {"200", "201"} & op["responses"].keys()
+    assert "404" in op["responses"] and not {"200", "201"} & op["responses"].keys()
     assert op["security"] == [{"SesionATM": [], "APIKeyHeader": []}]
     assert set(
         op["requestBody"]["content"]["application/json"]["schema"]["properties"]

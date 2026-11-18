@@ -12,6 +12,7 @@ from app.core.database.db import cooperativa
 from app.core.security.auth import Usuario, require_auth, require_permiso, require_roles
 from app.core.security.operador import IdInterno
 from app.modules.caja.schemas import INT32_MAX, ReversoRequest
+from app.modules.parametros.funciones import funcion_pendiente
 from app.modules.transacciones import service
 from app.modules.transacciones.dependencias import (
     DependenciasOperacion,
@@ -136,6 +137,7 @@ def obtener_transaccion(
     status_code=201,
     operation_id="TRX03",
 )
+@funcion_pendiente
 def reversar(
     request: Request,
     usuario: Annotated[

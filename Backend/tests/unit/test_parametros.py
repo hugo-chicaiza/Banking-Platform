@@ -99,7 +99,7 @@ def test_contrato_openapi_sin_actor_en_entradas(api):
         props = contrato["components"]["schemas"][nombre]["properties"]
         assert not {"registradoPor", "creadoPor", "idSolicitud"} & props.keys()
     assert (
-        "501"
+        "404"
         in contrato["paths"][BASE + "/comisiones/{idComision}"]["patch"]["responses"]
     )
 
@@ -138,7 +138,7 @@ def test_catalogo_legado_no_puede_cambiar_valor(monkeypatch, eventos_auditados):
         administracion.actualizar(
             conn, "comisiones", "1", {"valor": 2}, USUARIO, "127.0.0.1"
         )
-    assert error.value.status_code == 501
+    assert error.value.status_code == 404
     conn.execute.assert_not_called()
     conn.rollback.assert_called_once()
     assert eventos_auditados[-1].resultado == "Fallido"

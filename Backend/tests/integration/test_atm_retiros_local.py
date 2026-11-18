@@ -26,7 +26,7 @@ def cliente(request, monkeypatch):
 def test_cerrado_sin_debito_reserva_ni_comprobante(cliente, caplog):
     for _ in range(2):
         r = cliente.client.post(URL, json=BODY, headers=cliente.headers)
-        assert r.status_code == 501 and r.json()["code"] == "OPERACION_NO_HABILITADA"
+        assert r.status_code == 404 and r.json()["code"] == "FUNCION_NO_DISPONIBLE"
         assert r.headers["content-type"].startswith("application/problem+json")
         assert r.headers["cache-control"] == "no-store"
         assert "idTransaccion" not in r.json()
@@ -38,7 +38,7 @@ def test_cerrado_sin_debito_reserva_ni_comprobante(cliente, caplog):
 def test_dependencias_de_otro_modulo_no_habilitan(cliente):
     cliente.app.dependency_overrides[dependencias_operacion] = lambda: MagicMock()
     assert (
-        cliente.client.post(URL, json=BODY, headers=cliente.headers).status_code == 501
+        cliente.client.post(URL, json=BODY, headers=cliente.headers).status_code == 404
     )
     cliente.prohibido.assert_not_called()
 
@@ -57,7 +57,7 @@ def test_dependencias_de_otro_modulo_no_habilitan(cliente):
         "credencial",
     ],
 )
-def test_seguridad_se_aplica_antes_del_501(cliente, caso):
+def test_seguridad_se_aplica_antes_del_404(cliente, caso):
     h = preparar_fallo_autenticacion(cliente, caso)
     r = cliente.client.post(URL, json=BODY, headers=h)
     assert r.status_code in (401, 403)
@@ -133,7 +133,7 @@ def test_importe_exacto_y_fecha_opcional(cliente, monkeypatch):
             content=raw,
             headers={**cliente.headers, "Content-Type": "application/json"},
         ).status_code
-        == 501
+        == 404
     )
     assert capturada[0].monto == Decimal("9999999999999999.99")
     assert capturada[0].fecha_hora_dispositivo.hour == 12
@@ -142,7 +142,7 @@ def test_importe_exacto_y_fecha_opcional(cliente, monkeypatch):
 def test_openapi_sin_exito_ficticio(cliente):
     op = cliente.app.openapi()["paths"][URL]["post"]
     assert op["operationId"] == "ATM03"
-    assert "501" in op["responses"] and not {"200", "201"} & op["responses"].keys()
+    assert "404" in op["responses"] and not {"200", "201"} & op["responses"].keys()
     assert op["security"] == [{"SesionATM": [], "APIKeyHeader": []}]
     schema = op["requestBody"]["content"]["application/json"]["schema"]
     assert set(schema["properties"]) == set(BODY) | {"fechaHoraDispositivo"}

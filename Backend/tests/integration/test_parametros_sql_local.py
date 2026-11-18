@@ -169,7 +169,7 @@ def test_api_rechaza_asociar_otra_tarifa_con_solape_sin_filas_parciales(
     assert eventos_auditados[-1].resultado == "Fallido"
 
 
-def test_patch_valor_501_preserva_tarifa_y_asociacion_vigentes(tarifas_para_solape):
+def test_patch_valor_404_preserva_tarifa_y_asociacion_vigentes(tarifas_para_solape):
     client, raw, vigente, _ = tarifas_para_solape
     antes = configuracion_guardada(raw)
     respuesta = client.patch(
@@ -179,8 +179,8 @@ def test_patch_valor_501_preserva_tarifa_y_asociacion_vigentes(tarifas_para_sola
             "descripcion": "Este cambio tampoco debe persistirse",
         },
     )
-    assert respuesta.status_code == 501, respuesta.text
-    assert respuesta.json()["code"] == "APROBACION_PARAMETRO_NO_DISPONIBLE"
+    assert respuesta.status_code == 404, respuesta.text
+    assert respuesta.json()["code"] == "FUNCION_NO_DISPONIBLE"
     assert configuracion_guardada(raw) == antes
     monto = raw.execute(
         """
@@ -225,8 +225,8 @@ def test_rutas_comisiones_sql_y_actor(api_sql, eventos_auditados):
         f"{BASE}/comisiones/{id_}",
         json={"descripcion": "No debe quedar", "valor": "1.00"},
     )
-    assert r.status_code == 501, r.text
-    assert r.json()["code"] == "APROBACION_PARAMETRO_NO_DISPONIBLE"
+    assert r.status_code == 404, r.text
+    assert r.json()["code"] == "FUNCION_NO_DISPONIBLE"
     fila = raw.execute(
         "SELECT Valor,Descripcion FROM Transacciones.Comisiones WHERE IdComision=?", id_
     ).fetchone()
