@@ -20,7 +20,7 @@ Rama `feat/backend-351-e010` rebasada sobre `origin/develop` en `f988d9b` (PR #4
 ## Contrato y dependencias
 
 - El 200 de edición o reactivación y el 201 de alta conservan sus formas. El 202 de baja usa el DTO de E0-08 en las dos familias de rutas. Un PATCH que mezcla una baja efectiva con cambios de ficha responde 409 `BAJA_CON_EDICION`, sin aplicar cambios parciales.
-- La operación `ORG-AGENCIA-EDITAR` reutiliza el catálogo y los motores de E0-08. La versión de agencia usa `rowversion`. El ejecutor compara la versión y vuelve a consultar bloqueos bajo el bloqueo de la transacción. El comprobante de E0-08 impide aplicar dos veces, y el relevo reusa el ID de evento para evitar duplicar el registro.
+- La operación `ORG-AGENCIA-EDITAR` reutiliza el catálogo y los motores de E0-08. La versión de agencia se guarda en la columna interna `Organizacion.Agencia.VersionFila` (`rowversion NOT NULL`). El ejecutor compara la versión y vuelve a consultar bloqueos bajo el bloqueo de la transacción. El comprobante de E0-08 impide aplicar dos veces, y el relevo reusa el ID de evento para evitar duplicar el registro.
 - **E1-02.** Se probaron cajas físicas y bóvedas activas al aprobar. Se conservan las tablas y rutas actuales. La condición de activación por existencia de bóveda, horarios y la gestión de recursos son parte de E1-02. [Historia #361](https://github.com/hugo-chicaiza/Banking-Platform/issues/361)
 - **E1-04.** Después de la baja, el repositorio rechaza la agencia como destino activo y conserva su ficha para las asignaciones previas. El bloqueo por cajero vigente sigue consultando `Caja.CajerosAsignadosAgencia`. E1-04 debe trasladar esa consulta cuando retire la tabla anterior. La migración de asignaciones y sus flujos completos quedan en esa historia. [Historia #363](https://github.com/hugo-chicaiza/Banking-Platform/issues/363)
 - **Frontend revisado en solo lectura.** En la referencia local de frontend `origin/develop` (`7476261`), `AgenciasPage.tsx` usa `useAgencias()` de catálogos. `agencias.api.ts` valida el PATCH con `agenciaDetalleSchema`. El listado administrativo y la respuesta de solicitud ya están disponibles en backend. La pantalla existente necesita consumir ambos contratos antes de validar el flujo de punta a punta.
@@ -29,6 +29,8 @@ Rama `feat/backend-351-e010` rebasada sobre `origin/develop` en `f988d9b` (PR #4
 ## SQL local
 
 El esquema inspeccionado ya protege el código único y la matriz única. Se conserva la secuencia de E0-10 para instalaciones que carecen de ella y se agrega la versión de concurrencia. El laboratorio usa dos bases desechables con datos sintéticos y ensaya migraciones E0-08, subida y bajada repetida de secuencia y versión, concurrencia, recuperación y relevo. La prueba requiere `E010_SQL_LOCAL=1` y corre con `tests/integration/test_e010_sql_local.py` usando SQL Server local y autenticación integrada.
+
+La migración 1011 y el script manual se detienen si la tabla ya tiene una columna `rowversion` con otro nombre, para que se revise ese esquema antes de continuar.
 
 ## Verificación
 

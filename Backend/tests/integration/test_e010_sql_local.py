@@ -164,7 +164,7 @@ def cola(lab):
             conn.scalar(text("SELECT OBJECT_ID('Organizacion.SeqAgenciaId')")) is None
         )
         assert (
-            conn.scalar(text("SELECT COL_LENGTH('Organizacion.Agencia','VersionE010')"))
+            conn.scalar(text("SELECT COL_LENGTH('Organizacion.Agencia','VersionFila')"))
             is None
         )
         for nombre in (
@@ -451,6 +451,38 @@ def test_version_rechaza_edicion_y_reversion(cola):
             text("UPDATE Organizacion.Agencia SET Telefono=NULL WHERE IdAgencia=:id"),
             {"id": agencia},
         )
+    with pytest.raises(HTTPException) as desactualizada:
+        cola.aprobar(replace(CHECKER, agencias=(agencia,)), id_, None, CONTEXTO)
+    assert _error(desactualizada)["code"] == "SOLICITUD_DESACTUALIZADA"
+    assert _estado(cola, agencia) == "A"
+
+
+def test_ediciones_concurrentes_conservan_campos_e_invalidan_baja(cola):
+    agencia = _alta(cola)
+    id_ = _solicitar(cola, agencia)
+    barrera = Barrier(2, timeout=10)
+
+    def editar(cambios):
+        with cola.cooperativa.connect() as conn:
+            barrera.wait()
+            service.actualizar_agencia(
+                conn,
+                agencia,
+                AgenciaUpdate.model_validate(cambios),
+                1,
+                None,
+                "local",
+                USUARIO,
+            )
+
+    with ThreadPoolExecutor(max_workers=2) as grupo:
+        list(grupo.map(editar, [{"telefono": "123456"}, {"direccion": "Calle QA"}]))
+
+    with cola.cooperativa.connect() as conn:
+        fila = agencias.obtener_agencia(conn, agencia)
+        assert fila is not None
+        assert (fila["Telefono"], fila["Direccion"]) == ("123456", "Calle QA")
+
     with pytest.raises(HTTPException) as desactualizada:
         cola.aprobar(replace(CHECKER, agencias=(agencia,)), id_, None, CONTEXTO)
     assert _error(desactualizada)["code"] == "SOLICITUD_DESACTUALIZADA"
