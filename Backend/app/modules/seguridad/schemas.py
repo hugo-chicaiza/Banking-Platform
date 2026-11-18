@@ -1,6 +1,6 @@
 """Contratos de Seguridad: permisos de los roles (WorkOS) y pestañas por rol."""
 
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import Field, StringConstraints
 
@@ -71,3 +71,38 @@ class PestanasConfig(CamelModel):
     """Configuración completa: reemplaza la anterior. Lista vacía = menú por defecto."""
 
     pestanas: Annotated[list[PestanaRoles], Field(max_length=100)]
+    version: Annotated[str, StringConstraints(pattern=r"^[a-f0-9]{64}$")] | None = None
+    motivo: (
+        Annotated[
+            str,
+            StringConstraints(
+                strip_whitespace=True,
+                min_length=10,
+                max_length=160,
+                pattern=r"^[^\x00-\x1f\x7f]+$",
+            ),
+        ]
+        | None
+    ) = None
+
+
+class SeccionAcceso(CamelModel):
+    ruta: str
+    nombre: str
+    roles: list[str]
+
+
+class AccesosEfectivos(CamelModel):
+    version: str
+    habilitadas: list[str]
+
+
+class ConfiguracionAccesos(CamelModel):
+    version: str
+    activa: bool
+    pestanas: list[PestanaRoles]
+    secciones: list[SeccionAcceso]
+
+
+class ConfiguracionGuardada(ConfiguracionAccesos):
+    estado: Literal["GUARDADO"] = "GUARDADO"

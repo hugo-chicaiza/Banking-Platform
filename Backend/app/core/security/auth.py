@@ -661,7 +661,7 @@ def id_usuario_auditoria(usuario: UsuarioActual) -> int:
 UsuarioAuditoria = Annotated[int, Depends(id_usuario_auditoria)]
 
 
-def require_auth(usuario: UsuarioActual) -> Usuario:
+def require_auth(request: Request, usuario: UsuarioActual) -> Usuario:
     """Dependencia que declaran todos los routers: 401 sin sesión válida y 403 si el
     usuario de WorkOS no está registrado (KeyUsuario) o no está Activo en la base. Se
     resuelve antes que la ruta: nada se consulta ni se modifica sin ese registro.
@@ -672,6 +672,9 @@ def require_auth(usuario: UsuarioActual) -> Usuario:
             "USUARIO_NO_REGISTRADO",
             "Su usuario no está registrado o no está activo.",
         )
+    from app.core.security.secciones import verificar_seccion
+
+    verificar_seccion(request, usuario)
     return usuario
 
 

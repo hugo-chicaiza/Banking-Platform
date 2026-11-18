@@ -390,6 +390,8 @@ ROLES_POR_RUTA.update(
         ("PUT", "/api/v1/seguridad/roles/{rol}/permisos"): ("ADMIN",),
         ("GET", "/api/v1/seguridad/pestanas"): AUTH,
         ("PUT", "/api/v1/seguridad/pestanas"): ("ADMIN",),
+        ("GET", "/api/v1/seguridad/pestanas/configuracion"): ("ADMIN",),
+        ("PUT", "/api/v1/seguridad/pestanas/configuracion"): ("ADMIN",),
         ("GET", "/api/v1/auth/agencias"): (),
         ("POST", "/api/v1/auth/agencia-activa"): (),
         ("GET", "/api/v1/usuarios/{idUsuario}/agencias"): ("ADMIN",),
@@ -597,7 +599,22 @@ def test_admin_pasa_control_de_todas_las_rutas_de_boveda(client, ruta):
 
 
 def test_require_auth_entrega_el_usuario_de_la_sesion():
-    assert require_auth(USUARIO) is USUARIO
+    from starlette.requests import Request
+
+    assert (
+        require_auth(
+            Request(
+                {
+                    "type": "http",
+                    "method": "GET",
+                    "path": "/api/v1/auth/me",
+                    "headers": [],
+                }
+            ),
+            USUARIO,
+        )
+        is USUARIO
+    )
 
 
 def test_403_auditado_con_el_usuario_vinculado(client, eventos_auditados, monkeypatch):

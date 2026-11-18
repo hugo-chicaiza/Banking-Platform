@@ -9,7 +9,12 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Path, Request, Response
 from sqlalchemy import Connection
 
-from app.core.api.errors import RESPUESTAS_ERROR, ProblemDetailsRoute, solo_parametros
+from app.core.api.errors import (
+    RESPUESTAS_ERROR,
+    ProblemDetailsRoute,
+    problema,
+    solo_parametros,
+)
 from app.core.api.middleware import ip_cliente
 from app.core.database.db import seguridad
 from app.core.security.auth import (
@@ -19,8 +24,10 @@ from app.core.security.auth import (
     require_auth,
     require_roles,
 )
-from app.modules.seguridad import service
+from app.modules.seguridad import accesos, service
 from app.modules.seguridad.schemas import (
+    ConfiguracionAccesos,
+    ConfiguracionGuardada,
     PermisoAsignar,
     PermisoCreate,
     PermisosRol,
@@ -142,6 +149,44 @@ def reemplazar_permisos(
 def listar_pestanas(conn: Db) -> list[PestanaRoles]:
     """Pestañas con roles personalizados; las que no aparecen usan el menú por defecto."""
     return service.listar_pestanas(conn)
+
+
+@router.get(
+    "/pestanas/configuracion",
+    response_model=ConfiguracionAccesos,
+    operation_id="SEG11",
+    openapi_extra=_ADMIN,
+)
+def configuracion_accesos(
+    _: Admin, conn: Db, response: Response
+) -> ConfiguracionAccesos:
+    response.headers["Cache-Control"] = "no-store"
+    return accesos.configuracion(conn)
+
+
+@router.put(
+    "/pestanas/configuracion",
+    response_model=ConfiguracionGuardada,
+    operation_id="SEG12",
+    openapi_extra=_ADMIN,
+)
+def guardar_configuracion_accesos(
+    request: Request,
+    config: PestanasConfig,
+    admin: Admin,
+    id_admin: UsuarioAuditoria,
+    conn: Db,
+    response: Response,
+) -> ConfiguracionGuardada:
+    if config.version is None or config.motivo is None:
+        raise problema(
+            409,
+            "VERSION_Y_MOTIVO_REQUERIDOS",
+            "Consulta la configuración e indica un motivo antes de guardar.",
+        )
+    service.guardar_pestanas(conn, config, admin, id_admin, ip_cliente(request.scope))
+    response.headers["Cache-Control"] = "no-store"
+    return ConfiguracionGuardada(**accesos.configuracion(conn).model_dump())
 
 
 @router.put(
