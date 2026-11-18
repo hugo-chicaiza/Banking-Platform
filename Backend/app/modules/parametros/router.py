@@ -14,7 +14,7 @@ from app.core.security.auth import (
     require_auth,
     require_roles,
 )
-from app.modules.parametros import service
+from app.modules.parametros import mantenimiento, service
 from app.modules.parametros.schemas import (
     AsociarComision,
     Comision,
@@ -124,3 +124,10 @@ def actualizar_exoneracion(
     return service.actualizar_exoneracion(
         conn, id_exoneracion, payload, actor, ip_cliente(request.scope)
     )
+
+
+# Despues de las rutas estaticas E1-12 para evitar capturarlas con /{clave}.
+router_e112 = router
+router = APIRouter()
+router.include_router(router_e112)
+router.include_router(mantenimiento.router, prefix="/parametros")

@@ -15,6 +15,7 @@ from app.core.security.auth import Usuario
 from app.modules.seguridad.accesos import efectivos
 
 RUTAS_SECCION = {
+    "parametros.consultar": "/parametros",
     "clientes.registrar": "/registrar-cliente",
     "clientes.consultar": "/clientes-busqueda",
     "cuentas.abrir": "/cuentas/abrir",
@@ -33,6 +34,13 @@ RUTAS_SECCION = {
 }
 
 RUTAS_POR_SECCION: dict[str, tuple[tuple[str, str], ...]] = {
+    "parametros.consultar": (
+        ("GET", "/api/v1/parametros"),
+        ("GET", "/api/v1/parametros/{clave}"),
+        ("POST", "/api/v1/parametros/{clave}/valores"),
+        ("DELETE", "/api/v1/parametros/{clave}/valores/{id_valor}"),
+        ("PATCH", "/api/v1/parametros/{clave}/valores/{id_valor}"),
+    ),
     "clientes.registrar": (
         ("GET", "/api/v1/clientes/validar-identificacion"),
         ("POST", "/api/v1/clientes"),

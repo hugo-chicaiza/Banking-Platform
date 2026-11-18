@@ -33,6 +33,7 @@ class Seccion:
 ATENCION = ("ADMIN", "ASESOR", "CAJERO", "SUPERVISOR")
 CONTABLES = ("ADMIN", "CONTADOR", "AUDITOR")
 SECCIONES = (
+    Seccion("/parametros", "Parametros", ("ADMIN", "SUPERVISOR", "ASESOR")),
     Seccion("/organizacion/entidad", "Datos de la cooperativa", ("ADMIN", "ASESOR")),
     Seccion("/organizacion/agencias", "Agencias", ("ADMIN",)),
     Seccion("/productos", "Productos", ROLES, "prd-consultar"),

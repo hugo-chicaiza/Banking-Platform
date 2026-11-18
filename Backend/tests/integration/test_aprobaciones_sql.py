@@ -483,6 +483,12 @@ def test_trabajador_no_cancela_operaciones_no_registradas(motores, caso):
     from app.modules.aprobaciones.tareas import recuperar
 
     servicio, id_, _, actores = caso
+    # Simula un proceso que aun no tiene el manejador de Agencias E0-10.
+    from app.modules.aprobaciones.registro import Registro
+
+    registro = Registro()
+    registro.agregar(servicio.registro.obtener("PAR-EDITAR", "Parametro"))
+    servicio.registro = registro
     with motores["seguridad"].begin() as c:
         otro = c.execute(
             text("""INSERT Seguridad.SolicitudAprobacion

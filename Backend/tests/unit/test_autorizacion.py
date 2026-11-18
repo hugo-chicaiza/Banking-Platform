@@ -39,12 +39,18 @@ _TERMINALES = {
 }
 _VALORES_PATH = {
     "codigo_pais": "ECU",
+    "clave": "PARAMETRO_QA",
     "fecha": "2026-11-04",
     "id_agencia": "002",
 }
 
 # Roles de cada tarea (GitHubProject_Files)
 ROLES_POR_RUTA: dict[tuple[str, str], tuple[str, ...]] = {
+    ("GET", "/api/v1/parametros"): AUTH,
+    ("GET", "/api/v1/parametros/{clave}"): AUTH,
+    ("POST", "/api/v1/parametros/{clave}/valores"): AUTH,
+    ("DELETE", "/api/v1/parametros/{clave}/valores/{id_valor}"): AUTH,
+    ("PATCH", "/api/v1/parametros/{clave}/valores/{id_valor}"): AUTH,
     # E0-08 usa permisos efectivos por operacion y propiedad; no un rol fijo.
     ("GET", "/api/v1/aprobaciones"): AUTH,
     ("POST", "/api/v1/aprobaciones"): AUTH,
@@ -577,7 +583,12 @@ def test_rol_fuera_de_la_tarea_recibe_403(client, ruta, roles):
 def test_roles_de_la_tarea_pasan_el_control(client, ruta, monkeypatch):
     roles = ROLES_POR_RUTA[ruta]
     usuario = usuario_con_roles(*roles)
-    if ruta[1].startswith("/api/v1/aprobaciones"):
+    if ruta[1].startswith("/api/v1/aprobaciones") or ruta[1] in {
+        "/api/v1/parametros",
+        "/api/v1/parametros/{clave}",
+        "/api/v1/parametros/{clave}/valores",
+        "/api/v1/parametros/{clave}/valores/{id_valor}",
+    }:
         from app.modules.aprobaciones import identidad
 
         # Esta matriz comprueba el guarda comun. La revalidacion WorkOS y el
