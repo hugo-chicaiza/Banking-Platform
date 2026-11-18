@@ -221,12 +221,15 @@ def test_reverso_comparte_instante_con_el_calendario(
 
 
 def test_trx03_sin_configuracion_404(ctx: Contexto) -> None:
+    ctx.conn.execute.return_value.mappings.return_value.first.return_value = None
     respuesta = solicitar_reverso(ctx)
 
     assert respuesta.status_code == 404
     assert code(respuesta) == "FUNCION_NO_DISPONIBLE"
     ctx.conn.begin.assert_not_called()
     assert ctx.eventos[-1].resultado == "Fallido"
+
+    ctx.conn.execute.assert_called_once()
 
 
 def test_trx03_reverso_atm(ctx: Contexto) -> None:

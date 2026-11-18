@@ -1,32 +1,41 @@
-"""Contrato E0-09 para handlers sincronicos que aun declaran una funcion pendiente.
+"""Aplica una bandera solo cuando se alcanza una rama pendiente (HTTP 501)."""
 
-La ausencia de implementacion siempre falla cerrada, incluso si alguien enciende
-una bandera. No se ejecuta una operacion alternativa ni se anticipa este control
-a la autenticacion, autorizacion o validacion de datos de la ruta existente.
-"""
+import logging
+from collections.abc import Iterator
+from contextlib import contextmanager
 
-from collections.abc import Callable
-from functools import wraps
-from typing import ParamSpec, TypeVar
-
+from sqlalchemy import Connection
+from sqlalchemy.exc import SQLAlchemyError
 from starlette.exceptions import HTTPException
 
 from app.core.api.errors import problema
+from app.core.database.db import cooperativa
+from app.core.security.auth import Usuario
+from app.modules.parametros.banderas import requiere_funcion
 
-P = ParamSpec("P")
-T = TypeVar("T")
+logger = logging.getLogger(__name__)
 
 
-def funcion_pendiente(funcion: Callable[P, T]) -> Callable[P, T]:
-    @wraps(funcion)
-    def ejecutar(*args: P.args, **kwargs: P.kwargs) -> T:
+@contextmanager
+def funcion_pendiente(
+    clave: str, conn: Connection | None = None, usuario: Usuario | None = None
+) -> Iterator[None]:
+    try:
+        yield
+    except HTTPException as error:
+        if error.status_code != 501:
+            raise
+        verificar = requiere_funcion(clave)
         try:
-            return funcion(*args, **kwargs)
-        except HTTPException as error:
-            if error.status_code != 501:
-                raise
-            raise problema(
-                404, "FUNCION_NO_DISPONIBLE", "La funcion no esta disponible."
-            ) from None
-
-    return ejecutar
+            if conn is None:
+                # ATM autentica su propia sesión y sus banderas son globales.
+                with contextmanager(cooperativa)() as conexion:
+                    verificar(conexion, usuario)
+            else:
+                verificar(conn, usuario)
+        except SQLAlchemyError:
+            logger.warning("No se pudo consultar la bandera %s", clave)
+        # Una bandera activa tampoco sustituye la implementación pendiente.
+        raise problema(
+            404, "FUNCION_NO_DISPONIBLE", "La funcion no esta disponible."
+        ) from None

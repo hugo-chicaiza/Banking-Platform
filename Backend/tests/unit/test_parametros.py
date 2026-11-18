@@ -133,12 +133,14 @@ def test_catalogo_legado_no_puede_cambiar_valor(monkeypatch, eventos_auditados):
     from app.modules.catalogos import administracion
 
     conn = Mock()
+    conn.execute.return_value.mappings.return_value.first.return_value = None
     monkeypatch.setattr(administracion, "_fila", lambda *args: {"id": "1", "valor": 1})
     with pytest.raises(HTTPException) as error:
         administracion.actualizar(
             conn, "comisiones", "1", {"valor": 2}, USUARIO, "127.0.0.1"
         )
     assert error.value.status_code == 404
-    conn.execute.assert_not_called()
+    conn.execute.assert_called_once()
+    assert "SELECT" in str(conn.execute.call_args.args[0])
     conn.rollback.assert_called_once()
     assert eventos_auditados[-1].resultado == "Fallido"

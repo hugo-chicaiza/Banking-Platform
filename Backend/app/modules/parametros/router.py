@@ -8,7 +8,12 @@ from sqlalchemy import Connection
 from app.core.api.errors import RESPUESTAS_ERROR, ProblemDetailsRoute, solo_parametros
 from app.core.api.middleware import ip_cliente
 from app.core.database.db import cooperativa
-from app.core.security.auth import UsuarioAuditoria, require_auth, require_roles
+from app.core.security.auth import (
+    UsuarioActual,
+    UsuarioAuditoria,
+    require_auth,
+    require_roles,
+)
 from app.modules.parametros import service
 from app.modules.parametros.schemas import (
     AsociarComision,
@@ -68,9 +73,10 @@ def actualizar_comision(
     actor: UsuarioAuditoria,
     request: Request,
     conn: Db,
+    usuario: UsuarioActual,
 ) -> Comision:
     return service.actualizar_comision(
-        conn, id_comision, payload, actor, ip_cliente(request.scope)
+        conn, id_comision, payload, actor, ip_cliente(request.scope), usuario=usuario
     )
 
 

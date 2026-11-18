@@ -527,7 +527,6 @@ def cerrar_jornada(
     operation_id="CAJ09",
     dependencies=[Depends(require_roles("CAJERO"))],
 )
-@funcion_pendiente
 def registrar_deposito(
     request: Request,
     response: Response,
@@ -542,16 +541,17 @@ def registrar_deposito(
     ],
 ) -> Comprobante:
     """Registra un depósito idempotente."""
-    comprobante, repeticion = service.operacion_ventanilla(
-        conn,
-        usuario,
-        id_interno,
-        id_jornada,
-        datos,
-        ip_cliente(request.scope),
-        deps,
-        "Deposito",
-    )
+    with funcion_pendiente("FUNCION_CAJA_DEPOSITO", conn, usuario):
+        comprobante, repeticion = service.operacion_ventanilla(
+            conn,
+            usuario,
+            id_interno,
+            id_jornada,
+            datos,
+            ip_cliente(request.scope),
+            deps,
+            "Deposito",
+        )
 
     if repeticion:
         response.status_code = 200
@@ -607,7 +607,6 @@ def registrar_series(
     operation_id="CAJ11",
     dependencies=[Depends(require_roles("CAJERO"))],
 )
-@funcion_pendiente
 def registrar_retiro(
     request: Request,
     response: Response,
@@ -625,16 +624,17 @@ def registrar_retiro(
 
     La operación es idempotente por registroUnico.
     """
-    comprobante, repeticion = service.operacion_ventanilla(
-        conn,
-        usuario,
-        id_interno,
-        id_jornada,
-        datos,
-        ip_cliente(request.scope),
-        deps,
-        "Retiro",
-    )
+    with funcion_pendiente("FUNCION_CAJA_RETIRO", conn, usuario):
+        comprobante, repeticion = service.operacion_ventanilla(
+            conn,
+            usuario,
+            id_interno,
+            id_jornada,
+            datos,
+            ip_cliente(request.scope),
+            deps,
+            "Retiro",
+        )
 
     if repeticion:
         response.status_code = 200

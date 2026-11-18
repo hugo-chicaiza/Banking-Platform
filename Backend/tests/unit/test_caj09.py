@@ -33,7 +33,8 @@ def ctx(monkeypatch: pytest.MonkeyPatch) -> Iterator[Contexto]:
     yield crear_contexto(monkeypatch, router)
 
 
-def test_caj09_sin_configuracion_responde_404_sin_tocar_bd(ctx: Contexto) -> None:
+def test_caj09_sin_configuracion_responde_404_sin_movimiento(ctx: Contexto) -> None:
+    ctx.conn.execute.return_value.mappings.return_value.first.return_value = None
     ctx.fake("buscar_por_registro_unico", None, trx_repo)
     r = ctx.cliente.post(f"{BASE}/jornadas/55/depositos", json=CUERPO_DEPOSITO)
     assert r.status_code == 404
@@ -41,6 +42,8 @@ def test_caj09_sin_configuracion_responde_404_sin_tocar_bd(ctx: Contexto) -> Non
     assert not ctx.llamadas["buscar_por_registro_unico"]
     ctx.conn.begin.assert_not_called()
     assert ctx.resultado_auditoria() == "Fallido"
+
+    ctx.conn.execute.assert_called_once()
 
 
 def test_caj09_deposito_completo(ctx: Contexto) -> None:

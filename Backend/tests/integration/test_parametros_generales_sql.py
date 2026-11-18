@@ -7,6 +7,7 @@ from datetime import date, timedelta
 from pathlib import Path
 from threading import Barrier
 from typing import Any
+from unittest.mock import Mock
 from uuid import uuid4
 
 import pyodbc
@@ -19,8 +20,11 @@ from sqlalchemy.exc import DBAPIError
 from app.core.config.settings import Settings
 from app.core.database.db import cooperativa
 from app.core.security.auth import Usuario, usuario_actual
+from app.modules.parametros import banderas, funciones
 from app.modules.parametros import general as Parametros
 from app.modules.parametros.banderas import requiere_funcion
+from tests.integration.test_atm_transferencias_local import BODY, http  # noqa: F401
+from tests.unit.test_atm_api import api  # noqa: F401
 
 pytestmark = pytest.mark.skipif(
     not os.environ.get("E009_TEST_MANIFEST"),
@@ -267,6 +271,112 @@ def test_bandera_apagada_impide_efectos_de_ruta(motor, parametro, monkeypatch):
     assert respuesta.status_code == 404
     assert respuesta.json()["detail"]["code"] == "FUNCION_NO_DISPONIBLE"
     assert ejecutado == []
+
+
+def test_bandera_respeta_agencia_y_vigencia(motor, parametro, monkeypatch):
+    with motor.begin() as conn:
+        agencia = conn.execute(
+            text(
+                "SELECT TOP(1) IdAgencia FROM Organizacion.Agencia WHERE Estado='A' ORDER BY IdAgencia"
+            )
+        ).scalar_one()
+        conn.execute(
+            text(
+                "UPDATE Parametros.Parametro SET TipoDato='Booleano',ValorMinimo=NULL,ValorMaximo=NULL WHERE Clave=:clave"
+            ),
+            {"clave": parametro},
+        )
+        cambio = INICIO + timedelta(days=1)
+        Parametros.registrar(conn, parametro, "false", INICIO, actor=ACTOR)
+        Parametros.registrar(
+            conn, parametro, "true", cambio, hasta=cambio, agencia=agencia, actor=ACTOR
+        )
+        usuario = Usuario(
+            "user_fixture_e009",
+            "session_fixture",
+            None,
+            "QA",
+            "qa@example.invalid",
+            ("ADMIN",),
+            (),
+            id_agencia=agencia,
+            id_interno=1,
+        )
+        reloj = Mock()
+        monkeypatch.setattr(banderas, "datetime", reloj)
+        verificar = requiere_funcion(parametro)
+        for fecha in (INICIO, cambio + timedelta(days=1)):
+            reloj.now.return_value.date.return_value = fecha
+            with pytest.raises(HTTPException, match="FUNCION_NO_DISPONIBLE"):
+                verificar(conn, usuario)
+        reloj.now.return_value.date.return_value = cambio
+        verificar(conn, usuario)
+        with pytest.raises(HTTPException, match="FUNCION_NO_DISPONIBLE"):
+            verificar(conn, None)
+
+
+@pytest.mark.parametrize("estado", ["true", "false", "inexistente", "invalida"])
+def test_atm_consulta_bandera_persistida_y_sigue_cerrado(
+    motor, request, monkeypatch, estado
+):
+    manifiesto = json.loads(
+        Path(os.environ["E009_TEST_MANIFEST"]).read_text(encoding="utf-8")
+    )
+    if manifiesto["transporte"] != "lpc:.":
+        pytest.skip("Solo en laboratorio SQL local aislado")
+
+    escenario = request.getfixturevalue("http")
+    clave = "FUNCION_ATM_TRANSFERENCIA"
+    consultado = []
+    verificar = banderas.verificar_funcion
+
+    def observar(conn, clave, fecha, agencia):
+        try:
+            verificar(conn, clave, fecha, agencia)
+        except HTTPException:
+            consultado.append((clave, agencia, False))
+            raise
+        consultado.append((clave, agencia, True))
+
+    monkeypatch.setattr(banderas, "verificar_funcion", observar)
+
+    with motor.connect() as conn:
+        transaccion = conn.begin()
+        try:
+            id_ = conn.execute(
+                text("SELECT IdParametro FROM Parametros.Parametro WHERE Clave=:clave"),
+                {"clave": clave},
+            ).scalar_one()
+            if estado == "inexistente":
+                conn.execute(
+                    text("DELETE Parametros.ParametroValor WHERE IdParametro=:id"),
+                    {"id": id_},
+                )
+                conn.execute(
+                    text("DELETE Parametros.Parametro WHERE IdParametro=:id"),
+                    {"id": id_},
+                )
+            else:
+                conn.execute(
+                    text(
+                        "UPDATE Parametros.ParametroValor SET Valor=:valor WHERE IdParametro=:id"
+                    ),
+                    {"id": id_, "valor": estado},
+                )
+
+            def conexion_lab():
+                yield conn
+
+            monkeypatch.setattr(funciones, "cooperativa", conexion_lab)
+            respuesta = escenario.client.post(
+                "/api/v1/atm/transferencias", json=BODY, headers=escenario.headers
+            )
+            assert respuesta.status_code == 404
+            assert respuesta.json()["code"] == "FUNCION_NO_DISPONIBLE"
+            assert consultado == [(clave, None, estado == "true")]
+            escenario.prohibido.assert_not_called()
+        finally:
+            transaccion.rollback()
 
 
 def test_semilla_preserva_valores_y_no_duplica(motor):
