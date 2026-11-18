@@ -131,6 +131,9 @@ class _UserManagement:
         # Sesiones del usuario en WorkOS (list_sessions); session_1 es la del login
         self.sesiones_usuario = [SimpleNamespace(id="session_1", status="active")]
         self.error_sesiones: Exception | None = None
+        # Cookie que entrega authenticate_with_code (una real con _sellar si el test
+        # necesita leer su sid)
+        self.sellada_login: str | None = None
 
     def get_authorization_url(self, **kwargs: Any) -> str:
         self.llamadas.append(("authorize", kwargs))
@@ -140,8 +143,9 @@ class _UserManagement:
         self.llamadas.append(("code", kwargs))
         if self.error:
             raise self.error
-        self.sesiones["sellada-nueva"] = "vigente"
-        return SimpleNamespace(sealed_session="sellada-nueva", user=self.usuario)
+        sellada = self.sellada_login or "sellada-nueva"
+        self.sesiones[sellada] = "vigente"
+        return SimpleNamespace(sealed_session=sellada, user=self.usuario)
 
     def load_sealed_session(self, *, sealed_session: str, cookie_password: str):
         clave = get_settings().workos_cookie_password.get_secret_value()
@@ -284,6 +288,8 @@ def test_login_redirige_al_hosted_ui_con_state_y_pkce(client, workos):
 
     assert r.status_code == 302
     assert r.headers["location"].startswith(AUTHORIZE)
+    # AuthKit pide credenciales siempre, aunque su sesión del navegador siga viva
+    assert parse_qs(urlsplit(r.headers["location"]).query)["max_age"] == ["0"]
     assert r.headers["cache-control"] == "no-store"
     argumentos = workos.llamadas[0][1]
     assert argumentos["provider"] == "authkit"
@@ -447,14 +453,15 @@ def test_callback_sesion_sin_organizacion_no_crea_sesion(client, workos, monkeyp
         pytest.fail("Una organizacion ajena no debe alcanzar SQL")
 
     monkeypatch.setattr(service, "_vincular", vincular_prohibido)
+    workos.sellada_login = _sellar(workos, "vigente", sid="session_9")
     state, cookie = _iniciar(client)
 
     r = _callback(client, cookie, code="code-1", state=state)
 
     assert r.headers["location"] == f"{FRONT}/login?error=USUARIO_NO_HABILITADO"
     assert COOKIE_SESION not in _cookies(r)
-    # La organizacion se rechaza antes de crear una cookie local, sin mutar WorkOS.
-    assert not any(llamada[0] == "revoke_session" for llamada in workos.llamadas)
+    # Se rechaza antes de tocar la base, pero la sesión que creó WorkOS no queda viva
+    assert _revocadas(workos) == ["session_9"]
 
 
 def test_callback_sin_llaves_de_workos_no_crea_sesion(client, workos):
