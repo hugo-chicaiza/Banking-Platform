@@ -21,9 +21,7 @@ La antigua ruta `POST /bovedas/{idBoveda}/movimientos` queda obsoleta y responde
 **410 SOLICITUD_AUTORIZACION_REQUERIDA**. Este cambio exige adaptar el frontend y
 los consumidores de esa operación. El resto de BOV-01..06 conserva sus rutas.
 
-Los permisos de escritura reutilizan `boveda:operar`, asignado a SUPERVISOR y ADMIN
-en la matriz inicial. Antes del despliegue debe asignarse también al rol `org-admin`
-en WorkOS y renovarse la sesión: el archivo local de permisos no configura el tenant.
+Las escrituras exigen el rol SUPERVISOR o ADMIN (no hay un permiso de WorkOS propio).
 Las consultas admiten SUPERVISOR, CONTADOR, AUDITOR y ADMIN. Supervisor
 consulta su agencia. Los roles globales pueden consultar las otras agencias.
 Las escrituras exigen pertenecer a la agencia de origen, incluso para usuarios

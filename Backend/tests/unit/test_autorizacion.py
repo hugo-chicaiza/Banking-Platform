@@ -14,9 +14,12 @@ from fastapi.testclient import TestClient
 
 from app.core.database.db import cooperativa
 from app.core.security.auth import ROLES, Usuario, require_auth
+from app.core.security.permisos import PERMISOS
 from app.main import app
 from app.modules.tarjetas import router as tarjetas_router
 from tests.sesion import USUARIO, simular_sesion, usuario_con_roles
+
+CONSULTA_PRODUCTOS = PERMISOS["prd-consultar"]
 
 AUTH = ()  # Cualquier usuario autenticado, sin rol específico
 _PUBLICAS = {
@@ -323,48 +326,39 @@ ROLES_POR_RUTA: dict[tuple[str, str], tuple[str, ...]] = {
     ("POST", "/api/v1/agencias"): ("ADMIN",),
     ("GET", "/api/v1/agencias/{id_agencia}"): ("ADMIN",),
     ("PATCH", "/api/v1/agencias/{id_agencia}"): ("ADMIN",),
-    # Productos y subproductos (plan E3-02): ADMIN escribe; ADMIN y ASESOR consultan
-    ("GET", "/api/v1/productos"): ("ADMIN", "SUPERVISOR", "ASESOR"),
-    ("GET", "/api/v1/productos/{id_producto}"): ("ADMIN", "SUPERVISOR", "ASESOR"),
-    ("GET", "/api/v1/productos/subproductos/{id_sub_producto}/ficha/imprimible"): (
-        "ADMIN",
-        "SUPERVISOR",
-        "ASESOR",
-    ),
-    ("GET", "/api/v1/productos/tipos"): ("ADMIN", "SUPERVISOR", "ASESOR"),
+    # Productos: consultar exige prd-consultar (todos menos CAJERO en WorkOS); escribir prd-editar
+    ("GET", "/api/v1/productos"): CONSULTA_PRODUCTOS,
+    ("GET", "/api/v1/productos/{id_producto}"): CONSULTA_PRODUCTOS,
+    (
+        "GET",
+        "/api/v1/productos/subproductos/{id_sub_producto}/ficha/imprimible",
+    ): CONSULTA_PRODUCTOS,
+    ("GET", "/api/v1/productos/tipos"): CONSULTA_PRODUCTOS,
     ("DELETE", "/api/v1/productos/{id_producto}"): ("ADMIN",),
-    ("GET", "/api/v1/productos/subproductos/{id_sub_producto}/ficha"): (
-        "ADMIN",
-        "SUPERVISOR",
-        "ASESOR",
-    ),
+    (
+        "GET",
+        "/api/v1/productos/subproductos/{id_sub_producto}/ficha",
+    ): CONSULTA_PRODUCTOS,
     ("POST", "/api/v1/productos"): ("ADMIN",),
     ("PATCH", "/api/v1/productos/{id_producto}"): ("ADMIN",),
     ("POST", "/api/v1/productos/{id_producto}/subproductos"): ("ADMIN",),
     ("PATCH", "/api/v1/productos/subproductos/{id_sub_producto}"): ("ADMIN",),
-    ("GET", "/api/v1/productos/subproductos/{id_sub_producto}/cupos"): (
-        "ADMIN",
-        "SUPERVISOR",
-        "ASESOR",
-    ),
+    (
+        "GET",
+        "/api/v1/productos/subproductos/{id_sub_producto}/cupos",
+    ): CONSULTA_PRODUCTOS,
     ("PUT", "/api/v1/productos/subproductos/{id_sub_producto}/cupos"): ("ADMIN",),
-    ("GET", "/api/v1/productos/subproductos/{id_sub_producto}/vinculos"): (
-        "ADMIN",
-        "SUPERVISOR",
-        "ASESOR",
-    ),
+    (
+        "GET",
+        "/api/v1/productos/subproductos/{id_sub_producto}/vinculos",
+    ): CONSULTA_PRODUCTOS,
     ("PUT", "/api/v1/productos/subproductos/{id_sub_producto}/vinculos"): ("ADMIN",),
-    ("GET", "/api/v1/productos/{id_producto}/vinculos"): (
-        "ADMIN",
-        "SUPERVISOR",
-        "ASESOR",
-    ),
+    ("GET", "/api/v1/productos/{id_producto}/vinculos"): CONSULTA_PRODUCTOS,
     ("PUT", "/api/v1/productos/{id_producto}/vinculos"): ("ADMIN",),
-    ("GET", "/api/v1/productos/subproductos/{id_sub_producto}/restricciones"): (
-        "ADMIN",
-        "SUPERVISOR",
-        "ASESOR",
-    ),
+    (
+        "GET",
+        "/api/v1/productos/subproductos/{id_sub_producto}/restricciones",
+    ): CONSULTA_PRODUCTOS,
     ("PUT", "/api/v1/productos/subproductos/{id_sub_producto}/restricciones"): (
         "ADMIN",
     ),

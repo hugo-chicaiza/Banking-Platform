@@ -18,6 +18,7 @@ from sqlalchemy.exc import DBAPIError
 from app.core.database.db import cooperativa
 from app.core.security import audit
 from app.core.security.auth import ROLES
+from app.core.security.permisos import PERMISOS
 from app.modules.productos import repository as repo
 from app.modules.productos.router import router
 from tests.sesion import simular_sesion, usuario_con_roles
@@ -219,9 +220,9 @@ def test_asesor_consulta_pero_no_crea(bd, asesor):
 
 
 @pytest.mark.parametrize(
-    "rol", [r for r in ROLES if r not in ("ADMIN", "SUPERVISOR", "ASESOR")]
+    "rol", [r for r in ROLES if r not in PERMISOS["prd-consultar"]]
 )
-def test_otros_roles_no_consultan(bd, rol):
+def test_sin_prd_consultar_no_consultan(bd, rol):
     assert _cliente(rol).get(BASE).status_code == 403
 
 
@@ -641,15 +642,18 @@ def test_estado_inconsistente_no_se_guarda(bd, admin):
     assert r.status_code == 422 and r.json()["code"] == "ESTADO_INVALIDO"
 
 
-def test_consultar_solo_pide_el_rol(bd):
-    # El rol decide qué se ve: sin permisos de WorkOS, la consulta responde igual
+def test_consultar_lo_decide_prd_consultar_no_el_rol(bd):
+    # ADMIN sin prd-consultar no consulta; CAJERO con prd-consultar sí
     from dataclasses import replace
 
     from app.core.security.auth import usuario_actual
 
-    client = _cliente("SUPERVISOR")
-    cast(FastAPI, client.app).dependency_overrides[usuario_actual] = lambda: replace(
-        usuario_con_roles("SUPERVISOR"), permisos=()
+    client = _cliente("ADMIN")
+    overrides = cast(FastAPI, client.app).dependency_overrides
+    overrides[usuario_actual] = lambda: replace(usuario_con_roles("ADMIN"), permisos=())
+    assert client.get(BASE).status_code == 403
+    overrides[usuario_actual] = lambda: replace(
+        usuario_con_roles("CAJERO"), permisos=("prd-consultar",)
     )
     assert client.get(BASE).status_code == 200
     assert client.get(BASE + "/tipos").status_code == 200

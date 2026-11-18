@@ -16,9 +16,9 @@ Prefijo: `/api/v1/boveda`. El contrato ejecutable se genera en
 | BOV01 | GET `/bovedas` | SUPERVISOR, CONTADOR, ADMIN |
 | BOV02 | GET `/bovedas/{idBoveda}` | SUPERVISOR, CONTADOR, ADMIN |
 | BOV03 | GET `/bovedas/{idBoveda}/movimientos` | SUPERVISOR, CONTADOR, AUDITOR, ADMIN |
-| BOV04 legado (410) | POST `/bovedas/{idBoveda}/movimientos` | permiso boveda:operar |
-| BOV05 | POST `/bovedas/{idBoveda}/arqueos` | permiso boveda:arqueo (SUPERVISOR, AUDITOR, ADMIN) |
-| BOV06 | POST `/arqueos/{idArqueoBoveda}/aprobacion` | permiso boveda:operar (SUPERVISOR, ADMIN) |
+| BOV04 legado (410) | POST `/bovedas/{idBoveda}/movimientos` | SUPERVISOR, ADMIN |
+| BOV05 | POST `/bovedas/{idBoveda}/arqueos` | SUPERVISOR, AUDITOR, ADMIN |
+| BOV06 | POST `/arqueos/{idArqueoBoveda}/aprobacion` | SUPERVISOR, ADMIN |
 | Listado de arqueos | GET `/bovedas/{idBoveda}/arqueos` | SUPERVISOR, CONTADOR, AUDITOR, ADMIN |
 
 Se reutilizan sesión WorkOS, CSRF, ProblemDetails y auditoría de éxitos/fallos.
@@ -33,11 +33,8 @@ asignada al usuario. ADMIN también debe respetar las identidades distintas para
 aprobar y la cancelación exclusiva del solicitante. El testigo de un arqueo sigue
 siendo un SUPERVISOR de la agencia o un AUDITOR, conforme al contrato BOV-05.
 
-Antes de desplegar, asignar **boveda:operar** y **boveda:arqueo** al rol **org-admin**
-en WorkOS. `core/security/permisos.py` documenta la asignación inicial y las pruebas;
-no modifica el tenant automáticamente. Las escrituras comprueban los permisos del
-token, también para ADMIN. Renovar la sesión tras configurar los permisos y
-comprobarlos en `/api/v1/auth/me`. No se requiere otra migración SQL para este acceso.
+Las escrituras de bóveda se autorizan por rol (no hay un permiso de WorkOS propio);
+ver `core/security/permisos.py`. No se requiere migración SQL para este acceso.
 
 BOV01 filtra por `idAgencia` y `tipo`. BOV02 incluye `saldoActual`, inventario,
 valor/subtotal por denominación y `totalDesglose`. BOV03 filtra por

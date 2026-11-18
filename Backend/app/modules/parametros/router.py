@@ -1,4 +1,4 @@
-"""HTTP E1-12. PAR-EDITAR corresponde a catalogos:editar en la matriz vigente."""
+"""HTTP E1-12. Las escrituras de parámetros son del rol ADMIN (sin permiso de WorkOS propio)."""
 
 from typing import Annotated
 
@@ -8,12 +8,7 @@ from sqlalchemy import Connection
 from app.core.api.errors import RESPUESTAS_ERROR, ProblemDetailsRoute, solo_parametros
 from app.core.api.middleware import ip_cliente
 from app.core.database.db import cooperativa
-from app.core.security.auth import (
-    UsuarioAuditoria,
-    require_auth,
-    require_permiso,
-    require_roles,
-)
+from app.core.security.auth import UsuarioAuditoria, require_auth, require_roles
 from app.modules.parametros import service
 from app.modules.parametros.schemas import (
     AsociarComision,
@@ -36,7 +31,7 @@ Db = Annotated[Connection, Depends(cooperativa)]
 IdComision = Annotated[int, Path(alias="idComision", ge=1, le=2_147_483_647)]
 IdExoneracion = Annotated[int, Path(alias="idExoneracion", ge=1, le=2_147_483_647)]
 _LECTURA = ("ADMIN", "SUPERVISOR", "ASESOR")
-_ESCRITURA = [Depends(require_permiso("catalogos:editar")), Depends(solo_parametros())]
+_ESCRITURA = [Depends(require_roles("ADMIN")), Depends(solo_parametros())]
 
 
 @router.get(

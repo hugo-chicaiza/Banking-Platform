@@ -138,7 +138,7 @@ def test_version_impide_sobrescritura(client, base):
 
 
 def test_permiso_sin_admin_no_basta(client):
-    actor = replace(usuario_con_roles("CONTADOR"), permisos=("usuarios:editar",))
+    actor = replace(usuario_con_roles("CONTADOR"), permisos=("prd-editar",))
     simular_sesion(app, actor)
     r = client.put(
         BASE + "/3/agencias",

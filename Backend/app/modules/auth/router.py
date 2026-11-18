@@ -35,7 +35,6 @@ from app.core.security.auth import (
     motivo_rechazo,
     no_autenticado,
     require_auth,
-    require_permiso,
     require_roles,
     verificar_origen,
 )
@@ -198,7 +197,7 @@ def me(usuario: Annotated[Usuario, Depends(require_auth)]) -> Any:
 ConexionSeguridad = Annotated[Connection, Depends(seguridad)]
 ConexionCooperativa = Annotated[Connection, Depends(cooperativa)]
 Admin = Annotated[Usuario, Depends(require_roles("ADMIN"))]
-EditorUsuarios = Annotated[Usuario, Depends(require_permiso("usuarios:editar"))]
+EditorUsuarios = Annotated[Usuario, Depends(require_roles("ADMIN"))]
 IdUsuario = Annotated[int, Path(alias="idUsuario", ge=1)]
 
 router_usuarios = APIRouter(

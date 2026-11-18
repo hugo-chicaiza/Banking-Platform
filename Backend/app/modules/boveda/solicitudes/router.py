@@ -8,7 +8,7 @@ from sqlalchemy import Connection
 from app.core.api.errors import RESPUESTAS_ERROR, ProblemDetailsRoute, solo_parametros
 from app.core.api.middleware import ip_cliente
 from app.core.database.db import cooperativa
-from app.core.security.auth import Usuario, require_permiso, require_roles
+from app.core.security.auth import Usuario, require_roles
 from app.core.security.operador import IdInterno
 from app.modules.boveda.schemas import INT32_MAX, INT64_MAX, MovimientoBoveda
 from app.modules.boveda.solicitudes import service
@@ -23,7 +23,7 @@ from app.modules.boveda.solicitudes.schemas import (
 
 router = APIRouter(route_class=ProblemDetailsRoute, responses=RESPUESTAS_ERROR)
 Conexion = Annotated[Connection, Depends(cooperativa)]
-Operador = Annotated[Usuario, Depends(require_permiso("boveda:operar"))]
+Operador = Annotated[Usuario, Depends(require_roles("SUPERVISOR", "ADMIN"))]
 Lector = Annotated[
     Usuario, Depends(require_roles("SUPERVISOR", "CONTADOR", "AUDITOR", "ADMIN"))
 ]
