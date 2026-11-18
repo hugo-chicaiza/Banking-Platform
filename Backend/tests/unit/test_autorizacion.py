@@ -382,6 +382,8 @@ ROLES_POR_RUTA.update(
         # Seguridad: permisos de roles (WorkOS) y pestañas por rol
         ("GET", "/api/v1/seguridad/permisos"): ("ADMIN",),
         ("PATCH", "/api/v1/seguridad/permisos/{slug}"): ("ADMIN",),
+        ("POST", "/api/v1/seguridad/permisos"): ("ADMIN",),
+        ("DELETE", "/api/v1/seguridad/permisos/{slug}"): ("ADMIN",),
         ("GET", "/api/v1/seguridad/roles"): ("ADMIN",),
         ("POST", "/api/v1/seguridad/roles/{rol}/permisos"): ("ADMIN",),
         ("DELETE", "/api/v1/seguridad/roles/{rol}/permisos/{permiso}"): ("ADMIN",),

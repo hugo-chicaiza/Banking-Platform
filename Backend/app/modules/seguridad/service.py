@@ -1,8 +1,8 @@
 """Seguridad: permisos de los roles del sistema en WorkOS y pestañas visibles por rol.
 
-- Permisos: solo se editan nombre y descripción; crear o borrar un permiso se acuerda
-  aparte (los permisos son generales, no uno por módulo). Los de sistema (widgets:*)
-  no se tocan.
+- Permisos: un ADMIN los crea, edita (nombre y descripción) y borra. Un permiso nuevo
+  no habilita nada hasta que el código lo exija (core/security/permisos.py); por eso no
+  se borra uno que el código usa. Los de sistema (widgets:*) no se tocan.
 - Roles: solo los 7 roles del sistema (org-*). Un cambio de permisos aplica a la
   siguiente sesión (o refresco) de cada usuario, cuando WorkOS emite el token nuevo.
 - Pestañas: solo deciden qué muestra el menú; cada API sigue validando rol o permiso.
@@ -13,10 +13,12 @@ from sqlalchemy import Connection
 from app.core.api.errors import problema
 from app.core.security.auth import ROLES, Rol, Usuario, slug_rol
 from app.core.security.operador import auditar
+from app.core.security.permisos import PERMISOS
 from app.integrations.workos_client import get_organizacion_id, get_workos
 from app.modules.auth.service import _workos  # traducción común de errores de WorkOS
 from app.modules.seguridad import repository
 from app.modules.seguridad.schemas import (
+    PermisoCreate,
     PermisoUpdate,
     PermisoVista,
     PestanaRoles,
@@ -68,6 +70,44 @@ def _asignable(slug: str, catalogo: list[PermisoVista] | None = None) -> Permiso
             "Los permisos de sistema de WorkOS no se administran aquí.",
         )
     return permiso
+
+
+def crear_permiso(datos: PermisoCreate, usuario: Usuario, ip: str) -> PermisoVista:
+    with auditar(
+        "CREAR_PERMISO",
+        _TABLA_PERMISOS,
+        usuario,
+        ip,
+        f"permiso={datos.slug}",
+        datos.slug,
+    ):
+        if any(p.slug == datos.slug for p in _permisos()):
+            raise problema(
+                409, "PERMISO_DUPLICADO", "Ya existe un permiso con ese código."
+            )
+        with _workos("create_permission"):
+            p = get_workos().authorization.create_permission(
+                slug=datos.slug, name=datos.nombre, description=datos.descripcion
+            )
+        return PermisoVista(
+            slug=p.slug, nombre=p.name, descripcion=p.description, sistema=p.system
+        )
+
+
+def borrar_permiso(slug: str, usuario: Usuario, ip: str) -> None:
+    """WorkOS lo quita también de los roles que lo tenían."""
+    with auditar(
+        "BORRAR_PERMISO", _TABLA_PERMISOS, usuario, ip, f"permiso={slug}", slug
+    ):
+        _asignable(slug)
+        if slug in PERMISOS:
+            raise problema(
+                409,
+                "PERMISO_EN_USO",
+                "La aplicación exige este permiso; borrarlo dejaría sin acceso a quienes lo tienen.",
+            )
+        with _workos("delete_permission"):
+            get_workos().authorization.delete_permission(slug)
 
 
 def editar_permiso(
