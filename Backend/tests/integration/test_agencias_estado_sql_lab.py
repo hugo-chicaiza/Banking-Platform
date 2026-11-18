@@ -5,6 +5,7 @@ WorkOS ni tablas contables. Las fixtures se eliminan al terminar.
 """
 
 import os
+from typing import cast
 
 import pyodbc
 import pytest
@@ -14,6 +15,7 @@ from sqlalchemy.exc import DBAPIError
 from sqlalchemy.pool import NullPool
 
 from app.modules.organizacion import service
+from tests.sesion import usuario_con_roles
 
 pytestmark = pytest.mark.skipif(
     os.environ.get("AGENCIAS_ESTADO_LOCAL_SQL_ENABLED") != "1",
@@ -111,7 +113,7 @@ def poner_estado(engine, estado):
 @pytest.mark.parametrize(
     "anterior,nuevo,esperado",
     [
-        ("A", "I", 200),
+        ("A", "I", 409),
         ("I", "A", 200),
         ("A", "A", 200),
         ("I", "I", 200),
@@ -125,13 +127,24 @@ def poner_estado(engine, estado):
 def test_transiciones_reales(engine, anterior, nuevo, esperado):
     poner_estado(engine, anterior)
     with engine.connect() as conn:
+        if (anterior, nuevo) == ("I", "A"):
+            if (
+                conn.scalar(text("SELECT OBJECT_ID('Auditoria.EventoPendiente','U')"))
+                is None
+            ):
+                pytest.skip(
+                    "Use la prueba E010_SQL_LOCAL para reactivacion con bandeja transaccional"
+                )
+            conn.rollback()
         if esperado == 200:
-            resultado, previo = service.cambiar_estado(conn, AGENCIA, nuevo)
+            resultado, previo = service.cambiar_estado(
+                conn, AGENCIA, nuevo, actor=usuario_con_roles("ADMIN")
+            )
             assert resultado.estado == nuevo and previo == anterior
         else:
             with pytest.raises(HTTPException) as error:
                 service.cambiar_estado(conn, AGENCIA, nuevo)
-            assert error.value.status_code == 409
+            assert error.value.status_code == esperado
     with engine.connect() as conn:
         final = conn.execute(
             text("SELECT Estado FROM Organizacion.Agencia WHERE IdAgencia=:id"),
@@ -166,10 +179,10 @@ def test_guard_impide_desactivar_hasta_terminar_escritura_local(engine):
                 text("UPDATE Organizacion.Agencia SET Estado='I' WHERE IdAgencia=:id"),
                 {"id": AGENCIA},
             )
-    # Una vez liberado el lock, la otra sesión sí puede desactivar.
-    with engine.connect() as otra:
-        resultado, _ = service.cambiar_estado(otra, AGENCIA, "I")
-        assert resultado.estado == "I"
+    with engine.connect() as otra, pytest.raises(HTTPException) as error:
+        service.cambiar_estado(otra, AGENCIA, "I")
+    detalle = cast(dict[str, object], error.value.detail)
+    assert detalle["code"] == "APROBACION_REQUERIDA"
 
 
 def test_guard_404_real(engine):

@@ -141,10 +141,15 @@ class Agencia(CamelModel):
     vinculada_workos: bool
 
 
+class PropuestaBajaAgencia(_Entrada):
+    motivo: Motivo | None = None
+
+
 # Contratos heredados: endpoint PATCH /agencias/{id_agencia}/estado.
 class AgenciaEstadoUpdate(CamelModel):
     model_config = ConfigDict(extra="forbid")
     estado: EstadoAgencia
+    motivo: Motivo | None = None
 
 
 class AgenciaEstado(CamelModel):

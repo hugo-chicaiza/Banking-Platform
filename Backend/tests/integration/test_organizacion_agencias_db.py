@@ -84,16 +84,10 @@ def test_lectura_y_dependencias_de_una_agencia_real(conn: Connection) -> None:
 @escritura
 def test_insertar_y_actualizar_se_revierte(conn: Connection) -> None:
     ciudad = conn.execute(text("SELECT TOP (1) IdCiudad FROM Catalogo.Ciudad")).scalar()
-    libre = next(
-        f"Z{n:02d}"
-        for n in range(100)
-        if repo.obtener_agencia(conn, f"Z{n:02d}") is None
-    )
-    repo.insertar_agencia(
+    libre = repo.insertar_agencia(
         conn,
         {
-            "id_agencia": libre,
-            "codigo": f"TST-{libre}",
+            "codigo": "TST-E010",
             "tipo_agencia": "Sucursal",
             "id_ciudad": ciudad,
             "telefono": None,
@@ -102,10 +96,10 @@ def test_insertar_y_actualizar_se_revierte(conn: Connection) -> None:
         },
     )
     creada = repo.obtener_agencia(conn, libre)
-    assert creada is not None and creada["Estado"] == "A"
+    assert creada is not None and creada["Estado"] == "I"
     assert repo.dependencias_activas(conn, libre) == []
-    assert repo.actualizar_agencia(conn, libre, {"estado": "I"}) == 1
-    assert repo.obtener_agencia(conn, libre)["Estado"] == "I"  # type: ignore[index]
+    assert repo.actualizar_agencia(conn, libre, {"estado": "A"}) == 1
+    assert repo.obtener_agencia(conn, libre)["Estado"] == "A"  # type: ignore[index]
 
 
 @escritura
@@ -122,7 +116,6 @@ def test_segunda_matriz_la_rechaza_el_indice(conn: Connection) -> None:
         repo.insertar_agencia(
             conn,
             {
-                "id_agencia": "Z99",
                 "codigo": "TST-MTZ",
                 "tipo_agencia": "Matriz",
                 "id_ciudad": ciudad,
@@ -151,7 +144,6 @@ def test_creaciones_concurrentes_del_mismo_codigo_se_serializan(
                 repo.insertar_agencia(
                     otra,
                     {
-                        "id_agencia": "Z97",
                         "codigo": "TST-CONC",
                         "tipo_agencia": "Sucursal",
                         "id_ciudad": otra.execute(

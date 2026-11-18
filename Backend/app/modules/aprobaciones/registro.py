@@ -49,6 +49,9 @@ class Operacion:
     roles_ejecucion: frozenset[str]
     permiso_aprobacion: str
     manejador: Manejador
+    tabla_auditada: str | None = None
+    evento_ejecucion: str = "APR_OPERACION_EJECUTADA"
+    solicitud_directa: bool = True
 
 
 class Registro:
