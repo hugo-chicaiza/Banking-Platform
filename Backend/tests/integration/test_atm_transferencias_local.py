@@ -10,6 +10,7 @@ import pytest
 
 from app.modules.atm import repository, router, session
 from app.modules.atm import transferencias_service as svc
+from app.modules.parametros import funciones
 from app.modules.transacciones import numeracion
 from app.modules.transacciones import repository as tx_repo
 from app.modules.transacciones.dependencias import dependencias_operacion
@@ -41,6 +42,13 @@ def http(request, monkeypatch):
     monkeypatch.setattr(session, "get_engine", MagicMock())
     monkeypatch.setattr(repository, "sesion_atm_revocada", lambda *a: e.revocada)
     monkeypatch.setattr(repository, "obtener_asignacion_pin_actual", lambda *a: e.pin)
+    e.conexion_bandera = MagicMock()
+    e.conexion_bandera.execute.return_value.mappings.return_value.first.return_value = (
+        None
+    )
+    monkeypatch.setattr(
+        funciones, "cooperativa", lambda: (conn for conn in (e.conexion_bandera,))
+    )
     e.prohibido = Mock(
         side_effect=AssertionError("No debe acceder a cuentas ni efectos financieros")
     )

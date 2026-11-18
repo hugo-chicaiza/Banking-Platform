@@ -370,15 +370,15 @@ async def leer_transferencia_atm(
         }
     },
 )
-@funcion_pendiente
 def transferir_atm(
     solicitud: Annotated[TransferenciaAutenticada, Depends(leer_transferencia_atm)],
     dependencias: Annotated[DependenciasOperacion, Depends(dependencias_operacion)],
 ) -> Response:
-    # No abrir CooperativaDB, numerar, calcular comisiones ni invocar escritores.
-    transferencias_service.solicitar_transferencia(
-        solicitud.sesion, solicitud.terminal, solicitud.entrada, dependencias
-    )
+    with funcion_pendiente("FUNCION_ATM_TRANSFERENCIA"):
+        # No numerar, calcular comisiones ni invocar escritores.
+        transferencias_service.solicitar_transferencia(
+            solicitud.sesion, solicitud.terminal, solicitud.entrada, dependencias
+        )
 
 
 @dataclass(frozen=True, repr=False)
@@ -427,14 +427,14 @@ async def leer_reverso_atm(
         }
     },
 )
-@funcion_pendiente
 def reversar_atm(
     solicitud: Annotated[ReversoAutenticado, Depends(leer_reverso_atm)],
     dependencias: Annotated[DependenciasOperacion, Depends(dependencias_operacion)],
 ) -> Response:
-    reversos_service.solicitar_reverso(
-        solicitud.sesion, solicitud.terminal, solicitud.entrada, dependencias
-    )
+    with funcion_pendiente("FUNCION_ATM_REVERSO"):
+        reversos_service.solicitar_reverso(
+            solicitud.sesion, solicitud.terminal, solicitud.entrada, dependencias
+        )
 
 
 @dataclass(frozen=True, repr=False)
@@ -485,11 +485,11 @@ async def leer_retiro_atm(
         }
     },
 )
-@funcion_pendiente
 def retirar_atm(
     solicitud: Annotated[RetiroAutenticado, Depends(leer_retiro_atm)],
     dependencias: Annotated[DependenciasOperacion, Depends(dependencias_operacion)],
 ) -> Response:
-    retiros_service.solicitar_retiro(
-        solicitud.sesion, solicitud.terminal, solicitud.entrada, dependencias
-    )
+    with funcion_pendiente("FUNCION_ATM_RETIRO"):
+        retiros_service.solicitar_retiro(
+            solicitud.sesion, solicitud.terminal, solicitud.entrada, dependencias
+        )

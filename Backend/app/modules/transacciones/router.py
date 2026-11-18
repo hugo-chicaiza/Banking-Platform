@@ -137,7 +137,6 @@ def obtener_transaccion(
     status_code=201,
     operation_id="TRX03",
 )
-@funcion_pendiente
 def reversar(
     request: Request,
     usuario: Annotated[
@@ -154,12 +153,13 @@ def reversar(
     ],
 ) -> Transaccion:
     """Registra el reverso con movimientos y asiento inverso."""
-    return service.reversar(
-        conn,
-        usuario,
-        id_interno,
-        id_transaccion,
-        datos.motivo,
-        ip_cliente(request.scope),
-        deps,
-    )
+    with funcion_pendiente("FUNCION_TRANSACCION_REVERSO", conn, usuario):
+        return service.reversar(
+            conn,
+            usuario,
+            id_interno,
+            id_transaccion,
+            datos.motivo,
+            ip_cliente(request.scope),
+            deps,
+        )

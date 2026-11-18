@@ -226,10 +226,12 @@ def cambiar_estado_cuenta_contable(
     },
     openapi_extra={"x-roles": _ROLES_ESCRITURA_CUENTAS},
 )
-@funcion_pendiente
-def eliminar_cuenta_contable(conn: Db, id_cuenta: IdCuentaContable) -> Response:
+def eliminar_cuenta_contable(
+    conn: Db, id_cuenta: IdCuentaContable, usuario: UsuarioActual
+) -> Response:
     """Elimina la cuenta: 204, o 202 si queda pendiente de aprobación."""
-    service.eliminar_cuenta_contable(conn, id_cuenta)
+    with funcion_pendiente("FUNCION_CONTABILIDAD_BAJA_CUENTA", conn, usuario):
+        service.eliminar_cuenta_contable(conn, id_cuenta)
     return Response(status_code=204)
 
 

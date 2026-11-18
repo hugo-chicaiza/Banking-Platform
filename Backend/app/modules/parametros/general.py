@@ -102,7 +102,7 @@ def verificar_funcion(
     try:
         habilitada = valor(conn, clave, fecha, agencia)
     except HTTPException as error:
-        if error.status_code != 404:
+        if error.status_code not in (404, 422):
             raise
         habilitada = False
     if habilitada is not True:
