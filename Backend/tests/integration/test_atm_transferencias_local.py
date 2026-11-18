@@ -57,8 +57,8 @@ def test_endpoint_cerrado_con_auth_real_y_sin_efectos(http, caplog):
         r = http.client.post(
             "/api/v1/atm/transferencias", json=BODY, headers=http.headers
         )
-        assert r.status_code == 501
-        assert r.json()["code"] == "OPERACION_NO_HABILITADA"
+        assert r.status_code == 404
+        assert r.json()["code"] == "FUNCION_NO_DISPONIBLE"
         assert r.headers["content-type"].startswith("application/problem+json")
         assert r.headers["cache-control"] == "no-store"
         assert "idTransaccion" not in r.json()
@@ -70,7 +70,7 @@ def test_endpoint_cerrado_con_auth_real_y_sin_efectos(http, caplog):
 def test_configurar_dependencias_de_otro_modulo_no_abre_endpoint(http):
     http.app.dependency_overrides[dependencias_operacion] = lambda: MagicMock()
     r = http.client.post("/api/v1/atm/transferencias", json=BODY, headers=http.headers)
-    assert r.status_code == 501
+    assert r.status_code == 404
     http.prohibido.assert_not_called()
 
 
@@ -90,7 +90,7 @@ def test_configurar_dependencias_de_otro_modulo_no_abre_endpoint(http):
         "sin_version",
     ],
 )
-def test_controles_de_seguridad_se_aplican_antes_del_501(http, caso):
+def test_controles_de_seguridad_se_aplican_antes_del_404(http, caso):
     headers = dict(http.headers)
     if caso == "sin_jwt":
         headers.pop("Authorization")
@@ -165,7 +165,7 @@ def test_entrada_invalida_no_expone_datos_ni_consulta_cuentas(http, datos):
 def test_openapi_declara_barrera_sin_exito_ficticio(http):
     op = http.app.openapi()["paths"]["/api/v1/atm/transferencias"]["post"]
     assert op["operationId"] == "ATM05"
-    assert "501" in op["responses"] and not {"200", "201"} & op["responses"].keys()
+    assert "404" in op["responses"] and not {"200", "201"} & op["responses"].keys()
     assert op["security"] == [{"SesionATM": [], "APIKeyHeader": []}]
     schema = op["requestBody"]["content"]["application/json"]["schema"]
     assert set(schema["properties"]) == set(BODY)
@@ -185,7 +185,7 @@ def test_importe_json_no_pierde_centavos_por_float(http, monkeypatch):
         content=raw,
         headers={**http.headers, "Content-Type": "application/json"},
     )
-    assert r.status_code == 501
+    assert r.status_code == 404
     assert capturada[0].monto == Decimal("9999999999999999.99")
 
 

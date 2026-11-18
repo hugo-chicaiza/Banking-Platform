@@ -33,11 +33,11 @@ def ctx(monkeypatch: pytest.MonkeyPatch) -> Iterator[Contexto]:
     yield crear_contexto(monkeypatch, router)
 
 
-def test_caj09_sin_configuracion_responde_501_sin_tocar_bd(ctx: Contexto) -> None:
+def test_caj09_sin_configuracion_responde_404_sin_tocar_bd(ctx: Contexto) -> None:
     ctx.fake("buscar_por_registro_unico", None, trx_repo)
     r = ctx.cliente.post(f"{BASE}/jornadas/55/depositos", json=CUERPO_DEPOSITO)
-    assert r.status_code == 501
-    assert code(r) == "OPERACION_NO_HABILITADA"
+    assert r.status_code == 404
+    assert code(r) == "FUNCION_NO_DISPONIBLE"
     assert not ctx.llamadas["buscar_por_registro_unico"]
     ctx.conn.begin.assert_not_called()
     assert ctx.resultado_auditoria() == "Fallido"

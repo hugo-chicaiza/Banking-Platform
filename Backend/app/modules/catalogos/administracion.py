@@ -24,6 +24,7 @@ from app.core.api.errors import problema, traducir_error_bd
 from app.core.security.auth import Usuario
 from app.core.security.operador import auditar
 from app.modules.catalogos.confirmacion import CATALOGOS_CON_CONFIRMACION
+from app.modules.parametros.funciones import funcion_pendiente
 
 # numero: >= 0 con hasta 6 decimales (valor de comisión o seguro; en % si es Porcentaje)
 # opcion: uno de `opciones` (p. ej. Billete o Moneda)
@@ -706,6 +707,7 @@ def _validar_tasa(
         raise _invalido("Plazo máximo (meses)", "es obligatorio en tasas de crédito.")
 
 
+@funcion_pendiente
 def actualizar(
     conn: Connection,
     clave: str,

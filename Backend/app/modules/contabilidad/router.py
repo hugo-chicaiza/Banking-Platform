@@ -26,6 +26,7 @@ from app.modules.contabilidad.schemas import (
     FechaContable,
     PageAsiento,
 )
+from app.modules.parametros.funciones import funcion_pendiente
 
 from .plantillas import router as plantillas_router
 
@@ -102,7 +103,7 @@ router.include_router(_cuentas_contables_router)
 
 
 # ---------------------------------------------------------------------------
-# #206 · Alta, edición, estado y baja de cuentas (contrato: el servicio da 501)
+# #206: alta, edicion y estado funcionales; baja pendiente con contrato E0-09.
 # ---------------------------------------------------------------------------
 # Roles: solo CONTADOR. El AUDITOR (y el ADMIN) solo leen el plan con CON-03.
 _ROLES_ESCRITURA_CUENTAS = ["CONTADOR"]
@@ -126,8 +127,8 @@ _PENDIENTE: dict[int | str, dict[str, Any]] = {
     202: {"description": "Pendiente de aprobación. Sin cuerpo."}
 }
 _NO_HABILITADA = {
-    501: {
-        "description": "OPERACION_NO_HABILITADA: contrato aún sin lógica.",
+    404: {
+        "description": "FUNCION_NO_DISPONIBLE: funcion pendiente.",
         "content": RESPUESTAS_ERROR[500]["content"],
     }
 }
@@ -231,6 +232,7 @@ def cambiar_estado_cuenta_contable(
     },
     openapi_extra={"x-roles": _ROLES_ESCRITURA_CUENTAS},
 )
+@funcion_pendiente
 def eliminar_cuenta_contable(conn: Db, id_cuenta: IdCuentaContable) -> Response:
     """Elimina la cuenta: 204, o 202 si queda pendiente de aprobación."""
     service.eliminar_cuenta_contable(conn, id_cuenta)

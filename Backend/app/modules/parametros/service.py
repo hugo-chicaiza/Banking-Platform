@@ -16,6 +16,7 @@ from sqlalchemy.exc import DBAPIError
 from app.core.api.errors import problema, traducir_error_bd
 from app.core.security import audit
 from app.modules.parametros import repository as repo
+from app.modules.parametros.funciones import funcion_pendiente
 from app.modules.parametros.schemas import (
     AsociarComision,
     CobroComision,
@@ -211,6 +212,7 @@ def crear_comision(
     return respuesta
 
 
+@funcion_pendiente
 def solicitar_cambio_valor(
     conn: Connection, id_comision: int, cambios: dict[str, Any], actor: int
 ) -> None:

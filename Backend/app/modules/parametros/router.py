@@ -65,7 +65,7 @@ def crear_comision(
     "/comisiones/{idComision}",
     response_model=Comision,
     dependencies=_ESCRITURA,
-    responses={501: {"description": "Cambio de valor pendiente del flujo E1-10"}},
+    responses={404: {"description": "Comision no encontrada o FUNCION_NO_DISPONIBLE"}},
 )
 def actualizar_comision(
     id_comision: IdComision,

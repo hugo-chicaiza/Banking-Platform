@@ -37,6 +37,7 @@ from app.modules.atm.terminal_auth import (
     require_terminal,
     revalidar_terminal,
 )
+from app.modules.parametros.funciones import funcion_pendiente
 from app.modules.transacciones.dependencias import (
     DependenciasOperacion,
     dependencias_operacion,
@@ -347,7 +348,7 @@ async def leer_transferencia_atm(
 
 @router.post(
     "/transferencias",
-    status_code=501,
+    status_code=404,
     response_class=Response,
     operation_id="ATM05",
     description="Implementación parcial. Operación financiera deshabilitada hasta integrar G-06/AC-01 y resolver sus contratos pendientes.",
@@ -363,12 +364,13 @@ async def leer_transferencia_atm(
         },
     },
     responses={
-        501: {
+        404: {
             "description": "Operación financiera no habilitada.",
             "content": RESPUESTAS_ERROR[500]["content"],
         }
     },
 )
+@funcion_pendiente
 def transferir_atm(
     solicitud: Annotated[TransferenciaAutenticada, Depends(leer_transferencia_atm)],
     dependencias: Annotated[DependenciasOperacion, Depends(dependencias_operacion)],
@@ -405,7 +407,7 @@ async def leer_reverso_atm(
 
 @router.post(
     "/reversos",
-    status_code=501,
+    status_code=404,
     response_class=Response,
     operation_id="ATM08",
     description="ATM-08 parcial: reversos financieros deshabilitados hasta resolver contabilidad, idempotencia y reglas de efectivo.",
@@ -419,12 +421,13 @@ async def leer_reverso_atm(
         },
     },
     responses={
-        501: {
+        404: {
             "description": "Operación financiera no habilitada.",
             "content": RESPUESTAS_ERROR[500]["content"],
         }
     },
 )
+@funcion_pendiente
 def reversar_atm(
     solicitud: Annotated[ReversoAutenticado, Depends(leer_reverso_atm)],
     dependencias: Annotated[DependenciasOperacion, Depends(dependencias_operacion)],
@@ -462,7 +465,7 @@ async def leer_retiro_atm(
 
 @router.post(
     "/retiros",
-    status_code=501,
+    status_code=404,
     response_class=Response,
     operation_id="ATM03",
     description="ATM-03 parcial: retiros deshabilitados hasta resolver contabilidad y dispensación.",
@@ -476,12 +479,13 @@ async def leer_retiro_atm(
         },
     },
     responses={
-        501: {
+        404: {
             "description": "Operación financiera no habilitada.",
             "content": RESPUESTAS_ERROR[500]["content"],
         }
     },
 )
+@funcion_pendiente
 def retirar_atm(
     solicitud: Annotated[RetiroAutenticado, Depends(leer_retiro_atm)],
     dependencias: Annotated[DependenciasOperacion, Depends(dependencias_operacion)],

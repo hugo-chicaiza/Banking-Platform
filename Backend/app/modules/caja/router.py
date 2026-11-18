@@ -44,6 +44,7 @@ from app.modules.caja.schemas import (
     ReversoRequest,
     SeriesBilletesRequest,
 )
+from app.modules.parametros.funciones import funcion_pendiente
 from app.modules.transacciones.dependencias import (
     DependenciasOperacion,
     dependencias_operacion,
@@ -532,6 +533,7 @@ def cerrar_jornada(
     operation_id="CAJ09",
     dependencies=[Depends(require_permiso("caja:operar"))],
 )
+@funcion_pendiente
 def registrar_deposito(
     request: Request,
     response: Response,
@@ -611,6 +613,7 @@ def registrar_series(
     operation_id="CAJ11",
     dependencies=[Depends(require_permiso("caja:operar"))],
 )
+@funcion_pendiente
 def registrar_retiro(
     request: Request,
     response: Response,

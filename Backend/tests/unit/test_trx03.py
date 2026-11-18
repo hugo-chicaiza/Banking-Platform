@@ -220,11 +220,11 @@ def test_reverso_comparte_instante_con_el_calendario(
     assert ctx.llamadas["insertar_transaccion"][0][0]["fecha_hora"] == instante
 
 
-def test_trx03_sin_configuracion_501(ctx: Contexto) -> None:
+def test_trx03_sin_configuracion_404(ctx: Contexto) -> None:
     respuesta = solicitar_reverso(ctx)
 
-    assert respuesta.status_code == 501
-    assert code(respuesta) == "OPERACION_NO_HABILITADA"
+    assert respuesta.status_code == 404
+    assert code(respuesta) == "FUNCION_NO_DISPONIBLE"
     ctx.conn.begin.assert_not_called()
     assert ctx.eventos[-1].resultado == "Fallido"
 
