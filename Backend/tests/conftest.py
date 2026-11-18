@@ -40,3 +40,27 @@ def _sin_workos_real_en_seguridad(monkeypatch):
         raise httpx.ConnectError("WorkOS no disponible en pruebas")
 
     monkeypatch.setattr(service, "get_workos", caido)
+
+
+@pytest.fixture(autouse=True)
+def _sin_integraciones_reales_en_aprobaciones(monkeypatch):
+    import httpx
+    from sqlalchemy.exc import SQLAlchemyError
+
+    from app.modules.aprobaciones import identidad, scheduler
+    from app.modules.parametros import funciones
+
+    def caido():
+        raise httpx.ConnectError("WorkOS real no permitido en suites controladas")
+
+    def sin_conexion_implicita():
+        raise SQLAlchemyError(
+            "La lectura de banderas debe instalar su conexion de prueba explicita"
+        )
+
+    async def sin_tareas():
+        return
+
+    monkeypatch.setattr(identidad, "get_workos", caido)
+    monkeypatch.setattr(scheduler, "ciclo", sin_tareas)
+    monkeypatch.setattr(funciones, "cooperativa", sin_conexion_implicita)

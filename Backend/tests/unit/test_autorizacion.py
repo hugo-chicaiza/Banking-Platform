@@ -45,6 +45,14 @@ _VALORES_PATH = {
 
 # Roles de cada tarea (GitHubProject_Files)
 ROLES_POR_RUTA: dict[tuple[str, str], tuple[str, ...]] = {
+    # E0-08 usa permisos efectivos por operacion y propiedad; no un rol fijo.
+    ("GET", "/api/v1/aprobaciones"): AUTH,
+    ("POST", "/api/v1/aprobaciones"): AUTH,
+    ("GET", "/api/v1/aprobaciones/accesos"): AUTH,
+    ("GET", "/api/v1/aprobaciones/{idSolicitud}"): AUTH,
+    ("POST", "/api/v1/aprobaciones/{idSolicitud}/aprobar"): AUTH,
+    ("POST", "/api/v1/aprobaciones/{idSolicitud}/rechazar"): AUTH,
+    ("POST", "/api/v1/aprobaciones/{idSolicitud}/cancelar"): AUTH,
     ("POST", "/api/v1/boveda/bovedas/{idBoveda}/solicitudes-movimiento"): (
         "SUPERVISOR",
         "ADMIN",
@@ -561,9 +569,19 @@ def test_rol_fuera_de_la_tarea_recibe_403(client, ruta, roles):
 
 
 @pytest.mark.parametrize("ruta", list(ROLES_POR_RUTA), ids=" ".join)
-def test_roles_de_la_tarea_pasan_el_control(client, ruta):
+def test_roles_de_la_tarea_pasan_el_control(client, ruta, monkeypatch):
     roles = ROLES_POR_RUTA[ruta]
-    simular_sesion(app, usuario_con_roles(*roles))
+    usuario = usuario_con_roles(*roles)
+    if ruta[1].startswith("/api/v1/aprobaciones"):
+        from app.modules.aprobaciones import identidad
+
+        # Esta matriz comprueba el guarda comun. La revalidacion WorkOS y el
+        # permiso por operacion se prueban en las suites especificas de E0-08.
+        usuario = replace(usuario, id_organizacion="org_fixture_autorizacion")
+        monkeypatch.setattr(
+            identidad, "get_organizacion_id", lambda: usuario.id_organizacion
+        )
+    simular_sesion(app, usuario)
 
     r = _llamar(client, *ruta)
 
