@@ -15,6 +15,7 @@ from sqlalchemy.exc import DBAPIError
 
 from app.core.api.errors import problema, traducir_error_bd
 from app.core.security import audit
+from app.core.security.auth import Usuario
 from app.modules.parametros import repository as repo
 from app.modules.parametros.funciones import funcion_pendiente
 from app.modules.parametros.schemas import (
@@ -212,9 +213,13 @@ def crear_comision(
     return respuesta
 
 
-@funcion_pendiente
 def solicitar_cambio_valor(
-    conn: Connection, id_comision: int, cambios: dict[str, Any], actor: int
+    conn: Connection,
+    id_comision: int,
+    cambios: dict[str, Any],
+    actor: int,
+    *,
+    usuario: Usuario | None = None,
 ) -> None:
     """Punto de integración E1-10 #367/E0-09: falta el servicio de solicitudes.
 
@@ -222,15 +227,22 @@ def solicitar_cambio_valor(
     con 202, sin actualizar Comisiones. El manejador de aprobación crea la nueva
     vigencia. No sustituir esta dependencia por un UPDATE ni un 202 sin solicitud.
     """
-    raise problema(
-        501,
-        "APROBACION_PARAMETRO_NO_DISPONIBLE",
-        "El cambio de valor requiere el flujo de aprobación de E1-10, aún no disponible.",
-    )
+    with funcion_pendiente("FUNCION_PARAMETRO_APROBACION", conn, usuario):
+        raise problema(
+            501,
+            "APROBACION_PARAMETRO_NO_DISPONIBLE",
+            "El cambio de valor requiere el flujo de aprobación de E1-10, aún no disponible.",
+        )
 
 
 def actualizar_comision(
-    conn: Connection, id_: int, entrada: ComisionUpdate, actor: int, ip: str | None
+    conn: Connection,
+    id_: int,
+    entrada: ComisionUpdate,
+    actor: int,
+    ip: str | None,
+    *,
+    usuario: Usuario | None = None,
 ) -> Comision:
     cambios = entrada.model_dump(exclude_unset=True)
     with _escribir(conn, "Comisiones", actor, ip, id_) as evento:
@@ -244,7 +256,7 @@ def actualizar_comision(
         if (
             "valor" in cambios and cambios["valor"] != fila["valor"]
         ) or "vigencia_desde" in cambios:
-            solicitar_cambio_valor(conn, id_, cambios, actor)
+            solicitar_cambio_valor(conn, id_, cambios, actor, usuario=usuario)
         repo.actualizar_comision(conn, id_, cambios)
         respuesta = _respuesta(conn, _comision(conn, id_))
     return respuesta

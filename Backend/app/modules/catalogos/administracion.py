@@ -707,7 +707,6 @@ def _validar_tasa(
         raise _invalido("Plazo máximo (meses)", "es obligatorio en tasas de crédito.")
 
 
-@funcion_pendiente
 def actualizar(
     conn: Connection,
     clave: str,
@@ -724,13 +723,16 @@ def actualizar(
     # E1-09 AC 5: antes y después de cada campo que cambia (lo demás no cambia)
     antes = {k: actual.get(k) for k in sorted(cambios)}
     despues = {k: cambios[k] for k in sorted(cambios)}
-    with auditar(
-        "ACTUALIZAR",
-        catalogo.tabla,
-        usuario,
-        ip,
-        f"CAT-EDITAR {clave} antes={_json(antes)} despues={_json(despues)}",
-        id_,
+    with (
+        funcion_pendiente("FUNCION_PARAMETRO_APROBACION", conn, usuario),
+        auditar(
+            "ACTUALIZAR",
+            catalogo.tabla,
+            usuario,
+            ip,
+            f"CAT-EDITAR {clave} antes={_json(antes)} despues={_json(despues)}",
+            id_,
+        ),
     ):
         try:
             # E1-12: el catálogo legado tampoco puede saltarse la aprobación.
