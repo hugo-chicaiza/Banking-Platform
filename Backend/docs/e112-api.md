@@ -20,11 +20,9 @@ respuestas (Decimal en Python). El OpenAPI generado contiene los schemas complet
 | PATCH | `/exoneraciones/{idExoneracion}` | 200, actualización parcial de regla |
 
 Las lecturas exigen sesión y roles ADMIN/SUPERVISOR/ASESOR, igual que la lectura de
-administración de catálogos. Las escrituras exigen **`require_permiso("catalogos:editar")`**,
-el permiso vigente para estos parámetros en `core/security/permisos.py` (asignado
-inicialmente a ADMIN). `PAR-EDITAR` es la etiqueta funcional del issue; no se agregó
-un slug paralelo que WorkOS aún no conoce. Un rol ADMIN sin permiso no escribe;
-un usuario con el permiso puede escribir independientemente de su rol.
+administración de catálogos. Las escrituras exigen el rol **ADMIN**: no hay un permiso de
+WorkOS propio para parámetros (ver `core/security/permisos.py`). `PAR-EDITAR` es la
+etiqueta funcional del issue, no un permiso.
 
 `require_auth` exige el vínculo interno activo; `UsuarioAuditoria` obtiene el
 entero de la sesión y lo pasa al servicio/repositorio. El cliente **no puede enviar

@@ -1041,7 +1041,7 @@ def test_require_roles_permite_con_el_rol(workos):
 def _app_con_permiso() -> TestClient:
     rutas = APIRouter(route_class=ProblemDetailsRoute)
 
-    @rutas.post("/editar", dependencies=[Depends(require_permiso("catalogos:editar"))])
+    @rutas.post("/editar", dependencies=[Depends(require_permiso("prd-editar"))])
     def editar() -> dict[str, bool]:
         return {"ok": True}
 
@@ -1052,17 +1052,18 @@ def _app_con_permiso() -> TestClient:
 
 def test_require_permiso_lo_decide_el_permiso_no_el_rol(workos):
     # Escribir depende del permiso de WorkOS: ADMIN sin él no pasa; CAJERO con él sí
-    workos.roles, workos.permisos = ["org-admin"], ["productos:editar"]
+    workos.roles, workos.permisos = ["org-admin"], ["prd-exportar"]
     r = _app_con_permiso().post("/editar", headers=_con_sesion())
     assert r.status_code == 403 and r.json()["code"] == "SIN_PERMISO"
 
-    workos.roles, workos.permisos = ["org-cajero"], ["catalogos:editar"]
+    workos.roles, workos.permisos = ["org-cajero"], ["prd-editar"]
     assert _app_con_permiso().post("/editar", headers=_con_sesion()).status_code == 200
 
 
 def test_require_permiso_rechaza_permisos_desconocidos():
-    with pytest.raises(ValueError, match="prd-editar"):
-        require_permiso("prd-editar")
+    # Los permisos por módulo se retiraron de WorkOS: pedirlos es un error de código
+    with pytest.raises(ValueError, match="productos:editar"):
+        require_permiso("productos:editar")
 
 
 def test_require_roles_rechaza_roles_desconocidos():

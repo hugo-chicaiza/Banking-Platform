@@ -37,8 +37,8 @@ def test_sesion_obligatoria(api, metodo, ruta):
 
 
 @pytest.mark.parametrize("metodo,ruta", [(m, r) for m, r in RUTAS if m != "GET"])
-def test_rol_admin_sin_permiso_no_escribe(api, metodo, ruta):
-    simular_sesion(api, replace(usuario_con_roles("ADMIN"), permisos=()))
+def test_otro_rol_no_escribe(api, metodo, ruta):
+    simular_sesion(api, usuario_con_roles("SUPERVISOR", "ASESOR", "CONTADOR"))
     r = TestClient(api).request(metodo, BASE + ruta, json={})
     assert r.status_code == 403
     assert r.json()["code"] == "SIN_PERMISO"
@@ -104,24 +104,24 @@ def test_contrato_openapi_sin_actor_en_entradas(api):
     )
 
 
-def test_escritura_por_permiso_independiente_del_rol(api, monkeypatch):
+def test_escritura_solo_admin(api, monkeypatch):
     from app.modules.parametros import service
 
     def permitido(*args):
         raise problema(422, "LLEGO_AL_SERVICIO", "Acceso verificado.")
 
-    simular_sesion(
-        api, replace(usuario_con_roles("ASESOR"), permisos=("catalogos:editar",))
-    )
     monkeypatch.setattr(service, "crear_exoneracion", permitido)
-    r = TestClient(api).post(
-        BASE + "/exoneraciones",
-        json={
-            "idComision": 1,
-            "porcentajeExonerado": 100,
-            "vigenciaDesde": "2099-01-01",
-        },
-    )
+    cuerpo = {
+        "idComision": 1,
+        "porcentajeExonerado": 100,
+        "vigenciaDesde": "2099-01-01",
+    }
+    # Ningún permiso de WorkOS sustituye al rol ADMIN en esta escritura
+    simular_sesion(api, replace(usuario_con_roles("ASESOR"), permisos=("prd-editar",)))
+    r = TestClient(api).post(BASE + "/exoneraciones", json=cuerpo)
+    assert r.status_code == 403
+    simular_sesion(api, usuario_con_roles("ADMIN"))
+    r = TestClient(api).post(BASE + "/exoneraciones", json=cuerpo)
     assert r.status_code == 422 and r.json()["code"] == "LLEGO_AL_SERVICIO"
 
 

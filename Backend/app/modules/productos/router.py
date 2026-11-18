@@ -1,7 +1,7 @@
 """Catalogo de productos con roles y permisos de la sesion WorkOS.
 
-ADMIN, SUPERVISOR y ASESOR consultan (por rol); escribir exige productos:editar y la
-ficha imprimible productos:exportar (permisos de WorkOS, ver core/security/permisos.py).
+Consultar exige prd-consultar, escribir prd-editar y la ficha imprimible además
+prd-exportar (permisos generales de WorkOS, ver core/security/permisos.py).
 Solo se elimina un Borrador sin uso.
 """
 
@@ -17,7 +17,7 @@ from app.core.api.errors import (
 )
 from app.core.api.middleware import ip_cliente
 from app.core.database.db import cooperativa
-from app.core.security.auth import Usuario, require_auth, require_permiso, require_roles
+from app.core.security.auth import Usuario, require_auth, require_permiso
 from app.modules.productos import service, vinculos
 from app.modules.productos.schemas import (
     CupoCanalVista,
@@ -36,7 +36,7 @@ from app.modules.productos.schemas import (
     VinculosVista,
 )
 
-_LECTURA = ["ADMIN", "SUPERVISOR", "ASESOR"]
+_CONSULTA = {"x-permissions": ["prd-consultar"]}
 _ESCRITURA = ["ADMIN"]
 
 router = APIRouter(
@@ -50,13 +50,13 @@ Db = Annotated[Connection, Depends(cooperativa)]
 IdPath = Annotated[int, Path(ge=1, le=2_147_483_647)]
 
 
-Lector = Annotated[Usuario, Depends(require_roles(*_LECTURA))]
-Administrador = Annotated[Usuario, Depends(require_permiso("productos:editar"))]
+Lector = Annotated[Usuario, Depends(require_permiso("prd-consultar"))]
+Administrador = Annotated[Usuario, Depends(require_permiso("prd-editar"))]
 
 
 def _exportador(
     usuario: Lector,
-    _: Annotated[Usuario, Depends(require_permiso("productos:exportar"))],
+    _: Annotated[Usuario, Depends(require_permiso("prd-exportar"))],
 ) -> Usuario:
     return usuario
 
@@ -68,7 +68,7 @@ Exportador = Annotated[Usuario, Depends(_exportador)]
     "",
     operation_id="PRDListar",
     response_model=list[Producto],
-    openapi_extra={"x-roles": _LECTURA},
+    openapi_extra=_CONSULTA,
 )
 def listar_productos(_: Lector, conn: Db) -> list[Producto]:
     """Todos los productos (activos e inactivos) con todos sus subproductos."""
@@ -80,7 +80,7 @@ def listar_productos(_: Lector, conn: Db) -> list[Producto]:
     "/tipos",
     operation_id="PRDTipos",
     response_model=list[TipoProductoInfo],
-    openapi_extra={"x-roles": _LECTURA},
+    openapi_extra=_CONSULTA,
 )
 def listar_tipos(_: Lector, conn: Db) -> list[TipoProductoInfo]:
     """Tipos de producto que trae el software (no se crean desde la API)."""
@@ -92,8 +92,7 @@ def listar_tipos(_: Lector, conn: Db) -> list[TipoProductoInfo]:
     operation_id="PRDSubFichaImprimible",
     response_model=FichaSubProducto,
     openapi_extra={
-        "x-roles": _LECTURA,
-        "x-permissions": ["productos:exportar"],
+        "x-permissions": ["prd-consultar", "prd-exportar"],
     },
 )
 def ficha_imprimible(
@@ -106,7 +105,7 @@ def ficha_imprimible(
     "/subproductos/{id_sub_producto}/ficha",
     operation_id="PRDSubFicha",
     response_model=FichaSubProducto,
-    openapi_extra={"x-roles": _LECTURA},
+    openapi_extra=_CONSULTA,
 )
 def ficha_subproducto(id_sub_producto: IdPath, _: Lector, conn: Db) -> FichaSubProducto:
     """Lo que el asesor lee al cliente: elegibilidad, cupos, restricciones, tasas,
@@ -118,7 +117,7 @@ def ficha_subproducto(id_sub_producto: IdPath, _: Lector, conn: Db) -> FichaSubP
     "/{id_producto}",
     operation_id="PRDObtener",
     response_model=Producto,
-    openapi_extra={"x-roles": _LECTURA},
+    openapi_extra=_CONSULTA,
 )
 def obtener_producto(id_producto: IdPath, _: Lector, conn: Db) -> Producto:
     return service.obtener_producto(conn, id_producto)
@@ -143,7 +142,7 @@ def crear_producto(
     "/subproductos/{id_sub_producto}/vinculos",
     operation_id="PRDSubVinculos",
     response_model=VinculosVista,
-    openapi_extra={"x-roles": _LECTURA},
+    openapi_extra=_CONSULTA,
 )
 def obtener_vinculos_subproducto(
     id_sub_producto: IdPath, _: Lector, conn: Db
@@ -179,7 +178,7 @@ def guardar_vinculos_subproducto(
     "/subproductos/{id_sub_producto}/cupos",
     operation_id="PRDSubCupos",
     response_model=list[CupoCanalVista],
-    openapi_extra={"x-roles": _LECTURA},
+    openapi_extra=_CONSULTA,
 )
 def listar_cupos(id_sub_producto: IdPath, _: Lector, conn: Db) -> list[CupoCanalVista]:
     """Cuentas y tarjetas: máximos por canal (diario, mensual, por transacción, número)."""
@@ -209,7 +208,7 @@ def guardar_cupos(
     "/subproductos/{id_sub_producto}/restricciones",
     operation_id="PRDSubRestricciones",
     response_model=RestriccionesVista,
-    openapi_extra={"x-roles": _LECTURA},
+    openapi_extra=_CONSULTA,
 )
 def obtener_restricciones(
     id_sub_producto: IdPath, _: Lector, conn: Db
@@ -295,7 +294,7 @@ def crear_subproducto(
     "/{id_producto}/vinculos",
     operation_id="PRDVinculos",
     response_model=VinculosVista,
-    openapi_extra={"x-roles": _LECTURA},
+    openapi_extra=_CONSULTA,
 )
 def obtener_vinculos_producto(
     id_producto: IdPath, _: Lector, conn: Db

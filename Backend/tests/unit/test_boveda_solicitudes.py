@@ -288,7 +288,7 @@ def test_admin_resuelve_solicitud_sin_mover_efectivo(ctx, accion, actor, estado)
     assert not ctx.state["movimientos"]
 
 
-def test_admin_global_usa_agencia_del_recurso_y_permisos_explicitos(ctx):
+def test_admin_global_usa_agencia_del_recurso_y_rol_operador(ctx):
     from dataclasses import replace
 
     ctx.como("ADMIN", actor=7, agencia=None)
@@ -296,7 +296,7 @@ def test_admin_global_usa_agencia_del_recurso_y_permisos_explicitos(ctx):
     assert crear(ctx).status_code == 201
     ctx.como("ADMIN", actor=9, agencia=None)
     assert ctx.client.get(f"{BASE}/solicitudes-movimiento/1").status_code == 200
-    ctx.usuario = replace(ctx.usuario, permisos=())
+    ctx.usuario = replace(ctx.usuario, roles=("CAJERO",))
     assert aprobar(ctx).json()["code"] == "SIN_PERMISO"
     assert not ctx.state["movimientos"]
     ctx.como("ADMIN", actor=9, agencia=None)

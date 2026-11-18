@@ -11,7 +11,6 @@ from app.core.security.auth import (
     Usuario,
     UsuarioAuditoria,
     require_auth,
-    require_permiso,
     require_roles,
 )
 from app.modules.cuentas import service
@@ -34,7 +33,7 @@ router = APIRouter(
 )
 
 Db = Annotated[Connection, Depends(cooperativa)]
-AperturadorCuenta = Annotated[Usuario, Depends(require_permiso("cuentas:abrir"))]
+AperturadorCuenta = Annotated[Usuario, Depends(require_roles("ASESOR", "ADMIN"))]
 
 # ---------------------------------------------------------------------------
 # CTA-01 · POST /api/v1/cuentas
@@ -175,8 +174,10 @@ _ROLES_ESTADO_CUPOS = ["ASESOR", "SUPERVISOR", "ADMIN"]
 _ROLES_MODIFICAR_CUPO = ["SUPERVISOR", "ADMIN"]
 _ROLES_HISTORIAL_CUPO = ["SUPERVISOR", "AUDITOR", "ADMIN"]
 LectorCupos = Annotated[Usuario, Depends(require_roles(*_ROLES_ESTADO_CUPOS))]
-GestorEstado = Annotated[Usuario, Depends(require_permiso("cuentas:estado"))]
-GestorCupo = Annotated[Usuario, Depends(require_permiso("cuentas:cupos"))]
+GestorEstado = Annotated[
+    Usuario, Depends(require_roles("ASESOR", "SUPERVISOR", "ADMIN"))
+]
+GestorCupo = Annotated[Usuario, Depends(require_roles("SUPERVISOR", "ADMIN"))]
 AuditorCupo = Annotated[Usuario, Depends(require_roles(*_ROLES_HISTORIAL_CUPO))]
 IdRecurso = Annotated[int, Path(gt=0, le=2147483647)]
 _gestion_router = APIRouter(

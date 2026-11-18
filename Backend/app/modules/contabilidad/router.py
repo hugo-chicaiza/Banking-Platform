@@ -6,13 +6,7 @@ from sqlalchemy import Connection
 from app.core.api.errors import RESPUESTAS_ERROR, ProblemDetailsRoute, solo_parametros
 from app.core.api.middleware import ip_cliente
 from app.core.database.db import cooperativa
-from app.core.security.auth import (
-    Usuario,
-    UsuarioActual,
-    require_auth,
-    require_permiso,
-    require_roles,
-)
+from app.core.security.auth import Usuario, UsuarioActual, require_auth, require_roles
 from app.core.security.operador import IdInterno, auditar, exigir_id_interno
 from app.modules.auth.agencias import agencia_consulta_asientos
 from app.modules.contabilidad import corte_workos, importaciones, service
@@ -111,7 +105,7 @@ _cuentas_escritura_router = APIRouter(
     route_class=ProblemDetailsRoute,
     responses=RESPUESTAS_ERROR,
     dependencies=[
-        Depends(require_permiso("contabilidad:editar")),
+        Depends(require_roles("CONTADOR")),
         Depends(solo_parametros()),
     ],
 )
