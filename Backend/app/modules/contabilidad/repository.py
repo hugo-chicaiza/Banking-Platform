@@ -104,6 +104,138 @@ def listar_cuentas_contables(
     return [dict(f) for f in conn.execute(text(sql), params).mappings().all()]
 
 
+# #206 · Alta y cambio de estado de cuentas contables
+# CodigoElemento y TipoCuenta son columnas calculadas de LEFT(CodigoCuenta, 1): la
+# hija los hereda del padre porque su código empieza con el del padre. No se insertan.
+
+_CUENTA = """
+    SELECT IdCuentaContable  AS id_cuenta_contable,
+           CodigoCuenta      AS codigo_cuenta,
+           NombreCuenta      AS nombre_cuenta,
+           Naturaleza        AS naturaleza,
+           TipoCuenta        AS tipo_cuenta,
+           IdCuentaSuperior  AS id_cuenta_superior,
+           EsImputable       AS es_imputable,
+           Saldo             AS saldo,
+           Estado            AS estado,
+           EsCuentaValuacion AS es_cuenta_valuacion
+    FROM Contabilidad.CuentasContables
+"""
+
+
+def obtener_cuenta(conn: Connection, id_cuenta: int) -> dict[str, Any] | None:
+    """Una cuenta por id, o None. Sin bloqueo: para leer después de escribir."""
+    return _one(conn, _CUENTA + " WHERE IdCuentaContable = :id", {"id": id_cuenta})
+
+
+def bloquear_cuenta(conn: Connection, id_cuenta: int) -> dict[str, Any] | None:
+    """Una cuenta por id, bloqueada hasta el fin de la transacción (UPDLOCK,
+    HOLDLOCK): nadie cambia su saldo, estado o hijas mientras se valida."""
+    return _one(
+        conn,
+        _CUENTA + " WITH (UPDLOCK, HOLDLOCK) WHERE IdCuentaContable = :id",
+        {"id": id_cuenta},
+    )
+
+
+def existe_codigo(conn: Connection, codigo: str) -> bool:
+    """Si ya hay una cuenta con ese código. HOLDLOCK bloquea el rango del índice
+    único hasta el commit, así otra transacción no inserta el mismo código entre
+    esta lectura y el INSERT (si igual choca, el índice único responde 2601/2627)."""
+    fila = _one(
+        conn,
+        """
+        SELECT 1 AS existe
+        FROM Contabilidad.CuentasContables WITH (UPDLOCK, HOLDLOCK)
+        WHERE CodigoCuenta = :codigo
+        """,
+        {"codigo": codigo},
+    )
+    return fila is not None
+
+
+def tiene_movimientos(conn: Connection, id_cuenta: int) -> bool:
+    """Si la cuenta tiene filas en MovimientosContables. HOLDLOCK bloquea el rango
+    de IX_MovimientosContables_Cuenta hasta el commit: nadie registra un movimiento
+    en la cuenta entre esta lectura y el cambio de EsImputable."""
+    fila = _one(
+        conn,
+        """
+        SELECT TOP (1) 1 AS existe
+        FROM Contabilidad.MovimientosContables WITH (HOLDLOCK)
+        WHERE IdCuentaContable = :id
+        """,
+        {"id": id_cuenta},
+    )
+    return fila is not None
+
+
+def desmarcar_imputable(conn: Connection, id_cuenta: int) -> int:
+    """Pone EsImputable = 0 y FechaModificacion (hora de Ecuador); filas afectadas."""
+    resultado = conn.execute(
+        text(
+            """
+            UPDATE Contabilidad.CuentasContables
+            SET EsImputable = 0,
+                FechaModificacion = CONVERT(
+                    datetime2,
+                    SYSDATETIMEOFFSET() AT TIME ZONE 'SA Pacific Standard Time'
+                )
+            WHERE IdCuentaContable = :id AND EsImputable = 1
+            """
+        ),
+        {"id": id_cuenta},
+    )
+    return resultado.rowcount
+
+
+def insertar_cuenta(conn: Connection, datos: dict[str, Any]) -> int:
+    """Inserta la cuenta con Estado = 1 y Saldo = 0; devuelve su IdCuentaContable.
+
+    `datos`: codigo, nombre, naturaleza, id_superior, imputable, valuacion.
+    La tabla tiene el trigger trg_CuentasContables_PadreNoImputable: SQL Server no
+    admite OUTPUT sin INTO sobre una tabla con triggers (error 334), por eso el id
+    pasa por una variable de tabla.
+    """
+    return int(
+        conn.execute(
+            text(
+                """
+                SET NOCOUNT ON;
+                DECLARE @ids TABLE (IdCuentaContable int);
+                INSERT INTO Contabilidad.CuentasContables
+                    (CodigoCuenta, NombreCuenta, Naturaleza, IdCuentaSuperior,
+                     Saldo, Estado, EsImputable, EsCuentaValuacion)
+                OUTPUT INSERTED.IdCuentaContable INTO @ids
+                VALUES (:codigo, :nombre, :naturaleza, :id_superior,
+                        0, 1, :imputable, :valuacion);
+                SELECT IdCuentaContable FROM @ids;
+                """
+            ),
+            datos,
+        ).scalar_one()
+    )
+
+
+def actualizar_estado_cuenta(conn: Connection, id_cuenta: int, activa: bool) -> int:
+    """Cambia el bit Estado y FechaModificacion (hora de Ecuador); filas afectadas."""
+    resultado = conn.execute(
+        text(
+            """
+            UPDATE Contabilidad.CuentasContables
+            SET Estado = :estado,
+                FechaModificacion = CONVERT(
+                    datetime2,
+                    SYSDATETIMEOFFSET() AT TIME ZONE 'SA Pacific Standard Time'
+                )
+            WHERE IdCuentaContable = :id
+            """
+        ),
+        {"id": id_cuenta, "estado": 1 if activa else 0},
+    )
+    return resultado.rowcount
+
+
 # CON-04 / CON-05 · Asientos contables
 
 # Lista blanca del sort de CON-04: campo del contrato -> columna. Solo estos nombres

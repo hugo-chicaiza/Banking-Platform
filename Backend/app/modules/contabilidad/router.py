@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, Path, Query, Request, Response
 from sqlalchemy import Connection
 
 from app.core.api.errors import RESPUESTAS_ERROR, ProblemDetailsRoute, solo_parametros
+from app.core.api.middleware import ip_cliente
 from app.core.database.db import cooperativa
 from app.core.security.auth import (
     Usuario,
@@ -141,7 +142,12 @@ _NO_EXISTE = {404: _error(404, "CUENTA_NO_ENCONTRADA: la cuenta no existe.")}
     responses={
         **_PENDIENTE,
         404: _error(404, "CUENTA_SUPERIOR_NO_ENCONTRADA: la cuenta padre no existe."),
-        409: _error(409, "CODIGO_DUPLICADO: ya existe una cuenta con ese código."),
+        409: _error(
+            409,
+            "CODIGO_DUPLICADO: ya existe una cuenta con ese código. "
+            "CUENTA_SUPERIOR_CON_MOVIMIENTOS: el padre es imputable y tiene "
+            "movimientos o saldo; si no los tiene, se marca como no imputable.",
+        ),
         422: _error(
             422,
             "CODIGO_NO_CORRESPONDE_AL_PADRE: el código no empieza con el del padre.",
@@ -150,9 +156,13 @@ _NO_EXISTE = {404: _error(404, "CUENTA_NO_ENCONTRADA: la cuenta no existe.")}
     },
     openapi_extra={"x-roles": _ROLES_ESCRITURA_CUENTAS},
 )
-def crear_cuenta_contable(conn: Db, datos: CuentaContableCrear) -> Any:
+def crear_cuenta_contable(
+    conn: Db, datos: CuentaContableCrear, request: Request, usuario: UsuarioActual
+) -> Any:
     """Alta de una cuenta del plan: 201 con la cuenta o 202 si queda pendiente."""
-    return service.crear_cuenta_contable(conn, datos)
+    return service.crear_cuenta_contable(
+        conn, usuario, ip_cliente(request.scope), datos
+    )
 
 
 @_cuentas_escritura_router.patch(
@@ -196,10 +206,16 @@ def editar_cuenta_contable(
     openapi_extra={"x-roles": _ROLES_ESCRITURA_CUENTAS},
 )
 def cambiar_estado_cuenta_contable(
-    conn: Db, id_cuenta: IdCuentaContable, datos: CuentaContableEstado
+    conn: Db,
+    id_cuenta: IdCuentaContable,
+    datos: CuentaContableEstado,
+    request: Request,
+    usuario: UsuarioActual,
 ) -> Any:
     """Activa o desactiva la cuenta: 200 con la cuenta o 202 si queda pendiente."""
-    return service.cambiar_estado_cuenta_contable(conn, id_cuenta, datos)
+    return service.cambiar_estado_cuenta_contable(
+        conn, usuario, ip_cliente(request.scope), id_cuenta, datos
+    )
 
 
 @_cuentas_escritura_router.delete(

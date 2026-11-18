@@ -6,8 +6,11 @@ from typing import Any, NoReturn
 
 from fastapi import HTTPException
 from sqlalchemy import Connection, text
+from sqlalchemy.exc import DBAPIError
 
-from app.core.api.errors import problema
+from app.core.api.errors import problema, traducir_error_bd
+from app.core.security.auth import Usuario
+from app.core.security.operador import auditar
 from app.modules.contabilidad import repository
 from app.modules.contabilidad.schemas import (
     CuentaContableCrear,
@@ -121,8 +124,19 @@ def listar_cuentas_contables(
     ]
 
 
-# #206 · Alta, edición, estado y baja de cuentas: solo contrato. Hasta que exista la
-# lógica (y el flujo de aprobación que da los 202) responden 501.
+# #206 · Alta, edición, estado y baja de cuentas. Alta y estado tienen lógica; edición
+# y baja siguen solo con contrato (501). Aún no hay flujo de aprobación (202).
+
+# Las cuentas que se crean por API son auxiliares: código de exactamente 8 dígitos.
+NIVEL_AUXILIAR = 8
+
+_TABLA_CUENTAS = "Contabilidad.CuentasContables"
+_DUPLICADO_RE = re.compile(r"\((2627|2601)\)")
+# THROW de trg_CuentasContables_PadreNoImputable cuando el código no corresponde al
+# padre. El 51100 (padre imputable) no tiene código propio en el contrato: lo
+# traduce traducir_error_bd (422 DB_51100, mensaje genérico).
+_CODIGO_PADRE_BD = 56010
+_DB_NUMERO_RE = re.compile(r"\((\d+)\) \(SQL\w+\)")
 
 
 def _no_habilitada() -> HTTPException:
@@ -133,13 +147,124 @@ def _no_habilitada() -> HTTPException:
     )
 
 
-def crear_cuenta_contable(conn: Connection, datos: CuentaContableCrear) -> NoReturn:
-    """Alta de cuenta: 201 con la cuenta o 202 si queda pendiente de aprobación.
+def _codigo_no_corresponde() -> HTTPException:
+    return problema(
+        422,
+        "CODIGO_NO_CORRESPONDE_AL_PADRE",
+        "El código no corresponde a la cuenta superior.",
+    )
+
+
+def _codigo_duplicado() -> HTTPException:
+    return problema(409, "CODIGO_DUPLICADO", "Ya existe una cuenta con ese código.")
+
+
+def _padre_con_movimientos() -> HTTPException:
+    return problema(
+        409,
+        "CUENTA_SUPERIOR_CON_MOVIMIENTOS",
+        "La cuenta superior tiene movimientos o saldo.",
+    )
+
+
+def _cuenta_respuesta(fila: dict[str, Any]) -> dict[str, Any]:
+    """Fila de la BD -> CuentaContable de CON-03 (estado bit como Activo/Inactivo)."""
+    respuesta = {k: v for k, v in fila.items() if k != "es_cuenta_valuacion"}
+    respuesta["estado"] = "Activo" if fila["estado"] else "Inactivo"
+    return respuesta
+
+
+def _error_bd_cuenta(exc: DBAPIError) -> HTTPException:
+    """Errores de la BD al escribir una cuenta -> códigos del contrato.
+
+    Solo se lee exc.orig para sacar el número; str(exc) trae SQL y parámetros.
+    """
+    original = str(exc.orig)
+    if _DUPLICADO_RE.search(original):
+        return _codigo_duplicado()
+    if "CK_CuentasContables_InactivaSinSaldo" in original:
+        return _cuenta_con_saldo()
+    numeros = {int(n) for n in _DB_NUMERO_RE.findall(original)}
+    if _CODIGO_PADRE_BD in numeros:
+        return _codigo_no_corresponde()
+    return traducir_error_bd(exc)
+
+
+def crear_cuenta_contable(
+    conn: Connection, usuario: Usuario, ip: str, datos: CuentaContableCrear
+) -> dict[str, Any]:
+    """Alta de una cuenta auxiliar bajo `idCuentaSuperior`; 201 con la cuenta.
+
+    Valida en este orden: el padre existe, el código empieza con el del padre, el
+    código tiene NIVEL_AUXILIAR dígitos y el código no existe. Hereda del padre la
+    naturaleza y si es cuenta de valuación; el elemento CUC y el tipo salen solos
+    del código. Entra con Estado = 1 y Saldo = 0.
+
+    Una cuenta con hijas no puede ser imputable (trigger de la BD, THROW 51100). Si
+    el padre es imputable y no tiene movimientos ni saldo, en la misma transacción
+    se pone EsImputable = 0 en el padre y luego se inserta la hija; la auditoría
+    registra `padre_desmarcado=<id>`. Si el padre ya no es imputable, no se toca.
 
     Raises:
-        HTTPException 501 OPERACION_NO_HABILITADA (contrato sin lógica)
+        HTTPException 404 CUENTA_SUPERIOR_NO_ENCONTRADA
+        HTTPException 422 CODIGO_NO_CORRESPONDE_AL_PADRE
+        HTTPException 409 CODIGO_DUPLICADO (también si otra petición gana la carrera)
+        HTTPException 409 CUENTA_SUPERIOR_CON_MOVIMIENTOS (padre imputable con
+            movimientos o saldo distinto de 0)
     """
-    raise _no_habilitada()
+    codigo = datos.codigo_cuenta
+    with auditar(
+        "CON_CUENTA_CREADA",
+        _TABLA_CUENTAS,
+        usuario,
+        ip,
+        f"padre={datos.id_cuenta_superior} codigo={codigo}",
+    ) as auditado:
+        try:
+            with conn.begin():
+                padre = repository.bloquear_cuenta(conn, datos.id_cuenta_superior)
+                if padre is None:
+                    raise problema(
+                        404,
+                        "CUENTA_SUPERIOR_NO_ENCONTRADA",
+                        "La cuenta superior no existe.",
+                    )
+                if not codigo.startswith(padre["codigo_cuenta"]):
+                    raise _codigo_no_corresponde()
+                if len(codigo) != NIVEL_AUXILIAR:
+                    raise _codigo_no_corresponde()
+                if repository.existe_codigo(conn, codigo):
+                    raise _codigo_duplicado()
+                desmarcar = bool(padre["es_imputable"])
+                if desmarcar:
+                    if padre["saldo"] != 0 or repository.tiene_movimientos(
+                        conn, padre["id_cuenta_contable"]
+                    ):
+                        raise _padre_con_movimientos()
+                    repository.desmarcar_imputable(conn, padre["id_cuenta_contable"])
+                id_cuenta = repository.insertar_cuenta(
+                    conn,
+                    {
+                        "codigo": codigo,
+                        "nombre": datos.nombre_cuenta,
+                        "naturaleza": padre["naturaleza"],
+                        "id_superior": padre["id_cuenta_contable"],
+                        "imputable": 1 if datos.es_imputable else 0,
+                        "valuacion": 1 if padre["es_cuenta_valuacion"] else 0,
+                    },
+                )
+                auditado.id_registro = str(id_cuenta)
+                if desmarcar:
+                    auditado.detalle = (
+                        f"padre_desmarcado={padre['id_cuenta_contable']}"
+                        " padre_es_imputable=1->0"
+                    )
+                fila = repository.obtener_cuenta(conn, id_cuenta)
+        except DBAPIError as exc:
+            raise _error_bd_cuenta(exc) from None
+        if fila is None:  # recién insertada en la misma transacción: no debería pasar
+            raise problema(500, "ERROR_INTERNO", "Error interno del servidor.")
+        return _cuenta_respuesta(fila)
 
 
 def editar_cuenta_contable(
@@ -181,15 +306,57 @@ def editar_cuenta_contable(
         )
 
 
+def _cuenta_con_saldo() -> HTTPException:
+    return problema(
+        409, "CUENTA_CON_SALDO", "No se puede desactivar una cuenta con saldo."
+    )
+
+
 def cambiar_estado_cuenta_contable(
-    conn: Connection, id_cuenta: int, datos: CuentaContableEstado
-) -> NoReturn:
-    """Activar o desactivar: 200 con la cuenta o 202 si queda pendiente.
+    conn: Connection,
+    usuario: Usuario,
+    ip: str,
+    id_cuenta: int,
+    datos: CuentaContableEstado,
+) -> dict[str, Any]:
+    """Activa o desactiva la cuenta; 200 con la cuenta.
+
+    Desactivar exige saldo 0 (la BD lo exige también con
+    CK_CuentasContables_InactivaSinSaldo). Activar no tiene bloqueo. Si ya está en
+    ese estado, responde la cuenta sin escribir.
 
     Raises:
-        HTTPException 501 OPERACION_NO_HABILITADA (contrato sin lógica)
+        HTTPException 404 CUENTA_NO_ENCONTRADA
+        HTTPException 409 CUENTA_CON_SALDO
     """
-    raise _no_habilitada()
+    activar = datos.estado == "Activo"
+    with auditar(
+        "CON_CUENTA_ESTADO",
+        _TABLA_CUENTAS,
+        usuario,
+        ip,
+        f"cuenta={id_cuenta} estado={datos.estado}",
+        id_registro=str(id_cuenta),
+    ) as auditado:
+        try:
+            with conn.begin():
+                cuenta = repository.bloquear_cuenta(conn, id_cuenta)
+                if cuenta is None:
+                    raise problema(
+                        404, "CUENTA_NO_ENCONTRADA", "La cuenta contable no existe."
+                    )
+                if bool(cuenta["estado"]) == activar:
+                    auditado.detalle = "sin_cambio"
+                    return _cuenta_respuesta(cuenta)
+                if not activar and cuenta["saldo"] != 0:
+                    raise _cuenta_con_saldo()
+                repository.actualizar_estado_cuenta(conn, id_cuenta, activar)
+                fila = repository.obtener_cuenta(conn, id_cuenta)
+        except DBAPIError as exc:
+            raise _error_bd_cuenta(exc) from None
+        if fila is None:
+            raise problema(500, "ERROR_INTERNO", "Error interno del servidor.")
+        return _cuenta_respuesta(fila)
 
 
 def eliminar_cuenta_contable(conn: Connection, id_cuenta: int) -> NoReturn:

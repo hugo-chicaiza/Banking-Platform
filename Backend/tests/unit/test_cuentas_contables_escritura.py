@@ -73,6 +73,7 @@ def test_contrato_codigos_de_error_documentados():
     baja = paths[_RUTA_ID]["delete"]["responses"]
 
     assert "CODIGO_DUPLICADO" in alta["409"]["description"]
+    assert "CUENTA_SUPERIOR_CON_MOVIMIENTOS" in alta["409"]["description"]
     assert "CODIGO_NO_CORRESPONDE_AL_PADRE" in alta["422"]["description"]
     assert "CUENTA_CON_SALDO" in estado["409"]["description"]
     assert "CUENTA_EN_USO" in baja["409"]["description"]
@@ -115,9 +116,10 @@ def test_contrato_estado_solo_acepta_activo_o_inactivo():
 # ---------------------------------------------------------------------------
 
 
+# Alta, edición y estado ya tienen lógica; la baja sigue solo con contrato.
 @pytest.mark.parametrize(
     ("metodo", "url", "cuerpo"),
-    [op for op in _OPERACIONES if op[:2] != ("PATCH", f"{_BASE}/7")],
+    [op for op in _OPERACIONES if op[0] == "DELETE"],
 )
 def test_contador_con_datos_validos_recibe_501(client, metodo, url, cuerpo):
     r = _llamar(client, metodo, url, cuerpo)
@@ -125,14 +127,6 @@ def test_contador_con_datos_validos_recibe_501(client, metodo, url, cuerpo):
     assert r.status_code == 501
     assert r.json()["code"] == "OPERACION_NO_HABILITADA"
     assert r.headers["content-type"].startswith("application/problem+json")
-    assert "110105" not in r.json()["detail"]
-
-
-@pytest.mark.parametrize("estado", ["Activo", "Inactivo"])
-def test_estado_acepta_ambos_valores(client, estado):
-    r = client.patch(f"{_BASE}/7/estado", json={"estado": estado})
-
-    assert r.status_code == 501
 
 
 # ---------------------------------------------------------------------------
