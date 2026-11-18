@@ -5,12 +5,11 @@ de Organizacion.Agencia (PK, UQ_Agencia_Codigo, UX_Agencia_KeyAgencia,
 UX_Agencia_UnaMatriz, FK a Catalogo.Ciudad).
 """
 
-import json
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, Mock
 
 import pytest
 from fastapi import FastAPI
@@ -19,6 +18,7 @@ from sqlalchemy.exc import DBAPIError
 
 from app.core.database.db import cooperativa
 from app.core.security import audit
+from app.modules.aprobaciones import router as aprobaciones
 from app.modules.organizacion import repository as repo
 from app.modules.organizacion import service
 from app.modules.organizacion.router import router
@@ -171,6 +171,13 @@ def eventos(monkeypatch: pytest.MonkeyPatch) -> list[audit.EventoAuditoria]:
     return lista
 
 
+@pytest.fixture
+def bandeja(monkeypatch):
+    escribir = Mock()
+    monkeypatch.setattr(service, "encolar", escribir)
+    return escribir
+
+
 NUEVA = {
     "codigo": "SUC-AMB",
     "tipoAgencia": "Sucursal",
@@ -183,7 +190,7 @@ NUEVA = {
 # --- ORG-01 · creación --------------------------------------------------------------
 
 
-def test_crea_agencia_inactiva(cliente, bd, conn, eventos) -> None:
+def test_crea_agencia_inactiva(cliente, bd, conn, bandeja) -> None:
     r = cliente.post(BASE, json={**NUEVA, "keyAgencia": "org_01AMBATO"})
 
     assert r.status_code == 201, r.text
@@ -200,22 +207,15 @@ def test_crea_agencia_inactiva(cliente, bd, conn, eventos) -> None:
     }
     assert "keyAgencia" not in r.json()  # el valor no se publica
     conn.commit.assert_called_once()
-    evento = eventos[-1]
-    assert (evento.accion, evento.tabla, evento.id_registro, evento.resultado) == (
-        "ORG_AGENCIA_CREADA",
-        "Organizacion.Agencia",
-        "005",
-        "Exitoso",
-    )
-    assert evento.usuario == ID_AUDITORIA
-    assert "org_01AMBATO" not in evento.descripcion
-    assert "workos=True" in evento.descripcion
-    assert evento.roles == "ADMIN"
-    detalle = json.loads(evento.detalle_json)
-    assert detalle["antes"] is None
-    assert detalle["despues"] == r.json()
-    assert detalle["agenciaActor"] == "001"
-    assert "org_01AMBATO" not in evento.detalle_json
+    argumentos = bandeja.call_args.args
+    assert argumentos[1] == "ORG_AGENCIA_CREADA"
+    assert argumentos[2].id_interno == ID_AUDITORIA
+    assert argumentos[2].roles == ("ADMIN",)
+    cambios = bandeja.call_args.kwargs["cambios"]
+    assert cambios["antes"] is None
+    assert cambios["despues"] == r.json()
+    assert argumentos[5].agencia_actor == "001"
+    assert "org_01AMBATO" not in str(cambios)
 
 
 def test_listado_incluye_agencia_recien_creada(cliente, bd, monkeypatch):
@@ -378,15 +378,14 @@ def _patch(cliente: TestClient, id_agencia: str, cuerpo: dict[str, Any]) -> Any:
     return cliente.patch(f"{BASE}/{id_agencia}", json=cuerpo)
 
 
-def test_patch_parcial_solo_cambia_lo_enviado(cliente, bd, conn, eventos) -> None:
+def test_patch_parcial_solo_cambia_lo_enviado(cliente, bd, conn, bandeja) -> None:
     r = _patch(cliente, "002", {"telefono": "022 999 888", "direccion": None})
 
     assert r.status_code == 200, r.text
     assert bd.actualizaciones == [{"telefono": "022 999 888"}]  # direccion ya era NULL
     assert r.json()["codigo"] == "SUC-SGQ"
     conn.commit.assert_called_once()
-    assert eventos[-1].descripcion.startswith("ORG02 telefono=None->022 999 888")
-    detalle = json.loads(eventos[-1].detalle_json)
+    detalle = bandeja.call_args.kwargs["cambios"]
     assert detalle["antes"]["telefono"] is None
     assert detalle["despues"] == r.json()
 
@@ -500,15 +499,13 @@ def test_patch_ciudad_inexistente_422(cliente, bd) -> None:
     assert r.json()["code"] == "CIUDAD_NO_ENCONTRADA"
 
 
-def test_patch_quita_vinculo_workos_sin_registrar_el_valor(
-    cliente, bd, eventos
-) -> None:
+def test_patch_quita_vinculo_workos_sin_registrar_el_valor(cliente, bd, bandeja):
     r = _patch(cliente, "002", {"keyAgencia": None})
-
     assert r.status_code == 200
-    assert r.json()["vinculadaWorkos"] is False
-    assert "org_SGQ" not in eventos[-1].descripcion
-    assert "keyAgencia=vinculadaWorkos:True->False" in eventos[-1].descripcion
+    detalle = bandeja.call_args.kwargs["cambios"]
+    assert detalle["antes"]["vinculadaWorkos"] is True
+    assert detalle["despues"]["vinculadaWorkos"] is False
+    assert "org_SGQ" not in str(detalle)
 
 
 # --- ORG-02 · desactivación y reactivación --------------------------------------------
@@ -516,16 +513,28 @@ def test_patch_quita_vinculo_workos_sin_registrar_el_valor(
 DESACTIVAR = {"estado": "I", "motivo": "Cierre de la sucursal aprobado"}
 
 
-def test_sucursal_sin_bloqueos_requiere_aprobaciones(
-    cliente, bd, conn, eventos
-) -> None:
-    r = _patch(cliente, "002", DESACTIVAR)
-    assert r.status_code == 503
-    assert r.json()["code"] == "APROBACIONES_NO_DISPONIBLES"
+@pytest.mark.parametrize(
+    "prefijo", [BASE, "https://testserver/api/v1/organizacion/agencias"]
+)
+def test_sucursal_sin_bloqueos_encola(cliente, bd, conn, eventos, monkeypatch, prefijo):
+    actor = Mock()
+    cola = Mock()
+    cola.solicitar.return_value = 47
+    monkeypatch.setattr(aprobaciones, "actual", lambda _: actor)
+    monkeypatch.setattr(aprobaciones, "servicio", lambda: cola)
+    r = cliente.patch(f"{prefijo}/002", json=DESACTIVAR)
+    assert r.status_code == 202
+    assert r.json() == {
+        "idSolicitud": 47,
+        "estado": "Pendiente",
+        "requiereAprobacion": True,
+    }
+    objetivo = cola.solicitar.call_args.args[2]
+    assert (objetivo.tipo, objetivo.id, objetivo.agencia) == ("Agencia", "002", "002")
     assert bd.agencias["002"]["Estado"] == "A"
     assert bd.actualizaciones == []
     conn.commit.assert_not_called()
-    assert eventos[-1].resultado == "Fallido"
+    assert eventos == []
 
 
 def test_desactivar_bloqueado_por_actividad_real(cliente, bd, conn, eventos) -> None:
@@ -575,7 +584,8 @@ def test_agencia_en_estado_c_no_se_modifica(cliente, bd) -> None:
 def test_desactivar_y_editar_en_la_misma_peticion(cliente, bd) -> None:
     r = _patch(cliente, "002", {**DESACTIVAR, "telefono": "022 111 222"})
 
-    assert r.status_code == 503
+    assert r.status_code == 409
+    assert r.json()["code"] == "BAJA_CON_EDICION"
     assert bd.actualizaciones == []
 
 

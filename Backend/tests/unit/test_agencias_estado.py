@@ -7,8 +7,8 @@ from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
 from app.core.database.db import cooperativa
-from app.core.security import audit
 from app.core.security.auth import normalizar_roles
+from app.modules.aprobaciones import router as aprobaciones
 from app.modules.organizacion import repository, service
 from app.modules.organizacion.router import router
 from tests.sesion import simular_sesion, usuario_con_roles
@@ -56,7 +56,7 @@ def ctx(monkeypatch):
         Mock(return_value=[]),
     )
     monkeypatch.setattr(repository, "actualizar_estado", escribir)
-    monkeypatch.setattr(audit, "registrar", auditoria)
+    monkeypatch.setattr(service, "encolar", auditoria)
     with TestClient(app) as cliente:
         yield app, cliente, conn, leer, escribir, auditoria
 
@@ -160,11 +160,15 @@ def test_actualizacion_no_confirmada_no_informa_exito(ctx):
 
 
 @pytest.mark.parametrize("ruta", [RUTA, "/api/v1/organizacion/agencias/001/estado"])
-def test_no_desactiva_sin_cola(ctx, ruta):
+def test_solicita_sin_desactivar(ctx, ruta, monkeypatch):
+    cola = Mock()
+    cola.solicitar.return_value = 81
+    monkeypatch.setattr(aprobaciones, "actual", lambda _: Mock())
+    monkeypatch.setattr(aprobaciones, "servicio", lambda: cola)
     _, cliente, _, leer, escribir, auditoria = ctx
     r = cliente.patch(ruta, json={"estado": "I"})
-    assert r.status_code == 503
-    assert r.json()["code"] == "APROBACIONES_NO_DISPONIBLES"
+    assert r.status_code == 202
+    assert r.json()["idSolicitud"] == 81
     assert leer.return_value["estado"] == "A"
     escribir.assert_not_called()
     auditoria.assert_not_called()

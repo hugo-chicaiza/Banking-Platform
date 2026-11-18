@@ -75,7 +75,10 @@ Cola = Annotated[Servicio, Depends(servicio)]
 
 def contexto(request: Request, usuario: UsuarioActual) -> ContextoAuditoria:
     return ContextoAuditoria(
-        usuario.id_sesion, ip_cliente(request.scope), obtener_trace_id(request.scope)
+        usuario.id_sesion,
+        ip_cliente(request.scope),
+        obtener_trace_id(request.scope),
+        agencia_actor=usuario.agencia(),
     )
 
 
@@ -135,6 +138,11 @@ def solicitar(
     usuario: UsuarioActual,
     request: Request,
 ) -> SolicitudAceptada:
+    operacion = cola.registro.obtener(datos.codigo_transaccion, datos.tipo_objetivo)
+    if not operacion.solicitud_directa:
+        raise problema(
+            403, "SIN_PERMISO", "Use la ruta de la operacion para solicitar el cambio."
+        )
     alcance_operativo(actor, usuario, datos.id_agencia)
     id_ = cola.solicitar(
         actor,

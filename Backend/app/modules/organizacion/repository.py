@@ -94,6 +94,17 @@ def obtener_agencia(
     return dict(fila) if fila is not None else None
 
 
+def version_agencia(conn: Connection, id_agencia: str) -> str | None:
+    return conn.execute(
+        text("""
+            SELECT CONVERT(varchar(16), VersionE010, 2)
+            FROM Organizacion.Agencia WITH (UPDLOCK, HOLDLOCK)
+            WHERE IdAgencia = :id
+        """),
+        {"id": id_agencia},
+    ).scalar_one_or_none()
+
+
 def existe_ciudad(conn: Connection, id_ciudad: int) -> bool:
     """Catalogo.Ciudad no tiene columna de estado: solo se puede validar que exista."""
     return (

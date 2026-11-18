@@ -39,13 +39,9 @@ class EventoAuditoria:
     # UsuarioID, se toman de Organizacion.Usuarios.RolesWorkOS (actualizado en la
     # misma petición, antes de ejecutar la ruta)
     roles: str | None = None
-    detalle_json: str | None = None
 
 
 def _insertar(conn: Connection, evento: EventoAuditoria) -> None:
-    if evento.detalle_json is not None:
-        _insertar_evento_estructurado(conn, evento)
-        return
     conn.execute(
         text(
             """
@@ -78,32 +74,6 @@ def _insertar(conn: Connection, evento: EventoAuditoria) -> None:
             "descripcion": evento.descripcion[:_MAX_DESCRIPCION],
             "resultado": evento.resultado,
             "roles": evento.roles,
-        },
-    )
-
-
-def _insertar_evento_estructurado(conn: Connection, evento: EventoAuditoria) -> None:
-    conn.execute(
-        text("""
-            INSERT INTO Auditoria.Auditoria (
-                UsuarioID, NombreAccion, TablaAfectada, IDRegistro, FechaHora,
-                DireccionIP, Descripcion, Resultado, RolesWorkOS, DetalleJson
-            )
-            VALUES (
-                :usuario, :accion, :tabla, :id_registro, SYSUTCDATETIME(),
-                :ip, :descripcion, :resultado, :roles, :detalle
-            )
-        """),
-        {
-            "usuario": evento.usuario,
-            "accion": evento.accion,
-            "tabla": evento.tabla,
-            "id_registro": evento.id_registro,
-            "ip": evento.ip,
-            "descripcion": evento.descripcion[:_MAX_DESCRIPCION],
-            "resultado": evento.resultado,
-            "roles": evento.roles,
-            "detalle": evento.detalle_json,
         },
     )
 

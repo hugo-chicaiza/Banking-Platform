@@ -36,15 +36,22 @@ def entregar(origen: Engine, seguridad: Engine, limite: int = 100) -> int:
                     id_auditoria = destino.execute(
                         consulta("""INSERT Auditoria.Auditoria
                         (UsuarioID,NombreAccion,TablaAfectada,IDRegistro,FechaHora,DireccionIP,Descripcion,Resultado,RolesWorkOS)
-                        OUTPUT inserted.AuditoriaID VALUES(:interno,:codigo,'Seguridad.SolicitudAprobacion',:objetivo,
+                        OUTPUT inserted.AuditoriaID VALUES(:interno,:codigo,:tabla,:objetivo,
                         DATEADD(hour,-5,:fecha),:ip,:descripcion,:resultado,:roles)"""),
                         {
                             "interno": contenido["idInterno"],
                             "codigo": fila["CodigoEvento"],
                             "objetivo": contenido["idObjetivo"],
+                            "tabla": contenido.get(
+                                "tablaAfectada", "Seguridad.SolicitudAprobacion"
+                            ),
                             "fecha": fila["FechaCreacionUTC"],
                             "ip": contenido["origen"] or None,
-                            "descripcion": "solicitud="
+                            "descripcion": (
+                                "solicitud="
+                                if contenido["tipoObjetivo"] == "SolicitudAprobacion"
+                                else "objetivo="
+                            )
                             + contenido["idObjetivo"]
                             + " trace="
                             + contenido["correlacion"],

@@ -141,10 +141,8 @@ class Agencia(CamelModel):
     vinculada_workos: bool
 
 
-class DesactivacionAceptada(CamelModel):
-    id_solicitud: Annotated[int, Field(gt=0, le=9223372036854775807)]
-    estado: Literal["Pendiente"] = "Pendiente"
-    requiere_aprobacion: Literal[True] = True
+class PropuestaBajaAgencia(_Entrada):
+    motivo: Motivo | None = None
 
 
 # Contratos heredados: endpoint PATCH /agencias/{id_agencia}/estado.
