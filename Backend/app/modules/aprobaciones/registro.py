@@ -54,6 +54,8 @@ class Operacion:
     evento_ejecucion: str | Callable[[dict[str, Any]], str] = "APR_OPERACION_EJECUTADA"
     solicitud_directa: bool = True
     permiso_ejecucion: str | None = None
+    aplicar_con_aprobador: Callable[[Connection, Objetivo, int], None] | None = None
+    solicitud_unica: bool = False
 
 
 class Registro:
