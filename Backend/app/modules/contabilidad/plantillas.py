@@ -22,6 +22,8 @@ from app.modules.contabilidad.asientos import ErrorContable, resolver_lineas
 
 router = APIRouter(
     route_class=ProblemDetailsRoute,
+    # Con el editor activo require_permiso autoriza la función de cada método/ruta:
+    # consultar en GET y editar en POST. Apagado, conserva el permiso WorkOS previo.
     dependencies=[Depends(require_permiso("con-plantilla-editar"))],
 )
 Db = Annotated[Connection, Depends(cooperativa)]

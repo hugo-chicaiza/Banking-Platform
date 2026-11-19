@@ -558,6 +558,29 @@ FUNCIONES = (
         ("contabilidad.importaciones.consultar",),
     ),
     _f(
+        "contabilidad.plantillas.consultar",
+        "Consultar plantillas contables",
+        "Contabilidad",
+        ("ADMIN", "SUPERVISOR", "AUDITOR", "CONTADOR"),
+        (
+            ("GET", B + "/tipos-asiento/{id_tipo}/plantillas"),
+            ("GET", B + "/plantillas/{id_plantilla}"),
+        ),
+        "/contabilidad/plantillas",
+    ),
+    _f(
+        "contabilidad.plantillas.editar",
+        "Simular y crear versiones de plantillas",
+        "Contabilidad",
+        PERMISOS["con-plantilla-editar"],
+        (
+            ("POST", B + "/tipos-asiento/{id_tipo}/plantillas"),
+            ("POST", B + "/plantillas/simulaciones"),
+        ),
+        "/contabilidad/plantillas",
+        ("contabilidad.plantillas.consultar",),
+    ),
+    _f(
         "contabilidad.asientos.consultar",
         "Consultar asientos",
         "Contabilidad",

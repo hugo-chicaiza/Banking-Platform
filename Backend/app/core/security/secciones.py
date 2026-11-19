@@ -207,6 +207,8 @@ FUERA_DEL_EDITOR = (
     ("POST", "/api/v1/contabilidad/cortes-e201"),
     ("GET", "/api/v1/contabilidad/cortes-e201/{id_plan}"),
     ("POST", "/api/v1/contabilidad/cortes-e201/{id_plan}/aprobaciones"),
+    # Plantillas ya tiene funciones en el editor nuevo. El modo anterior conserva
+    # sus permisos WorkOS y no necesita una sección legada adicional.
     ("GET", "/api/v1/contabilidad/tipos-asiento/{id_tipo}/plantillas"),
     ("POST", "/api/v1/contabilidad/tipos-asiento/{id_tipo}/plantillas"),
     ("GET", "/api/v1/contabilidad/plantillas/{id_plantilla}"),
