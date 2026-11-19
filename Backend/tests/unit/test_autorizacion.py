@@ -618,7 +618,7 @@ def test_rol_fuera_de_la_tarea_recibe_403(client, ruta, roles):
 def test_roles_de_la_tarea_pasan_el_control(client, ruta, monkeypatch):
     roles = ROLES_POR_RUTA[ruta]
     usuario = usuario_con_roles(*roles)
-    if ruta[1].startswith("/api/v1/aprobaciones") or ruta[1] in {
+    if ruta[1].startswith(("/api/v1/aprobaciones", "/api/v1/productos")) or ruta[1] in {
         "/api/v1/parametros",
         "/api/v1/parametros/{clave}",
         "/api/v1/parametros/{clave}/valores",

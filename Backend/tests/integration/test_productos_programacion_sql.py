@@ -263,10 +263,10 @@ def test_migraciones_repetibles_y_rollback_ante_fallo(motores):
 
     raiz = Path(__file__).resolve().parents[2] / "migrations"
     scripts = [
-        ("cooperativa", "202611183030_productos_vigencias.up.sql"),
-        ("cooperativa", "202611183031_cupos_efectivos.up.sql"),
-        ("cooperativa", "202611183032_productos_consumidor.up.sql"),
-        ("seguridad", "202611183030_productos_aprobacion.up.sql"),
+        ("cooperativa", "202611191300_productos_vigencias.up.sql"),
+        ("cooperativa", "202611191301_cupos_efectivos.up.sql"),
+        ("cooperativa", "202611191302_productos_consumidor.up.sql"),
+        ("seguridad", "202611191300_productos_aprobacion.up.sql"),
     ]
     for _ in range(2):
         for base, nombre in scripts:

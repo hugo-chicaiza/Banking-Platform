@@ -711,6 +711,34 @@
         ]
       }
     },
+    "/api/v1/aprobaciones/notificaciones": {
+      "get": {
+        "operationId": "notificaciones_api_v1_aprobaciones_notificaciones_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Notificaciones Api V1 Aprobaciones Notificaciones Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "APIKeyCookie": []
+          }
+        ],
+        "summary": "Notificaciones",
+        "tags": [
+          "Aprobaciones"
+        ]
+      }
+    },
     "/api/v1/aprobaciones/{idSolicitud}": {
       "get": {
         "operationId": "ficha_api_v1_aprobaciones__idSolicitud__get",

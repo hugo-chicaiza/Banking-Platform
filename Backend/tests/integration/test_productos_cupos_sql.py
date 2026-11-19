@@ -302,6 +302,82 @@ def test_consumidor_transacciones_respeta_restricciones_y_no_postea(motores, cas
         )
 
 
+def test_consumidor_conserva_comision_real_y_validacion_de_fondos(motores, caso):
+    """Contrato E1-12: el techo no altera el calculo ni contabiliza movimientos."""
+    cuenta = cuenta_y_techo(motores, caso)
+    with motores["cooperativa"].connect() as c:
+        transaccion = c.begin()
+        try:
+            codigo = "Q" + uuid4().hex[:8].upper()
+            c.execute(
+                text(
+                    "INSERT Transacciones.Comisiones(CodigoComision,TipoComision,TipoCalculo,Valor,IdCanal,Descripcion,VigenciaDesde,Estado) VALUES(:codigo,'Retiro','Fijo',0.45,1,'Comision QA local',:desde,'A')"
+                ),
+                {"codigo": codigo, "desde": hoy() - timedelta(days=1)},
+            )
+            id_comision = c.execute(
+                text(
+                    "SELECT IdComision FROM Transacciones.Comisiones WHERE CodigoComision=:codigo"
+                ),
+                {"codigo": codigo},
+            ).scalar_one()
+            c.execute(
+                text(
+                    "INSERT Transacciones.ComisionTipoTransaccion(CodigoTipoTransaccion,IdCanal,IdComision,VigenciaDesde,Estado,RegistradoPor) VALUES('Retiro',1,:comision,:desde,'A',:actor)"
+                ),
+                {
+                    "comision": id_comision,
+                    "desde": hoy() - timedelta(days=1),
+                    "actor": MAKER.id_interno,
+                },
+            )
+
+            def autorizar():
+                return (
+                    c.execute(
+                        text(
+                            "SET NOCOUNT ON; DECLARE @codigo char(2),@mensaje nvarchar(300),@comision decimal(18,2); EXEC Transacciones.usp_AutorizarOperacion @IdCuenta=:cuenta,@IdCanal=1,@TipoTransaccion='Retiro',@Monto=10,@CodigoRespuesta=@codigo OUTPUT,@Mensaje=@mensaje OUTPUT,@Comision=@comision OUTPUT; SELECT @codigo AS codigo,@comision AS comision;"
+                        ),
+                        {"cuenta": cuenta},
+                    )
+                    .mappings()
+                    .one()
+                )
+
+            autorizado = autorizar()
+            assert (
+                autorizado["codigo"] == "00" and str(autorizado["comision"]) == "0.45"
+            )
+            c.execute(
+                text("UPDATE Cuentas.Cuenta SET Saldo=10 WHERE IdCuenta=:cuenta"),
+                {"cuenta": cuenta},
+            )
+            insuficiente = autorizar()
+            assert (
+                insuficiente["codigo"] == "51"
+                and str(insuficiente["comision"]) == "0.45"
+            )
+            assert (
+                c.execute(
+                    text(
+                        "SELECT COUNT(*) FROM Transacciones.Transaccion WHERE IdCuenta=:cuenta"
+                    ),
+                    {"cuenta": cuenta},
+                ).scalar_one()
+                == 0
+            )
+        finally:
+            transaccion.rollback()
+    with motores["cooperativa"].connect() as c:
+        assert (
+            c.execute(
+                text("SELECT Saldo FROM Cuentas.Cuenta WHERE IdCuenta=:cuenta"),
+                {"cuenta": cuenta},
+            ).scalar_one()
+            == 2000
+        )
+
+
 def test_lote_sin_canales_cancelable_una_sola_vez(motores, caso):
     cuenta_y_techo(motores, caso)
     id_ = solicitar(
