@@ -21,10 +21,13 @@ Ejecutar `000_inspeccionar.sql` y contrastar sus resultados antes de aplicar
 - Valida datos existentes; si hay datos incompatibles, revierte y exige resolverlos.
   No elimina registros. La fecha de creación se guarda en UTC.
 
-Este SQL agrega almacenamiento; no altera `fn_CalcularComision` ni
-`usp_AutorizarOperacion`. El nuevo servicio `parametros.service.comision` selecciona
-reglas y aplica el cálculo de #446; la integración con los flujos de débito sigue
-pendiente y se detalla en el contrato de la API.
+El script 001 instala los datos de exoneración. Después, ejecutar
+`004_versiones_tarifa.sql` antes de `002_cargar_tarifas.sql` y del despliegue del
+backend. El script 004 siembra las versiones y actualiza
+`fn_CalcularComision` con la misma firma para que
+`usp_AutorizarOperacion` lea la tarifa del día que recibe. La exoneración
+automática se aplica en el cálculo Python. Su integración con los débitos
+legados sigue teniendo el alcance descrito en el contrato de la API.
 
 ## Carga pendiente del ID oficial
 
@@ -184,3 +187,19 @@ La verificación actual incluye los 17 escenarios SQL de este script y tres
 escenarios adicionales de API/repositorios/cálculo en SQL local. Los resultados
 de la corrida final se entregan junto al diff. No se ejecutó una reposición con
 débito real ni SQL en Azure.
+
+### Verificación de la migración 004
+
+Ejecute `005_verificar_versiones_solo_lectura.sql` antes y después. Use una sesión
+sin transacción externa, con `migration_database` configurado con el nombre
+exacto de la base, y pause las escrituras de comisiones durante el despliegue.
+La instalación inicial admite la definición legada de `fn_CalcularComision`
+validada en el laboratorio. La reejecución admite la propia definición versionada
+de 004. Se compara desde la palabra FUNCTION y se normalizan los saltos de línea,
+las tabulaciones y los espacios exteriores. Si la definición local difiere, revise la lógica antes de adaptar la
+migración. El script no sobrescribe una función desconocida.
+
+La reejecución comprueba los objetos de versionado y la cobertura de toda la
+vigencia original. Cualquier falta de versión inicial, hueco, solape o
+intervalo inválido aborta la transacción. Los errores 57287 a 57290 requieren
+diagnosticar el estado de destino antes de volver a ejecutar.

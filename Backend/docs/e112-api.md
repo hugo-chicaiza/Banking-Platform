@@ -1,9 +1,7 @@
 # E1-12 #104: comisiones y exoneraciones
 
-Implementación local en `feat/backend-104-esquema-comisiones`, actualizada desde
-`origin/develop` a `9422e910b85ee1a8fc737015165952bdaf876ed5`. Se conserva la
-migración separada en `scripts/sql/e112/001_exoneraciones.up.sql`. Sin ejecución en
-Azure, commit ni push. Antes de usar estas rutas en una base, aplicar la estructura.
+La estructura de exoneraciones y las versiones de tarifa tienen migraciones
+separadas. Antes de habilitar las rutas, aplicar el orden SQL de este documento.
 
 ## Contrato HTTP
 
@@ -14,7 +12,8 @@ respuestas (Decimal en Python). El OpenAPI generado contiene los schemas complet
 |---|---|---|
 | GET | `/comisiones` | 200, lista de tarifas con todas sus asociaciones y vigencias |
 | POST | `/comisiones` | 201, tarifa creada y asociada, o tarifa existente asociada por ID |
-| PATCH | `/comisiones/{idComision}` | 200, metadatos/estado; cambio de valor protegido con 501 mientras falte E1-10 |
+| PATCH | `/comisiones/{idComision}` | 200 para metadatos o valor idéntico. 202 con `idSolicitud` para un cambio de tarifa |
+| GET | `/comisiones/{idComision}/tarifa?fecha=2026-12-01` | 200 para la versión vigente en esa fecha o 404 si no existe |
 | GET | `/exoneraciones?idComision=1` | 200, reglas; filtro opcional por comisión |
 | POST | `/exoneraciones` | 201, regla automática con actor de creación |
 | PATCH | `/exoneraciones/{idExoneracion}` | 200, actualización parcial de regla |
@@ -81,8 +80,8 @@ sesión simulada; el entorno real sigue necesitando un vínculo válido en core.
 
 PATCH de comisión admite descripcion, estado A/I, idCuentaContableIngreso (nullable),
 valor y vigenciaDesde. Omitir conserva; null solo permite limpiar la cuenta contable.
-Un valor idéntico no genera solicitud ni actualiza el valor. Un valor distinto o
-una nueva vigencia de valor requieren el flujo pendiente descrito abajo. No se
+Un valor idéntico sin fecha nueva no genera solicitud ni actualiza el valor.
+Un valor distinto o una nueva fecha requieren el flujo de aprobación. No se
 pueden cambiar canal, código, tipo de cálculo ni límites mediante PATCH.
 La cuenta contable solo valida un entero positivo: la FK y su destino siguen
 pendientes; no se afirma que un ID aceptado corresponda a una cuenta contable real.
@@ -129,27 +128,47 @@ cobra. Usa el cálculo de #446 y redondea solo el importe final con ROUND_HALF_U
 idExoneracion si se aplicó. La fecha naive representa hora de Ecuador; fechas
 con zona se convierten a Ecuador.
 
-## Aprobación de valor: operación pendiente
+## Aprobación de tarifas
 
-Se revisaron #367 y el código actualizado de develop. No existe módulo/servicio
-de parámetros de E0-09/E1-10 ni una cola genérica con registro de solicitudes y
-manejador que active vigencias de comisiones. La aprobación de arqueos de bóveda
-es de otro dominio y no se reutiliza para este cambio.
+`PAR-COMISION` usa la cola E0-08 con objetivo global `Comision`. Solicita un
+ADMIN. Aprueba o rechaza otra persona con `parametros:aprobar`. La cola guarda
+solicitante, resolutor, versión de origen, antes, después y resultado.
 
-El punto exacto preparado es **`parametros.service.solicitar_cambio_valor(conn,
-id_comision,cambios,actor)`**, invocado desde actualizar_comision antes de escribir.
-Por ahora responde **501 APROBACION_PARAMETRO_NO_DISPONIBLE**, revierte toda la
-operación (incluidos metadatos enviados junto al valor) y audita el intento. La
-tarifa vigente queda intacta. El PATCH legado de administración de comisiones
-también bloquea cambios de valor/vigencia para evitar un camino alternativo.
+El PATCH sensible debe venir separado de los metadatos. Si solo se envía valor,
+la fecha propuesta es el día siguiente en Ecuador continental. Si solo se envía
+fecha, la nueva versión conserva el valor de la versión que divide.
+La fecha debe ser posterior al inicio de la última versión y anterior a su fin,
+si tiene uno. Esta operación agrega una versión sucesora y conserva el fin
+original. Una propuesta atrasada, solapada o desactualizada se rechaza.
 
-Al integrar E1-10 faltará reemplazar ese bloqueo por la llamada al servicio oficial
-que persista la propuesta con actor y vigencia, y adaptar la respuesta del PATCH
-a **202 con idSolicitud real**. El manejador de aprobación debe activar una nueva
-vigencia conservando la historia; rechazar/cancelar no altera la tarifa vigente.
-No se creó una cola paralela ni se devuelve un 202 sin solicitud persistida.
-El registro inicial de una tarifa nueva responde 201; no cambia una tarifa ya
-activa para el mismo evento/canal porque la comprobación de solapes lo impide.
+La aprobación cierra el intervalo anterior y registra la versión nueva una sola
+vez. La fecha efectiva activa el valor automáticamente. Los intervalos son
+`[desde, hasta)`. El cálculo Python y `fn_CalcularComision` utilizan esa fecha.
+El ID de la comisión, sus asociaciones, exoneraciones y vínculos de producto
+conservan sus referencias y sus propias vigencias. El GET por fecha consulta el
+historial de valores. La elegibilidad para un cobro sigue dependiendo del
+estado de la comisión y las asociaciones.
+
+### Orden SQL
+
+1. En CooperativaDB, con el esquema de E1-12 y E0-08 instalado, confirmar
+   `SESSION_CONTEXT('migration_database')` con el nombre de la base y ejecutar
+   `scripts/sql/e112/004_versiones_tarifa.sql`. En instalaciones nuevas ejecutar
+   `001_exoneraciones.up.sql` primero y `002_cargar_tarifas.sql` después.
+2. En SeguridadDB, después del catálogo E0-08 y con esa base confirmada
+   en la sesión, ejecutar `202611180805_comision_aprobacion.up.sql`.
+3. Desplegar el backend después de ambos cambios SQL. Suspender las altas de
+   comisión durante el cambio, porque la versión anterior del backend usa
+   `OUTPUT` sin `INTO` y SQL Server lo rechaza al instalar el trigger de alta.
+   Comparar el cálculo SQL
+   del entorno con el de laboratorio antes de sustituir su definición, y
+   revisar consumidores externos que consulten `Comisiones.Valor`.
+
+La migración conserva cada fila e ID original y siembra un intervalo por
+registro existente. Los valores históricos que ya no estaban almacenados
+quedan fuera del alcance de la migración. `Comisiones.Valor` conserva el valor
+inicial como parte del registro base. Para consultar la tarifa usar la tabla de
+versiones o la proyección de presentación, según corresponda.
 
 ## Errores y auditoría
 
@@ -163,13 +182,14 @@ el core, errores de schema/campos extra/cuerpo vacío/porcentaje/cupo inválido 
 | 404 | COMISION_NO_ENCONTRADA o EXONERACION_NO_ENCONTRADA en PATCH |
 | 409 | CODIGO_COMISION_DUPLICADO, COMISION_VIGENCIA_SOLAPADA, EXONERACION_VIGENCIA_SOLAPADA, COMISION_INACTIVA |
 | 422 | VIGENCIA_PASADA, VIGENCIA_FUERA_DE_COMISION, CANAL_COMISION_INCOMPATIBLE, referencias inexistentes/incompatibles |
-| 501 | APROBACION_PARAMETRO_NO_DISPONIBLE para cambiar valor/vigencia |
+| 422 | CAMBIO_TARIFA_MIXTO si se envían cambios sensibles y metadatos juntos |
 
 Las escrituras son transaccionales y bloquean la configuración para serializar
 comprobaciones de unicidad/solape. Auditoría usa el mecanismo común, un evento
 Exitoso/Fallido con actor real y cambios antes/después cuando procede:
-PAR_COMISION_REGISTRADA y PAR_EXONERACION_EDITADA. No se crea otro historial.
-Su persistencia comparte el comportamiento best-effort del core.
+PAR_COMISION_REGISTRADA y PAR_EXONERACION_EDITADA. Estos eventos conservan
+el comportamiento best-effort del core. La cola registra por separado las
+decisiones de aprobación, vinculadas a la versión por `IdSolicitud`.
 
 ## Alcance probado de punta a punta
 
@@ -206,3 +226,16 @@ API/cálculo). Las advertencias corresponden a TestClient/httpx y marcas integra
 preexistentes. Una primera corrida tuvo un falso positivo en el teardown de un
 test ATM: el traceId aleatorio contenía el PIN ficticio de cuatro dígitos. Ese
 archivo pasó al repetirlo y la corrida completa final terminó sin errores.
+
+### Fecha efectiva y baja de comisiones
+
+La vigencia es diaria en la zona horaria de Ecuador continental. Si se modifica
+solo el valor, se propone el día siguiente a la solicitud. Una fecha propuesta
+que no sea futura devuelve `422 VIGENCIA_TARIFA_NO_FUTURA`. Al aprobar, la fecha
+debe seguir siendo posterior a ese día. Si llegó o ya pasó, E0-08 registra el
+intento como fallido y devuelve `409 VIGENCIA_TARIFA_VENCIDA`. Para programar
+otra fecha, envíe una nueva solicitud.
+
+El catálogo devuelve `409 COMISION_CON_HISTORIAL` al intentar borrar una comisión.
+Use `PATCH /api/v1/parametros/comisiones/{idComision}` con `{"estado":"I"}`
+para desactivarla y conservar sus asociaciones e historial.
