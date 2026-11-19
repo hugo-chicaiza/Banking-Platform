@@ -149,13 +149,14 @@ class TraceIdMiddleware:
             # roles de WorkOS con que se atendió (las consultas no van a Auditoria)
             usuario = scope.get("state", {}).get("usuario")
             logger.info(
-                "%s %s status=%s ms=%d ip=%s usuario=%s roles=%s",
+                "%s %s status=%s ms=%d ip=%s usuario=%s agencia=%s roles=%s",
                 scope["method"],
                 scope["path"],
                 status,
                 (time.perf_counter() - inicio) * 1000,
                 ip_cliente(scope),
                 getattr(usuario, "id_usuario", "-"),
+                getattr(usuario, "id_agencia", None) or "-",
                 ",".join(getattr(usuario, "roles", ())) or "-",
             )
             trace_id_actual.reset(token)
