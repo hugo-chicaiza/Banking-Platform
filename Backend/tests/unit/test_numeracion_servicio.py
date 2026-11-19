@@ -289,3 +289,64 @@ def test_operacion_reutiliza_cola_sin_aprobacion_implicita_admin():
     assert op.permiso_aprobacion == "productos:aprobar"
     assert op.permiso_ejecucion == "prd-numeracion"
     assert not op.solicitud_directa
+
+
+@pytest.mark.parametrize("con_regla", [True, False])
+def test_consulta_reconstruye_autoria_y_pendiente_sin_filtrar_otra_organizacion(
+    monkeypatch, con_regla
+):
+    regla = fila() if con_regla else None
+    monkeypatch.setattr(api, "comprobar_modelo", lambda *_: None)
+    monkeypatch.setattr(n, "reglas", lambda *_: [regla] if regla else [])
+    monkeypatch.setattr(n, "vigente", lambda *_: regla)
+    monkeypatch.setattr(n, "cuentas_existentes", lambda *_: False)
+    monkeypatch.setattr(
+        api,
+        "ejemplo",
+        lambda *_: api.EjemploVista(
+            ejemplo="220000000015", estado_secuencia="DISPONIBLE", agencia_ejemplo="001"
+        ),
+    )
+    motor = MagicMock()
+    motor.connect.return_value.__enter__.return_value.execute.return_value.mappings.return_value.all.return_value = [
+        {
+            "IdSolicitud": 9,
+            "NombreSolicitante": "Persona QA",
+            "IdInternoSolicitante": 12,
+            "Estado": "Pendiente",
+        },
+        {
+            "IdSolicitud": 7,
+            "NombreSolicitante": "Persona QA",
+            "IdInternoSolicitante": 12,
+            "Estado": "Ejecutada",
+        },
+    ]
+    monkeypatch.setattr(api, "motor", lambda *_: motor)
+    conn = MagicMock()
+    respuesta = api.consultar(
+        3, MagicMock(), MagicMock(id_organizacion="organizacion_fixture"), conn
+    )
+    assert respuesta.solicitud_pendiente == 9
+    if con_regla:
+        assert respuesta.regla is not None
+        assert respuesta.regla.responsable == "Persona QA(12)"
+    else:
+        assert respuesta.regla is None and respuesta.estado_secuencia == "SIN_REGLA"
+    conn.rollback.assert_called_once()
+    llamada = motor.connect.return_value.__enter__.return_value.execute.call_args
+    assert llamada.args[1]["org"] == "organizacion_fixture"
+
+
+@pytest.mark.parametrize("tipo", ["Cuenta", "Credito"])
+def test_manejador_verifica_tipo_del_objetivo(monkeypatch, tipo):
+    monkeypatch.setattr(apr, "subproducto", lambda *_: {"TipoProducto": tipo})
+    if tipo == "Cuenta":
+        assert (
+            apr.modelo(MagicMock(), Objetivo("SubProducto", "3", None))["TipoProducto"]
+            == "Cuenta"
+        )
+    else:
+        with pytest.raises(HTTPException) as e:
+            apr.modelo(MagicMock(), Objetivo("SubProducto", "3", None))
+        assert codigo_error(e.value) == "TIPO_PRODUCTO_INVALIDO"
