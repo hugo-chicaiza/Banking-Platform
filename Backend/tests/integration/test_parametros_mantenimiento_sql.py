@@ -9,6 +9,7 @@ from datetime import datetime, time, timedelta
 from decimal import Decimal
 from pathlib import Path
 from threading import Barrier
+from typing import cast
 from uuid import uuid4
 
 import pyodbc
@@ -294,7 +295,11 @@ def test_e112_aprobacion_sql_conserva_identidad_y_tarifa_historica(
             with pytest.raises(HTTPException) as error:
                 cola.aprobar(APROBADOR, vencida, None, CONTEXTO)
         assert error.value.status_code == 409
-        assert error.value.detail["code"] == "VIGENCIA_TARIFA_VENCIDA"
+        detalle = cast(object, error.value.detail)
+        assert (
+            isinstance(detalle, dict)
+            and detalle.get("code") == "VIGENCIA_TARIFA_VENCIDA"
+        )
         assert cobrador(fecha) == Decimal("0.45")
 
     primera = solicitar()
@@ -325,7 +330,10 @@ def test_e112_aprobacion_sql_conserva_identidad_y_tarifa_historica(
     )
     with pytest.raises(HTTPException) as error:
         cola.aprobar(APROBADOR, desactualizada, None, CONTEXTO)
-    assert error.value.detail["code"] == "SOLICITUD_DESACTUALIZADA"
+    detalle = cast(object, error.value.detail)
+    assert (
+        isinstance(detalle, dict) and detalle.get("code") == "SOLICITUD_DESACTUALIZADA"
+    )
     with engines["seguridad"].connect() as conn:
         assert (
             conn.execute(

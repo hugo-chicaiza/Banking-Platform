@@ -2,7 +2,7 @@
 
 from datetime import date
 from decimal import Decimal
-from typing import Any
+from typing import Any, cast
 from unittest.mock import MagicMock
 
 import pytest
@@ -260,5 +260,6 @@ def test_borrado_comision_con_historial_se_rechaza_antes_de_ejecutar_delete(
     with pytest.raises(HTTPException) as error:
         administracion.eliminar(conn, "comisiones", "50", USUARIO, "127.0.0.1")
     assert error.value.status_code == 409
-    assert error.value.detail["code"] == "COMISION_CON_HISTORIAL"
+    detalle = cast(object, error.value.detail)
+    assert isinstance(detalle, dict) and detalle.get("code") == "COMISION_CON_HISTORIAL"
     conn.execute.assert_not_called()
