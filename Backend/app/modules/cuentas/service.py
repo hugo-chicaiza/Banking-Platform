@@ -25,6 +25,7 @@ from app.modules.cuentas.schemas import (
     PageMovimientoCuenta,
     SaldoCuenta,
 )
+from app.modules.productos.numeracion import siguiente_numero_cuenta
 
 CAMPOS_ORDEN_CUENTAS = {
     "idCuenta": "IdCuenta",
@@ -272,10 +273,13 @@ def abrir_cuenta(
         )
 
     # 6. Generar NumeroCuenta
-    numero_cuenta = _generar_numero_cuenta(conn, producto["tipo_cuenta"])
+    # El helper AH/CC se conserva hasta E6-01; aperturas usan la regla aprobada.
 
     # 7. Ejecutar la firma real del SP y traducir sus THROW sin exponer SQL.
     try:
+        numero_cuenta = siguiente_numero_cuenta(
+            conn, payload.id_sub_producto, payload.id_agencia
+        )
         row = repository.abrir_cuenta(
             conn,
             numero_cuenta=numero_cuenta,
