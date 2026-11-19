@@ -1,0 +1,103 @@
+# E0-02 · Ensayo de migraciones en una copia restaurada (APAGADO)
+#
+# Se activa con la variable del repositorio ENSAYO_MIGRACIONES=true (Settings → Variables).
+# En un pull request que toca Backend/migrations/: restaura el último respaldo de las dos
+# bases en un SQL Server temporal, aplica las migraciones con el ejecutor de E0-01 y compara
+# las filas por tabla antes y después. Si falla, el pull request queda en rojo y la ejecución
+# real no se habilita. La copia desaparece con el runner.
+name: Ensayo de migraciones
+
+on:
+  pull_request:
+    branches: [develop]
+    paths: ["Backend/migrations/**"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  SQLPACKAGE_VERSION: "170.5.76"
+
+jobs:
+  ensayo:
+    name: Aplicar migraciones en una copia
+    if: vars.ENSAYO_MIGRACIONES == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment: respaldos
+    services:
+      sql:
+        image: mcr.microsoft.com/mssql/server:2022-latest
+        env:
+          ACCEPT_EULA: "Y"
+          MSSQL_SA_PASSWORD: Tmp-${{ github.run_id }}-Aa1!
+        ports: ["1433:1433"]
+    env:
+      SA_PASSWORD: Tmp-${{ github.run_id }}-Aa1!
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.14"
+
+      - name: Dependencias y SqlPackage
+        run: |
+          pip install --require-hashes --only-binary :all: -r Backend/requirements.txt
+          dotnet tool install --global microsoft.sqlpackage --version "$SQLPACKAGE_VERSION"
+          echo "$HOME/.dotnet/tools" >> "$GITHUB_PATH"
+
+      - name: Restaurar el último respaldo de cada base
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.B2_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.B2_APP_KEY }}
+          AWS_DEFAULT_REGION: us-east-005
+          B2_BUCKET: ${{ secrets.B2_BUCKET }}
+          B2_ENDPOINT: ${{ secrets.B2_ENDPOINT }}
+          BACKUP_PASSPHRASE: ${{ secrets.BACKUP_PASSPHRASE }}
+        run: |
+          set -euo pipefail
+          S3="aws s3 --endpoint-url https://${B2_ENDPOINT}"
+          mkdir -p entrada
+          for BASE in CooperativaDB SeguridadDB; do
+            ARCHIVO=$($S3 ls "s3://${B2_BUCKET}/${BASE}/" | awk '{print $4}' | grep '\.enc$' | sort | tail -n 1)
+            $S3 cp "s3://${B2_BUCKET}/${BASE}/${ARCHIVO}" entrada/ --only-show-errors
+            openssl enc -d -aes-256-cbc -pbkdf2 -iter 600000 -in "entrada/${ARCHIVO}" -out "entrada/${BASE}.bacpac.gz" -pass env:BACKUP_PASSPHRASE
+            gunzip "entrada/${BASE}.bacpac.gz"
+            for i in $(seq 1 30); do
+              sqlpackage /Action:Import /SourceFile:"entrada/${BASE}.bacpac" /Quiet:True \
+                /TargetConnectionString:"Server=localhost,1433;Database=${BASE};User ID=sa;Password=${SA_PASSWORD};Encrypt=False;TrustServerCertificate=True" \
+                && break || sleep 10
+            done
+            sqlcmd -S localhost -U sa -P "$SA_PASSWORD" -C -d "$BASE" -h -1 -W -Q \
+              "SET NOCOUNT ON; SELECT s.name+'.'+t.name, SUM(p.rows) FROM sys.tables t JOIN sys.schemas s ON s.schema_id=t.schema_id JOIN sys.partitions p ON p.object_id=t.object_id AND p.index_id IN (0,1) GROUP BY s.name, t.name ORDER BY 1" \
+              > "antes_${BASE}.txt"
+          done
+          rm -rf entrada
+
+      - name: Aplicar las migraciones (ejecutor E0-01) sobre la copia
+        working-directory: Backend
+        run: |
+          set -euo pipefail
+          export MIGRACIONES_HABILITADAS=true
+          ODBC="Driver={ODBC Driver 18 for SQL Server};Server=localhost,1433;UID=sa;PWD=${SA_PASSWORD};Encrypt=no"
+          export MIGRACIONES_ODBC_COOPERATIVA="${ODBC};Database=CooperativaDB"
+          export MIGRACIONES_ODBC_SEGURIDAD="${ODBC};Database=SeguridadDB"
+          for BASE in cooperativa seguridad; do
+            python -m app.core.migraciones estado --base "$BASE"
+            python -m app.core.migraciones aplicar --base "$BASE" --marcar-linea-base
+          done
+
+      - name: Verificar datos (filas por tabla no disminuyen)
+        run: |
+          set -euo pipefail
+          for BASE in CooperativaDB SeguridadDB; do
+            sqlcmd -S localhost -U sa -P "$SA_PASSWORD" -C -d "$BASE" -h -1 -W -Q \
+              "SET NOCOUNT ON; SELECT s.name+'.'+t.name, SUM(p.rows) FROM sys.tables t JOIN sys.schemas s ON s.schema_id=t.schema_id JOIN sys.partitions p ON p.object_id=t.object_id AND p.index_id IN (0,1) GROUP BY s.name, t.name ORDER BY 1" \
+              > "despues_${BASE}.txt"
+            join "antes_${BASE}.txt" "despues_${BASE}.txt" | awk -v b="$BASE" '$3 < $2 {print b": "$1" pasó de "$2" a "$3" filas"; e=1} END {exit e}'
+          done
+          echo "### Ensayo correcto: migraciones aplicadas en la copia y sin pérdida de filas" >> "$GITHUB_STEP_SUMMARY"
