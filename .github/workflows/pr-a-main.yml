@@ -1,0 +1,24 @@
+# E0-11 · main solo recibe pull requests de versión: desde develop o desde una rama release/*.
+# La regla de main exige este check («Origen del pull request hacia main»).
+name: PR hacia main
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, edited]
+
+permissions: {}
+
+jobs:
+  origen:
+    name: Origen del pull request hacia main
+    runs-on: ubuntu-latest
+    steps:
+      - name: Solo develop o release/*
+        env:
+          ORIGEN: ${{ github.head_ref }}
+        run: |
+          case "$ORIGEN" in
+            develop|release/*) echo "Origen permitido: $ORIGEN" ;;
+            *) echo "main solo recibe pull requests de versión (develop o release/*), no '$ORIGEN'"; exit 1 ;;
+          esac
