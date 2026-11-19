@@ -7,13 +7,14 @@ from sqlalchemy import Connection, text
 
 Fila = dict[str, Any]
 _COMISION = """
-    SELECT IdComision AS id_comision, CodigoComision AS codigo_comision,
-        TipoComision AS tipo_comision, TipoCalculo AS tipo_calculo, Valor AS valor,
+    SELECT c.IdComision AS id_comision, CodigoComision AS codigo_comision,
+        TipoComision AS tipo_comision, TipoCalculo AS tipo_calculo, v.Valor AS valor,
         MontoMinimo AS monto_minimo, MontoMaximo AS monto_maximo, IdCanal AS id_canal,
-        Descripcion AS descripcion, VigenciaDesde AS vigencia_desde,
-        VigenciaHasta AS vigencia_hasta, Estado AS estado,
+        Descripcion AS descripcion, c.VigenciaDesde AS vigencia_desde,
+        c.VigenciaHasta AS vigencia_hasta, Estado AS estado,
         IdCuentaContableIngreso AS id_cuenta_contable_ingreso
-    FROM Transacciones.Comisiones
+    FROM Transacciones.Comisiones AS c
+    JOIN Transacciones.vw_ComisionValorPresentacion AS v ON v.IdComision=c.IdComision
 """
 _EXONERACION = """
     SELECT IdExoneracion AS id_exoneracion, IdComision AS id_comision,
@@ -44,11 +45,63 @@ def bloquear_comisiones(conn: Connection) -> None:
 
 
 def listar_comisiones(conn: Connection) -> list[Fila]:
-    return _filas(conn, _COMISION + " ORDER BY IdComision")
+    return _filas(conn, _COMISION + " ORDER BY c.IdComision")
 
 
 def obtener_comision(conn: Connection, id_: int) -> Fila | None:
-    return _fila(conn, _COMISION + " WHERE IdComision=:id", {"id": id_})
+    return _fila(conn, _COMISION + " WHERE c.IdComision=:id", {"id": id_})
+
+
+def versiones_comision(conn: Connection, id_: int) -> list[Fila]:
+    return _filas(
+        conn,
+        """
+        SELECT IdComisionValor AS id_version, Valor AS valor, VigenciaDesde AS desde,
+               VigenciaHasta AS hasta
+        FROM Transacciones.ComisionValor WITH (HOLDLOCK)
+        WHERE IdComision=:id ORDER BY VigenciaDesde
+    """,
+        {"id": id_},
+    )
+
+
+def tarifa_comision(conn: Connection, id_: int, fecha: date) -> Fila | None:
+    return _fila(
+        conn,
+        """
+        SELECT IdComision AS id_comision, Valor AS valor,
+               VigenciaDesde AS vigencia_desde, VigenciaHasta AS vigencia_hasta
+        FROM Transacciones.ComisionValor
+        WHERE IdComision=:id AND VigenciaDesde<=:fecha
+          AND (VigenciaHasta IS NULL OR VigenciaHasta>:fecha)
+    """,
+        {"id": id_, "fecha": fecha},
+    )
+
+
+def versionar_tarifa(
+    conn: Connection, id_: int, anterior: Fila, desde: date, valor: Any, solicitud: int
+) -> None:
+    conn.execute(
+        text("""
+        UPDATE Transacciones.ComisionValor SET VigenciaHasta=:desde
+        WHERE IdComisionValor=:anterior
+    """),
+        {"desde": desde, "anterior": anterior["id_version"]},
+    )
+    conn.execute(
+        text("""
+        INSERT Transacciones.ComisionValor (IdComision,Valor,VigenciaDesde,VigenciaHasta,IdSolicitud)
+        VALUES (:id,:valor,:desde,:hasta,:solicitud)
+    """),
+        {
+            "id": id_,
+            "desde": desde,
+            "hasta": anterior["hasta"],
+            "valor": valor,
+            "solicitud": solicitud,
+        },
+    )
 
 
 def asociaciones(conn: Connection, id_: int) -> list[Fila]:
@@ -101,11 +154,14 @@ def insertar_comision(conn: Connection, datos: Fila) -> int:
     return int(
         conn.execute(
             text("""
+        SET NOCOUNT ON;
+        DECLARE @Ids TABLE (IdComision int);
         INSERT Transacciones.Comisiones (CodigoComision,TipoComision,TipoCalculo,Valor,
             MontoMinimo,MontoMaximo,IdCanal,Descripcion,VigenciaDesde,VigenciaHasta,IdCuentaContableIngreso)
-        OUTPUT inserted.IdComision
+        OUTPUT inserted.IdComision INTO @Ids
         VALUES (:codigo_comision,:tipo_comision,:tipo_calculo,:valor,:monto_minimo,:monto_maximo,
-            :id_canal,:descripcion,:vigencia_desde,:vigencia_hasta,:id_cuenta_contable_ingreso)
+            :id_canal,:descripcion,:vigencia_desde,:vigencia_hasta,:id_cuenta_contable_ingreso);
+        SELECT IdComision FROM @Ids;
     """),
             datos,
         ).scalar_one()
@@ -274,10 +330,11 @@ def tarifas_vigentes(
         conn,
         """
         SELECT c.IdComision AS id_comision,c.TipoCalculo AS tipo_calculo,
-            c.Valor AS valor,c.MontoMinimo AS monto_minimo,c.MontoMaximo AS monto_maximo
+            v.Valor AS valor,c.MontoMinimo AS monto_minimo,c.MontoMaximo AS monto_maximo
         FROM Transacciones.Comisiones c
-        WHERE c.Estado='A' AND c.IdCanal=:canal AND c.VigenciaDesde<=:fecha
-          AND (c.VigenciaHasta IS NULL OR c.VigenciaHasta>:fecha)
+        JOIN Transacciones.ComisionValor v ON v.IdComision=c.IdComision
+        WHERE c.Estado='A' AND c.IdCanal=:canal AND v.VigenciaDesde<=:fecha
+          AND (v.VigenciaHasta IS NULL OR v.VigenciaHasta>:fecha)
           AND EXISTS (SELECT 1 FROM Transacciones.ComisionTipoTransaccion a
             WHERE a.IdComision=c.IdComision AND a.IdCanal=:canal AND a.CodigoTipoTransaccion=:tipo
               AND a.Estado='A' AND a.VigenciaDesde<=:fecha AND (a.VigenciaHasta IS NULL OR a.VigenciaHasta>:fecha))

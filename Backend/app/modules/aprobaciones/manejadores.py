@@ -10,6 +10,7 @@ from app.core.api.schemas import CamelModel
 from app.modules.aprobaciones.registro import Objetivo, Operacion, Plan, Registro
 from app.modules.organizacion.aprobacion import OPERACION_BAJA
 from app.modules.parametros import general
+from app.modules.parametros.aprobacion_comision import OPERACION_TARIFA
 
 
 class PropuestaParametro(CamelModel):
@@ -117,4 +118,5 @@ def registro_inicial() -> Registro:
         )
     )
     registro.agregar(OPERACION_BAJA)
+    registro.agregar(OPERACION_TARIFA)
     return registro

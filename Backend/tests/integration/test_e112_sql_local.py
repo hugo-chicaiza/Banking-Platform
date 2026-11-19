@@ -63,7 +63,7 @@ def conectar(base):
 
 
 @pytest.fixture
-def sql():
+def sql(request):
     base = "E112_Test_" + uuid4().hex
     with closing(conectar("master")) as master:
         assert (
@@ -96,6 +96,11 @@ def sql():
                     ).fetchval()
                     assert funcion and "ComisionTipoTransaccion" in funcion
                 conn.execute(funcion)
+                conn.execute(
+                    "EXEC sys.sp_set_session_context N'migration_database', ?", base
+                )
+                if getattr(request, "param", "instalada") == "instalada":
+                    ejecutar(conn, "004_versiones_tarifa.sql")
                 assert (
                     conn.execute(
                         "SELECT UsuarioID FROM Organizacion.Usuarios WHERE Estado='Activo'"
@@ -133,6 +138,103 @@ def monto(conn, tipo, canal, fecha):
         canal,
         fecha,
     ).fetchval()
+
+
+@pytest.mark.parametrize("sql", ["limpia"], indirect=True)
+def test_migracion_limpia_revierte_tabla_si_el_valor_original_es_invalido(sql):
+    conn, _ = sql
+    definicion = (
+        "SELECT OBJECT_DEFINITION(OBJECT_ID('Transacciones.fn_CalcularComision'))"
+    )
+    original = conn.execute(definicion).fetchval()
+    conn.execute(
+        "UPDATE Transacciones.Comisiones SET TipoCalculo = 'Porcentaje', Valor = 101"
+    )
+    with pytest.raises(pyodbc.Error, match="57290"):
+        ejecutar(conn, "004_versiones_tarifa.sql")
+    assert conn.execute(definicion).fetchval() == original
+    estado = conn.execute(
+        "SELECT OBJECT_ID('Transacciones.ComisionValor'), @@TRANCOUNT"
+    ).fetchone()
+    assert tuple(estado) == (None, 0)
+    assert (
+        conn.execute("SELECT MIN(Valor) FROM Transacciones.Comisiones").fetchval()
+        == 101
+    )
+
+
+@pytest.mark.parametrize(
+    ("alteracion", "codigo"),
+    [
+        ("DROP VIEW Transacciones.vw_ComisionValorPresentacion", "57288"),
+        ("DELETE FROM Transacciones.ComisionValor WHERE IdComision = 1", "57289"),
+        (
+            """
+            ALTER TABLE Transacciones.ComisionValor NOCHECK CONSTRAINT CK_ComisionValor_Intervalo;
+            UPDATE Transacciones.ComisionValor SET VigenciaHasta = VigenciaDesde
+            """,
+            "57288",
+        ),
+        (
+            """
+            ALTER TABLE Transacciones.ComisionValor DISABLE TRIGGER trg_ComisionValor_SinSolape;
+            INSERT Transacciones.ComisionValor (IdComision, Valor, VigenciaDesde, IdSolicitud)
+            VALUES (1, 0.99, '20270101', 999);
+            ALTER TABLE Transacciones.ComisionValor ENABLE TRIGGER trg_ComisionValor_SinSolape
+            """,
+            "57290",
+        ),
+        (
+            """
+            ALTER FUNCTION Transacciones.fn_CalcularComision
+            (@CodigoTipo varchar(30), @IdCanal int, @Monto decimal(18,2), @Fecha date)
+            RETURNS TABLE AS RETURN SELECT 1 AS IdComision
+            """,
+            "57287",
+        ),
+    ],
+)
+def test_migracion_versiones_rechaza_estados_parciales_sin_repararlos(
+    sql, alteracion, codigo
+):
+    conn, _ = sql
+    conn.execute(alteracion)
+    snapshot = """
+        SELECT OBJECT_DEFINITION(OBJECT_ID('Transacciones.fn_CalcularComision')),
+               OBJECT_ID('Transacciones.vw_ComisionValorPresentacion'),
+               (SELECT COUNT(*) FROM Transacciones.ComisionValor), @@TRANCOUNT
+    """
+    antes = conn.execute(snapshot).fetchone()
+    with pytest.raises(pyodbc.Error, match=codigo):
+        ejecutar(conn, "004_versiones_tarifa.sql")
+    assert conn.execute(snapshot).fetchone() == antes
+
+
+def test_versiones_sql_preservan_semilla_y_rechazan_solape_o_edicion_directa(sql):
+    conn, _ = sql
+    consulta = """
+        SELECT IdComision, Valor, VigenciaDesde, VigenciaHasta
+        FROM Transacciones.ComisionValor ORDER BY IdComision
+    """
+    antes = conn.execute(consulta).fetchall()
+    assert (
+        antes
+        == conn.execute("""
+        SELECT IdComision, Valor, VigenciaDesde, VigenciaHasta
+        FROM Transacciones.Comisiones ORDER BY IdComision
+    """).fetchall()
+    )
+    ejecutar(conn, "004_versiones_tarifa.sql")
+    with pytest.raises(pyodbc.Error, match="57281"):
+        conn.execute("""
+            INSERT Transacciones.ComisionValor (IdComision, Valor, VigenciaDesde)
+            VALUES (1, 0.99, '20270101');
+        """)
+    with pytest.raises(pyodbc.Error, match="57282"):
+        conn.execute(
+            "UPDATE Transacciones.Comisiones SET Valor=0.99 WHERE IdComision=1"
+        )
+    assert conn.execute(consulta).fetchall() == antes
 
 
 def test_migracion_repetible_y_limites(sql):
@@ -386,7 +488,7 @@ def test_generador_id(sql, secuencia):
 
 def test_duplicados_existentes_y_tarifa_distinta_aborta(sql):
     conn, _ = sql
-    conn.execute("UPDATE Transacciones.Comisiones SET Valor=0.46 WHERE IdComision=1")
+    conn.execute("UPDATE Transacciones.ComisionValor SET Valor=0.46 WHERE IdComision=1")
     with pytest.raises(pyodbc.Error, match="Catalogos"):
         ejecutar(conn, "002_cargar_tarifas.sql")
     assert (
@@ -395,7 +497,7 @@ def test_duplicados_existentes_y_tarifa_distinta_aborta(sql):
         ).fetchval()
         == 0
     )
-    conn.execute("UPDATE Transacciones.Comisiones SET Valor=0.45 WHERE IdComision=1")
+    conn.execute("UPDATE Transacciones.ComisionValor SET Valor=0.45 WHERE IdComision=1")
     conn.execute("""
         INSERT Transacciones.ComisionTipoTransaccion
             (CodigoTipoTransaccion,IdCanal,IdComision,VigenciaDesde,Estado,RegistradoPor)

@@ -17,5 +17,11 @@ WHERE CodigoTipoTransaccion IN ('Retiro','Transferencia_Enviada','Reposicion_Tar
 SELECT * FROM Transacciones.TipoTransaccion
 WHERE CodigoTipo IN ('Retiro','Transferencia_Enviada','Reposicion_Tarjeta','Cobro_Comision');
 SELECT OBJECT_DEFINITION(OBJECT_ID('Transacciones.fn_CalcularComision')) AS CobradorVigente;
+SELECT OBJECT_SCHEMA_NAME(d.referencing_id) AS Esquema,
+       OBJECT_NAME(d.referencing_id) AS Consumidor
+FROM sys.sql_expression_dependencies AS d
+WHERE d.referenced_id IN (OBJECT_ID('Transacciones.Comisiones'),
+                          OBJECT_ID('Transacciones.fn_CalcularComision'))
+ORDER BY Esquema, Consumidor;
 SELECT name,definition,is_disabled,is_not_trusted FROM sys.check_constraints
 WHERE parent_object_id=OBJECT_ID('Transacciones.ExoneracionComision');
