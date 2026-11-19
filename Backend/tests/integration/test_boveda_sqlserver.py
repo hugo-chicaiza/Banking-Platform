@@ -397,6 +397,70 @@ def test_sql_solicitudes_no_se_editan(motor, tabla, asignacion):
         )
 
 
+def test_sql_traslado_con_trigger_contable_se_ejecuta_una_sola_vez(motor):
+    with motor.begin() as conn:
+        conn.execute(
+            text("""
+            CREATE TRIGGER Contabilidad.trg_AsientoContable_PeriodoLab
+            ON Contabilidad.AsientoContable AFTER INSERT AS
+            BEGIN
+                SET NOCOUNT ON;
+                IF EXISTS (
+                    SELECT 1 FROM inserted i
+                    JOIN Contabilidad.PeriodoContable p
+                      ON p.Anio=YEAR(i.FechaAsiento) AND p.Mes=MONTH(i.FechaAsiento)
+                    WHERE p.Estado='CERRADO'
+                )
+                    THROW 56007, N'El periodo del asiento esta cerrado.', 1;
+            END;
+            """)
+        )
+
+    with motor.connect() as conn:
+        solicitud = solicitudes.crear(
+            conn,
+            OPERADOR,
+            7,
+            1,
+            movimiento("Traslado", idBovedaContraparte=2),
+            "local",
+            None,
+        )
+        primera = solicitudes.aprobar(
+            conn, APROBADOR, 9, solicitud.id_solicitud_movimiento, "local"
+        )
+        repetida = solicitudes.aprobar(
+            conn, APROBADOR, 9, solicitud.id_solicitud_movimiento, "local"
+        )
+        assert primera == repetida
+        assert len(primera) == 2
+        assert len({m.id_asiento_contable for m in primera}) == 2
+        assert service.obtener_boveda(conn, OPERADOR, 1).saldo_actual == 160
+        admin = replace(OPERADOR, roles=("ADMIN",))
+        assert service.obtener_boveda(conn, admin, 2).saldo_actual == 240
+        assert (
+            solicitudes.obtener(
+                conn, OPERADOR, solicitud.id_solicitud_movimiento
+            ).estado
+            == "EJECUTADA"
+        )
+        assert (
+            conn.execute(
+                text("""
+            SELECT COUNT(*) FROM Contabilidad.AsientoContable
+            WHERE Estado='CONTABILIZADO' AND TotalDebito=40 AND TotalCredito=40
+        """)
+            ).scalar_one()
+            == 2
+        )
+        assert (
+            conn.execute(
+                text("SELECT COUNT(*) FROM Boveda.MovimientoBoveda")
+            ).scalar_one()
+            == 2
+        )
+
+
 def test_sql_fallo_al_vincular_revierte_toda_aprobacion(motor, monkeypatch):
     from app.modules.boveda.solicitudes import repository as repo
 

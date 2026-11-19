@@ -423,7 +423,7 @@ def validar_participante_boveda(
                 422, "PARTICIPANTE_NO_HABILITADO", "El participante no está habilitado."
             )
         auditor_global = "AUDITOR" in roles_permitidos and "AUDITOR" in roles
-        if not auditor_global and fila["AgenciaID"] != id_agencia:
+        if not auditor_global and codigo_agencia(fila["AgenciaID"]) != id_agencia:
             raise problema(
                 403, "SIN_ACCESO_AGENCIA", "El participante pertenece a otra agencia."
             )
