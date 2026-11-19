@@ -145,6 +145,48 @@ def listar(
     )
 
 
+def notificaciones(servicio: Servicio, actor: Actor, agencia: str | None) -> dict:
+    """Avisos reales de la cola, con el mismo alcance de sus bandejas."""
+    codigos = [
+        o.codigo
+        for o in servicio.registro.operaciones()
+        if o.permiso_aprobacion in actor.permisos
+    ]
+    sql = consulta("""SELECT TOP(50) *,COUNT(*) OVER() AS TotalFiltrado
+        FROM Seguridad.SolicitudAprobacion
+        WHERE IdOrganizacion=:org
+          AND (:global=1 OR IdAgencia IS NULL OR IdAgencia IN :agencias)
+          AND (:agencia IS NULL OR IdAgencia IS NULL OR IdAgencia=:agencia)
+          AND ((Estado='Pendiente' AND SolicitadoPor<>:actor AND CodigoTransaccion IN :codigos)
+            OR (SolicitadoPor=:actor AND Estado<>'Pendiente'))
+        ORDER BY COALESCE(FechaResolucion,FechaSolicitud) DESC,IdSolicitud DESC""").bindparams(
+        bindparam("agencias", expanding=True), bindparam("codigos", expanding=True)
+    )
+    with servicio.seguridad.connect() as seg:
+        filas = (
+            seg.execute(
+                sql,
+                {
+                    "org": actor.organizacion,
+                    "global": int(actor.global_admin),
+                    "agencias": list(actor.agencias),
+                    "agencia": agencia,
+                    "actor": actor.sujeto,
+                    "codigos": codigos,
+                },
+            )
+            .mappings()
+            .all()
+        )
+    return {
+        "items": [
+            resumen(servicio, actor, dict(f)).model_dump(mode="json", by_alias=True)
+            for f in filas
+        ],
+        "total": filas[0]["TotalFiltrado"] if filas else 0,
+    }
+
+
 def detalle(servicio: Servicio, actor: Actor, id_: int) -> SolicitudDetalle:
     with servicio.seguridad.connect() as seg:
         fila = obtener(seg, id_, actor.organizacion)

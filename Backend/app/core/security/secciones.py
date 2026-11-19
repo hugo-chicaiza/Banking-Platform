@@ -94,6 +94,29 @@ RUTAS_POR_SECCION: dict[str, tuple[tuple[str, str], ...]] = {
         ("PATCH", "/api/v1/organizacion/agencias/{id_agencia}/estado"),
     ),
     "productos.consultar": (
+        ("GET", "/api/v1/productos/subproductos/{id_sub}/vigencias"),
+        ("GET", "/api/v1/productos/subproductos/{id_sub}/condiciones"),
+        ("POST", "/api/v1/productos/subproductos/{id_sub}/condiciones"),
+        ("DELETE", "/api/v1/productos/subproductos/{id_sub}/condiciones/{id_registro}"),
+        ("PATCH", "/api/v1/productos/subproductos/{id_sub}/condiciones/{id_registro}"),
+        ("PATCH", "/api/v1/productos/subproductos/{id_sub}/cupos/{id_registro}"),
+        ("POST", "/api/v1/productos/subproductos/{id_sub}/restricciones"),
+        (
+            "DELETE",
+            "/api/v1/productos/subproductos/{id_sub}/restricciones/{id_registro}",
+        ),
+        (
+            "PATCH",
+            "/api/v1/productos/subproductos/{id_sub}/restricciones/{id_registro}",
+        ),
+        (
+            "POST",
+            "/api/v1/productos/subproductos/{id_sub}/restricciones/{id_registro}/fin",
+        ),
+        (
+            "DELETE",
+            "/api/v1/productos/subproductos/{id_sub}/cupos/programaciones/{id_programacion}",
+        ),
         ("GET", "/api/v1/productos"),
         ("POST", "/api/v1/productos"),
         ("GET", "/api/v1/productos/tipos"),

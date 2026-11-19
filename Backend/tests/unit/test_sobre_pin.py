@@ -35,7 +35,10 @@ VENCE = AHORA + timedelta(days=30)
 def texto_pdf(pdf: bytes) -> str:
     """Texto de los flujos del PDF (fpdf2 los comprime con zlib)."""
     partes = []
-    for flujo in re.findall(rb"stream\r?\n(.*?)\r?\nendstream", pdf, re.DOTALL):
+    # /Length evita recortar bytes CR o LF del contenido comprimido.
+    for bloque in re.finditer(rb"/Length\s+(\d+)\b[^>]*>>\s*stream\r?\n", pdf):
+        inicio = bloque.end()
+        flujo = pdf[inicio : inicio + int(bloque.group(1))]
         try:
             partes.append(zlib.decompress(flujo).decode("latin-1"))
         except zlib.error:

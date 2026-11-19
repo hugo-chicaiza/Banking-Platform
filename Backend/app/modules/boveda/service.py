@@ -36,7 +36,7 @@ from app.modules.boveda.schemas import (
 from app.modules.contabilidad import service as contabilidad
 
 _GLOBALES = frozenset({"ADMIN", "CONTADOR", "AUDITOR"})
-_TESTIGOS = frozenset({"SUPERVISOR", "AUDITOR"})
+_TESTIGOS = frozenset({"SUPERVISOR", "AUDITOR", "ADMIN"})
 _MAX_DINERO = Decimal("9999999999999999.99")
 
 

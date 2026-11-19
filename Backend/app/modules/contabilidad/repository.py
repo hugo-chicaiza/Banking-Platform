@@ -393,12 +393,17 @@ def crear_asiento_boveda(conn: Connection, datos: dict[str, Any]) -> int:
     return int(
         conn.execute(
             text("""
+        SET NOCOUNT ON;
+        DECLARE @AsientoCreado TABLE (IdAsientoContable int NOT NULL);
+
         INSERT INTO Contabilidad.AsientoContable
             (NumeroAsiento, FechaAsiento, FechaSistema, IdTipoAsiento, Origen,
              Concepto, TotalDebito, TotalCredito, Estado, IdUsuarioCreacion, IdAgencia, IdFechaContable)
-        OUTPUT INSERTED.IdAsientoContable
+        OUTPUT INSERTED.IdAsientoContable INTO @AsientoCreado (IdAsientoContable)
         VALUES (:numero, :fecha, :ahora, :tipo_asiento, 'BOVEDA', :concepto,
-                0, 0, 'BORRADOR', :actor, :agencia, :fecha_contable)
+                0, 0, 'BORRADOR', :actor, :agencia, :fecha_contable);
+
+        SELECT IdAsientoContable FROM @AsientoCreado;
     """),
             {**datos, "numero": numero},
         ).scalar_one()

@@ -130,6 +130,13 @@ def bandeja(
     )
 
 
+@router.get("/notificaciones")
+def notificaciones(actor: Actual, cola: Cola, usuario: UsuarioActual) -> dict:
+    return lecturas.notificaciones(
+        cola, actor, None if actor.global_admin else usuario.agencia()
+    )
+
+
 @router.post("", status_code=202, response_model=SolicitudAceptada)
 def solicitar(
     datos: Solicitar,

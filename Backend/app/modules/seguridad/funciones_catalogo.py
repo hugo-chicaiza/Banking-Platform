@@ -359,6 +359,8 @@ FUNCIONES = (
                 "/subproductos/{id_sub_producto}/vinculos",
                 "/subproductos/{id_sub_producto}/cupos",
                 "/subproductos/{id_sub_producto}/restricciones",
+                "/subproductos/{id_sub}/vigencias",
+                "/subproductos/{id_sub}/condiciones",
             )
         ),
         "/productos",
@@ -388,7 +390,7 @@ FUNCIONES = (
     ),
     _f(
         "productos.configurar",
-        "Configurar vínculos, cupos y restricciones",
+        "Configurar vinculos de productos",
         "Productos",
         PERMISOS["prd-editar"],
         tuple(
@@ -396,12 +398,35 @@ FUNCIONES = (
             for s in (
                 "/{id_producto}/vinculos",
                 "/subproductos/{id_sub_producto}/vinculos",
-                "/subproductos/{id_sub_producto}/cupos",
-                "/subproductos/{id_sub_producto}/restricciones",
             )
         ),
         "/productos",
         ("productos.consultar",),
+    ),
+    _f(
+        "productos.programar",
+        "Programar condiciones, cupos y restricciones",
+        "Productos",
+        PERMISOS["prd-condicion"],
+        (
+            ("PUT", P + "/subproductos/{id_sub_producto}/cupos"),
+            ("PUT", P + "/subproductos/{id_sub_producto}/restricciones"),
+            ("POST", P + "/subproductos/{id_sub}/condiciones"),
+            ("DELETE", P + "/subproductos/{id_sub}/condiciones/{id_registro}"),
+            ("PATCH", P + "/subproductos/{id_sub}/condiciones/{id_registro}"),
+            ("PATCH", P + "/subproductos/{id_sub}/cupos/{id_registro}"),
+            ("POST", P + "/subproductos/{id_sub}/restricciones"),
+            ("DELETE", P + "/subproductos/{id_sub}/restricciones/{id_registro}"),
+            ("PATCH", P + "/subproductos/{id_sub}/restricciones/{id_registro}"),
+            ("POST", P + "/subproductos/{id_sub}/restricciones/{id_registro}/fin"),
+            (
+                "DELETE",
+                P + "/subproductos/{id_sub}/cupos/programaciones/{id_programacion}",
+            ),
+        ),
+        "/productos",
+        ("productos.consultar",),
+        delegable=False,
     ),
     _f(
         "productos.exportar",

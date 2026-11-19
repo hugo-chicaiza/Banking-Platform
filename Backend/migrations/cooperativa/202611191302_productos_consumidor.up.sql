@@ -1,0 +1,138 @@
+SET XACT_ABORT ON;
+IF COALESCE(CONVERT(nvarchar(128),SESSION_CONTEXT(N'migration_database')),N'')<>DB_NAME()
+ THROW 57603,'Falta confirmar la base destino de E3-03.',1;
+IF CONVERT(int,SERVERPROPERTY('EngineEdition'))=5 AND ISNULL(CONVERT(int,SESSION_CONTEXT(N'E303_AZURE_APROBADA')),0)<>1
+ THROW 57603,'E3-03 requiere autorizacion adicional para Azure.',1;
+BEGIN TRY
+ BEGIN TRANSACTION;
+ IF OBJECT_ID('Transacciones.usp_AutorizarOperacion','P') IS NULL
+  THROW 57603,'Falta el consumidor de Transacciones inspeccionado.',1;
+ EXEC sys.sp_executesql N'CREATE OR ALTER PROCEDURE Transacciones.usp_AutorizarOperacion
+
+    @IdCuenta int, @IdCanal int, @TipoTransaccion varchar(30), @Monto decimal(18,2),
+
+    @FechaHora datetime2 = NULL,
+
+    @CodigoRespuesta char(2) OUTPUT, @Mensaje nvarchar(300) OUTPUT, @Comision decimal(18,2) = NULL OUTPUT
+
+AS
+
+/* Decide si una operación se puede registrar, antes de registrarla. Devuelve el código de respuesta:
+
+     00 aprobada; 05 no aprobar (cuenta no activa o restricción del subproducto);
+
+     51 fondos insuficientes; 61 excede el límite de monto; 65 excede el límite de frecuencia.
+
+   Aplica: CU-03 (estado de la cuenta), PC-02 (cupo vigente con fn_CupoVigente),
+
+   restricciones de ProductoRestriccion y comisiones de fn_CalcularComision (TR-04). */
+
+BEGIN
+
+    SET NOCOUNT ON;
+
+    DECLARE @Estado varchar(10), @Saldo decimal(18,2), @Retenido decimal(18,2), @IdSub int, @Apertura datetime2, @Naturaleza char(1);
+
+    DECLARE @CupoDia decimal(18,2), @CupoMes decimal(18,2), @MaxTx decimal(18,2), @MaxCant smallint;
+
+    DECLARE @UsadoDia decimal(18,2), @UsadoMes decimal(18,2), @CantDia int, @Dia date, @Restriccion nvarchar(250);
+
+    SET @FechaHora = ISNULL(@FechaHora, CAST(SYSDATETIMEOFFSET() AT TIME ZONE ''SA Pacific Standard Time'' AS datetime2));
+
+    SET @Dia = CAST(@FechaHora AS date);
+
+    SET @CodigoRespuesta = ''00''; SET @Mensaje = N''Aprobada'';
+
+
+
+    SELECT @Naturaleza = Naturaleza FROM Transacciones.TipoTransaccion WHERE CodigoTipo = @TipoTransaccion AND Estado = ''A'';
+
+    SELECT @Estado = Estado, @Saldo = Saldo, @Retenido = SaldoRetenido, @IdSub = IdSubProducto, @Apertura = FechaApertura
+
+    FROM Cuentas.Cuenta WHERE IdCuenta = @IdCuenta;
+
+    IF @Estado IS NULL BEGIN SET @CodigoRespuesta = ''14''; SET @Mensaje = N''La cuenta no existe.''; RETURN; END;
+
+
+
+    SELECT @Comision = ISNULL(SUM(MontoComision), 0) FROM Transacciones.fn_CalcularComision(@TipoTransaccion, @IdCanal, @Monto, @Dia);
+
+
+
+    -- E3-03: restricciones por tipo y fin inclusivo, sin confundir retiros y transferencias.
+    SELECT TOP(1) @Restriccion=r.Descripcion
+    FROM ProductosFinancieros.ProductoRestriccion r
+    WHERE r.IdSubProducto=@IdSub AND r.Estado=''A'' AND r.VigenciaDesde<=@Dia
+      AND (r.VigenciaHasta IS NULL OR r.VigenciaHasta>=@Dia)
+      AND (
+        (r.TipoRestriccion=''SIN_RETIROS'' AND @TipoTransaccion=''Retiro''
+          AND (r.Dias IS NULL OR DATEDIFF(day,@Apertura,@FechaHora)<r.Dias))
+        OR (r.TipoRestriccion=''SIN_RETIROS_DIAS'' AND @TipoTransaccion=''Retiro'' AND DATEDIFF(day,@Apertura,@FechaHora)<r.Dias)
+        OR (r.TipoRestriccion=''SIN_TRANSFERENCIAS_SALIDA'' AND @TipoTransaccion=''Transferencia_Enviada'')
+        OR (r.TipoRestriccion=''SALDO_MINIMO'' AND (@Naturaleza=''D'' OR @Comision>0)
+          AND @Saldo-ISNULL(CASE WHEN @Naturaleza=''D'' THEN @Monto END,0)-@Comision<r.Monto)
+        OR (r.TipoRestriccion=''SALDO_MAXIMO'' AND @Naturaleza=''C'' AND @Saldo+@Monto-@Comision>r.Monto)
+      );
+    IF @Restriccion IS NOT NULL
+    BEGIN SET @CodigoRespuesta=''05''; SET @Mensaje=CONCAT(N''Restriccion del producto: '',@Restriccion); RETURN; END;
+
+    IF @Naturaleza = ''D'' OR @Comision > 0
+
+    BEGIN
+
+        IF @Estado <> ''Activa'' BEGIN SET @CodigoRespuesta = ''05''; SET @Mensaje = N''La cuenta no está activa.''; RETURN; END;
+
+        IF @Saldo - @Retenido < ISNULL(CASE WHEN @Naturaleza = ''D'' THEN @Monto END, 0) + @Comision
+
+        BEGIN SET @CodigoRespuesta = ''51''; SET @Mensaje = N''Fondos insuficientes.''; RETURN; END;
+
+    END;
+
+
+
+    -- La habilitacion del canal requiere techo vigente. Los limites de salida
+    -- conservan su contrato original: se contabilizan solamente debitos.
+    IF @Naturaleza IN (''D'',''C'') OR @Comision > 0
+    BEGIN
+        SELECT @CupoDia = CupoDiario, @CupoMes = CupoMensual, @MaxTx = MontoMaxTransaccion, @MaxCant = MaxTransaccionesDia
+        FROM Canal.fn_CupoVigenteFecha(@IdCuenta, @IdCanal, @Dia);
+        IF @CupoDia IS NULL BEGIN SET @CodigoRespuesta=''05''; SET @Mensaje=N''Canal sin cupo vigente del producto.''; RETURN; END;
+    END;
+
+    IF @Naturaleza = ''D''
+    BEGIN
+        IF @CupoDia IS NOT NULL
+
+        BEGIN
+
+            SELECT @UsadoDia = ISNULL(SUM(CASE WHEN CAST(t.FechaHoraSistema AS date) = @Dia THEN t.Monto END), 0),
+
+                   @CantDia  = ISNULL(SUM(CASE WHEN CAST(t.FechaHoraSistema AS date) = @Dia THEN 1 END), 0),
+
+                   @UsadoMes = ISNULL(SUM(t.Monto), 0)
+
+            FROM Transacciones.Transaccion t JOIN Transacciones.TipoTransaccion tt ON tt.CodigoTipo = t.TipoTransaccion
+
+            WHERE t.IdCuenta = @IdCuenta AND t.IdCanal = @IdCanal AND t.Estado = ''Completada'' AND t.TipoOperacion = ''Normal''
+
+              AND tt.Naturaleza = ''D'' AND t.FechaHoraSistema >= DATEFROMPARTS(YEAR(@Dia), MONTH(@Dia), 1) AND t.FechaHoraSistema < DATEADD(day, 1, @Dia);
+
+            IF @Monto > @MaxTx OR @UsadoDia + @Monto > @CupoDia OR @UsadoMes + @Monto > @CupoMes
+
+            BEGIN SET @CodigoRespuesta = ''61''; SET @Mensaje = N''Excede el límite de monto.''; RETURN; END;
+
+            IF @CantDia + 1 > @MaxCant
+
+            BEGIN SET @CodigoRespuesta = ''65''; SET @Mensaje = N''Excede el límite de frecuencia.''; RETURN; END;
+
+        END;
+
+    END;
+
+END;';
+ COMMIT TRANSACTION;
+END TRY
+BEGIN CATCH
+ IF XACT_STATE()<>0 ROLLBACK TRANSACTION;
+ THROW;
+END CATCH;

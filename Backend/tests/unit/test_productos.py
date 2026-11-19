@@ -13,13 +13,18 @@ from unittest.mock import MagicMock
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 from sqlalchemy.exc import DBAPIError
 
 from app.core.database.db import cooperativa
 from app.core.security import audit
 from app.core.security.auth import ROLES
 from app.core.security.permisos import PERMISOS
+from app.modules.aprobaciones import router as apr
+from app.modules.aprobaciones.identidad import Actor
 from app.modules.productos import repository as repo
+from app.modules.productos.programacion import validar_cupos
+from app.modules.productos.programacion_schemas import CuposNuevos
 from app.modules.productos.router import router
 from tests.sesion import simular_sesion, usuario_con_roles
 
@@ -180,6 +185,21 @@ def _cliente(*roles: str) -> TestClient:
     app.include_router(router, prefix="/api/v1")
     app.dependency_overrides[cooperativa] = lambda: MagicMock()
     simular_sesion(app, usuario_con_roles(*roles))
+    # Contratos HTTP unitarios. La persistencia y WorkOS reales se verifican
+    # por separado en SQL local y en las pruebas funcionales del navegador.
+    actor = Actor(
+        "user_unitario",
+        "org_unitaria",
+        "Persona QA",
+        1,
+        tuple(roles),
+        frozenset({"prd-condicion"} if "ADMIN" in roles else set()),
+        (),
+    )
+    app.dependency_overrides[apr.actual] = lambda: actor
+    cola = MagicMock()
+    cola.solicitar.return_value = 37
+    app.dependency_overrides[apr.servicio] = lambda: cola
     return TestClient(app, raise_server_exceptions=False)
 
 
@@ -512,18 +532,20 @@ def _sub_de_cuenta(admin: TestClient) -> int:
     ).json()["idSubProducto"]
 
 
-def test_admin_habilita_canales_y_asesor_consulta(bd, cupos, admin, asesor):
+def test_admin_solicita_cupos_sin_habilitarlos_y_asesor_consulta(
+    bd, cupos, admin, asesor
+):
     sub = _sub_de_cuenta(admin)
     url = f"{BASE}/subproductos/{sub}/cupos"
     assert asesor.put(url, json={"cupos": [VENTANILLA]}).status_code == 403
-    r = admin.put(url, json={"cupos": [VENTANILLA]})
-    assert r.status_code == 200, r.text
-    por_canal = {c["codigoCanal"]: c for c in r.json()}
-    assert (
-        por_canal["VENT"]["habilitado"]
-        and por_canal["VENT"]["cupoDiarioMaximo"] == 10000
-    )
-    assert not por_canal["ATM"]["habilitado"]
+    r = admin.put(url, json={"vigenciaDesde": "2099-01-01", "cupos": [VENTANILLA]})
+    assert r.status_code == 202, r.text
+    assert r.json() == {
+        "idSolicitud": 37,
+        "estado": "Pendiente",
+        "requiereAprobacion": True,
+    }
+    assert cupos["cupos"] == {}
     assert asesor.get(url).status_code == 200
 
 
@@ -533,19 +555,22 @@ def test_admin_habilita_canales_y_asesor_consulta(bd, cupos, admin, asesor):
         ({"cupoMensualMaximo": 100}, 422),  # mensual menor que el diario
         ({"montoMaxTransaccion": 20000}, 422),  # supera el diario
         ({"maxTransaccionesDia": 0}, 400),
-        ({"idCanal": 9}, 422),  # canal inexistente
     ],
 )
 def test_cupos_invalidos(bd, cupos, admin, cambio, status):
-    sub = _sub_de_cuenta(admin)
-    r = admin.put(
-        f"{BASE}/subproductos/{sub}/cupos", json={"cupos": [{**VENTANILLA, **cambio}]}
-    )
-    assert r.status_code in (status, 422), r.text
+    from fastapi import HTTPException
+
+    with pytest.raises((ValidationError, HTTPException)):
+        datos = CuposNuevos.model_validate(
+            {"vigenciaDesde": "2099-01-01", "cupos": [{**VENTANILLA, **cambio}]}
+        )
+        validar_cupos(datos.cupos)
     assert cupos["cupos"] == {}
 
 
-def test_no_baja_el_maximo_bajo_un_cupo_personalizado(bd, cupos, admin):
+def test_p7_reduccion_del_techo_se_solicita_sin_reescribir_personalizados(
+    bd, cupos, admin
+):
     sub = _sub_de_cuenta(admin)
     cupos["personalizados"] = {
         1: {"cupo_diario": 8000, "cupo_mensual": 9000, "monto_max_transaccion": 100}
@@ -554,14 +579,19 @@ def test_no_baja_el_maximo_bajo_un_cupo_personalizado(bd, cupos, admin):
     r = admin.put(
         url,
         json={
+            "vigenciaDesde": "2099-01-01",
             "cupos": [
                 {**VENTANILLA, "cupoDiarioMaximo": 6000, "montoMaxTransaccion": 1000}
-            ]
+            ],
         },
     )
-    assert r.status_code == 409 and r.json()["code"] == "CUPO_MENOR_QUE_PERSONALIZADO"
-    assert admin.put(url, json={"cupos": []}).status_code == 409  # quitar el canal
-    assert admin.put(url, json={"cupos": [VENTANILLA]}).status_code == 200
+    assert r.status_code == 202
+    assert cupos["personalizados"][1]["cupo_diario"] == 8000
+    assert cupos["cupos"] == {}
+    assert (
+        admin.put(url, json={"vigenciaDesde": "2099-01-01", "cupos": []}).status_code
+        == 202
+    )
 
 
 def test_cupos_no_aplican_a_creditos(bd, cupos, admin):
@@ -573,13 +603,20 @@ def test_cupos_no_aplican_a_creditos(bd, cupos, admin):
 def test_restricciones_de_cuenta(bd, cupos, admin, asesor):
     sub = _sub_de_cuenta(admin)
     url = f"{BASE}/subproductos/{sub}/restricciones"
-    r = admin.put(url, json={"diasSinRetiros": 30, "saldoMinimo": 100})
-    assert r.status_code == 200 and r.json() == {
-        "diasSinRetiros": 30,
-        "saldoMinimo": 100,
-    }
-    r = admin.put(url, json={"diasSinRetiros": None, "saldoMinimo": 100})
-    assert r.json()["diasSinRetiros"] is None
+    r = admin.put(
+        url,
+        json={
+            "vigenciaDesde": "2099-01-01",
+            "tipoRestriccion": "SIN_RETIROS_DIAS",
+            "dias": 30,
+            "descripcion": "Reserva inicial",
+        },
+    )
+    assert r.status_code == 202 and r.json()["requiereAprobacion"]
+    assert cupos["restricciones"] == {}
+    assert admin.put(
+        url, json={"diasSinRetiros": 30, "saldoMinimo": 100}
+    ).status_code in (400, 422)
     assert asesor.put(url, json={}).status_code == 403
     assert admin.put(url, json={"saldoMinimo": 0}).status_code in (400, 422)
 
