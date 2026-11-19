@@ -470,6 +470,7 @@ def contabilizar_boveda(
     """
     if not conn.in_transaction():
         raise RuntimeError("La contabilización de bóveda requiere una transacción")
+    repository.bloquear_contabilizacion(conn)
     periodo = repository.periodo_boveda(conn, fecha_contable)
     if periodo is None or periodo["estado"] != "ABIERTO":
         raise problema(
@@ -482,7 +483,6 @@ def contabilizar_boveda(
             "PLANTILLA_BOVEDA_NO_CONFIGURADA",
             "Falta una plantilla contable activa para esta operación y agencia.",
         )
-    cuentas: dict[int, dict[str, Any]] = {}
     for id_cuenta in sorted({plantilla["debito"], plantilla["credito"]}):
         cuenta = repository.cuenta_boveda(conn, id_cuenta)
         if cuenta is None or not cuenta["estado"] or not cuenta["imputable"]:
@@ -491,7 +491,6 @@ def contabilizar_boveda(
                 "CUENTA_CONTABLE_NO_HABILITADA",
                 "La plantilla contiene una cuenta inactiva o no imputable.",
             )
-        cuentas[id_cuenta] = cuenta
     asiento = repository.crear_asiento_boveda(
         conn,
         {
@@ -514,7 +513,6 @@ def contabilizar_boveda(
             monto,
             lado,
             ahora,
-            cuentas[cuenta]["naturaleza"],
         )
-    repository.confirmar_asiento_boveda(conn, asiento)
+    repository.contabilizar_asiento(conn, asiento)
     return asiento

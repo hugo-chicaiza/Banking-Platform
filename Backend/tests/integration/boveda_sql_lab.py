@@ -1,4 +1,4 @@
-"""Laboratorio BOV opt-in, local SQLEXPRESS, nombre aleatorio y marca verificable.
+"""Laboratorio BOV opt-in, servidor local, nombre aleatorio y marca verificable.
 
 No lee .env ni conecta las bases de negocio. Solo puede borrar la base que crea
 esta instancia después de comprobar servidor, nombre y marca.
@@ -21,6 +21,9 @@ BACKEND = Path(__file__).resolve().parents[2]
 class LaboratorioBoveda:
     def __init__(self):
         self.database = "CooperativaDB_BOV_Lab_" + uuid4().hex[:12]
+        self.instancia_predeterminada = (
+            os.getenv("BOV_LOCAL_SQL_DEFAULT_INSTANCE") == "1"
+        )
         self.engine = None
         self.creada = False
 
@@ -34,11 +37,11 @@ class LaboratorioBoveda:
             if (
                 fila is None
                 or str(fila[0]).upper() != platform.node().upper()
-                or fila[1] != "SQLEXPRESS"
-                or fila[2] != 4
+                or fila[1] != (None if self.instancia_predeterminada else "SQLEXPRESS")
+                or fila[2] not in ((2, 3, 4) if self.instancia_predeterminada else (4,))
                 or fila[3] != database
             ):
-                raise RuntimeError("Destino fuera del laboratorio local SQLEXPRESS")
+                raise RuntimeError("Destino fuera del laboratorio SQL Server local")
             if marca:
                 valor = cursor.execute(
                     "SELECT CONVERT(nvarchar(128),value) FROM sys.extended_properties WHERE class=0 AND name='BOV_Local_Lab'"
@@ -52,8 +55,9 @@ class LaboratorioBoveda:
             self.database,
         }:
             raise RuntimeError("Laboratorio BOV deshabilitado o base no permitida")
+        servidor = "lpc:." if self.instancia_predeterminada else r"lpc:.\SQLEXPRESS"
         raw = pyodbc.connect(
-            "DRIVER={ODBC Driver 17 for SQL Server};SERVER=lpc:.\\SQLEXPRESS;"
+            f"DRIVER={{ODBC Driver 17 for SQL Server}};SERVER={servidor};"
             f"DATABASE={database};Trusted_Connection=yes;Encrypt=no;Connection Timeout=5;APP=BOV_Local_Lab;",
             autocommit=autocommit,
             timeout=5,
@@ -105,6 +109,16 @@ class LaboratorioBoveda:
             )
             self.ejecutar_script(raw, solicitudes)
             self.ejecutar_script(raw, solicitudes)
+            with closing(raw.cursor()) as cursor:
+                cursor.execute(
+                    "CREATE TABLE Contabilidad.ConceptoContable "
+                    "(IdConceptoContable int PRIMARY KEY)"
+                )
+            for nombre in (
+                "20261111_ac01_01_plantillas_asiento.sql",
+                "20261117_e401_versiones.sql",
+            ):
+                self.ejecutar_script(raw, BACKEND / "migrations" / nombre)
         self.engine = create_engine(
             "mssql+pyodbc://", creator=lambda: self.abrir(self.database)
         )

@@ -30,6 +30,7 @@ def operacion():
 
 @pytest.fixture
 def contabilidad(monkeypatch):
+    monkeypatch.setattr(repository, "bloquear_contabilizacion", Mock())
     monkeypatch.setattr(repository, "buscar_asiento_evento", Mock(return_value=None))
     monkeypatch.setattr(
         repository,
