@@ -304,6 +304,22 @@ def actualizar_estado(
     return resultado.rowcount == 1
 
 
+def obtener_presentacion_entidad(conn: Connection) -> dict[str, Any] | None:
+    """Solo datos públicos: no selecciona RUC, representante ni auditoría."""
+    fila = (
+        conn.execute(
+            select(
+                _TABLA_ENTIDAD.c.NombreComercial.label("nombre_comercial"),
+                _TABLA_ENTIDAD.c.RazonSocial.label("razon_social"),
+                _TABLA_ENTIDAD.c.SitioWeb.label("sitio_web"),
+            ).where(_TABLA_ENTIDAD.c.IdEntidad == 1)
+        )
+        .mappings()
+        .one_or_none()
+    )
+    return dict(fila) if fila is not None else None
+
+
 def obtener_entidad(
     conn: Connection, *, bloquear: bool = False
 ) -> dict[str, Any] | None:
