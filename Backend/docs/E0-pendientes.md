@@ -39,7 +39,7 @@ F-08 (brechas de la base) **no** se aplica, por decisión.
 - [ ] **Registrar como aplicadas las migraciones que ya se corrieron a mano**, para que el ejecutor no las repita:
       | Base | Migraciones aplicadas a mano |
       |---|---|
-      | SeguridadDB | `202611191000_auditoria_formato`, `202611191100_auditoria_evento_relevo`, `202611191200_tareas_programadas`, `202611191300_auditoria_eventos_ventanilla`, `202611191400_auditoria_eventos_atm` y las de E0-08 (`202611180800…180805`) |
+      | SeguridadDB | `202611191000_auditoria_formato`, `202611191100_auditoria_evento_relevo`, `202611191200_tareas_programadas`, `202611191310_auditoria_eventos_ventanilla`, `202611191400_auditoria_eventos_atm` y las de E0-08 (`202611180800…180805`) |
       | CooperativaDB | `202611172000…172002` (parámetros), `202611180802` (aprobaciones), `202611181010…181011` (agencias) |
       Todas son repetibles (`MERGE`, `IF NOT EXISTS`), pero no deben quedar fuera de `Migracion.Bitacora`.
 - [ ] **Activar**: `MIGRACIONES_HABILITADAS=true` solo donde se ejecuten migraciones.
