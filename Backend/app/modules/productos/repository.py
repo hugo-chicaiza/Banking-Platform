@@ -451,7 +451,9 @@ def obtener_restricciones(
     por_tipo = {fila["tipo"]: fila for fila in filas}
 
     return {
-        "dias_sin_retiros": por_tipo.get("SIN_RETIROS", {}).get("dias"),
+        "dias_sin_retiros": por_tipo.get(
+            "SIN_RETIROS_DIAS", por_tipo.get("SIN_RETIROS", {})
+        ).get("dias"),
         "saldo_minimo": por_tipo.get("SALDO_MINIMO", {}).get("monto"),
     }
 
@@ -668,7 +670,8 @@ def restricciones_vigentes(
             text("""
             SELECT IdRestriccion AS id_restriccion,
                 TipoRestriccion AS tipo_restriccion,
-                Dias AS dias, Monto AS monto, Descripcion AS descripcion,
+                Dias AS dias, Monto AS monto, Cantidad AS cantidad,
+                Descripcion AS descripcion,
                 VigenciaDesde AS vigencia_desde,
                 VigenciaHasta AS vigencia_hasta
             FROM ProductosFinancieros.ProductoRestriccion

@@ -3,6 +3,8 @@
 import re
 import zlib
 
+import pytest
+
 from app.core.pdf import (
     DocumentoPdf,
     nombre_archivo,
@@ -24,6 +26,22 @@ def _texto(pdf: bytes) -> str:
         except zlib.error:
             continue
     return "".join(partes)
+
+
+@pytest.mark.parametrize("fin_linea", [b"\n", b"\r\n"])
+def test_lector_preserva_checksum_comprimido_terminado_en_cr(fin_linea):
+    flujo = zlib.compress(b"\x0c")
+    assert flujo.endswith(b"\r")
+    documento = (
+        b"<< /Length "
+        + str(len(flujo)).encode("ascii")
+        + b" >>\nstream"
+        + fin_linea
+        + flujo
+        + fin_linea
+        + b"endstream"
+    )
+    assert _texto(documento) == "\x0c"
 
 
 def test_documento_con_bloques_encabezado_y_pie():

@@ -1,5 +1,6 @@
 """Manejadores explicitos por operacion; el cliente no puede seleccionar codigo ejecutable."""
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date
 from typing import Any, Literal, Protocol
@@ -50,8 +51,9 @@ class Operacion:
     permiso_aprobacion: str
     manejador: Manejador
     tabla_auditada: str | None = None
-    evento_ejecucion: str = "APR_OPERACION_EJECUTADA"
+    evento_ejecucion: str | Callable[[dict[str, Any]], str] = "APR_OPERACION_EJECUTADA"
     solicitud_directa: bool = True
+    permiso_ejecucion: str | None = None
 
 
 class Registro:

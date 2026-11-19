@@ -828,7 +828,22 @@ def cliente_elegible(
         motivos.append("PRODUCTO_REQUERIDO_NO_CONTRATADO")
     if datos["tipo_producto"] == "Tarjeta" and not activas:
         motivos.append("TARJETA_REQUIERE_CUENTA_ACTIVA")
-    maximo = datos["maximo_por_cliente"]
+    maximo: int | None = (
+        None
+        if datos["maximo_por_cliente"] is None
+        else int(datos["maximo_por_cliente"])
+    )
+    if datos["tipo_producto"] == "Cuenta":
+        limites: list[int] = [
+            int(r["cantidad"])
+            for r in repo.restricciones_vigentes(
+                conn, id_subproducto, fecha, "ELEGIBILIDAD"
+            )
+            if r["tipo_restriccion"] == "MAXIMO_CUENTAS_CLIENTE"
+            and r.get("cantidad") is not None
+        ]
+        if limites:
+            maximo = min(limites) if maximo is None else min(maximo, min(limites))
     if maximo is not None:
         cantidad = sum(
             item["id_subproducto"] == id_subproducto
