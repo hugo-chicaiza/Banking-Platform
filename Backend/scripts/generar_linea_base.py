@@ -43,7 +43,7 @@ def _tipo(t: str, largo: int, precision: int, escala: int) -> str:
 
 
 def generar(conn, semillas: list[str]) -> str:
-    q = lambda sql: conn.execute(text(sql)).all()
+    q = lambda sql, **p: conn.execute(text(sql), p).all()
     salida = [
         "/* Migración cero (línea base) generada por scripts/generar_linea_base.py.",
         "   En la base compartida se REGISTRA sin ejecutar (aplicar --marcar-linea-base);",
@@ -66,13 +66,14 @@ def generar(conn, semillas: list[str]) -> str:
     )
     for oid, esquema, tabla in tablas:
         cols = q(
-            f"""SELECT c.name, ty.name, c.max_length, c.precision, c.scale, c.is_nullable, c.is_identity,
+            """SELECT c.name, ty.name, c.max_length, c.precision, c.scale, c.is_nullable, c.is_identity,
                        ic.seed_value, ic.increment_value, dc.name, dc.definition, cc.definition, c.is_rowguidcol
                 FROM sys.columns c JOIN sys.types ty ON ty.user_type_id=c.user_type_id
                 LEFT JOIN sys.identity_columns ic ON ic.object_id=c.object_id AND ic.column_id=c.column_id
                 LEFT JOIN sys.default_constraints dc ON dc.object_id=c.default_object_id
                 LEFT JOIN sys.computed_columns cc ON cc.object_id=c.object_id AND cc.column_id=c.column_id
-                WHERE c.object_id={oid} ORDER BY c.column_id"""
+                WHERE c.object_id=:oid ORDER BY c.column_id""",
+            oid=oid,
         )
         lineas = []
         for (
@@ -101,12 +102,12 @@ def generar(conn, semillas: list[str]) -> str:
                 linea += f" CONSTRAINT {_q(df_nombre)} DEFAULT {df_def}"
             lineas.append(linea)
         for cnombre, es_pk, clustered, columnas in q(
-            f"""SELECT i.name, i.is_primary_key, CASE WHEN i.type=1 THEN 1 ELSE 0 END,
+            """SELECT i.name, i.is_primary_key, CASE WHEN i.type=1 THEN 1 ELSE 0 END,
                        STRING_AGG(QUOTENAME(c.name) + CASE WHEN ic.is_descending_key=1 THEN ' DESC' ELSE '' END, ', ')
                          WITHIN GROUP (ORDER BY ic.key_ordinal)
                 FROM sys.indexes i JOIN sys.index_columns ic ON ic.object_id=i.object_id AND ic.index_id=i.index_id
                 JOIN sys.columns c ON c.object_id=ic.object_id AND c.column_id=ic.column_id
-                WHERE i.object_id={oid} AND (i.is_primary_key=1 OR i.is_unique_constraint=1) AND ic.key_ordinal>0
+                WHERE i.object_id=:oid AND (i.is_primary_key=1 OR i.is_unique_constraint=1) AND ic.key_ordinal>0
                 GROUP BY i.name, i.is_primary_key, i.type"""
         ):
             tipo = "PRIMARY KEY" if es_pk else "UNIQUE"
@@ -225,21 +226,24 @@ def _semilla(q, tabla: str) -> list[str]:
     pk = [
         c
         for (c,) in q(
-            f"""SELECT c.name FROM sys.indexes i JOIN sys.index_columns ic ON ic.object_id=i.object_id AND ic.index_id=i.index_id
+            """SELECT c.name FROM sys.indexes i JOIN sys.index_columns ic ON ic.object_id=i.object_id AND ic.index_id=i.index_id
                 JOIN sys.columns c ON c.object_id=ic.object_id AND c.column_id=ic.column_id
-                WHERE i.object_id=OBJECT_ID('{esquema}.{nombre}') AND i.is_primary_key=1 ORDER BY ic.key_ordinal"""
+                WHERE i.object_id=OBJECT_ID(:tabla) AND i.is_primary_key=1 ORDER BY ic.key_ordinal""",
+            tabla=tabla,
         )
     ]
     columnas = [
         c
         for (c,) in q(
-            f"SELECT name FROM sys.columns WHERE object_id=OBJECT_ID('{esquema}.{nombre}') AND is_computed=0 ORDER BY column_id"
+            "SELECT name FROM sys.columns WHERE object_id=OBJECT_ID(:tabla) AND is_computed=0 ORDER BY column_id",
+            tabla=tabla,
         )
     ]
     if not pk:
         return [f"-- {tabla}: sin clave primaria, semilla omitida", "GO"]
     filas = q(
-        f"SELECT {', '.join(_q(c) for c in columnas)} FROM {_q(esquema)}.{_q(nombre)}"
+        # Identificadores (no se pueden parametrizar) leídos del catálogo y entre corchetes con _q
+        f"SELECT {', '.join(_q(c) for c in columnas)} FROM {_q(esquema)}.{_q(nombre)}"  # nosec B608
     )
     if not filas:
         return []
@@ -250,15 +254,17 @@ def _semilla(q, tabla: str) -> list[str]:
     on = " AND ".join(f"d.{_q(c)}=o.{_q(c)}" for c in pk)
     resto = [c for c in columnas if c not in pk]
     identidad = q(
-        f"SELECT 1 FROM sys.identity_columns WHERE object_id=OBJECT_ID('{esquema}.{nombre}')"
+        "SELECT 1 FROM sys.identity_columns WHERE object_id=OBJECT_ID(:tabla)",
+        tabla=tabla,
     )
     lineas = [f"/* Semilla repetible de {tabla} (MERGE por clave primaria) */"]
     if identidad:
         lineas.append(f"SET IDENTITY_INSERT {_q(esquema)}.{_q(nombre)} ON;")
+    # Texto del guion que se genera (no se ejecuta aquí): bandit B608 no aplica
     lineas += [
         f"MERGE {_q(esquema)}.{_q(nombre)} AS d USING (VALUES\n{valores}\n) AS o ({lista}) ON {on}",
         (
-            "WHEN MATCHED THEN UPDATE SET "
+            "WHEN MATCHED THEN UPDATE SET "  # nosec B608
             + ", ".join(f"d.{_q(c)}=o.{_q(c)}" for c in resto)
         )
         if resto
