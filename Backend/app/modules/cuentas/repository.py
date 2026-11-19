@@ -438,7 +438,9 @@ def bloquear_cupo_producto(
         FROM Cuentas.Cuenta AS c
         JOIN ProductosFinancieros.ProductoCanalCupo AS p WITH (HOLDLOCK)
           ON p.IdSubProducto = c.IdSubProducto AND p.IdCanal = :id_canal
-        WHERE c.IdCuenta = :id_cuenta
+        WHERE c.IdCuenta = :id_cuenta AND p.EstadoCupo = 'A'
+          AND p.VigenciaDesde <= CONVERT(date,SYSDATETIMEOFFSET() AT TIME ZONE 'SA Pacific Standard Time')
+          AND (p.VigenciaHasta IS NULL OR p.VigenciaHasta >= CONVERT(date,SYSDATETIMEOFFSET() AT TIME ZONE 'SA Pacific Standard Time'))
         """,
         {"id_cuenta": id_cuenta, "id_canal": id_canal},
     )

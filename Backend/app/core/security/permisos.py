@@ -27,6 +27,8 @@ PERMISOS: dict[str, tuple[str, ...]] = {
     "agencias:aprobar": ("SUPERVISOR",),
     "prd-consultar": tuple(r for r in _TODOS if r != "CAJERO"),
     "prd-editar": ("ADMIN",),
+    "prd-condicion": ("ADMIN",),
+    "productos:aprobar": ("SUPERVISOR",),
     "prd-exportar": _TODOS,
     "con-plantilla-editar": ("CONTADOR",),
     "con-cuenta-editar": ("CONTADOR",),
