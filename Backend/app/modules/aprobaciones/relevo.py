@@ -6,6 +6,7 @@ import logging
 from sqlalchemy import Engine
 
 from app.core.config.settings import get_settings
+from app.core.security import audit
 from app.core.security.audit import cambios_json
 from app.modules.aprobaciones.congelacion import congelar
 from app.modules.aprobaciones.repositorio import consulta
@@ -26,8 +27,9 @@ def edad_pendiente_minutos(origen: Engine) -> int | None:
 
 def alertar_pendientes(*origenes: Engine) -> list[int]:
     """Alerta (registro de nivel ERROR con código fijo, para el monitor de App Service) si
-    un evento lleva más de AUD_EDAD_MAX_PENDIENTE_MIN minutos sin pasar a la bitácora."""
-    limite = get_settings().aud_edad_max_pendiente_min
+    un evento lleva más de AUD_RELEVO_ALERTA_MINUTOS minutos sin pasar a la bitácora; la
+    alerta queda también como evento AUD_RELEVO_ALERTA en la bitácora."""
+    limite = get_settings().aud_relevo_alerta_minutos
     edades = [e for o in origenes if (e := edad_pendiente_minutos(o)) is not None]
     for edad in edades:
         if edad > limite:
@@ -35,6 +37,18 @@ def alertar_pendientes(*origenes: Engine) -> list[int]:
                 "AUD_RELEVO_ALERTA evento pendiente de %d minutos (máximo %d)",
                 edad,
                 limite,
+            )
+            audit.registrar(
+                audit.EventoAuditoria(
+                    accion="AUD_RELEVO_ALERTA",
+                    tabla="Auditoria.EventoPendiente",
+                    id_registro=None,
+                    resultado="Fallido",
+                    usuario=None,
+                    ip=None,
+                    descripcion=f"evento pendiente de {edad} minutos (máximo {limite})",
+                    canal="SISTEMA",
+                )
             )
     return edades
 

@@ -47,12 +47,13 @@ def _codigos_del_codigo() -> set[str]:
 
 
 def _codigos_del_catalogo() -> set[str]:
-    return set(
-        re.findall(
-            r"\('([A-Z0-9_]+)', '[a-z]+', '(?:Informativo|Sensible|Seguridad)'",
-            MIGRACION.read_text(encoding="utf-8"),
-        )
-    )
+    """Códigos sembrados en Auditoria.TipoEvento por todas las migraciones de SeguridadDB."""
+    patron = r"\('([A-Z0-9_]+)', '[a-z]+', '(?:Informativo|Sensible|Seguridad)'"
+    return {
+        codigo
+        for archivo in MIGRACION.parent.glob("*.up.sql")
+        for codigo in re.findall(patron, archivo.read_text(encoding="utf-8"))
+    }
 
 
 def test_cada_evento_del_codigo_esta_en_el_catalogo():
@@ -154,3 +155,12 @@ def test_alerta_del_relevo_por_edad(monkeypatch, caplog, edad, alerta):
     with caplog.at_level(logging.ERROR, logger=relevo.__name__):
         assert relevo.alertar_pendientes(object()) == [edad]  # type: ignore[arg-type]
     assert ("AUD_RELEVO_ALERTA" in caplog.text) is alerta
+
+
+def test_la_alerta_del_relevo_queda_en_la_bitacora(monkeypatch, eventos_auditados):
+    from app.modules.aprobaciones import relevo
+
+    monkeypatch.setattr(relevo, "edad_pendiente_minutos", lambda origen: 30)
+    relevo.alertar_pendientes(object())  # type: ignore[arg-type]
+    assert [e.accion for e in eventos_auditados] == ["AUD_RELEVO_ALERTA"]
+    assert eventos_auditados[0].canal == "SISTEMA"

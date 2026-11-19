@@ -78,8 +78,9 @@ class Settings(BaseSettings):
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
     # E0-13: "texto" (una línea con trace=) o "json" (una línea JSON por registro)
     log_formato: Literal["texto", "json"] = "texto"
-    # E0-05: minutos máximos de un evento en la bandeja de salida antes de alertar
-    aud_edad_max_pendiente_min: int = 10
+    # E0-05: minutos que un evento puede esperar en la bandeja de salida antes de que se
+    # alerte (registro AUD_RELEVO_ALERTA y evento en la bitácora)
+    aud_relevo_alerta_minutos: int = 10
     # Puerto no estándar; local solo en loopback. En Azure: APP_HOST=0.0.0.0 y WEBSITES_PORT=APP_PORT
     app_host: str = "127.0.0.1"
     app_port: int = 8471
