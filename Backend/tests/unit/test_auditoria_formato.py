@@ -43,6 +43,36 @@ def _codigos_del_codigo() -> set[str]:
                 and isinstance(c.value, str)
                 and c.value.isupper()
             }
+        # Ventanilla: REGISTRAR_<CODIGO> por cada tipo de TipoVentanilla (Literal)
+        for nodo in ast.walk(ast.parse(archivo.read_text(encoding="utf-8"))):
+            if (
+                isinstance(nodo, ast.Assign)
+                and getattr(nodo.targets[0], "id", "") == "TipoVentanilla"
+                and isinstance(nodo.value, ast.Subscript)
+            ):
+                valores = nodo.value.slice
+                elementos = (
+                    valores.elts if isinstance(valores, ast.Tuple) else [valores]
+                )
+                codigos |= {
+                    f"REGISTRAR_{e.value.upper()}"
+                    for e in elementos
+                    if isinstance(e, ast.Constant) and isinstance(e.value, str)
+                }
+        # Tablas de códigos explícitas (`_EVENTO_* = {...: "CODIGO"}`)
+        for nodo in ast.walk(ast.parse(archivo.read_text(encoding="utf-8"))):
+            if isinstance(nodo, (ast.Assign, ast.AnnAssign)) and isinstance(
+                nodo.value, ast.Dict
+            ):
+                destinos = (
+                    nodo.targets if isinstance(nodo, ast.Assign) else [nodo.target]
+                )
+                if any(getattr(d, "id", "").startswith("_EVENTO_") for d in destinos):
+                    codigos |= {
+                        v.value
+                        for v in nodo.value.values
+                        if isinstance(v, ast.Constant) and isinstance(v.value, str)
+                    }
     return codigos
 
 
@@ -164,3 +194,7 @@ def test_la_alerta_del_relevo_queda_en_la_bitacora(monkeypatch, eventos_auditado
     relevo.alertar_pendientes(object())  # type: ignore[arg-type]
     assert [e.accion for e in eventos_auditados] == ["AUD_RELEVO_ALERTA"]
     assert eventos_auditados[0].canal == "SISTEMA"
+
+
+def test_la_ventanilla_declara_sus_eventos():
+    assert {"REGISTRAR_DEPOSITO", "REGISTRAR_RETIRO"} <= _codigos_del_codigo()

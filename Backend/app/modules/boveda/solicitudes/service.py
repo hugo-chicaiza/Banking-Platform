@@ -179,6 +179,7 @@ def crear(
                 detalle,
             )
             registro.id_registro = str(solicitud_id)
+            registro.confirmar(conn)
             return _modelos(conn, [_exigir(repo.obtener(conn, solicitud_id))])[0]
 
 
@@ -236,7 +237,7 @@ def aprobar(
         ip,
         f"solicitud={id_solicitud}",
         str(id_solicitud),
-    ):
+    ) as registro:
         actor = exigir_id_interno(id_interno)
         with conn.begin():
             inicial = _exigir(repo.obtener(conn, id_solicitud))
@@ -311,6 +312,12 @@ def aprobar(
                 contabilidad.ahora_ecuador(),
                 None,
             )
+            registro.confirmar(
+                conn,
+                objetivo="Boveda.MovimientoBoveda",
+                id_objetivo=",".join(str(m.id_movimiento) for m in movimientos),
+                cambios={"idSolicitudMovimiento": id_solicitud},
+            )
             return movimientos
 
 
@@ -330,7 +337,7 @@ def resolver_sin_ejecucion(
         ip,
         f"estado={estado}",
         str(id_solicitud),
-    ):
+    ) as registro:
         actor = exigir_id_interno(id_interno)
         with conn.begin():
             fila = _exigir(repo.obtener(conn, id_solicitud, bloquear=True))
@@ -351,4 +358,5 @@ def resolver_sin_ejecucion(
             repo.resolver(
                 conn, id_solicitud, estado, actor, contabilidad.ahora_ecuador(), motivo
             )
+            registro.confirmar(conn)
             return _modelos(conn, [_exigir(repo.obtener(conn, id_solicitud))])[0]

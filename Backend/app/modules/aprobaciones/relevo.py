@@ -106,20 +106,31 @@ def entregar(
                         {
                             "interno": contenido["idInterno"],
                             "codigo": fila["CodigoEvento"],
-                            "objetivo": contenido["idObjetivo"],
+                            # Recortes al tamaño de columna: un texto largo no debe trabar el relevo
+                            "objetivo": _corto(contenido["idObjetivo"], 100),
                             "tabla": contenido.get(
                                 "tablaAfectada", "Seguridad.SolicitudAprobacion"
                             ),
                             "fecha": fila["FechaCreacionUTC"],
                             "ip": contenido["origen"] or None,
-                            "descripcion": (
-                                "solicitud="
-                                if contenido["tipoObjetivo"] == "SolicitudAprobacion"
-                                else "objetivo="
-                            )
-                            + contenido["idObjetivo"]
-                            + " trace="
-                            + contenido["correlacion"],
+                            "descripcion": _corto(
+                                (
+                                    contenido["descripcion"]
+                                    + " trace="
+                                    + contenido["correlacion"]
+                                    if contenido.get("descripcion")
+                                    else (
+                                        "solicitud="
+                                        if contenido["tipoObjetivo"]
+                                        == "SolicitudAprobacion"
+                                        else "objetivo="
+                                    )
+                                    + contenido["idObjetivo"]
+                                    + " trace="
+                                    + contenido["correlacion"]
+                                ),
+                                500,
+                            ),
                             "resultado": contenido["resultado"],
                             "roles": ",".join(contenido["roles"]),
                             # E0-05: columnas del formato nuevo desde el evento ya filtrado

@@ -73,6 +73,17 @@ def preparar_ventanilla(ctx: Contexto, tipo: str = "Deposito") -> DependenciasFa
     deps = DependenciasFalsas()
     ctx.app.dependency_overrides[dependencias_operacion] = lambda: deps
     ctx.fake("buscar_por_registro_unico", None, trx_repo)
+    # Transacciones.TipoTransaccion: la naturaleza sale de la base, no del nombre
+    ctx.fake(
+        "tipo_transaccion",
+        lambda _conn, codigo: {
+            "CodigoTipo": codigo,
+            "Naturaleza": "C" if codigo == "Deposito" else "D",
+            "AfectaSaldo": True,
+            "Estado": "A",
+        },
+        trx_repo,
+    )
     ctx.fake("obtener_jornada", JORNADA)
     ctx.fake("dotacion_inicial_registrada", True)
     ctx.fake("obtener_cuadre_de_jornada", None)

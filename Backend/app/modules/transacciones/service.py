@@ -491,4 +491,5 @@ def reversar(
             if fila is None:
                 raise RuntimeError("El reverso no se encontró tras registrarlo")
 
+            registro.confirmar(conn)
             return _transaccion(fila)
