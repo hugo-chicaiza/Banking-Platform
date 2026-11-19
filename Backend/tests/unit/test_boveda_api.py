@@ -241,6 +241,40 @@ def test_admin_registra_arqueo_y_otro_admin_aprueba(ctx):
     assert ctx.state["bovedas"][1]["saldo_actual"] == 180
 
 
+def test_admin_testigo_se_valida_con_agencia_numerica_real(ctx, monkeypatch):
+    from unittest.mock import MagicMock
+
+    from app.modules.auth import service as auth
+
+    monkeypatch.setattr(auth, "get_engine", MagicMock())
+    monkeypatch.setattr(
+        auth.repository,
+        "obtener_usuario",
+        lambda conn, id_usuario: {
+            "Estado": "Activo",
+            "KeyUsuario": "user_testigo_admin",
+            "RolesWorkOS": "ADMIN",
+            "AgenciaID": 1,
+        },
+    )
+    monkeypatch.setattr(
+        auth.repository, "bloqueo_vigente", lambda conn, id_usuario: None
+    )
+    monkeypatch.setattr(
+        service, "validar_participante_boveda", auth.validar_participante_boveda
+    )
+    ctx.como("ADMIN", actor=11)
+
+    respuesta = ctx.registrar_conteo(9, idUsuarioTestigo=25)
+
+    assert respuesta.status_code == 201, respuesta.text
+    assert respuesta.json()["idUsuarioTestigo"] == 25
+    assert respuesta.json()["idUsuarioArqueador"] == 11
+    assert respuesta.json()["estado"] == "REGISTRADO"
+    assert ctx.state["bovedas"][1]["saldo_actual"] == 200
+    assert not ctx.state["movimientos"]
+
+
 def test_arqueo_omite_denominaciones_como_cero_y_admite_conteo_cero(ctx):
     r = ctx.registrar_conteo(desglose=[{"idDenominacion": 2, "cantidad": 0}])
     assert r.status_code == 201

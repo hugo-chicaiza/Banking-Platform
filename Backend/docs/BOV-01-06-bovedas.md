@@ -30,8 +30,8 @@ además otro rol global. Un auditor puede registrar un arqueo en otra agencia.
 ADMIN dispone de todas las rutas del módulo. Las consultas tienen alcance global;
 las solicitudes y aprobaciones mantienen el alcance de escritura de la agencia
 asignada al usuario. ADMIN también debe respetar las identidades distintas para
-aprobar y la cancelación exclusiva del solicitante. El testigo de un arqueo sigue
-siendo un SUPERVISOR de la agencia o un AUDITOR, conforme al contrato BOV-05.
+aprobar y la cancelación exclusiva del solicitante. El testigo de un arqueo puede
+ser un SUPERVISOR o ADMIN de la agencia, o un AUDITOR con alcance global.
 
 Las escrituras de bóveda se autorizan por rol (no hay un permiso de WorkOS propio);
 ver `core/security/permisos.py`. No se requiere migración SQL para este acceso.
@@ -80,7 +80,7 @@ las tablas y columnas de las migraciones existentes de bóvedas.
 
 BOV05 recibe `tipoArqueo` (Programado/Sorpresivo), `idUsuarioTestigo`, `desglose`
 y `observaciones`. El arqueador proviene de la sesión. El testigo debe ser distinto,
-activo, vinculado, sin bloqueo y supervisor de esa agencia o auditor.
+activo, vinculado, sin bloqueo y SUPERVISOR o ADMIN de esa agencia, o AUDITOR.
 
 Se guarda conteo, cantidades esperadas, valores unitarios, saldo esperado/físico y
 último movimiento al registrar. Denominaciones omitidas se cuentan como cero;

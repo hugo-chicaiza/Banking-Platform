@@ -106,7 +106,7 @@ def participante(monkeypatch):
             "Estado": "Activo",
             "KeyUsuario": "user_testigo",
             "RolesWorkOS": "org-supervisor",
-            "AgenciaID": "001",
+            "AgenciaID": 1,
         }
     )
     monkeypatch.setattr(auth.repository, "obtener_usuario", obtener)
@@ -125,7 +125,7 @@ def test_participante_vigente_misma_agencia_y_rol(participante):
         ("Estado", "Inactivo", "PARTICIPANTE_NO_HABILITADO"),
         ("KeyUsuario", None, "PARTICIPANTE_NO_HABILITADO"),
         ("RolesWorkOS", "org-cajero", "PARTICIPANTE_NO_HABILITADO"),
-        ("AgenciaID", "002", "SIN_ACCESO_AGENCIA"),
+        ("AgenciaID", 2, "SIN_ACCESO_AGENCIA"),
     ],
 )
 def test_participante_inhabilitado_o_fuera_de_alcance(participante, campo, valor, code):
@@ -143,7 +143,7 @@ def test_testigo_auditor_puede_observar_otra_agencia(participante):
     obtener.return_value = {
         **obtener.return_value,
         "RolesWorkOS": "org-auditor",
-        "AgenciaID": "002",
+        "AgenciaID": 2,
     }
     auth.validar_participante_boveda(9, "001", frozenset({"AUDITOR", "SUPERVISOR"}))
 
@@ -160,7 +160,7 @@ def test_autorizador_con_rol_auditor_adicional_no_elude_agencia(participante):
     obtener.return_value = {
         **obtener.return_value,
         "RolesWorkOS": "org-supervisor,org-auditor",
-        "AgenciaID": "002",
+        "AgenciaID": 2,
     }
     with pytest.raises(HTTPException) as error:
         auth.validar_participante_boveda(9, "001", frozenset({"SUPERVISOR"}))
