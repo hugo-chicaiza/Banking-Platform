@@ -1,11 +1,63 @@
 """Relevo idempotente a la unica bitacora institucional y su detalle inmutable."""
 
 import json
+import logging
 
 from sqlalchemy import Engine
 
+from app.core.config.settings import get_settings
+from app.core.security import audit
+from app.core.security.audit import cambios_json
 from app.modules.aprobaciones.congelacion import congelar
 from app.modules.aprobaciones.repositorio import consulta
+
+logger = logging.getLogger(__name__)
+
+
+def edad_pendiente_minutos(origen: Engine) -> int | None:
+    """Minutos del evento pendiente más antiguo de la bandeja (None si no hay)."""
+    with origen.connect() as conn:
+        valor = conn.execute(
+            consulta(
+                "SELECT DATEDIFF(minute, MIN(FechaCreacionUTC), SYSUTCDATETIME()) FROM Auditoria.EventoPendiente WHERE Enviado=0"
+            )
+        ).scalar()
+    return None if valor is None else int(valor)
+
+
+def alertar_pendientes(*origenes: Engine) -> list[int]:
+    """Alerta (registro de nivel ERROR con código fijo, para el monitor de App Service) si
+    un evento lleva más de AUD_RELEVO_ALERTA_MINUTOS minutos sin pasar a la bitácora; la
+    alerta queda también como evento AUD_RELEVO_ALERTA en la bitácora."""
+    limite = get_settings().aud_relevo_alerta_minutos
+    edades = [e for o in origenes if (e := edad_pendiente_minutos(o)) is not None]
+    for edad in edades:
+        if edad > limite:
+            logger.error(
+                "AUD_RELEVO_ALERTA evento pendiente de %d minutos (máximo %d)",
+                edad,
+                limite,
+            )
+            audit.registrar(
+                audit.EventoAuditoria(
+                    accion="AUD_RELEVO_ALERTA",
+                    tabla="Auditoria.EventoPendiente",
+                    id_registro=None,
+                    resultado="Fallido",
+                    usuario=None,
+                    ip=None,
+                    descripcion=f"evento pendiente de {edad} minutos (máximo {limite})",
+                    canal="SISTEMA",
+                )
+            )
+    return edades
+
+
+def _corto(valor: object, largo: int, *, exacto: bool = False) -> str | None:
+    texto = str(valor) if valor not in (None, "") else None
+    if texto is None or (exacto and len(texto) > largo):
+        return None
+    return texto[:largo]
 
 
 def entregar(
@@ -46,9 +98,11 @@ def entregar(
                 if existe is None:
                     id_auditoria = destino.execute(
                         consulta("""INSERT Auditoria.Auditoria
-                        (UsuarioID,NombreAccion,TablaAfectada,IDRegistro,FechaHora,DireccionIP,Descripcion,Resultado,RolesWorkOS)
+                        (UsuarioID,NombreAccion,TablaAfectada,IDRegistro,FechaHora,DireccionIP,Descripcion,Resultado,RolesWorkOS,
+                         IdEvento,CodigoEvento,FechaHoraUTC,IdAgencia,IdSesion,Canal,IdCorrelacion,TipoObjetivo,IdObjetivo,Cambios)
                         OUTPUT inserted.AuditoriaID VALUES(:interno,:codigo,:tabla,:objetivo,
-                        DATEADD(hour,-5,:fecha),:ip,:descripcion,:resultado,:roles)"""),
+                        DATEADD(hour,-5,:fecha),:ip,:descripcion,:resultado,:roles,
+                        :id_evento,:codigo,:fecha,:agencia,:sesion,:canal,:correlacion,:tipo_objetivo,:objetivo,:cambios)"""),
                         {
                             "interno": contenido["idInterno"],
                             "codigo": fila["CodigoEvento"],
@@ -68,6 +122,14 @@ def entregar(
                             + contenido["correlacion"],
                             "resultado": contenido["resultado"],
                             "roles": ",".join(contenido["roles"]),
+                            # E0-05: columnas del formato nuevo desde el evento ya filtrado
+                            "id_evento": fila["IdEvento"],
+                            "agencia": _corto(contenido.get("agencia"), 3, exacto=True),
+                            "sesion": _corto(contenido.get("sesion"), 64),
+                            "canal": _corto(contenido.get("canal"), 10),
+                            "correlacion": _corto(contenido.get("correlacion"), 64),
+                            "tipo_objetivo": _corto(contenido.get("tipoObjetivo"), 100),
+                            "cambios": cambios_json(contenido.get("cambios")),
                         },
                     ).scalar_one()
                     destino.execute(
