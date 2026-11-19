@@ -17,17 +17,17 @@ from app.core.api.errors import (
 )
 from app.core.api.middleware import ip_cliente
 from app.core.database.db import cooperativa
-from app.core.security.auth import Usuario, require_auth, require_permiso
-from app.modules.productos import service, vinculos
+from app.core.security.auth import Usuario, UsuarioActual, require_auth, require_permiso
+from app.modules.aprobaciones import router as aprobaciones
+from app.modules.aprobaciones.contratos import SolicitudAceptada
+from app.modules.productos import programacion_api, service, vinculos
+from app.modules.productos.programacion_schemas import CuposNuevos, RestriccionNueva
 from app.modules.productos.schemas import (
     CupoCanalVista,
-    CuposSubProducto,
     FichaSubProducto,
     Producto,
     ProductoCreate,
     ProductoUpdate,
-    RestriccionesSubProducto,
-    RestriccionesVista,
     SubProducto,
     SubProductoCreate,
     SubProductoUpdate,
@@ -188,50 +188,67 @@ def listar_cupos(id_sub_producto: IdPath, _: Lector, conn: Db) -> list[CupoCanal
 @router.put(
     "/subproductos/{id_sub_producto}/cupos",
     operation_id="PRDSubCuposGuardar",
-    response_model=list[CupoCanalVista],
-    openapi_extra={"x-roles": _ESCRITURA},
+    status_code=202,
+    response_model=SolicitudAceptada,
+    openapi_extra={"x-permissions": ["prd-condicion"]},
 )
 def guardar_cupos(
     id_sub_producto: IdPath,
-    payload: CuposSubProducto,
+    payload: CuposNuevos,
     request: Request,
-    usuario: Administrador,
-    conn: Db,
-) -> list[CupoCanalVista]:
-    """Reemplaza los canales habilitados y sus máximos."""
-    return service.guardar_cupos(
-        conn, id_sub_producto, payload, usuario, ip_cliente(request.scope)
+    usuario: programacion_api.Proponente,
+    actor: aprobaciones.Actual,
+    cola: aprobaciones.Cola,
+) -> SolicitudAceptada:
+    return programacion_api.cupos(
+        id_sub_producto, payload, request, usuario, actor, cola
     )
 
 
 @router.get(
     "/subproductos/{id_sub_producto}/restricciones",
     operation_id="PRDSubRestricciones",
-    response_model=RestriccionesVista,
     openapi_extra=_CONSULTA,
 )
 def obtener_restricciones(
-    id_sub_producto: IdPath, _: Lector, conn: Db
-) -> RestriccionesVista:
-    """Cuentas: días sin retiros desde la apertura y saldo mínimo."""
-    return service.obtener_restricciones(conn, id_sub_producto)
+    id_sub_producto: IdPath, _: Lector, conn: Db, usuario: UsuarioActual
+) -> dict:
+    """Conserva campos E3-02 y agrega los conjuntos completos E3-03."""
+    anteriores = service.obtener_restricciones(conn, id_sub_producto)
+    historia = programacion_api.leer(id_sub_producto, conn, usuario)
+    return {
+        **anteriores.model_dump(mode="json", by_alias=True),
+        "conjuntos": historia["restricciones"],
+        "tiposRestriccion": historia["tiposRestriccion"],
+    }
 
 
 @router.put(
     "/subproductos/{id_sub_producto}/restricciones",
     operation_id="PRDSubRestriccionesGuardar",
-    response_model=RestriccionesVista,
-    openapi_extra={"x-roles": _ESCRITURA},
+    status_code=202,
+    response_model=SolicitudAceptada,
+    openapi_extra={"x-permissions": ["prd-condicion"]},
 )
 def guardar_restricciones(
     id_sub_producto: IdPath,
-    payload: RestriccionesSubProducto,
+    payload: RestriccionNueva,
     request: Request,
-    usuario: Administrador,
-    conn: Db,
-) -> RestriccionesVista:
-    return service.guardar_restricciones(
-        conn, id_sub_producto, payload, usuario, ip_cliente(request.scope)
+    usuario: programacion_api.Proponente,
+    actor: aprobaciones.Actual,
+    cola: aprobaciones.Cola,
+) -> SolicitudAceptada:
+    return programacion_api.solicitar(
+        id_sub_producto,
+        programacion_api.Cambio(
+            clase="restricciones",
+            accion="programar",
+            datos=payload.model_dump(mode="json", by_alias=True),
+        ),
+        request,
+        usuario,
+        actor,
+        cola,
     )
 
 
@@ -333,3 +350,6 @@ def eliminar_producto(
     """Solo un producto inactivo que nunca se usó; con uso, 409 PRODUCTO_EN_USO."""
     service.eliminar_producto(conn, id_producto, usuario, ip_cliente(request.scope))
     return Response(status_code=204)
+
+
+router.include_router(programacion_api.router)

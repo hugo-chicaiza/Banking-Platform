@@ -668,7 +668,8 @@ def restricciones_vigentes(
             text("""
             SELECT IdRestriccion AS id_restriccion,
                 TipoRestriccion AS tipo_restriccion,
-                Dias AS dias, Monto AS monto, Descripcion AS descripcion,
+                Dias AS dias, Monto AS monto, Cantidad AS cantidad,
+                Descripcion AS descripcion,
                 VigenciaDesde AS vigencia_desde,
                 VigenciaHasta AS vigencia_hasta
             FROM ProductosFinancieros.ProductoRestriccion

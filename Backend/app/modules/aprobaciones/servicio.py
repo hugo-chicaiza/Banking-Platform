@@ -36,6 +36,15 @@ class Servicio:
     @staticmethod
     def puede_solicitar(actor: Actor, operacion: Operacion, objetivo: Objetivo) -> None:
         actor.alcance(objetivo.agencia)
+        if (
+            operacion.permiso_ejecucion
+            and operacion.permiso_ejecucion not in actor.permisos
+        ):
+            raise problema(
+                403,
+                "SIN_PERMISO",
+                "Falta el permiso efectivo para solicitar esta operacion.",
+            )
         if not set(actor.roles) & operacion.roles_ejecucion:
             raise problema(
                 403, "SIN_PERMISO", "Falta el acceso de ejecucion de la operacion."
@@ -316,7 +325,9 @@ class Servicio:
         )
         encolar(
             conn,
-            operacion.evento_ejecucion,
+            operacion.evento_ejecucion(contenido["cambio"])
+            if callable(operacion.evento_ejecucion)
+            else operacion.evento_ejecucion,
             actor,
             fila["IdSolicitud"],
             fila["IdAgencia"],
