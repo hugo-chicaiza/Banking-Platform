@@ -55,6 +55,7 @@ ROLES_POR_RUTA: dict[tuple[str, str], tuple[str, ...]] = {
     ("GET", "/api/v1/aprobaciones"): AUTH,
     ("POST", "/api/v1/aprobaciones"): AUTH,
     ("GET", "/api/v1/aprobaciones/accesos"): AUTH,
+    ("GET", "/api/v1/aprobaciones/notificaciones"): AUTH,
     ("GET", "/api/v1/aprobaciones/{idSolicitud}"): AUTH,
     ("POST", "/api/v1/aprobaciones/{idSolicitud}/aprobar"): AUTH,
     ("POST", "/api/v1/aprobaciones/{idSolicitud}/rechazar"): AUTH,
@@ -347,6 +348,33 @@ ROLES_POR_RUTA: dict[tuple[str, str], tuple[str, ...]] = {
     ("PATCH", "/api/v1/agencias/{id_agencia}"): ("ADMIN",),
     # Productos: consultar exige prd-consultar (todos menos CAJERO en WorkOS); escribir prd-editar
     ("GET", "/api/v1/productos"): CONSULTA_PRODUCTOS,
+    ("GET", "/api/v1/productos/subproductos/{id_sub}/vigencias"): CONSULTA_PRODUCTOS,
+    ("GET", "/api/v1/productos/subproductos/{id_sub}/condiciones"): CONSULTA_PRODUCTOS,
+    ("POST", "/api/v1/productos/subproductos/{id_sub}/condiciones"): ("ADMIN",),
+    ("DELETE", "/api/v1/productos/subproductos/{id_sub}/condiciones/{id_registro}"): (
+        "ADMIN",
+    ),
+    ("PATCH", "/api/v1/productos/subproductos/{id_sub}/condiciones/{id_registro}"): (
+        "ADMIN",
+    ),
+    ("PATCH", "/api/v1/productos/subproductos/{id_sub}/cupos/{id_registro}"): (
+        "ADMIN",
+    ),
+    ("POST", "/api/v1/productos/subproductos/{id_sub}/restricciones"): ("ADMIN",),
+    ("DELETE", "/api/v1/productos/subproductos/{id_sub}/restricciones/{id_registro}"): (
+        "ADMIN",
+    ),
+    ("PATCH", "/api/v1/productos/subproductos/{id_sub}/restricciones/{id_registro}"): (
+        "ADMIN",
+    ),
+    (
+        "POST",
+        "/api/v1/productos/subproductos/{id_sub}/restricciones/{id_registro}/fin",
+    ): ("ADMIN",),
+    (
+        "DELETE",
+        "/api/v1/productos/subproductos/{id_sub}/cupos/programaciones/{id_programacion}",
+    ): ("ADMIN",),
     ("GET", "/api/v1/productos/{id_producto}"): CONSULTA_PRODUCTOS,
     (
         "GET",

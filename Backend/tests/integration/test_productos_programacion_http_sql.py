@@ -10,6 +10,7 @@ from app.core.database.db import cooperativa
 from app.main import app
 from app.modules.aprobaciones import router as apr
 from app.modules.productos import programacion_api
+from app.modules.seguridad import funciones
 from tests.integration import test_productos_programacion_sql as base_sql
 from tests.sesion import USUARIO, simular_sesion
 
@@ -20,10 +21,12 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-@pytest.fixture
-def http_sql(motores, caso, monkeypatch):
+@pytest.fixture(params=[False, True], ids=["WorkOS", "Funciones-y-WorkOS"])
+def http_sql(motores, caso, monkeypatch, request):
     actor = [base_sql.MAKER]
     monkeypatch.setattr(programacion_api, "motor", lambda base: motores[base])
+    monkeypatch.setattr(funciones, "activa", lambda: request.param)
+    monkeypatch.setattr(funciones, "get_engine", lambda base: motores[base])
 
     def conexion():
         with motores["cooperativa"].connect() as c:

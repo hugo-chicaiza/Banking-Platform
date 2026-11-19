@@ -386,7 +386,10 @@ def test_cancelar_cadena_con_lote_intermedio_sin_canales(motores, caso):
     ],
 )
 def test_seis_tipos_vigencia_inclusiva_y_fin_aprobado(motores, caso, tipo, extra):
-    from app.modules.productos.repository import restricciones_vigentes
+    from app.modules.productos.repository import (
+        obtener_restricciones,
+        restricciones_vigentes,
+    )
 
     id_ = solicitar(
         caso,
@@ -405,6 +408,8 @@ def test_seis_tipos_vigencia_inclusiva_y_fin_aprobado(motores, caso, tipo, extra
     with motores["cooperativa"].connect() as c:
         registros = restricciones_vigentes(c, int(caso[1].id), hoy(), "VENT")
         assert len(registros) == 1 and registros[0]["tipo_restriccion"] == tipo
+        if tipo == "SIN_RETIROS_DIAS":
+            assert obtener_restricciones(c, int(caso[1].id))["dias_sin_retiros"] == 30
         restriccion = registros[0]["id_restriccion"]
     fin = solicitar(
         caso,

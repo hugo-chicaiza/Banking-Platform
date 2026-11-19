@@ -29,8 +29,23 @@ router = APIRouter(
 )
 Id = Annotated[int, Path(gt=0, le=2147483647)]
 Lector = Annotated[Usuario, Depends(require_permiso("prd-consultar"))]
-Proponente = Annotated[Usuario, Depends(require_permiso("prd-condicion"))]
 Db = Annotated[Connection, Depends(cooperativa)]
+
+
+def proponente(
+    usuario: Annotated[Usuario, Depends(require_permiso("prd-condicion"))],
+    actor: apr.Actual,
+) -> Usuario:
+    # El editor de funciones puede sustituir el guarda generico por ruta.
+    # E3-03 conserva ademas su permiso efectivo WorkOS, antes de validar datos.
+    if "prd-condicion" not in actor.permisos:
+        raise problema(
+            403, "SIN_PERMISO", "Falta el permiso efectivo de condiciones de productos."
+        )
+    return usuario
+
+
+Proponente = Annotated[Usuario, Depends(proponente)]
 
 
 def solicitar(

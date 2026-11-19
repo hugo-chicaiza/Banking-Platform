@@ -84,7 +84,7 @@ def subproducto(conn: Connection, id_sub: int, permitir_retirado: bool = False) 
     fila = (
         conn.execute(
             text(
-                "SELECT s.*,p.TipoProducto FROM ProductosFinancieros.SubProducto s WITH(UPDLOCK,HOLDLOCK) JOIN ProductosFinancieros.Producto p ON p.IdProducto=s.IdProducto WHERE s.IdSubProducto=:id"
+                "SELECT s.*,p.TipoProducto,p.NombreProducto FROM ProductosFinancieros.SubProducto s WITH(UPDLOCK,HOLDLOCK) JOIN ProductosFinancieros.Producto p ON p.IdProducto=s.IdProducto WHERE s.IdSubProducto=:id"
             ),
             {"id": id_sub},
         )
@@ -233,8 +233,22 @@ class Programador:
             plan = self._fin(cambio, actuales, hoy)
         return Plan(
             normalizar(plan),
-            {"clase": clase, "registros": normalizar(actuales)},
-            {"clase": clase, "propuesta": normalizar(plan)},
+            {
+                "clase": clase,
+                "subproducto": {
+                    "nombre": sub["NombreSubProducto"],
+                    "producto": sub["NombreProducto"],
+                },
+                "registros": normalizar(actuales),
+            },
+            {
+                "clase": clase,
+                "subproducto": {
+                    "nombre": sub["NombreSubProducto"],
+                    "producto": sub["NombreProducto"],
+                },
+                "propuesta": normalizar(plan),
+            },
             self.version(conn, objetivo),
         )
 

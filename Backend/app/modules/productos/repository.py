@@ -451,7 +451,9 @@ def obtener_restricciones(
     por_tipo = {fila["tipo"]: fila for fila in filas}
 
     return {
-        "dias_sin_retiros": por_tipo.get("SIN_RETIROS", {}).get("dias"),
+        "dias_sin_retiros": por_tipo.get(
+            "SIN_RETIROS_DIAS", por_tipo.get("SIN_RETIROS", {})
+        ).get("dias"),
         "saldo_minimo": por_tipo.get("SALDO_MINIMO", {}).get("monto"),
     }
 

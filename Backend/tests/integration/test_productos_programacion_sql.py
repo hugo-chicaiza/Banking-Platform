@@ -212,6 +212,52 @@ def test_cambio_del_objetivo_invalida_la_solicitud(motores, caso):
         assert len(p.filas(c, "condiciones", int(caso[1].id))) == 1
 
 
+def test_notificaciones_solo_aprobador_y_resolucion_para_solicitante(caso):
+    from app.modules.aprobaciones.lecturas import notificaciones
+
+    id_ = solicitar(caso, condicion())
+
+    def ids(actor):
+        return {s["idSolicitud"] for s in notificaciones(caso[0], actor, None)["items"]}
+
+    assert id_ in ids(CHECKER)
+    assert id_ not in ids(MAKER)
+    assert id_ not in ids(replace(CHECKER, organizacion="org_ajena_qa"))
+    assert id_ not in ids(replace(CHECKER, permisos=frozenset()))
+    assert aprobar(caso, id_)["estado"] == "Ejecutada"
+    assert id_ in ids(MAKER)
+    assert id_ not in ids(CHECKER)
+
+
+def test_una_pendiente_por_modelo_sin_bloquear_otros_modelos(motores, caso):
+    primera = solicitar(caso, condicion())
+    with pytest.raises(HTTPException) as error:
+        solicitar(caso, condicion(4))
+    assert error.value.status_code == 409
+    with motores["cooperativa"].begin() as c:
+        otro = c.execute(
+            text(
+                "INSERT ProductosFinancieros.SubProducto(IdProducto,CodigoSubProducto,NombreSubProducto,Estado,EstadoSubProducto) OUTPUT inserted.IdSubProducto SELECT IdProducto,:codigo,'Otro modelo QA local','A','Activo' FROM ProductosFinancieros.SubProducto WHERE IdSubProducto=:id"
+            ),
+            {"codigo": "Q303" + uuid4().hex[:8].upper(), "id": int(caso[1].id)},
+        ).scalar_one()
+    otro_caso = (caso[0], Objetivo("SubProducto", str(otro), None), None, caso[3])
+    segunda = solicitar(otro_caso, condicion())
+    assert primera != segunda
+    with motores["seguridad"].connect() as c:
+        estados = (
+            c.execute(
+                text(
+                    "SELECT Estado FROM Seguridad.SolicitudAprobacion WHERE IdSolicitud IN (:primera,:segunda)"
+                ),
+                {"primera": primera, "segunda": segunda},
+            )
+            .scalars()
+            .all()
+        )
+    assert estados == ["Pendiente", "Pendiente"]
+
+
 def test_migraciones_repetibles_y_rollback_ante_fallo(motores):
     from sqlalchemy.exc import DBAPIError
 

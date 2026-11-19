@@ -124,3 +124,17 @@ ALTER TABLE Auditoria.Auditoria ADD CONSTRAINT [CHK_Auditoria_Resultado] CHECK (
 ALTER TABLE Organizacion.Usuarios ADD CONSTRAINT [CHK_Usuarios_Cedula_Formato] CHECK (NOT [Cedula] like '%[^0-9]%' AND len([Cedula])=(10));
 
 ALTER TABLE Organizacion.Usuarios ADD CONSTRAINT [CHK_Usuarios_Estado] CHECK ([Estado]='Bloqueado' OR [Estado]='Inactivo' OR [Estado]='Activo');
+
+-- Dependencia publicada en develop: editor de funciones.
+IF OBJECT_ID(N'Seguridad.AccesoFuncionRol', N'U') IS NULL
+    CREATE TABLE Seguridad.AccesoFuncionRol (
+        Funcion varchar(80) NOT NULL,
+        Rol varchar(32) NOT NULL,
+        Permitido bit NOT NULL,
+        ModificadoPor int NOT NULL,
+        FechaModificacion datetime2 NOT NULL CONSTRAINT DF_AccesoFuncionRol_Fecha DEFAULT SYSUTCDATETIME(),
+        CONSTRAINT PK_AccesoFuncionRol PRIMARY KEY (Funcion, Rol),
+        CONSTRAINT FK_AccesoFuncionRol_Usuario FOREIGN KEY (ModificadoPor) REFERENCES Organizacion.Usuarios(UsuarioID),
+        CONSTRAINT CK_AccesoFuncionRol_Funcion CHECK (LEN(Funcion)>0 AND Funcion NOT LIKE '%[^a-zA-Z0-9.]%' COLLATE Latin1_General_100_BIN2),
+        CONSTRAINT CK_AccesoFuncionRol_Rol CHECK (Rol IN ('ADMIN','SUPERVISOR','ASESOR','CAJERO','CONTADOR','AUDITOR','APROBADOR_CREDITO'))
+    );
