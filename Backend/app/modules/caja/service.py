@@ -546,7 +546,7 @@ def cancelar_jornada(
             ip,
             f"jornada={id_jornada}",
             str(id_jornada),
-        ),
+        ) as registro,
         conn.begin(),
     ):
         jornada = jornada_bloqueada(
@@ -589,6 +589,7 @@ def cancelar_jornada(
                 "La jornada no está ABIERTA.",
             )
 
+        registro.confirmar(conn)
         return _recargar_jornada(
             conn,
             id_jornada,
@@ -682,6 +683,7 @@ def abrir_jornada(
 
             registro.id_registro = str(id_jornada)
 
+            registro.confirmar(conn)
             return _recargar_jornada(
                 conn,
                 id_jornada,
@@ -866,6 +868,7 @@ def registrar_dotacion(
 
             id_dotacion = int(salida["IdDotacionCaja"])
             registro.id_registro = str(id_dotacion)
+            id_movimiento = str(salida["IdMovimientoBoveda"])
 
             fila = repo.obtener_dotacion(conn, id_dotacion)
 
@@ -883,6 +886,12 @@ def registrar_dotacion(
                     fecha_hora=ahora,
                     importes={"PRINCIPAL": decimal(fila["Monto"])},
                 ),
+            )
+            registro.confirmar(
+                conn,
+                objetivo="Boveda.MovimientoBoveda",
+                id_objetivo=id_movimiento,
+                cambios={"idDotacionCaja": registro.id_registro},
             )
             return _dotacion(
                 fila,
@@ -974,6 +983,7 @@ def generar_cuadre(
 
             registro.id_registro = str(id_cuadre)
 
+            registro.confirmar(conn)
             return _recargar_cuadre(conn, id_cuadre)
 
 
@@ -1068,6 +1078,7 @@ def registrar_conteo(
                     "El cuadre ya fue cerrado.",
                 )
 
+            registro.confirmar(conn)
             return _recargar_cuadre(
                 conn,
                 cuadre["IdCuadreCaja"],
@@ -1168,6 +1179,7 @@ def registrar_devolucion(
 
             id_devolucion = int(salida["IdDevolucionCaja"])
             registro.id_registro = str(id_devolucion)
+            id_movimiento = str(salida["IdMovimientoBoveda"])
 
             fila = repo.obtener_devolucion(
                 conn,
@@ -1189,6 +1201,12 @@ def registrar_devolucion(
                     fecha_hora=ahora,
                     importes={"PRINCIPAL": decimal(fila["Monto"])},
                 ),
+            )
+            registro.confirmar(
+                conn,
+                objetivo="Boveda.MovimientoBoveda",
+                id_objetivo=id_movimiento,
+                cambios={"idDevolucionCaja": registro.id_registro},
             )
             return Devolucion(
                 id_devolucion_caja=fila["IdDevolucionCaja"],
@@ -1310,6 +1328,7 @@ def autorizar_cuadre(
                     "El cuadre ya fue autorizado.",
                 )
 
+            registro.confirmar(conn)
             return _recargar_cuadre(
                 conn,
                 cuadre["IdCuadreCaja"],
@@ -1334,7 +1353,7 @@ def cerrar_jornada(
         ip,
         f"jornada={id_jornada}",
         str(id_jornada),
-    ):
+    ) as registro:
         actor = exigir_id_interno(id_interno)
 
         with conn.begin():
@@ -1404,12 +1423,18 @@ def cerrar_jornada(
                     "La jornada ya está CERRADA.",
                 )
 
+            registro.confirmar(conn)
             return _recargar_jornada(conn, id_jornada)
 
 
 # --- CAJ-09: depósito en ventanilla ----------
 
 TipoVentanilla = Literal["Deposito", "Retiro"]
+# Códigos explícitos: la prueba del catálogo (E0-05) los encuentra por su nombre _EVENTO_*
+_EVENTO_VENTANILLA: dict[str, str] = {
+    "Deposito": "REGISTRAR_DEPOSITO",
+    "Retiro": "REGISTRAR_RETIRO",
+}
 
 
 def _validar_desglose(
@@ -1524,7 +1549,7 @@ def operacion_ventanilla(
     """Depósito o retiro. Devuelve (comprobante, es_repeticion)."""
 
     with auditar(
-        "REGISTRAR_" + tipo.upper(),
+        _EVENTO_VENTANILLA[tipo],
         "Transacciones.Transaccion",
         usuario,
         ip,
@@ -1787,6 +1812,7 @@ def operacion_ventanilla(
 
             denominaciones = datos.desglose if tipo == "Retiro" else None
 
+            registro.confirmar(conn)
             return (
                 _comprobante(
                     conn,
@@ -1828,7 +1854,7 @@ def registrar_series(
             f"cantidad={datos.cantidad_declarada}"
         ),
         str(id_transaccion),
-    ):
+    ) as registro:
         cajero = exigir_id_interno(id_interno)
 
         with conn.begin():
@@ -1888,3 +1914,4 @@ def registrar_series(
                 datos.cantidad_declarada,
                 json.dumps(datos.series),
             )
+            registro.confirmar(conn)

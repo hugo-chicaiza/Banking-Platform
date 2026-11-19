@@ -454,6 +454,7 @@ def registrar_arqueo(
             if fila is None:
                 raise RuntimeError("No se encontró el arqueo recién registrado")
             auditado.id_registro = str(id_arqueo)
+            auditado.confirmar(conn)
             return _arqueo(conn, fila)
 
 
@@ -467,7 +468,7 @@ def aprobar_arqueo(
         ip,
         f"arqueo={id_arqueo}",
         str(id_arqueo),
-    ):
+    ) as registro:
         actor = exigir_id_interno(id_interno)
         with conn.begin():
             inicial = repo.obtener_arqueo(conn, id_arqueo)
@@ -582,4 +583,5 @@ def aprobar_arqueo(
             aprobada = repo.obtener_arqueo(conn, id_arqueo)
             if aprobada is None:
                 raise RuntimeError("No se encontró el arqueo aprobado")
+            registro.confirmar(conn)
             return _arqueo(conn, aprobada)

@@ -43,6 +43,20 @@ def _codigos_del_codigo() -> set[str]:
                 and isinstance(c.value, str)
                 and c.value.isupper()
             }
+        # Tablas de códigos explícitas (`_EVENTO_* = {...: "CODIGO"}`)
+        for nodo in ast.walk(ast.parse(archivo.read_text(encoding="utf-8"))):
+            if isinstance(nodo, (ast.Assign, ast.AnnAssign)) and isinstance(
+                nodo.value, ast.Dict
+            ):
+                destinos = (
+                    nodo.targets if isinstance(nodo, ast.Assign) else [nodo.target]
+                )
+                if any(getattr(d, "id", "").startswith("_EVENTO_") for d in destinos):
+                    codigos |= {
+                        v.value
+                        for v in nodo.value.values
+                        if isinstance(v, ast.Constant)
+                    }
     return codigos
 
 

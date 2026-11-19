@@ -11,12 +11,16 @@
 
 ## Registro de capacitación
 
-| Fecha | Persona | Tema | Duración | Evidencia |
-|---|---|---|---|---|
-| | | Codificación segura (OWASP Top 10, ASVS) | | |
-| | | Manejo de datos de tarjeta y PIN (PCI) | | |
-| | | Protección de datos personales (LOPDP) | | |
-| | | Uso responsable de asistentes de IA | | |
+| Tema | Responsable | Estado | Fecha | Duración | Evidencia |
+|---|---|---|---|---|---|
+| Codificación segura (OWASP Top 10, ASVS) | Matthew | En estudio autodidacta; sin capacitación oficial | 2026-11-19 (inicio) | — | Aplicación de ASVS 5.0 en E0-05, E0-13 y E0-16 |
+| Manejo de datos de tarjeta y PIN (PCI) | Matthew | En estudio autodidacta; sin capacitación oficial | 2026-11-19 (inicio) | — | Librerías PCI SSS/SLC y mapeo PCI↔ASVS en CISO Assistant |
+| Protección de datos personales (LOPDP) | Eli | En estudio autodidacta; sin capacitación oficial | 2026-11-19 (inicio) | — | — |
+| Uso responsable de asistentes de IA | Eli | En estudio autodidacta; sin capacitación oficial | 2026-11-19 (inicio) | — | — |
+
+Pendiente: cada responsable completa una capacitación formal de su tema y la registra aquí (fecha, duración y
+certificado). Mientras tanto, el responsable de cada tema es la referencia del equipo para revisar las historias
+que lo tocan.
 
 Cada persona del equipo completa los cuatro temas antes de trabajar en historias de dinero, tarjetas o seguridad, y
 los repasa una vez por año.

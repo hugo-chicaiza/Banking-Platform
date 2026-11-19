@@ -11,13 +11,16 @@ que necesitan el id interno responden 403 USUARIO_INTERNO_NO_VINCULADO: fallan c
 
 from collections.abc import Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass
-from typing import Annotated
+from dataclasses import dataclass, field
+from typing import Annotated, Any
+from uuid import uuid4
 
 from fastapi import Depends
+from sqlalchemy import Connection, text
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.core.api.errors import problema
+from app.core.config.logs import trace_id_actual
 from app.core.security import audit
 from app.core.security.auth import Usuario, UsuarioActual
 
@@ -76,6 +79,73 @@ class RegistroAuditado:
 
     id_registro: str | None = None
     detalle: str = ""
+    # Lo llena auditar(); confirmar() lo usa para escribir el evento en la bandeja
+    _evento: dict[str, Any] = field(default_factory=dict, repr=False)
+    _confirmado: bool = field(default=False, repr=False)
+
+    def confirmar(
+        self,
+        conn: Connection,
+        *,
+        cambios: dict[str, Any] | None = None,
+        objetivo: str | None = None,
+        id_objetivo: str | None = None,
+    ) -> None:
+        """E0-05 B: escribe el evento de éxito en `Auditoria.EventoPendiente` **dentro de la
+        transacción abierta de la operación**. Si el evento no se puede guardar, la operación
+        se revierte; si la operación se revierte, el evento tampoco queda. El relevo lo pasa
+        a la bitácora. `objetivo`/`id_objetivo`: tabla e id del registro al que apunta el
+        evento (por omisión, la tabla de auditar() y `id_registro`). Operaciones con clientes
+        apuntan a Transacciones.Transaccion; las internas, a su tabla de movimiento.
+        Se llama justo antes de salir del `with conn.begin()`; montos, ids y estados, nunca
+        datos personales."""
+        if not conn.in_transaction():
+            raise RuntimeError(
+                "confirmar() exige la transacción abierta de la operación"
+            )
+        # Importación diferida: aprobaciones depende de core, no al revés en la carga
+        from app.modules.aprobaciones.congelacion import congelar
+
+        e = self._evento
+        usuario: Usuario = e["usuario"]
+        tabla = objetivo or e["tabla"]
+        descripcion = _descripcion(usuario, e["detalle"], self)
+        contenido = congelar(
+            {
+                "codigo": e["accion"],
+                "sujeto": usuario.id_usuario,
+                "idInterno": None,  # mismo criterio que auditar(): sin FK que pierda el evento
+                "organizacion": usuario.id_organizacion,
+                "roles": list(usuario.roles),
+                "agencia": _agencia_leida(usuario),
+                "sesion": usuario.id_sesion,
+                "origen": e["ip"] or "",
+                "correlacion": trace_id_actual.get() or "",
+                "canal": "API",
+                "tipoObjetivo": tabla,
+                "tablaAfectada": tabla,
+                "agenciaActor": _agencia_leida(usuario),
+                "idSolicitud": None,
+                "idObjetivo": id_objetivo or self.id_registro or "",
+                "resultado": "Exitoso",
+                "descripcion": audit.texto_seguro(descripcion),
+                "cambios": cambios or {},
+            }
+        ).texto
+        conn.execute(
+            text(
+                "INSERT Auditoria.EventoPendiente(IdEvento,CodigoEvento,Contenido) VALUES(:id,:codigo,:contenido)"
+            ),
+            {"id": str(uuid4()), "codigo": e["accion"], "contenido": contenido},
+        )
+        self._confirmado = True
+
+
+def _agencia_leida(usuario: Usuario) -> str | None:
+    """Agencia del usuario para la auditoría sin consultar la base: la que la operación
+    ya leyó en esta petición (agencia()) o la fija de las pruebas."""
+    valor = usuario._leidos.get("agencia", usuario.id_agencia)
+    return valor if isinstance(valor, str) else None
 
 
 def _descripcion(usuario: Usuario, detalle: str, registro: RegistroAuditado) -> str:
@@ -103,10 +173,19 @@ def auditar(
     UsuarioID va en NULL igual que en auth: el id de WorkOS no es el UsuarioID de
     SeguridadDB y una FK fallida haría perder el evento. El id de WorkOS va en la
     descripción. `detalle` solo lleva ids y estados, nunca datos personales.
-    La auditoría es best-effort (audit.registrar): no reemplaza la persistencia
-    financiera, que la garantiza la transacción de la BD.
+    Sin confirmar(), la auditoría es best-effort (audit.registrar). Las operaciones de
+    dinero llaman registro.confirmar(conn) dentro de su transacción (E0-05 B): el evento
+    de éxito queda en la bandeja junto con el movimiento, o ninguno de los dos. Los fallos
+    siguen siendo best-effort: la transacción ya se revirtió.
     """
     registro = RegistroAuditado(id_registro)
+    registro._evento = {
+        "accion": accion,
+        "tabla": tabla,
+        "usuario": usuario,
+        "ip": ip,
+        "detalle": detalle,
+    }
     try:
         yield registro
     except BaseException as exc:
@@ -123,11 +202,13 @@ def auditar(
                     f" motivo={_codigo_fallo(exc)}"
                 ),
                 roles=usuario.roles_texto(),
-                agencia=getattr(usuario, "id_agencia", None),
+                agencia=_agencia_leida(usuario),
                 sesion=getattr(usuario, "id_sesion", None),
             )
         )
         raise
+    if registro._confirmado:
+        return  # E0-05 B: el evento ya quedó en la bandeja con la operación
     audit.registrar(
         audit.EventoAuditoria(
             accion=accion,
@@ -138,7 +219,7 @@ def auditar(
             ip=ip,
             descripcion=_descripcion(usuario, detalle, registro),
             roles=usuario.roles_texto(),
-            agencia=getattr(usuario, "id_agencia", None),
+            agencia=_agencia_leida(usuario),
             sesion=getattr(usuario, "id_sesion", None),
         )
     )
