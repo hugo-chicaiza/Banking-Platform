@@ -324,3 +324,26 @@ def test_sql_protege_el_formato_de_una_regla_usada(motores):
             ).scalar_one()
             == "2200"
         )
+
+
+@pytest.mark.parametrize("algoritmo", ["MODULO_10", "MODULO_11"])
+def test_apertura_real_con_agencia_y_verificador_sin_consumir_en_ejemplo(
+    motores, caso, algoritmo
+):
+    from app.modules.productos.numeracion_api import ejemplo
+    from app.modules.productos.numeracion_schemas import ReglaEntrada
+
+    cola, objetivo, regla = caso
+    regla.update(incluyeAgencia=True, algoritmoVerificador=algoritmo)
+    id_ = cola.solicitar(MAKER, CODIGO, objetivo, regla, hoy(), CTX)
+    assert cola.aprobar(CHECKER, id_, None, CTX)["estado"] == "Ejecutada"
+    with motores["cooperativa"].connect() as c:
+        id_sub = int(objetivo.id)
+        formato = ReglaEntrada.model_validate(regla)
+        previa = ejemplo(c, id_sub, formato)
+        assert ejemplo(c, id_sub, formato).ejemplo == previa.ejemplo
+        numero = abrir_real(c, id_sub)
+        assert numero == previa.ejemplo
+        assert len(numero) == len(regla["prefijo"]) + 3 + 8 + 1
+        assert numero.isascii() and numero.isdigit()
+        c.rollback()
