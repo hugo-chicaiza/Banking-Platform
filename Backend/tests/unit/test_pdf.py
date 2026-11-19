@@ -3,6 +3,8 @@
 import re
 import zlib
 
+import pytest
+
 from app.core.pdf import (
     DocumentoPdf,
     nombre_archivo,
@@ -15,12 +17,22 @@ from app.core.pdf import (
 def _texto(pdf: bytes) -> str:
     """Texto de los flujos del PDF (fpdf2 los comprime con zlib)."""
     partes = []
-    for flujo in re.findall(rb"stream\r?\n(.*?)\r?\nendstream", pdf, re.DOTALL):
+    # Un CR al final puede pertenecer al checksum zlib, no al delimitador.
+    # zlib admite el CR adicional de un delimitador CRLF tras el flujo.
+    for flujo in re.findall(rb"stream\r?\n(.*?)\nendstream", pdf, re.DOTALL):
         try:
             partes.append(zlib.decompress(flujo).decode("latin-1"))
         except zlib.error:
             continue
     return "".join(partes)
+
+
+@pytest.mark.parametrize("fin_linea", [b"\n", b"\r\n"])
+def test_lector_preserva_checksum_comprimido_terminado_en_cr(fin_linea):
+    flujo = zlib.compress(b"\x0c")
+    assert flujo.endswith(b"\r")
+    documento = b"stream" + fin_linea + flujo + fin_linea + b"endstream"
+    assert _texto(documento) == "\x0c"
 
 
 def test_documento_con_bloques_encabezado_y_pie():
