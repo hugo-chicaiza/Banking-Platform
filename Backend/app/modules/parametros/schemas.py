@@ -114,6 +114,13 @@ class ExoneracionCreate(Vigencia):
     estado: Estado = "A"
 
 
+class TarifaVigente(CamelModel):
+    id_comision: int
+    valor: Valor
+    vigencia_desde: date
+    vigencia_hasta: date | None
+
+
 class ExoneracionUpdate(Entrada):
     id_producto: Id | None = None
     id_sub_producto: Id | None = None

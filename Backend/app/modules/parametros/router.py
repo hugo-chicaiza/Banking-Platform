@@ -1,11 +1,18 @@
 """HTTP E1-12. Las escrituras de parámetros son del rol ADMIN (sin permiso de WorkOS propio)."""
 
+from datetime import date, timedelta
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Path, Query, Request
+from fastapi.responses import JSONResponse
 from sqlalchemy import Connection
 
-from app.core.api.errors import RESPUESTAS_ERROR, ProblemDetailsRoute, solo_parametros
+from app.core.api.errors import (
+    RESPUESTAS_ERROR,
+    ProblemDetailsRoute,
+    problema,
+    solo_parametros,
+)
 from app.core.api.middleware import ip_cliente
 from app.core.database.db import cooperativa
 from app.core.security.auth import (
@@ -14,7 +21,11 @@ from app.core.security.auth import (
     require_auth,
     require_roles,
 )
-from app.modules.parametros import mantenimiento, service
+from app.modules.aprobaciones import router as aprobaciones
+from app.modules.aprobaciones.contratos import SolicitudAceptada
+from app.modules.aprobaciones.registro import Objetivo
+from app.modules.parametros import mantenimiento, repository, service
+from app.modules.parametros.aprobacion_comision import OPERACION_TARIFA
 from app.modules.parametros.schemas import (
     AsociarComision,
     Comision,
@@ -23,6 +34,7 @@ from app.modules.parametros.schemas import (
     Exoneracion,
     ExoneracionCreate,
     ExoneracionUpdate,
+    TarifaVigente,
 )
 
 router = APIRouter(
@@ -65,7 +77,7 @@ def crear_comision(
     "/comisiones/{idComision}",
     response_model=Comision,
     dependencies=_ESCRITURA,
-    responses={404: {"description": "Comision no encontrada o FUNCION_NO_DISPONIBLE"}},
+    responses={202: {"model": SolicitudAceptada}},
 )
 def actualizar_comision(
     id_comision: IdComision,
@@ -74,10 +86,51 @@ def actualizar_comision(
     request: Request,
     conn: Db,
     usuario: UsuarioActual,
-) -> Comision:
+) -> Comision | JSONResponse:
+    if service.cambio_sensible(conn, id_comision, payload):
+        if payload.model_fields_set - {"valor", "vigencia_desde"}:
+            raise problema(
+                422,
+                "CAMBIO_TARIFA_MIXTO",
+                "Envíe el cambio de tarifa separado de los metadatos.",
+            )
+        hoy = service.hoy()
+        conn.rollback()
+        actor_aprobaciones = aprobaciones.actual(usuario)
+        id_ = aprobaciones.servicio().solicitar(
+            actor_aprobaciones,
+            OPERACION_TARIFA.codigo,
+            Objetivo(OPERACION_TARIFA.tipo_objetivo, str(id_comision), None),
+            {
+                "valor": str(payload.valor) if payload.valor is not None else None,
+                "vigenciaDesde": (
+                    payload.vigencia_desde or hoy + timedelta(days=1)
+                ).isoformat(),
+            },
+            hoy,
+            aprobaciones.contexto(request, usuario),
+        )
+        return JSONResponse(
+            status_code=202,
+            content=SolicitudAceptada(id_solicitud=id_).model_dump(by_alias=True),
+        )
     return service.actualizar_comision(
         conn, id_comision, payload, actor, ip_cliente(request.scope), usuario=usuario
     )
+
+
+@router.get(
+    "/comisiones/{idComision}/tarifa",
+    response_model=TarifaVigente,
+    dependencies=[Depends(require_roles(*_LECTURA)), Depends(solo_parametros("fecha"))],
+)
+def consultar_tarifa(id_comision: IdComision, fecha: date, conn: Db) -> TarifaVigente:
+    fila = repository.tarifa_comision(conn, id_comision, fecha)
+    if fila is None:
+        raise problema(
+            404, "TARIFA_NO_ENCONTRADA", "No hay una tarifa para la fecha consultada."
+        )
+    return TarifaVigente.model_validate(fila)
 
 
 @router.get(

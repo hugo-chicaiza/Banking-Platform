@@ -106,7 +106,7 @@ def test_contrato_openapi_sin_actor_en_entradas(api):
         props = contrato["components"]["schemas"][nombre]["properties"]
         assert not {"registradoPor", "creadoPor", "idSolicitud"} & props.keys()
     assert (
-        "404"
+        "202"
         in contrato["paths"][BASE + "/comisiones/{idComision}"]["patch"]["responses"]
     )
 

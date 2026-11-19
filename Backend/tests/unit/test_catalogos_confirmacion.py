@@ -62,7 +62,10 @@ class Conexion:
         r = MagicMock()
         if "SELECT CodigoCanal FROM Canal.Canal" in texto:
             r.scalars.return_value = ["APP", "ATM", "VENT"]
-        elif texto.lstrip().startswith("INSERT"):
+        elif (
+            texto.lstrip().startswith("INSERT")
+            or "INSERT INTO Transacciones.Comisiones" in texto
+        ):
             self.inserts.append(dict(params or {}))
             sin_canal = "Transacciones.Comisiones" in texto and not self.canal_existe
             r.scalar.return_value = None if sin_canal else "50"
@@ -247,3 +250,15 @@ def test_simulacion_usa_la_tasa_vinculada(monkeypatch):
         creditos_service.simular(MagicMock(), datos, hoy=date(2026, 11, 16))
     assert pedido == {"tipo": 1, "producto": 4, "sub": 9}
     assert USUARIO is not None
+
+
+def test_borrado_comision_con_historial_se_rechaza_antes_de_ejecutar_delete(
+    monkeypatch,
+):
+    conn = MagicMock()
+    monkeypatch.setattr(administracion, "_fila", lambda *_: {"id": "50"})
+    with pytest.raises(HTTPException) as error:
+        administracion.eliminar(conn, "comisiones", "50", USUARIO, "127.0.0.1")
+    assert error.value.status_code == 409
+    assert error.value.detail["code"] == "COMISION_CON_HISTORIAL"
+    conn.execute.assert_not_called()

@@ -48,9 +48,11 @@ BEGIN TRY
         LEFT JOIN Canal.Canal ca WITH (HOLDLOCK) ON ca.IdCanal=t.IdCanal AND ca.CodigoCanal=t.Canal AND ca.Estado='A'
         LEFT JOIN Transacciones.TipoTransaccion tt WITH (HOLDLOCK) ON tt.CodigoTipo=t.Codigo AND tt.Estado='A'
         LEFT JOIN Transacciones.Comisiones c WITH (HOLDLOCK) ON c.IdComision=t.IdComision
-            AND c.IdCanal=t.IdCanal AND c.TipoCalculo='Fijo' AND c.Valor=t.Valor AND c.Estado='A'
-            AND c.VigenciaDesde<=@Fecha AND (c.VigenciaHasta IS NULL OR c.VigenciaHasta>@Fecha)
-        WHERE ca.IdCanal IS NULL OR tt.CodigoTipo IS NULL OR c.IdComision IS NULL)
+            AND c.IdCanal=t.IdCanal AND c.TipoCalculo='Fijo' AND c.Estado='A'
+        LEFT JOIN Transacciones.ComisionValor v WITH (HOLDLOCK)
+            ON v.IdComision=c.IdComision AND v.Valor=t.Valor AND v.VigenciaDesde<=@Fecha
+           AND (v.VigenciaHasta IS NULL OR v.VigenciaHasta>@Fecha)
+        WHERE ca.IdCanal IS NULL OR tt.CodigoTipo IS NULL OR v.IdComision IS NULL)
         THROW 51104, 'Catalogos, canales, tarifa o vigencia distintos de lo esperado. No se cargo nada.', 1;
 
     /* Se conserva una asignación abierta equivalente que ya cubre la fecha.

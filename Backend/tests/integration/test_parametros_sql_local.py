@@ -4,6 +4,7 @@ import os
 from dataclasses import replace
 from datetime import datetime, time, timedelta
 from decimal import Decimal
+from pathlib import Path
 
 import pytest
 from fastapi import FastAPI
@@ -12,8 +13,9 @@ from sqlalchemy import create_engine
 from sqlalchemy.pool import NullPool
 
 from app.core.database.db import cooperativa
+from app.core.security import audit
 from app.core.security.auth import id_usuario_auditoria
-from app.modules.parametros import service
+from app.modules.parametros import general, service
 from app.modules.parametros.router import router
 from tests.integration.test_e112_sql_local import conectar, ejecutar
 from tests.integration.test_e112_sql_local import sql as sql  # noqa: PLC0414
@@ -102,12 +104,14 @@ def tarifas_para_solape(api_sql):
     }
     respuesta = client.post(BASE + "/comisiones", json=vigente)
     assert respuesta.status_code == 201, respuesta.text
-    otra = raw.execute("""
+    raw.execute("""
         INSERT Transacciones.Comisiones
             (CodigoComision,TipoCalculo,Valor,IdCanal,VigenciaDesde,Estado)
-        OUTPUT inserted.IdComision
         VALUES ('OTRA104','Fijo',0.75,2,'20200101','A')
-    """).fetchval()
+    """)
+    otra = raw.execute(
+        "SELECT IdComision FROM Transacciones.Comisiones WHERE CodigoComision='OTRA104'"
+    ).fetchval()
     return client, raw, vigente, otra
 
 
@@ -169,8 +173,36 @@ def test_api_rechaza_asociar_otra_tarifa_con_solape_sin_filas_parciales(
     assert eventos_auditados[-1].resultado == "Fallido"
 
 
-def test_patch_valor_404_preserva_tarifa_y_asociacion_vigentes(tarifas_para_solape):
+@pytest.mark.parametrize("bandera_activa", [False, True], ids=["sin-bandera", "activa"])
+def test_patch_mixto_preserva_tarifa_y_asociacion_vigentes(
+    tarifas_para_solape, bandera_activa, api_sql
+):
     client, raw, vigente, _ = tarifas_para_solape
+    if bandera_activa:
+        raw.execute("""
+            CREATE TABLE Organizacion.Agencia (IdAgencia char(3) PRIMARY KEY);
+            DECLARE @base sysname = DB_NAME();
+            EXEC sys.sp_set_session_context N'migration_database', @base;
+        """)
+        migraciones = Path(__file__).resolve().parents[2] / "migrations/cooperativa"
+        for nombre in (
+            "202611172000_parametros_estructura.up.sql",
+            "202611172001_parametros_semillas.up.sql",
+        ):
+            cursor = raw.execute((migraciones / nombre).read_text(encoding="utf-8"))
+            while cursor.nextset():
+                pass
+        raw.execute("""
+            UPDATE v SET Valor = 'true'
+            FROM Parametros.ParametroValor AS v
+            JOIN Parametros.Parametro AS p ON p.IdParametro = v.IdParametro
+            WHERE p.Clave = 'FUNCION_PARAMETRO_APROBACION';
+        """)
+        _, _, motor = api_sql
+        with motor.connect() as conn:
+            general.verificar_funcion(
+                conn, "FUNCION_PARAMETRO_APROBACION", service.hoy()
+            )
     antes = configuracion_guardada(raw)
     respuesta = client.patch(
         BASE + "/comisiones/1",
@@ -179,8 +211,8 @@ def test_patch_valor_404_preserva_tarifa_y_asociacion_vigentes(tarifas_para_sola
             "descripcion": "Este cambio tampoco debe persistirse",
         },
     )
-    assert respuesta.status_code == 404, respuesta.text
-    assert respuesta.json()["code"] == "FUNCION_NO_DISPONIBLE"
+    assert respuesta.status_code == 422, respuesta.text
+    assert respuesta.json()["code"] == "CAMBIO_TARIFA_MIXTO"
     assert configuracion_guardada(raw) == antes
     monto = raw.execute(
         """
@@ -225,13 +257,13 @@ def test_rutas_comisiones_sql_y_actor(api_sql, eventos_auditados):
         f"{BASE}/comisiones/{id_}",
         json={"descripcion": "No debe quedar", "valor": "1.00"},
     )
-    assert r.status_code == 404, r.text
-    assert r.json()["code"] == "FUNCION_NO_DISPONIBLE"
+    assert r.status_code == 422, r.text
+    assert r.json()["code"] == "CAMBIO_TARIFA_MIXTO"
     fila = raw.execute(
         "SELECT Valor,Descripcion FROM Transacciones.Comisiones WHERE IdComision=?", id_
     ).fetchone()
     assert fila[0] == Decimal("0.05") and fila[1] == "Editada"
-    assert eventos_auditados[-1].resultado == "Fallido"
+    assert eventos_auditados[-1].resultado == "Exitoso"
     assert eventos_auditados[-1].usuario == 900104
     r = client.patch(f"{BASE}/comisiones/{id_}", json={"valor": "0.05"})
     assert r.status_code == 200
@@ -261,6 +293,51 @@ def test_rutas_comisiones_sql_y_actor(api_sql, eventos_auditados):
         },
     )
     assert r.status_code == 422 and r.json()["code"] == "CANAL_COMISION_INCOMPATIBLE"
+
+
+def test_persiste_auditoria_local_de_tarifa_y_exoneracion(api_sql, monkeypatch):
+    client, raw, motor = api_sql
+    raw.execute("CREATE SCHEMA Auditoria")
+    raw.execute("""
+        ALTER TABLE Organizacion.Usuarios ADD RolesWorkOS varchar(100);
+        CREATE TABLE Auditoria.Auditoria (
+            AuditoriaID int IDENTITY PRIMARY KEY, UsuarioID int, NombreAccion varchar(100),
+            TablaAfectada varchar(100), IDRegistro varchar(100), FechaHora datetime,
+            DireccionIP varchar(45), Descripcion varchar(500), Resultado varchar(15),
+            RolesWorkOS varchar(200)
+        );
+    """)
+
+    def persistir_local(evento):
+        with motor.begin() as conn:
+            audit.registrar_en_transaccion(conn, evento)
+
+    monkeypatch.setattr(audit, "_persistir", persistir_local)
+    nueva = client.post(BASE + "/comisiones", json=nueva_comision())
+    assert nueva.status_code == 201, nueva.text
+    id_ = nueva.json()["idComision"]
+    cambio = client.patch(f"{BASE}/comisiones/{id_ + 100}", json={"estado": "I"})
+    assert cambio.status_code == 404, cambio.text
+    exoneracion = client.post(
+        BASE + "/exoneraciones",
+        json={
+            "idComision": id_,
+            "porcentajeExonerado": 100,
+            "vigenciaDesde": service.hoy().isoformat(),
+        },
+    )
+    assert exoneracion.status_code == 201, exoneracion.text
+    assert [
+        tuple(fila)
+        for fila in raw.execute("""
+        SELECT UsuarioID, NombreAccion, Resultado
+        FROM Auditoria.Auditoria ORDER BY AuditoriaID
+    """).fetchall()
+    ] == [
+        (900104, "PAR_COMISION_REGISTRADA", "Exitoso"),
+        (900104, "PAR_COMISION_REGISTRADA", "Fallido"),
+        (900104, "PAR_EXONERACION_EDITADA", "Exitoso"),
+    ]
 
 
 def test_exoneracion_crud_y_calculo_automatico_sql(api_sql, eventos_auditados):

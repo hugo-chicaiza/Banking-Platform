@@ -144,28 +144,26 @@ CATALOGOS: dict[str, Catalogo] = {
                 Campo("codigo", "Código"),
                 Campo("tipoComision", "Tipo"),
                 Campo("tipoCalculo", "Cálculo"),
-                Campo("valor", "Valor", "numero", True, minimo=0),
+                Campo("valor", "Valor", "numero", minimo=0),
                 Campo("nombreCanal", "Canal"),
                 Campo("descripcion", "Descripción", editable=True, maximo=250),
                 Campo("vigenciaDesde", "Vigente desde", "fecha"),
-                Campo("vigenciaHasta", "Vigente hasta", "fecha", True, nulo=True),
+                Campo("vigenciaHasta", "Vigente hasta", "fecha", nulo=True),
             ),
             listar="""
                 SELECT CAST(c.IdComision AS varchar(10)) AS id, c.Estado AS estado,
                        c.CodigoComision AS codigo, c.TipoComision AS tipoComision,
-                       c.TipoCalculo AS tipoCalculo, c.Valor AS valor,
+                       c.TipoCalculo AS tipoCalculo, v.Valor AS valor,
                        ca.NombreCanal AS nombreCanal, c.Descripcion AS descripcion,
-                       c.VigenciaDesde AS vigenciaDesde, c.VigenciaHasta AS vigenciaHasta
+                       v.VigenciaDesde AS vigenciaDesde, v.VigenciaHasta AS vigenciaHasta
                 FROM Transacciones.Comisiones AS c
+                JOIN Transacciones.vw_ComisionValorPresentacion AS v ON v.IdComision = c.IdComision
                 JOIN Canal.Canal AS ca ON ca.IdCanal = c.IdCanal
                 ORDER BY c.TipoComision, c.CodigoComision
             """,
             actualizar="""
                 UPDATE Transacciones.Comisiones SET
-                    Valor = CASE WHEN :c_valor = 1 THEN :valor ELSE Valor END,
                     Descripcion = CASE WHEN :c_descripcion = 1 THEN :descripcion ELSE Descripcion END,
-                    VigenciaHasta = CASE WHEN :c_vigenciaHasta = 1
-                        THEN :vigenciaHasta ELSE VigenciaHasta END,
                     Estado = CASE WHEN :c_estado = 1 THEN :estado ELSE Estado END
                 WHERE IdComision = TRY_CAST(:id AS int)
             """,
@@ -641,7 +639,11 @@ def _cambios(catalogo: Catalogo, cuerpo: dict[str, Any]) -> dict[str, Any]:
         raise problema(
             400, "DATOS_INVALIDOS", "Envíe al menos un campo para actualizar."
         )
-    desconocidos = set(cuerpo) - catalogo.editables - {"estado"}
+    admitidos = catalogo.editables | {"estado"}
+    if catalogo.clave == "comisiones":
+        # Conserva la respuesta del contrato legado para solicitudes directas.
+        admitidos |= {"valor", "vigenciaHasta"}
+    desconocidos = set(cuerpo) - admitidos
     if desconocidos:
         raise problema(
             400,
@@ -735,7 +737,6 @@ def actualizar(
         ),
     ):
         try:
-            # E1-12: el catálogo legado tampoco puede saltarse la aprobación.
             if clave == "comisiones" and any(
                 k in cambios and cambios[k] != actual.get(k)
                 for k in ("valor", "vigenciaHasta")
@@ -743,7 +744,7 @@ def actualizar(
                 raise problema(
                     501,
                     "APROBACION_PARAMETRO_NO_DISPONIBLE",
-                    "El cambio de valor o vigencia requiere el flujo de aprobación de E1-10.",
+                    "Use el flujo de aprobación de tarifas de comisiones.",
                 )
             _validar_fila({**actual, **cambios})
             if clave == "tasas-interes":
@@ -822,13 +823,16 @@ _ALTA_BAJA: dict[str, AltaBaja] = {
         ),
         # El canal se busca por su código: si no existe o está inactivo, no inserta
         insertar="""
+            SET NOCOUNT ON;
+            DECLARE @Ids TABLE (IdComision varchar(10));
             INSERT INTO Transacciones.Comisiones (CodigoComision, TipoComision, TipoCalculo,
                 Valor, MontoMinimo, MontoMaximo, IdCanal, Descripcion, VigenciaDesde)
-            OUTPUT CAST(inserted.IdComision AS varchar(10))
+            OUTPUT CAST(inserted.IdComision AS varchar(10)) INTO @Ids
             SELECT :codigo, :tipoComision, :tipoCalculo, :valor, :montoMinimo, :montoMaximo,
                    c.IdCanal, :descripcion, :vigenciaDesde
             FROM Canal.Canal AS c
-            WHERE c.CodigoCanal = :codigoCanal AND c.Estado = 'A'
+            WHERE c.CodigoCanal = :codigoCanal AND c.Estado = 'A';
+            SELECT IdComision FROM @Ids;
         """,
         en_uso="""
             SELECT CASE WHEN EXISTS (SELECT 1 FROM ProductosFinancieros.ProductoComision
@@ -1197,6 +1201,12 @@ def eliminar(conn: Connection, clave: str, id_: str, usuario: Usuario, ip: str) 
     actual = _fila(conn, catalogo, id_)
     if actual is None:
         raise problema(404, "REGISTRO_NO_ENCONTRADO", "El registro no existe.")
+    if clave == "comisiones":
+        raise problema(
+            409,
+            "COMISION_CON_HISTORIAL",
+            "La comisión conserva historial de tarifas: desactive el registro.",
+        )
     with auditar(
         "ELIMINAR",
         catalogo.tabla,
