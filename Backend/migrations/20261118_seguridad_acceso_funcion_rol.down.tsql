@@ -1,0 +1,15 @@
+/* Reversión manual: apagar EDITOR_FUNCIONES_ACTIVO en la aplicación primero.
+   Se niega a borrar ajustes. Exportarlos/revisarlos antes de una reversión real.
+   No borra Auditoria.Auditoria ni modifica Seguridad.PestanaRol. */
+SET XACT_ABORT ON;
+GO
+IF DB_NAME() <> N'SeguridadDB'
+    THROW 51470, 'La reversion requiere SeguridadDB.', 1;
+GO
+IF OBJECT_ID(N'Seguridad.AccesoFuncionRol', N'U') IS NOT NULL
+BEGIN
+    IF EXISTS (SELECT 1 FROM Seguridad.AccesoFuncionRol)
+        THROW 51472, 'La reversion no elimina ajustes; revisarlos y respaldarlos primero.', 1;
+    DROP TABLE Seguridad.AccesoFuncionRol;
+END;
+GO

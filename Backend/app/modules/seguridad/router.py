@@ -24,7 +24,12 @@ from app.core.security.auth import (
     require_auth,
     require_roles,
 )
-from app.modules.seguridad import accesos, service
+from app.modules.seguridad import accesos, funciones, service
+from app.modules.seguridad.funciones_schemas import (
+    CambiosFunciones,
+    ConfiguracionFunciones,
+    FuncionesGuardadas,
+)
 from app.modules.seguridad.schemas import (
     ConfiguracionAccesos,
     ConfiguracionGuardada,
@@ -49,6 +54,37 @@ Admin = Annotated[Usuario, Depends(require_roles("ADMIN"))]
 Db = Annotated[Connection, Depends(seguridad)]
 SlugPath = Annotated[str, Path(pattern=r"^[a-z0-9][a-z0-9_.:-]{0,63}$")]
 _ADMIN = {"x-roles": ["ADMIN"]}
+
+
+@router.get(
+    "/accesos/configuracion",
+    response_model=ConfiguracionFunciones,
+    operation_id="SEG13",
+    openapi_extra=_ADMIN,
+)
+def configuracion_funciones(
+    _: Admin, conn: Db, response: Response
+) -> ConfiguracionFunciones:
+    response.headers["Cache-Control"] = "no-store"
+    return funciones.configuracion(conn)
+
+
+@router.patch(
+    "/accesos/configuracion",
+    response_model=FuncionesGuardadas,
+    operation_id="SEG14",
+    openapi_extra=_ADMIN,
+)
+def guardar_funciones(
+    request: Request,
+    datos: CambiosFunciones,
+    admin: Admin,
+    id_admin: UsuarioAuditoria,
+    conn: Db,
+    response: Response,
+) -> FuncionesGuardadas:
+    response.headers["Cache-Control"] = "no-store"
+    return funciones.guardar(conn, datos, admin, id_admin, ip_cliente(request.scope))
 
 
 @router.get(

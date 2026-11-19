@@ -782,6 +782,20 @@ def test_bloquear_usuario_vinculado(client, base, workos):
     assert ("revoke_session", "session_b") not in workos.llamadas
 
 
+def test_desactivar_usuario_vinculado_cierra_sus_sesiones(client, workos):
+    auth._revocadas.clear()
+
+    r = client.patch(f"{BASE}/2", json={"estado": "Inactivo"})
+
+    assert r.status_code == 200
+    assert r.json()["estado"] == "Inactivo"
+    assert workos.membresias["user_2"].status == "inactive"
+    # Sus sesiones se cierran en WorkOS y se rechazan al instante (401 SESION_REVOCADA)
+    assert ("revoke_session", "session_a") in workos.llamadas
+    assert ("revoke_session", "session_b") not in workos.llamadas
+    assert auth.motivo_revocacion("session_a") == "SESION_REVOCADA"
+
+
 def test_bloquear_exige_motivo(client, workos):
     r = client.patch(f"{BASE}/2", json={"estado": "Bloqueado"})
 

@@ -13,6 +13,7 @@ from pydantic.json_schema import SkipJsonSchema
 from app.core.api.schemas import CamelModel
 from app.core.security.auth import Rol
 from app.modules.clientes.service import validar_cedula_ecuatoriana
+from app.modules.seguridad.funciones_schemas import AutorizacionFunciones
 from app.modules.seguridad.schemas import AccesosEfectivos
 
 
@@ -27,6 +28,9 @@ class UsuarioSesion(CamelModel):
     permisos: list[str]
     id_agencia: str | None
     accesos_secciones: AccesosEfectivos | None = Field(
+        default=None, exclude_if=lambda valor: valor is None
+    )
+    autorizacion: AutorizacionFunciones | None = Field(
         default=None, exclude_if=lambda valor: valor is None
     )
 

@@ -239,6 +239,14 @@ def listar_pestanas(conn: Connection) -> list[PestanaRoles]:
 def guardar_pestanas(
     conn: Connection, config: PestanasConfig, usuario: Usuario, id_usuario: int, ip: str
 ) -> list[PestanaRoles]:
+    from app.modules.seguridad import funciones
+
+    if funciones.activa():
+        raise problema(
+            409,
+            "EDITOR_ANTERIOR_SOLO_LECTURA",
+            "El modelo de funciones está activo. Utiliza su editor para guardar accesos.",
+        )
     rutas = [p.pestana for p in config.pestanas]
     if len(rutas) != len(set(rutas)):
         raise problema(

@@ -350,9 +350,11 @@ def cambiar_estado_cliente(
     modificado_por: int,
     direccion_ip: str,
     roles: tuple[str, ...],
+    *,
+    funcion_autorizada: bool = False,
 ) -> Cliente:
     """CLI-06: roles de una identidad autenticada; mismo estado es conflicto."""
-    if not set(roles) & {"ASESOR", "SUPERVISOR", "ADMIN"}:
+    if not funcion_autorizada and not set(roles) & {"ASESOR", "SUPERVISOR", "ADMIN"}:
         raise problema(403, "SIN_PERMISO", "No tiene permiso para esta operación.")
     try:
         actual = _cliente_bloqueado(conn, id_cliente)
