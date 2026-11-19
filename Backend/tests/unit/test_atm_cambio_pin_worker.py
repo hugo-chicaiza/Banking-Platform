@@ -247,4 +247,6 @@ def test_paquete_webjob_sin_scheduler_en_fastapi():
     assert config["is_singleton"] is True
     script = (base / "run.sh").read_bytes()
     assert script.startswith(b"#!/bin/bash\n") and b"\r\n" not in script
-    assert b"--pendientes" in script and b"pip install" not in script
+    # E0-06: corre por el ejecutor de tareas (bloqueo y registro)
+    assert b"-m app.core.tareas ejecutar ATM06_RECUPERACION" in script
+    assert b"pip install" not in script
