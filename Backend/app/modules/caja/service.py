@@ -1429,12 +1429,26 @@ def cerrar_jornada(
 
 # --- CAJ-09: depósito en ventanilla ----------
 
+# Códigos de Transacciones.TipoTransaccion que admite la ventanilla. Naturaleza, estado
+# y si afecta saldo se leen de esa tabla; el evento es REGISTRAR_<CODIGO> (catálogo
+# Auditoria.TipoEvento; la prueba del catálogo lo exige para cada valor).
 TipoVentanilla = Literal["Deposito", "Retiro"]
-# Códigos explícitos: la prueba del catálogo (E0-05) los encuentra por su nombre _EVENTO_*
-_EVENTO_VENTANILLA: dict[str, str] = {
-    "Deposito": "REGISTRAR_DEPOSITO",
-    "Retiro": "REGISTRAR_RETIRO",
-}
+
+
+def evento_ventanilla(tipo: str) -> str:
+    return f"REGISTRAR_{tipo.upper()}"
+
+
+def _tipo_configurado(conn: Connection, tipo: str) -> dict:
+    """Tipo de transacción desde la base; sin él (o inactivo) la operación no corre."""
+    fila = trx_repo.tipo_transaccion(conn, tipo)
+    if fila is None or fila["Estado"] != "A" or fila["Naturaleza"] not in ("C", "D"):
+        raise problema(
+            500,
+            "CONFIGURACION_INCOMPLETA",
+            "Falta configurar el tipo de transacción.",
+        )
+    return fila
 
 
 def _validar_desglose(
@@ -1549,7 +1563,7 @@ def operacion_ventanilla(
     """Depósito o retiro. Devuelve (comprobante, es_repeticion)."""
 
     with auditar(
-        _EVENTO_VENTANILLA[tipo],
+        evento_ventanilla(tipo),
         "Transacciones.Transaccion",
         usuario,
         ip,
@@ -1628,10 +1642,14 @@ def operacion_ventanilla(
                     "La jornada ya tiene cuadre; no admite operaciones.",
                 )
 
+            configurado = _tipo_configurado(conn, tipo)
+            # Crédito a la cuenta = entra efectivo a la caja (depósito); débito = sale
+            ingreso = configurado["Naturaleza"] == "C"
+
             _validar_desglose(
                 conn,
                 datos,
-                obligatorio=tipo == "Deposito",
+                obligatorio=ingreso,
             )
 
             cuenta = trx_repo.obtener_cuenta(
@@ -1660,7 +1678,7 @@ def operacion_ventanilla(
             descripcion = "Aprobada"
             fecha_hora = ahora_ecuador()
 
-            if tipo == "Retiro":
+            if not ingreso:
                 autorizacion = trx_repo.autorizar_operacion(
                     conn,
                     datos.id_cuenta,
@@ -1748,7 +1766,7 @@ def operacion_ventanilla(
                 conn,
                 id_transaccion,
                 datos.id_cuenta,
-                "C" if tipo == "Deposito" else "D",
+                configurado["Naturaleza"],
                 None,
                 datos.monto,
                 id_fecha,
@@ -1773,7 +1791,7 @@ def operacion_ventanilla(
                 ),
             )
 
-            naturaleza = "I" if tipo == "Deposito" else "E"
+            naturaleza = "I" if ingreso else "E"
 
             id_tipo = trx_repo.id_tipo_movimiento_caja(
                 conn,
@@ -1810,7 +1828,7 @@ def operacion_ventanilla(
             if fila is None:
                 raise RuntimeError("La transacción no se encontró tras registrarla")
 
-            denominaciones = datos.desglose if tipo == "Retiro" else None
+            denominaciones = datos.desglose if not ingreso else None
 
             registro.confirmar(conn)
             return (

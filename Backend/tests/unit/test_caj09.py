@@ -191,3 +191,31 @@ def test_caj09_validacion_400(ctx: Contexto, cambio: dict[str, Any]) -> None:
         f"{BASE}/jornadas/55/depositos", json={**CUERPO_DEPOSITO, **cambio}
     )
     assert r.status_code == 400
+
+
+def test_caj09_tipo_de_transaccion_no_configurado_falla_cerrado(ctx: Contexto) -> None:
+    # La naturaleza contable sale de Transacciones.TipoTransaccion; sin el tipo activo no
+    # se mueve dinero.
+    preparar_ventanilla(ctx)
+    ctx.fake("tipo_transaccion", None, trx_repo)
+    r = ctx.cliente.post(f"{BASE}/jornadas/55/depositos", json=CUERPO_DEPOSITO)
+    assert r.status_code == 500
+    assert code(r) == "CONFIGURACION_INCOMPLETA"
+    assert not ctx.llamadas.get("aplicar_movimiento_cuenta")
+
+
+def test_caj09_naturaleza_desde_la_base(ctx: Contexto) -> None:
+    preparar_ventanilla(ctx)
+    ctx.fake(
+        "tipo_transaccion",
+        {
+            "CodigoTipo": "Deposito",
+            "Naturaleza": "C",
+            "AfectaSaldo": True,
+            "Estado": "A",
+        },
+        trx_repo,
+    )
+    r = ctx.cliente.post(f"{BASE}/jornadas/55/depositos", json=CUERPO_DEPOSITO)
+    assert r.status_code == 201, r.text
+    assert ctx.llamadas["aplicar_movimiento_cuenta"][0][2] == "C"
