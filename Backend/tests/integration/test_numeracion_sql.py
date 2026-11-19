@@ -8,6 +8,7 @@ from dataclasses import replace
 from decimal import Decimal
 from pathlib import Path
 from threading import Barrier
+from typing import cast
 from uuid import uuid4
 
 import pyodbc
@@ -244,7 +245,10 @@ def test_ac2_regla_usada_no_admite_solicitar_otro_formato(motores):
             ProgramadorNumeracion(motores["seguridad"]).preparar(
                 c, Objetivo("SubProducto", str(sub), None), {"prefijo": "3300"}, hoy()
             )
-        assert e.value.status_code == 409 and e.value.detail["code"] == "REGLA_EN_USO"
+        assert (
+            e.value.status_code == 409
+            and cast(dict[str, object], e.value.detail)["code"] == "REGLA_EN_USO"
+        )
 
 
 def test_ac4_agotamiento_no_crea_cuenta_ni_desborda_longitud(motores):
@@ -264,7 +268,8 @@ def test_ac4_agotamiento_no_crea_cuenta_ni_desborda_longitud(motores):
         with pytest.raises(HTTPException) as e:
             abrir_real(c, sub)
         assert (
-            e.value.status_code == 409 and e.value.detail["code"] == "SECUENCIA_AGOTADA"
+            e.value.status_code == 409
+            and cast(dict[str, object], e.value.detail)["code"] == "SECUENCIA_AGOTADA"
         )
         assert (
             c.execute(text("SELECT COUNT(*) FROM Cuentas.Cuenta")).scalar_one() == total

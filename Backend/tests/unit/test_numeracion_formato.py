@@ -1,5 +1,7 @@
 """Regresiones de formato y espacios numericos; sin SQL ni autenticacion simulada."""
 
+from typing import cast
+
 import pytest
 from fastapi import HTTPException
 from pydantic import ValidationError
@@ -21,7 +23,7 @@ def test_agotamiento_no_genera_un_numero_mas_largo(secuencia):
     with pytest.raises(HTTPException) as error:
         formar_numero(ReglaEntrada(prefijo="2200"), secuencia, "001")
     assert error.value.status_code == 409
-    assert error.value.detail["code"] == "SECUENCIA_AGOTADA"
+    assert cast(dict[str, object], error.value.detail)["code"] == "SECUENCIA_AGOTADA"
 
 
 def test_modulo_diez_vector_luhn_conocido():
