@@ -108,6 +108,12 @@ class Settings(BaseSettings):
     seguridad_db_user: str = ""
     seguridad_db_password: SecretStr = SecretStr("")
 
+    # E0-01: ejecutor de migraciones. Apagado hasta que el responsable lo active. Usa el
+    # login ADMINISTRATIVO (cadena ODBC completa, secreto aparte), nunca el de la app.
+    migraciones_habilitadas: bool = False
+    migraciones_odbc_cooperativa: SecretStr = SecretStr("")
+    migraciones_odbc_seguridad: SecretStr = SecretStr("")
+
     atm_hsm_aes_key_hex: str = ""
     atm_hsm_pin_generation_key_hex: str = ""
     atm_hsm_key_reference: str = "TEST-KEY-01"
