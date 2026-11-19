@@ -36,7 +36,7 @@ from app.smoke_test import router as smoke_test_router  # SMOKE-TEST: borrar
 settings = get_settings()
 is_prod = settings.app_env == "production"
 # Antes de crear la app, para que los mensajes del arranque ya salgan con el formato
-configurar_logging(settings.log_level)
+configurar_logging(settings.log_level, settings.log_formato)
 
 app = FastAPI(
     title=settings.app_name,
@@ -84,6 +84,7 @@ app.include_router(boveda_router, prefix=API_V1)
 app.include_router(transacciones_router, prefix=API_V1)
 app.include_router(atm_router, prefix=API_V1)
 # PIN pad simulado para probar TAR-05 y ATM-01: responde 404 en producción
+# (su dependencia _solo_fuera_de_produccion; tests/unit/test_registros.py lo verifica)
 app.include_router(tarjetas_pruebas_router, prefix=API_V1)
 
 # Público a propósito: verifica el despliegue sin sesión (fuera de /api, sin require_auth)
