@@ -24,7 +24,10 @@ from app.core.security import secciones
 from app.main import app
 from app.modules.aprobaciones import router as aprobaciones
 from app.modules.aprobaciones.manejadores import registro_inicial
+from app.modules.aprobaciones.registro import Objetivo
 from app.modules.aprobaciones.servicio import Servicio
+from app.modules.contabilidad import plantillas
+from app.modules.contabilidad import service as contabilidad
 from app.modules.parametros import general
 from app.modules.parametros import mantenimiento as m
 from app.modules.parametros import service as e112
@@ -579,3 +582,132 @@ def test_fallo_auditoria_revierte_valor_y_frontera_anterior(laboratorio, monkeyp
     with engines["cooperativa"].connect() as c:
         valores = general.historial(c, clave)
         assert len(valores) == 1 and valores[0]["VigenciaHasta"] is None
+
+
+def test_plantilla_resuelve_en_cola_con_segunda_identidad(laboratorio, monkeypatch):
+    _, _, engines, _, _ = laboratorio
+    creador = replace(
+        CREADOR, roles=("CONTADOR",), permisos=frozenset({"con-plantilla-editar"})
+    )
+    aprobador = replace(APROBADOR, permisos=frozenset({"con-plantilla-aprobar"}))
+    actores = {a.sujeto: a for a in (creador, aprobador)}
+    cola = Servicio(
+        engines["seguridad"],
+        engines["cooperativa"],
+        registro_inicial(),
+        lambda sujeto, org: actores[sujeto],
+    )
+    monkeypatch.setattr(
+        contabilidad, "obtener_fecha_contable_actual", lambda conn: {"fecha": HOY}
+    )
+    monkeypatch.setattr(plantillas, "validar_lineas", lambda conn, lineas: [])
+    with engines["seguridad"].begin() as conn:
+        conn.exec_driver_sql("""
+            IF OBJECT_ID('Auditoria.TipoEvento','U') IS NULL
+                CREATE TABLE Auditoria.TipoEvento (
+                    CodigoEvento varchar(40) PRIMARY KEY, Modulo varchar(50),
+                    Severidad varchar(20), EnTransaccion bit, Estado char(1) DEFAULT 'A'
+                );
+            DECLARE @base sysname = DB_NAME();
+            EXEC sys.sp_set_session_context N'migration_database', @base;
+        """)
+        script = (
+            Path(__file__).resolve().parents[2]
+            / "migrations/seguridad/202611191500_plantillas_aprobacion.up.sql"
+        ).read_text(encoding="utf8")
+        conn.exec_driver_sql(script)
+        conn.exec_driver_sql(script)
+    with engines["cooperativa"].begin() as conn:
+        conn.exec_driver_sql("""
+            CREATE SCHEMA Contabilidad;
+        """)
+        conn.exec_driver_sql("""
+            CREATE TABLE Contabilidad.PlantillaAsiento (
+                IdPlantillaAsiento int PRIMARY KEY, CodigoPlantilla varchar(30),
+                CreadoPor int, Estado bit, VigenciaDesde date, VigenciaHasta date NULL,
+                AprobadoPor int NULL, FechaAprobacion datetime2 NULL
+            );
+        """)
+        for id_, activo, desde in (
+            (1, 1, HOY),
+            (2, 0, HOY + timedelta(days=1)),
+            (3, 0, HOY + timedelta(days=2)),
+        ):
+            conn.exec_driver_sql(
+                """
+                INSERT Contabilidad.PlantillaAsiento
+                    (IdPlantillaAsiento,CodigoPlantilla,CreadoPor,Estado,VigenciaDesde)
+                VALUES (?,'QA',?,?,?)
+            """,
+                (id_, creador.id_interno, activo, desde),
+            )
+    monkeypatch.setattr(
+        plantillas.repository, "obtener_lineas_plantilla", lambda conn, id_: []
+    )
+
+    def solicitar(id_):
+        return cola.solicitar(
+            creador,
+            "CON-PLANTILLA",
+            Objetivo("PlantillaAsiento", str(id_), None),
+            {"creador": creador.id_interno},
+            HOY,
+            CONTEXTO,
+        )
+
+    rechazada = solicitar(3)
+    assert (
+        cola.resolver(aprobador, rechazada, "Rechazada", "QA", CONTEXTO)["estado"]
+        == "Rechazada"
+    )
+    with pytest.raises(HTTPException) as repetida:
+        solicitar(3)
+    assert repetida.value.status_code == 409
+    aprobada = solicitar(2)
+    with pytest.raises(HTTPException) as propia:
+        cola.aprobar(creador, aprobada, None, CONTEXTO)
+    assert propia.value.status_code == 403
+    assert cola.aprobar(aprobador, aprobada, None, CONTEXTO)["estado"] == "Ejecutada"
+    with pytest.raises(HTTPException) as repetida:
+        cola.aprobar(aprobador, aprobada, None, CONTEXTO)
+    assert repetida.value.status_code == 409
+    with engines["cooperativa"].connect() as conn:
+        filas = conn.exec_driver_sql("""
+            SELECT Estado,VigenciaHasta,AprobadoPor FROM Contabilidad.PlantillaAsiento
+            ORDER BY IdPlantillaAsiento
+        """).all()
+        assert filas == [
+            (True, HOY, None),
+            (True, None, aprobador.id_interno),
+            (False, None, None),
+        ]
+
+
+def test_importacion_respeta_limite_vigente_y_semilla_repetible(laboratorio):
+    from app.modules.contabilidad import importaciones
+
+    _, _, engines, _, _ = laboratorio
+    script = (
+        Path(__file__).resolve().parents[2]
+        / "migrations/cooperativa/202611191500_importacion_limite_filas.up.sql"
+    ).read_text(encoding="utf8")
+    with engines["cooperativa"].begin() as conn:
+        conn.exec_driver_sql("""
+            DECLARE @base sysname = DB_NAME();
+            EXEC sys.sp_set_session_context N'migration_database', @base;
+        """)
+        conn.exec_driver_sql(script)
+        assert importaciones._limite_filas(conn) == 5000
+        conn.exec_driver_sql("""
+            UPDATE v SET Valor='1' FROM Parametros.ParametroValor v
+            JOIN Parametros.Parametro p ON p.IdParametro=v.IdParametro
+            WHERE p.Clave='CON_IMPORTACION_MAX_FILAS'
+        """)
+        conn.exec_driver_sql(script)
+        assert importaciones._limite_filas(conn) == 1
+    with (
+        engines["cooperativa"].connect() as conn,
+        pytest.raises(HTTPException) as error,
+    ):
+        importaciones.guardar_revision(conn, CREADOR.id_interno, "qa.csv", [{}, {}])
+    assert error.value.status_code == 422

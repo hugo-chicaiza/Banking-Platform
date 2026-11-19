@@ -354,6 +354,9 @@ ROLES_POR_RUTA: dict[tuple[str, str], tuple[str, ...]] = {
     ("PATCH", "/api/v1/agencias/{id_agencia}"): ("ADMIN",),
     # Productos: consultar exige prd-consultar (todos menos CAJERO en WorkOS); escribir prd-editar
     ("GET", "/api/v1/productos"): CONSULTA_PRODUCTOS,
+    ("GET", "/api/v1/productos/subproductos/{id_sub}/numeracion"): CONSULTA_PRODUCTOS,
+    ("PUT", "/api/v1/productos/subproductos/{id_sub}/numeracion"): ("ADMIN",),
+    ("POST", "/api/v1/productos/subproductos/{id_sub}/numeracion/ejemplo"): ("ADMIN",),
     ("GET", "/api/v1/productos/subproductos/{id_sub}/vigencias"): CONSULTA_PRODUCTOS,
     ("GET", "/api/v1/productos/subproductos/{id_sub}/condiciones"): CONSULTA_PRODUCTOS,
     ("POST", "/api/v1/productos/subproductos/{id_sub}/condiciones"): ("ADMIN",),
@@ -465,6 +468,9 @@ ROLES_POR_RUTA.update(
             "CONTADOR",
         ),
         ("POST", "/api/v1/contabilidad/tipos-asiento/{id_tipo}/plantillas"): (
+            "CONTADOR",
+        ),
+        ("POST", "/api/v1/contabilidad/plantillas/{id_plantilla}/solicitudes"): (
             "CONTADOR",
         ),
         ("POST", "/api/v1/contabilidad/plantillas/simulaciones"): ("CONTADOR",),
@@ -633,6 +639,16 @@ def test_roles_de_la_tarea_pasan_el_control(client, ruta, monkeypatch):
         monkeypatch.setattr(
             identidad, "get_organizacion_id", lambda: usuario.id_organizacion
         )
+    if ruta[1] == "/api/v1/contabilidad/plantillas/{id_plantilla}/solicitudes":
+        from app.core.api.errors import problema
+        from app.modules.aprobaciones import identidad
+
+        usuario = replace(usuario, id_organizacion="org_fixture_autorizacion")
+
+        def sin_proveedor(*args):
+            raise problema(503, "IDENTIDAD_NO_DISPONIBLE", "Fixture de autorizacion.")
+
+        monkeypatch.setattr(identidad, "vigente", sin_proveedor)
     simular_sesion(app, usuario)
 
     r = _llamar(client, *ruta)

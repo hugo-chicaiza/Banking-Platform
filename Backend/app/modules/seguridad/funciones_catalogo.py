@@ -360,6 +360,7 @@ FUNCIONES = (
                 "/subproductos/{id_sub_producto}/cupos",
                 "/subproductos/{id_sub_producto}/restricciones",
                 "/subproductos/{id_sub}/vigencias",
+                "/subproductos/{id_sub}/numeracion",
                 "/subproductos/{id_sub}/condiciones",
             )
         ),
@@ -423,6 +424,19 @@ FUNCIONES = (
                 "DELETE",
                 P + "/subproductos/{id_sub}/cupos/programaciones/{id_programacion}",
             ),
+        ),
+        "/productos",
+        ("productos.consultar",),
+        delegable=False,
+    ),
+    _f(
+        "productos.numeracion",
+        "Solicitar reglas de numeracion de cuentas",
+        "Productos",
+        PERMISOS["prd-numeracion"],
+        (
+            ("PUT", P + "/subproductos/{id_sub}/numeracion"),
+            ("POST", P + "/subproductos/{id_sub}/numeracion/ejemplo"),
         ),
         "/productos",
         ("productos.consultar",),

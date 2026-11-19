@@ -6,7 +6,8 @@ una identidad interna. La importación corresponde al usuario que la cargó.
 - `POST /contabilidad/cuentas/importaciones` recibe el CSV como cuerpo
   `text/csv` y el nombre en `X-Nombre-Archivo`. Devuelve 201 con el ID, los
   conteos y la revisión. Formato UTF-8, con BOM opcional, hasta 2 MiB y 5.000
-  registros. Cabecera exacta
+  registros como tope de seguridad. `CON_IMPORTACION_MAX_FILAS` permite reducir
+  el limite global. Cabecera exacta
   `CodigoCuenta,NombreCuenta,CodigoCuentaSuperior,Naturaleza`.
 - `GET /contabilidad/cuentas/importaciones/{id}` devuelve la revisión
   persistida. `numeroFila` indica la línea física inicial del registro.
@@ -34,3 +35,9 @@ interna y auditoría. El catálogo regulatorio se edita por importación.
 Altas, cambios de estado y bajas del mantenimiento requieren la cola de
 aprobación. La política de niveles debe aclarar el ejemplo 210140 de #206,
 que tiene seis dígitos y se solapa con los niveles reservados al regulador.
+
+La semilla opcional `202611191500_importacion_limite_filas.up.sql` se aplica
+en CooperativaDB despues de E0-09 y conserva valores existentes. Sin parametro
+vigente la API conserva el limite anterior de 5.000. El alineamiento con E2-02
+queda sujeto a la definicion de los cambios de naturaleza y jerarquia que se
+admitiran en mantenimiento ordinario.

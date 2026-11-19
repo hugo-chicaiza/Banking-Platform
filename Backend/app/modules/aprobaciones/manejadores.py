@@ -11,6 +11,9 @@ from app.modules.aprobaciones.registro import Objetivo, Operacion, Plan, Registr
 from app.modules.organizacion.aprobacion import OPERACION_BAJA
 from app.modules.parametros import general
 from app.modules.parametros.aprobacion_comision import OPERACION_TARIFA
+from app.modules.productos.numeracion_aprobacion import (
+    operacion as operacion_numeracion,
+)
 from app.modules.productos.programacion import operacion as operacion_productos
 
 
@@ -107,6 +110,8 @@ class Parametro:
 
 
 def registro_inicial() -> Registro:
+    from app.modules.contabilidad.plantillas import OPERACION_PLANTILLA
+
     registro = Registro()
     registro.agregar(
         Operacion(
@@ -121,4 +126,6 @@ def registro_inicial() -> Registro:
     registro.agregar(OPERACION_BAJA)
     registro.agregar(OPERACION_TARIFA)
     registro.agregar(operacion_productos())
+    registro.agregar(operacion_numeracion())
+    registro.agregar(OPERACION_PLANTILLA)
     return registro
