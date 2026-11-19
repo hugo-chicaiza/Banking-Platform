@@ -5,9 +5,11 @@ punto la transacción de la operación ya se revirtió. No pasar PIN, PAN, token
 hashes en descripcion.
 """
 
+import json
 import logging
+import re
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal
 
 from sqlalchemy import Connection, text
 from sqlalchemy.exc import SQLAlchemyError
@@ -15,7 +17,7 @@ from starlette.concurrency import run_in_threadpool
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from app.core.api.middleware import ip_cliente
-from app.core.config.logs import trace_id_actual
+from app.core.config.logs import enmascarar, trace_id_actual
 from app.core.database.db import get_engine
 
 logger = logging.getLogger(__name__)
@@ -39,6 +41,70 @@ class EventoAuditoria:
     # UsuarioID, se toman de Organizacion.Usuarios.RolesWorkOS (actualizado en la
     # misma petición, antes de ejecutar la ruta)
     roles: str | None = None
+    # E0-05: agencia, sesión (id del proveedor, nunca su token), canal, correlación (por
+    # defecto el traceId de la petición) y cambios (antes/después ya filtrados)
+    agencia: str | None = None
+    sesion: str | None = None
+    canal: str = "API"
+    correlacion: str | None = None
+    cambios: dict[str, Any] | None = None
+
+
+# Nunca en la bitácora: datos de tarjeta, PIN, tokens, cookies, contraseñas, invitaciones
+_PALABRAS_SENSIBLES = frozenset(
+    {
+        "pan",
+        "pin",
+        "cvv",
+        "cvc",
+        "track",
+        "token",
+        "cookie",
+        "password",
+        "contrasena",
+        "clave",
+        "secret",
+        "secreto",
+        "invitacion",
+        "apikey",
+    }
+)
+
+
+def _es_sensible(clave: str) -> bool:
+    """Por palabras del nombre (camelCase o snake_case): `pinOffset` sí, `compania` no."""
+    separado = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", clave).lower().replace("ñ", "n")
+    palabras = set(re.split(r"[^a-z0-9]+", separado))
+    return bool(palabras & _PALABRAS_SENSIBLES) or "apikey" in separado.replace("_", "")
+
+
+_CONTROL = re.compile(r"[\x00-\x1f\x7f]")
+
+
+def texto_seguro(texto: str) -> str:
+    """Texto libre para la bitácora (ASVS 16.4.1): caracteres de control escapados, así un
+    salto de línea no puede falsificar otro registro; tokens, secretos y PAN enmascarados."""
+    return _CONTROL.sub(lambda m: f"\\x{ord(m.group(0)):02x}", enmascarar(texto))
+
+
+def _filtrar(valor: Any) -> Any:
+    if isinstance(valor, dict):
+        return {
+            str(k): "[filtrado]" if _es_sensible(str(k)) else _filtrar(v)
+            for k, v in valor.items()
+        }
+    if isinstance(valor, (list, tuple)):
+        return [_filtrar(v) for v in valor]
+    if isinstance(valor, str):
+        return texto_seguro(valor)
+    return valor
+
+
+def cambios_json(cambios: dict[str, Any] | None) -> str | None:
+    """Antes/después en JSON, sin campos sensibles (se reemplazan por [filtrado])."""
+    if not cambios:
+        return None
+    return json.dumps(_filtrar(cambios), ensure_ascii=False, default=str)
 
 
 def _insertar(conn: Connection, evento: EventoAuditoria) -> None:
@@ -47,7 +113,9 @@ def _insertar(conn: Connection, evento: EventoAuditoria) -> None:
             """
             INSERT INTO Auditoria.Auditoria (
                 UsuarioID, NombreAccion, TablaAfectada, IDRegistro, FechaHora,
-                DireccionIP, Descripcion, Resultado, RolesWorkOS
+                DireccionIP, Descripcion, Resultado, RolesWorkOS,
+                IdEvento, CodigoEvento, FechaHoraUTC, IdAgencia, IdSesion, Canal,
+                IdCorrelacion, TipoObjetivo, IdObjetivo, Cambios
             )
             VALUES (
                 :usuario, :accion, :tabla, :id_registro,
@@ -61,7 +129,9 @@ def _insertar(conn: Connection, evento: EventoAuditoria) -> None:
                         SELECT u.RolesWorkOS FROM Organizacion.Usuarios AS u
                         WHERE u.UsuarioID = :usuario
                     )
-                )
+                ),
+                NEWID(), :accion, SYSUTCDATETIME(), :agencia, :sesion, :canal,
+                :correlacion, :tabla, :id_registro, :cambios
             )
             """
         ),
@@ -71,9 +141,16 @@ def _insertar(conn: Connection, evento: EventoAuditoria) -> None:
             "tabla": evento.tabla,
             "id_registro": evento.id_registro,
             "ip": evento.ip,
-            "descripcion": evento.descripcion[:_MAX_DESCRIPCION],
+            "descripcion": texto_seguro(evento.descripcion)[:_MAX_DESCRIPCION],
             "resultado": evento.resultado,
             "roles": evento.roles,
+            "agencia": (evento.agencia or None)
+            if len(evento.agencia or "") <= 3
+            else None,
+            "sesion": (evento.sesion or None) and evento.sesion[:64],
+            "canal": evento.canal[:10],
+            "correlacion": (evento.correlacion or trace_id_actual.get())[:64],
+            "cambios": cambios_json(evento.cambios),
         },
     )
 
@@ -128,6 +205,9 @@ def evento_acceso_denegado(scope: Scope, status: int) -> EventoAuditoria:
         ip=ip_cliente(scope),
         descripcion=descripcion,
         roles=roles,
+        agencia=getattr(usuario, "id_agencia", None),
+        sesion=getattr(usuario, "id_sesion", None),
+        correlacion=trace_id_actual.get(),
     )
 
 
