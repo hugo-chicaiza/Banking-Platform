@@ -5,6 +5,9 @@ El código de todos está en `develop`. Lo que se despliega desde `develop` lleg
 (`develop_backend-dev.yml`). Para llegar al App Service principal se pasa a `main` (`main_backend.yml`) con un PR
 `develop → main` y una aprobación.
 
+Pasos de Azure: [E0-azure.md](E0-azure.md). Qué hace cada E0: [E0-resumen.md](E0-resumen.md).
+Secretos locales (frase de cifrado): `.env.secretos` en la raíz del repositorio, ignorado por Git.
+
 ## Resumen
 
 | E0 | Qué es | Estado | Lo que falta |
