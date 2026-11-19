@@ -15,7 +15,8 @@ def generar() -> str:
     codigo = inspect.getsource(Settings)
     lineas = codigo.splitlines()
     clase = ast.parse(codigo).body[0]
-    assert isinstance(clase, ast.ClassDef)
+    if not isinstance(clase, ast.ClassDef):
+        raise TypeError("La referencia requiere una definición de clase Settings")
     descripciones = {}
     for nodo in clase.body:
         if isinstance(nodo, ast.AnnAssign) and isinstance(nodo.target, ast.Name):
