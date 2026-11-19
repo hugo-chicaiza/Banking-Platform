@@ -24,10 +24,10 @@ def configuracion(monkeypatch):
             "tipo_asiento": 1,
             "estado_tipo": "A",
         },
-        "cuenta_boveda": {"estado": True, "imputable": True, "naturaleza": "DEUDORA"},
+        "cuenta_boveda": {"estado": True, "imputable": True},
         "crear_asiento_boveda": 99,
         "linea_boveda": None,
-        "confirmar_asiento_boveda": None,
+        "contabilizar_asiento": None,
     }.items():
         mocks[nombre] = MagicMock(return_value=resultado)
         monkeypatch.setattr(repo, nombre, mocks[nombre])
@@ -55,7 +55,7 @@ def test_asiento_boveda_cuadra_y_comparte_la_conexion(configuracion):
     assert len(lineas) == 2
     assert lineas[0].args[:6] == (conn, 99, 2, "001", Decimal(20), "DEBITO")
     assert lineas[1].args[:6] == (conn, 99, 3, "001", Decimal(20), "CREDITO")
-    configuracion["confirmar_asiento_boveda"].assert_called_once_with(conn, 99)
+    configuracion["contabilizar_asiento"].assert_called_once_with(conn, 99)
 
 
 @pytest.mark.parametrize(

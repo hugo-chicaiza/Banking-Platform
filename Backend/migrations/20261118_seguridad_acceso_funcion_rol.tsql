@@ -1,0 +1,24 @@
+/* Migración nueva, no ejecutada automáticamente. Aplicar primero en SQL aislado.
+   No modifica WorkOS ni convierte pestañas antiguas en funciones de escritura.
+   Requiere la tabla existente Organizacion.Usuarios para el vínculo de auditoría. */
+SET XACT_ABORT ON;
+GO
+IF DB_NAME() <> N'SeguridadDB'
+    THROW 51470, 'La migracion requiere SeguridadDB.', 1;
+GO
+IF SCHEMA_ID(N'Seguridad') IS NULL OR OBJECT_ID(N'Organizacion.Usuarios', N'U') IS NULL
+    THROW 51471, 'Falta el esquema de Seguridad o la tabla de usuarios.', 1;
+GO
+IF OBJECT_ID(N'Seguridad.AccesoFuncionRol', N'U') IS NULL
+    CREATE TABLE Seguridad.AccesoFuncionRol (
+        Funcion varchar(80) NOT NULL,
+        Rol varchar(32) NOT NULL,
+        Permitido bit NOT NULL,
+        ModificadoPor int NOT NULL,
+        FechaModificacion datetime2 NOT NULL CONSTRAINT DF_AccesoFuncionRol_Fecha DEFAULT SYSUTCDATETIME(),
+        CONSTRAINT PK_AccesoFuncionRol PRIMARY KEY (Funcion, Rol),
+        CONSTRAINT FK_AccesoFuncionRol_Usuario FOREIGN KEY (ModificadoPor) REFERENCES Organizacion.Usuarios(UsuarioID),
+        CONSTRAINT CK_AccesoFuncionRol_Funcion CHECK (LEN(Funcion)>0 AND Funcion NOT LIKE '%[^a-zA-Z0-9.]%' COLLATE Latin1_General_100_BIN2),
+        CONSTRAINT CK_AccesoFuncionRol_Rol CHECK (Rol IN ('ADMIN','SUPERVISOR','ASESOR','CAJERO','CONTADOR','AUDITOR','APROBADOR_CREDITO'))
+    );
+GO

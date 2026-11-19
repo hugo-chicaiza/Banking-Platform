@@ -372,7 +372,7 @@ def cuenta_boveda(conn: Connection, id_cuenta: int) -> dict[str, Any] | None:
     return _one(
         conn,
         """
-        SELECT Estado AS estado, EsImputable AS imputable, Naturaleza AS naturaleza
+        SELECT Estado AS estado, EsImputable AS imputable
         FROM Contabilidad.CuentasContables WITH (UPDLOCK, HOLDLOCK)
         WHERE IdCuentaContable = :id
     """,
@@ -418,7 +418,6 @@ def linea_boveda(
     monto: Decimal,
     tipo: str,
     ahora: datetime,
-    naturaleza: str,
 ) -> None:
     conn.execute(
         text("""
@@ -434,21 +433,6 @@ def linea_boveda(
             "ahora": ahora,
             "asiento": asiento,
         },
-    )
-    delta = monto if (tipo == "DEBITO") == (naturaleza == "DEUDORA") else -monto
-    conn.execute(
-        text("""
-        UPDATE Contabilidad.CuentasContables SET Saldo = Saldo + :delta, FechaModificacion = :ahora
-        WHERE IdCuentaContable = :cuenta
-    """),
-        {"cuenta": cuenta, "delta": delta, "ahora": ahora},
-    )
-
-
-def confirmar_asiento_boveda(conn: Connection, id_asiento: int) -> None:
-    conn.execute(
-        text("EXEC Contabilidad.usp_ContabilizarAsiento @IdAsientoContable = :id"),
-        {"id": id_asiento},
     )
 
 
@@ -563,8 +547,28 @@ def insertar_lineas_asiento(conn: Connection, lineas: list[dict[str, Any]]) -> N
     )
 
 
+def bloquear_contabilizacion(conn: Connection) -> None:
+    # Bóveda y el motor automático deben entrar antes de bloquear numeración,
+    # asientos o cuentas. La transacción conserva el bloqueo entre ambos tramos.
+    conn.execute(
+        text("""
+        DECLARE @Resultado int;
+        EXEC @Resultado = sys.sp_getapplock
+            @Resource = N'Contabilidad.ContabilizarAsiento',
+            @LockMode = 'Exclusive',
+            @LockOwner = 'Transaction',
+            @LockTimeout = 10000;
+        IF @Resultado < 0
+            THROW 56106, N'No se pudo obtener el bloqueo de contabilización.', 1;
+    """)
+    )
+
+
 def contabilizar_asiento(conn: Connection, id_asiento: int) -> None:
-    confirmar_asiento_boveda(conn, id_asiento)
+    conn.execute(
+        text("EXEC Contabilidad.usp_ContabilizarAsiento @IdAsientoContable = :id"),
+        {"id": id_asiento},
+    )
     conn.execute(
         text("EXEC Contabilidad.usp_E401_AplicarSaldos @IdAsiento = :id"),
         {"id": id_asiento},

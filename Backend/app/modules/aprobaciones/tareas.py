@@ -15,7 +15,7 @@ from app.integrations.workos_client import get_organizacion_id
 from app.modules.aprobaciones.auditoria import ContextoAuditoria
 from app.modules.aprobaciones.manejadores import registro_inicial
 from app.modules.aprobaciones.motores import motor
-from app.modules.aprobaciones.relevo import entregar
+from app.modules.aprobaciones.relevo import alertar_pendientes, entregar
 from app.modules.aprobaciones.repositorio import consulta
 from app.modules.aprobaciones.servicio import Servicio
 from app.modules.parametros import general
@@ -194,6 +194,8 @@ def ejecutar(
                     servicio.seguridad, servicio.seguridad
                 )
                 resultado = Conteo(n, n)
+                # E0-05 (M8 AC 13): alerta si lo pendiente más antiguo supera la edad máxima
+                alertar_pendientes(servicio.cooperativa, servicio.seguridad)
             estado = "Parcial" if resultado.errores else "Exitoso"
             codigo_error = "TAREA_PARCIAL" if resultado.errores else None
             return resultado

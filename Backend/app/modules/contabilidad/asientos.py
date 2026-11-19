@@ -115,6 +115,7 @@ def generar_asiento(conn: Connection, operacion: OperacionContable) -> int:
     huella = hashlib.sha256(
         json.dumps(datos_huella, separators=(",", ":")).encode()
     ).hexdigest()
+    repository.bloquear_contabilizacion(conn)
     existente = repository.buscar_asiento_evento(conn, operacion.clave_evento)
     if existente is not None:
         if existente["HuellaEventoContable"] != huella or existente["Estado"] not in (
@@ -206,6 +207,7 @@ def reversar(
         raise problema(
             422, "MOTIVO_INVALIDO", "Indique un motivo de hasta 300 caracteres."
         )
+    repository.bloquear_contabilizacion(conn)
     original = (
         conn.execute(
             text("""
