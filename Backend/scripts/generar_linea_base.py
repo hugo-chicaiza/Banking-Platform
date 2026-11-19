@@ -214,7 +214,9 @@ def _literal(valor: object) -> str:
         return str(valor)
     if isinstance(valor, (bytes, bytearray)):
         return "0x" + valor.hex()
-    texto = valor.isoformat() if isinstance(valor, (date, time, datetime)) else str(valor)
+    texto = (
+        valor.isoformat() if isinstance(valor, (date, time, datetime)) else str(valor)
+    )
     return "N'" + texto.replace("'", "''") + "'"
 
 
