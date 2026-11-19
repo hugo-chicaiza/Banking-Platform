@@ -15,7 +15,10 @@ from app.core.pdf import (
 def _texto(pdf: bytes) -> str:
     """Texto de los flujos del PDF (fpdf2 los comprime con zlib)."""
     partes = []
-    for flujo in re.findall(rb"stream\r?\n(.*?)\r?\nendstream", pdf, re.DOTALL):
+    # /Length incluye todos los bytes, aunque el comprimido termine en CR o LF.
+    for bloque in re.finditer(rb"/Length\s+(\d+)\b[^>]*>>\s*stream\r?\n", pdf):
+        inicio = bloque.end()
+        flujo = pdf[inicio : inicio + int(bloque.group(1))]
         try:
             partes.append(zlib.decompress(flujo).decode("latin-1"))
         except zlib.error:
@@ -131,7 +134,15 @@ def test_pie_con_quien_lo_genero_y_la_zona_de_la_institucion():
         assert esperado in texto, esperado
 
 
-def test_sin_quien_mantiene_el_pie_y_la_hora_de_ecuador():
+def test_sin_quien_mantiene_el_pie_y_la_hora_de_ecuador(monkeypatch):
+    from datetime import datetime
+    from types import SimpleNamespace
+
+    from app.core.pdf import documento
+
+    # A esta hora el flujo comprimido termina en 0x0D: no es un separador del PDF.
+    reloj = SimpleNamespace(now=lambda zona: datetime(2026, 11, 19, 0, 6, tzinfo=zona))
+    monkeypatch.setattr(documento, "datetime", reloj)
     texto = _texto(DocumentoPdf("Ficha", institucion="EnquoCoop").contenido())
     assert "Generado el" in texto and "hora de Ecuador" in texto
     assert "RUC" not in texto
