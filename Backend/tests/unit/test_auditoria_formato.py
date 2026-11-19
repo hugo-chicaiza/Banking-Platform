@@ -57,7 +57,7 @@ def _codigos_del_codigo() -> set[str]:
                 codigos |= {
                     f"REGISTRAR_{e.value.upper()}"
                     for e in elementos
-                    if isinstance(e, ast.Constant)
+                    if isinstance(e, ast.Constant) and isinstance(e.value, str)
                 }
         # Tablas de códigos explícitas (`_EVENTO_* = {...: "CODIGO"}`)
         for nodo in ast.walk(ast.parse(archivo.read_text(encoding="utf-8"))):
@@ -71,7 +71,7 @@ def _codigos_del_codigo() -> set[str]:
                     codigos |= {
                         v.value
                         for v in nodo.value.values
-                        if isinstance(v, ast.Constant)
+                        if isinstance(v, ast.Constant) and isinstance(v.value, str)
                     }
     return codigos
 
