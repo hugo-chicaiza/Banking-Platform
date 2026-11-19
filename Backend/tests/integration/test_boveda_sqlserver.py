@@ -4,6 +4,8 @@ import os
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import datetime
+from decimal import Decimal
+from pathlib import Path
 from threading import Barrier
 from typing import Any, cast
 
@@ -16,6 +18,8 @@ from app.modules.boveda import service
 from app.modules.boveda.schemas import ArqueoBovedaRequest
 from app.modules.boveda.solicitudes import service as solicitudes
 from app.modules.boveda.solicitudes.schemas import SolicitudMovimientoRequest
+from app.modules.caja import service as caja
+from app.modules.contabilidad import repository as contabilidad
 from tests.integration.boveda_sql_lab import LaboratorioBoveda
 from tests.sesion import USUARIO
 
@@ -50,12 +54,20 @@ def motor(monkeypatch):
                 INSERT INTO Contabilidad.TiposAsiento (Codigo,Nombre,Descripcion,EsManual,Estado)
                 VALUES ('LAB_BOV','LAB','Datos ficticios',0,'A');
                 INSERT INTO Contabilidad.CuentasContables (CodigoCuenta,NombreCuenta,Naturaleza,Saldo,Estado,FechaCreacion,EsImputable,EsCuentaValuacion)
-                VALUES ('110105','LAB efectivo','DEUDORA',0,1,GETDATE(),1,0),('110110','LAB contraparte','DEUDORA',0,1,GETDATE(),1,0);
+                VALUES ('11010505','LAB efectivo','DEUDORA',400,1,GETDATE(),1,0),
+                       ('11011005','LAB contraparte','DEUDORA',0,1,GETDATE(),1,0),
+                       ('110105','LAB superior efectivo','DEUDORA',400,1,GETDATE(),0,0),
+                       ('110110','LAB superior contraparte','DEUDORA',0,1,GETDATE(),0,0);
+                UPDATE Contabilidad.CuentasContables SET IdCuentaSuperior=IdCuentaContable+2
+                WHERE IdCuentaContable IN (1,2);
                 INSERT INTO Boveda.Boveda (CodigoBoveda,TipoBoveda,IdAgencia,LimiteMaximo,LimiteMinimo,SaldoActual)
                 VALUES ('LAB1','General','001',1000,0,200),('LAB2','General','002',1000,0,200);
                 INSERT INTO Boveda.BovedaDenominacion (IdBoveda,IdDenominacion,CantidadActual) VALUES (1,1,10),(2,1,10);
                 INSERT INTO Contabilidad.PlantillaBoveda (IdAgencia,TipoMovimiento,Naturaleza,IdCuentaDebito,IdCuentaCredito,IdTipoAsiento)
-                SELECT a.IdAgencia,t.tipo,t.naturaleza,1,2,1 FROM Organizacion.Agencia a
+                SELECT a.IdAgencia,t.tipo,t.naturaleza,
+                       CASE WHEN t.naturaleza='I' THEN 1 ELSE 2 END,
+                       CASE WHEN t.naturaleza='I' THEN 2 ELSE 1 END,1
+                FROM Organizacion.Agencia a
                 CROSS JOIN (VALUES ('ProvisionExterna','I'),('EnvioExcedente','E'),('Traslado','E'),('Traslado','I'),('AjusteFaltante','E'),('AjusteSobrante','I')) t(tipo,naturaleza);
             """)
             )
@@ -72,6 +84,236 @@ def movimiento(tipo="ProvisionExterna", cantidad=2, **extra):
             **extra,
         }
     )
+
+
+def saldos_contables(conn):
+    return dict(
+        conn.execute(
+            text("SELECT CodigoCuenta, Saldo FROM Contabilidad.CuentasContables")
+        ).all()
+    )
+
+
+def test_sql_caja_y_boveda_comparten_auxiliar_y_superiores(motor):
+    ahora = datetime(2026, 11, 16, 10)
+    with motor.begin() as conn:
+        conn.execute(
+            text("""
+            INSERT Contabilidad.ConceptoContable (IdConceptoContable) VALUES (1);
+            INSERT Contabilidad.PlantillaAsiento
+                (CodigoPlantilla, IdConceptoContable, Origen, IdTipoAsiento, Nombre, Estado)
+            VALUES ('DOT_CAJA', 1, 'CAJA', 1, 'Dotación ficticia', 1);
+            INSERT Contabilidad.PlantillaAsientoDetalle
+                (IdPlantillaAsiento, Orden, IdCuentaContable, TipoMovimiento, ComponenteImporte)
+            SELECT IdPlantillaAsiento, v.Orden, v.Cuenta, v.Lado, 'PRINCIPAL'
+            FROM Contabilidad.PlantillaAsiento
+            CROSS JOIN (VALUES (1, 2, 'DEBITO'), (2, 1, 'CREDITO')) AS v(Orden, Cuenta, Lado)
+            WHERE CodigoPlantilla = 'DOT_CAJA';
+        """)
+        )
+
+    for intento in range(10):
+        with motor.connect() as conn:
+            solicitud = solicitudes.crear(
+                conn, OPERADOR, 7, 1, movimiento(), "local", None
+            )
+        barrera = Barrier(2)
+        operacion = caja.OperacionContable(
+            codigo_plantilla="DOT_CAJA",
+            clave_evento=f"DOTACION_CAJA:LAB:{intento}",
+            id_agencia="001" if intento % 2 == 0 else "002",
+            id_fecha_contable=1,
+            id_usuario=7,
+            fecha_hora=ahora,
+            importes={"PRINCIPAL": Decimal(10)},
+        )
+
+        def aprobar_boveda(barrera, id_solicitud):
+            with motor.connect() as conn:
+                barrera.wait(timeout=10)
+                return solicitudes.aprobar(conn, APROBADOR, 9, id_solicitud, "local")
+
+        def contabilizar_caja(barrera, operacion):
+            with motor.begin() as conn:
+                barrera.wait(timeout=10)
+                return caja.generar_asiento(conn, operacion)
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            futura_boveda = pool.submit(
+                aprobar_boveda, barrera, solicitud.id_solicitud_movimiento
+            )
+            futura_caja = pool.submit(contabilizar_caja, barrera, operacion)
+            boveda = futura_boveda.result(timeout=30)
+            asiento_caja = futura_caja.result(timeout=30)
+        assert boveda[0].id_asiento_contable != asiento_caja
+
+        with motor.connect() as conn:
+            assert (
+                solicitudes.aprobar(
+                    conn, APROBADOR, 9, solicitud.id_solicitud_movimiento, "local"
+                )
+                == boveda
+            )
+            with conn.begin():
+                assert caja.generar_asiento(conn, operacion) == asiento_caja
+                delta = 30 * (intento + 1)
+                assert saldos_contables(conn) == {
+                    "11010505": 400 + delta,
+                    "110105": 400 + delta,
+                    "11011005": -delta,
+                    "110110": -delta,
+                }
+                assert conn.execute(
+                    text("""
+                    SELECT COUNT(*) FROM Contabilidad.AsientoContable
+                    WHERE Estado = 'CONTABILIZADO' AND TotalDebito = TotalCredito
+                """)
+                ).scalar_one() == 2 * (intento + 1)
+
+
+def test_sql_conciliacion_compara_definiciones_antes_del_reemplazo(motor):
+    ruta = Path(__file__).resolve().parents[2] / "migrations"
+    propuesta = (ruta / "20261118_bov04_conciliacion_efectivo.sql").read_text(
+        encoding="utf-8"
+    )
+    vista = "Contabilidad.vw_ConciliacionEfectivo"
+    candidata = "Contabilidad.vw_ConciliacionEfectivo_Candidata"
+    anterior = propuesta.replace(
+        "cc.CodigoCuenta IN ('110105', '11010505', '11010510', '11010515')",
+        "cc.CodigoCuenta = '110105'",
+    )
+    ahora = datetime(2026, 11, 16, 10)
+    with motor.begin() as conn:
+        conn.exec_driver_sql("CREATE SCHEMA Caja")
+        conn.exec_driver_sql("CREATE SCHEMA ATM")
+        conn.exec_driver_sql("""
+            CREATE TABLE Caja.JornadasCaja (IdJornadaCaja int, DineroInicial decimal(18,2), Estado varchar(20));
+            CREATE TABLE Caja.DotacionesCaja (IdJornadaCaja int, Monto decimal(18,2), Estado varchar(20), TipoDotacion varchar(20));
+            CREATE TABLE Caja.MovimientosCaja (IdJornadaCaja int, IdTipoMovimiento int, Monto decimal(18,2));
+            CREATE TABLE Caja.TipoMovimientoCaja (IdTipoMovimientoCaja int, Naturaleza char(1));
+            CREATE TABLE Caja.DevolucionesCaja (IdJornadaCaja int, Monto decimal(18,2), Estado varchar(20));
+            CREATE TABLE ATM.Gaveta (IdDenominacion int, CantidadActual int);
+            INSERT Caja.JornadasCaja VALUES (1,20,'ABIERTA'), (2,100,'CERRADA');
+            INSERT Caja.DotacionesCaja VALUES (1,20,'ACTIVA','INICIAL'),
+                (1,7,'ACTIVA','ADICIONAL'), (1,100,'ANULADA','ADICIONAL');
+            INSERT Caja.TipoMovimientoCaja VALUES (1,'I'),(2,'E');
+            INSERT Caja.MovimientosCaja VALUES (1,1,8),(1,2,2),(2,1,100);
+            INSERT Caja.DevolucionesCaja VALUES (1,4,'ACTIVA'),(1,100,'ANULADA');
+            INSERT ATM.Gaveta VALUES (1,1);
+            INSERT Contabilidad.CuentasContables
+                (CodigoCuenta,NombreCuenta,Naturaleza,Saldo,Estado,FechaCreacion,EsImputable,IdCuentaSuperior)
+            VALUES ('11010510','Caja de prueba','DEUDORA',29,1,GETDATE(),1,3),
+                   ('11010515','ATM de prueba','DEUDORA',20,1,GETDATE(),1,3);
+        """)
+        conn.exec_driver_sql(anterior)
+        conn.exec_driver_sql(propuesta.replace(vista, candidata, 1))
+
+        def registrar_lineas(lineas, estado="CONTABILIZADO"):
+            asiento = contabilidad.crear_asiento_boveda(
+                conn,
+                {
+                    "fecha": ahora.date(),
+                    "ahora": ahora,
+                    "tipo_asiento": 1,
+                    "actor": 7,
+                    "agencia": "001",
+                    "fecha_contable": 1,
+                    "concepto": "LAB",
+                },
+            )
+            for cuenta, lado, monto in lineas:
+                contabilidad.linea_boveda(
+                    conn, asiento, cuenta, "001", Decimal(monto), lado, ahora
+                )
+            if estado != "BORRADOR":
+                conn.execute(
+                    text("""
+                    UPDATE Contabilidad.AsientoContable SET Estado = :estado
+                    WHERE IdAsientoContable = :asiento
+                """),
+                    {"estado": estado, "asiento": asiento},
+                )
+
+        registrar_lineas([(3, "DEBITO", 449), (2, "CREDITO", 449)])
+        assert conn.exec_driver_sql(f"SELECT * FROM {vista}").one() == (
+            449,
+            400,
+            29,
+            20,
+            449,
+            0,
+        )
+        assert conn.exec_driver_sql(f"SELECT * FROM {candidata}").one() == (
+            449,
+            400,
+            29,
+            20,
+            449,
+            0,
+        )
+
+        registrar_lineas(
+            [
+                (3, "CREDITO", 449),
+                (1, "DEBITO", 400),
+                (5, "DEBITO", 29),
+                (6, "DEBITO", 20),
+            ]
+        )
+        registrar_lineas([(5, "DEBITO", 5), (2, "CREDITO", 5)], "REVERSADO")
+        registrar_lineas([(5, "CREDITO", 5), (2, "DEBITO", 5)])
+        registrar_lineas([(6, "DEBITO", 100), (2, "CREDITO", 100)], "BORRADOR")
+        registrar_lineas([(3, "DEBITO", 3), (2, "CREDITO", 3)])
+
+        assert conn.exec_driver_sql(f"SELECT * FROM {vista}").one() == (
+            3,
+            400,
+            29,
+            20,
+            449,
+            -446,
+        )
+        esperado = (452, 400, 29, 20, 449, 3)
+        assert conn.exec_driver_sql(f"SELECT * FROM {candidata}").one() == esperado
+        columnas = text("""
+            SELECT name, system_type_id, max_length, precision, scale, is_nullable
+            FROM sys.columns WHERE object_id = OBJECT_ID(:vista) ORDER BY column_id
+        """)
+        contrato = conn.execute(columnas, {"vista": vista}).all()
+        assert [c.name for c in contrato] == [
+            "Contable",
+            "Bovedas",
+            "CajasAbiertas",
+            "Gavetas",
+            "Fisico",
+            "Diferencia",
+        ]
+        assert conn.execute(columnas, {"vista": candidata}).all() == contrato
+        saldos = saldos_contables(conn)
+        mayor = [
+            conn.exec_driver_sql(
+                f"SELECT * FROM Contabilidad.{tabla} ORDER BY {clave}"
+            ).all()
+            for tabla, clave in (
+                ("AsientoContable", "IdAsientoContable"),
+                ("MovimientosContables", "IdMovimientoContable"),
+            )
+        ]
+        conn.exec_driver_sql(propuesta)
+        assert conn.exec_driver_sql(f"SELECT * FROM {vista}").one() == esperado
+        assert saldos_contables(conn) == saldos
+        assert (
+            conn.exec_driver_sql(
+                "SELECT * FROM Contabilidad.AsientoContable ORDER BY IdAsientoContable"
+            ).all()
+            == mayor[0]
+        )
+        assert (
+            conn.exec_driver_sql(
+                "SELECT * FROM Contabilidad.MovimientosContables ORDER BY IdMovimientoContable"
+            ).all()
+            == mayor[1]
+        )
 
 
 def test_sql_historial_arqueos_filtros_paginacion_y_legado(motor):
@@ -147,6 +389,21 @@ def test_sql_provision_traslado_paginacion_y_reintento(motor):
             ejecutar_movimiento(conn, OPERADOR, 7, 1, movimiento(), "local", "prov-1")
             == primera
         )
+        asiento_previo = primera[0].id_asiento_contable
+        consultar_historico = text("""
+            SELECT a.NumeroAsiento, a.Estado, a.TotalDebito, a.TotalCredito,
+                   m.IdMovimientoContable, m.IdCuentaContable, m.TipoMovimiento, m.Monto
+            FROM Contabilidad.AsientoContable AS a
+            JOIN Contabilidad.MovimientosContables AS m
+              ON m.IdAsientoContable = a.IdAsientoContable
+            WHERE a.IdAsientoContable = :asiento
+            ORDER BY m.IdMovimientoContable
+        """)
+        with conn.begin():
+            historico = conn.execute(
+                consultar_historico, {"asiento": asiento_previo}
+            ).all()
+            assert len(historico) == 2
         par = ejecutar_movimiento(
             conn, OPERADOR, 7, 1, movimiento("Traslado", idBovedaContraparte=2), "local"
         )
@@ -157,6 +414,16 @@ def test_sql_provision_traslado_paginacion_y_reintento(motor):
             conn, OPERADOR, 1, None, None, None, 1, 10, "idMovimiento,asc"
         )
         assert pagina.total == 2 and len(pagina.items[0].desglose) == 1
+        assert saldos_contables(conn) == {
+            "11010505": 440,
+            "110105": 440,
+            "11011005": -40,
+            "110110": -40,
+        }
+        assert (
+            conn.execute(consultar_historico, {"asiento": asiento_previo}).all()
+            == historico
+        )
         assert (
             conn.execute(
                 text(
@@ -187,6 +454,12 @@ def test_sql_fallo_contable_revierte_ambas_bovedas(motor):
         detalle = cast(dict[str, Any], error.value.detail)
         assert isinstance(detalle, dict)
         assert detalle["code"] == "PLANTILLA_BOVEDA_NO_CONFIGURADA"
+        assert saldos_contables(conn) == {
+            "11010505": 400,
+            "110105": 400,
+            "11011005": 0,
+            "110110": 0,
+        }
         assert (
             conn.execute(
                 text("SELECT SUM(SaldoActual) FROM Boveda.Boveda")
@@ -365,6 +638,12 @@ def test_sql_aprobaciones_simultaneas_de_distintos_usuarios(motor):
     assert sorted(resultados) == ["SOLICITUD_MOVIMIENTO_RESUELTA", "ok"]
     with motor.connect() as conn:
         assert service.obtener_boveda(conn, OPERADOR, 1).saldo_actual == 240
+        assert saldos_contables(conn) == {
+            "11010505": 440,
+            "110105": 440,
+            "11011005": -40,
+            "110110": -40,
+        }
         assert (
             conn.execute(
                 text("SELECT COUNT(*) FROM Boveda.MovimientoBoveda")
