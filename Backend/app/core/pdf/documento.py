@@ -6,24 +6,31 @@ etiqueta–valor, tablas y un texto destacado (p. ej. el PIN del sobre).
 
 Uso:
 
-    doc = DocumentoPdf("Ficha del subproducto", institucion=settings.cooperativa_nombre)
+    doc = DocumentoPdf(
+        "Ficha del subproducto",
+        institucion=institucion_actual(conn),  # perfil de la entidad (core/pdf/institucion.py)
+        generado_por=usuario.nombre,
+    )
     doc.titulo("Ahorro a la vista")
     doc.campos([("Código", "AHO001-PN"), ("Estado", "Activo")])
     doc.tabla(["Canal", "Cupo diario"], [["Ventanilla", "$ 10.000,00"]])
     contenido = doc.contenido()
 
-Las fuentes base de PDF (Helvetica, Courier) solo cubren Latin-1: los caracteres de
+Fuentes: las base de PDF (Helvetica, Courier), que no se incrustan ni se descargan,
+así el generador funciona sin internet. Solo cubren Latin-1: los caracteres de
 fuera (rayas, comillas tipográficas, emojis) se cambian por un equivalente o por «?»
 en vez de romper el documento. El texto nunca se registra en logs.
 """
 
 from collections.abc import Sequence
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, tzinfo
 from typing import Any, Literal
 
 from fpdf import FPDF
 from fpdf.enums import XPos, YPos
 from fpdf.fonts import FontFace
+
+from app.core.pdf.institucion import Institucion
 
 Alineacion = Literal["L", "C", "R", "J"]
 
@@ -58,21 +65,31 @@ class _Pdf(FPDF):
     """FPDF con encabezado y pie opcionales."""
 
     def __init__(
-        self, titulo: str, institucion: str | None, encabezado: bool, pie: bool
+        self,
+        titulo: str,
+        institucion: Institucion | None,
+        encabezado: bool,
+        pie: bool,
+        generado_por: str | None,
+        zona: tzinfo,
+        nombre_zona: str,
     ) -> None:
         super().__init__(format="A4")
         self._titulo_doc = titulo
         self._institucion = institucion
         self._con_encabezado = encabezado
         self._con_pie = pie
-        self._generado = datetime.now(_ECUADOR).strftime("%d/%m/%Y %H:%M")
+        fecha = datetime.now(zona).strftime("%d/%m/%Y %H:%M")
+        quien = f" por {texto_pdf(generado_por)}" if generado_por else ""
+        self._generado = f"Generado{quien} el {fecha} ({nombre_zona})"
 
     def header(self) -> None:
         if not self._con_encabezado:
             return
+        nombre = self._institucion.nombre if self._institucion else ""
         self.set_font("Helvetica", "B", 10)
         self.set_text_color(*_AZUL)
-        self.cell(self.epw / 2, 6, texto_pdf(self._institucion or ""), align="L")
+        self.cell(self.epw / 2, 6, texto_pdf(nombre), align="L")
         self.set_font("Helvetica", "", 9)
         self.set_text_color(*_GRIS)
         self.cell(
@@ -83,6 +100,16 @@ class _Pdf(FPDF):
             new_x=XPos.LMARGIN,
             new_y=YPos.NEXT,
         )
+        if self._institucion and self._institucion.ruc:
+            self.set_font("Helvetica", "", 8)
+            self.cell(
+                0,
+                4,
+                texto_pdf(f"RUC {self._institucion.ruc}"),
+                align="L",
+                new_x=XPos.LMARGIN,
+                new_y=YPos.NEXT,
+            )
         self.set_draw_color(*_AZUL)
         self.line(
             self.l_margin, self.get_y() + 1, self.w - self.r_margin, self.get_y() + 1
@@ -96,7 +123,7 @@ class _Pdf(FPDF):
         self.set_y(-15)
         self.set_font("Helvetica", "", 8)
         self.set_text_color(*_GRIS)
-        self.cell(self.epw / 2, 6, f"Generado el {self._generado}", align="L")
+        self.cell(self.epw * 0.75, 6, self._generado, align="L")
         self.cell(0, 6, f"Página {self.page_no()} de {{nb}}", align="R")
         self.set_text_color(0, 0, 0)
 
@@ -108,19 +135,32 @@ class DocumentoPdf:
         self,
         titulo: str,
         *,
-        institucion: str | None = None,
+        institucion: str | Institucion | None = None,
+        generado_por: str | None = None,
+        zona: tzinfo = _ECUADOR,
+        nombre_zona: str = "hora de Ecuador",
         encabezado: bool = True,
         pie: bool = True,
         margenes: tuple[float, float, float] = (20, 20, 20),
         salto_automatico: bool = True,
     ) -> None:
-        """`margenes` = (izquierda, arriba, derecha) en mm. Sin salto automático el
-        contenido no pasa a otra página (hojas de una sola página, como el sobre)."""
-        self._pdf = _Pdf(texto_pdf(titulo), institucion, encabezado, pie)
+        """`institucion`: el perfil de la entidad (`institucion_actual(conn)`) o solo su
+        nombre. `generado_por`: nombre de quien lo pide, va en el pie con la fecha y hora
+        en `zona` (la de la institución). `margenes` = (izquierda, arriba, derecha) en
+        mm. Sin salto automático el contenido no pasa a otra página (hojas de una sola
+        página, como el sobre)."""
+        datos = (
+            Institucion(nombre=institucion)
+            if isinstance(institucion, str)
+            else institucion
+        )
+        self._pdf = _Pdf(
+            texto_pdf(titulo), datos, encabezado, pie, generado_por, zona, nombre_zona
+        )
         self._pdf.set_title(texto_pdf(titulo))
-        if institucion:
-            self._pdf.set_creator(texto_pdf(institucion))
-            self._pdf.set_author(texto_pdf(institucion))
+        if datos:
+            self._pdf.set_creator(texto_pdf(datos.nombre))
+            self._pdf.set_author(texto_pdf(datos.nombre))
         izquierda, arriba, derecha = margenes
         self._pdf.set_margins(izquierda, arriba, derecha)
         self._pdf.set_auto_page_break(auto=salto_automatico, margin=20 if pie else 15)
