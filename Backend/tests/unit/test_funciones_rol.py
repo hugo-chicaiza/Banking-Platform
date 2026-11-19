@@ -54,7 +54,13 @@ def test_catalogo_completo_y_sin_ambiguedades():
         for op in grupo
     }
     nuevas = {op for f in FUNCIONES for op in f.operaciones}
-    assert anteriores == nuevas
+    plantillas = {
+        op
+        for f in FUNCIONES
+        if f.id.startswith("contabilidad.plantillas.")
+        for op in f.operaciones
+    }
+    assert anteriores | plantillas == nuevas
     funciones._validar_dependencias({}, set(ROLES))
 
 
@@ -88,6 +94,9 @@ def test_valores_iniciales_preservan_la_matriz_de_operaciones_del_equipo():
     for funcion in FUNCIONES:
         for operacion in funcion.operaciones:
             permitidos = set(ROLES_POR_RUTA[operacion]) or set(ROLES)
+            if funcion.id == "contabilidad.plantillas.consultar":
+                # Ampliación acordada solo de lectura; apagado rige WorkOS anterior.
+                permitidos = {"ADMIN", "SUPERVISOR", "AUDITOR", "CONTADOR"}
             assert set(funcion.roles_iniciales) == permitidos, operacion
 
 

@@ -95,6 +95,9 @@ RUTAS_POR_SECCION: dict[str, tuple[tuple[str, str], ...]] = {
     ),
     "productos.consultar": (
         ("GET", "/api/v1/productos/subproductos/{id_sub}/vigencias"),
+        ("GET", "/api/v1/productos/subproductos/{id_sub}/numeracion"),
+        ("PUT", "/api/v1/productos/subproductos/{id_sub}/numeracion"),
+        ("POST", "/api/v1/productos/subproductos/{id_sub}/numeracion/ejemplo"),
         ("GET", "/api/v1/productos/subproductos/{id_sub}/condiciones"),
         ("POST", "/api/v1/productos/subproductos/{id_sub}/condiciones"),
         ("DELETE", "/api/v1/productos/subproductos/{id_sub}/condiciones/{id_registro}"),
@@ -204,10 +207,13 @@ FUERA_DEL_EDITOR = (
     ("POST", "/api/v1/contabilidad/cortes-e201"),
     ("GET", "/api/v1/contabilidad/cortes-e201/{id_plan}"),
     ("POST", "/api/v1/contabilidad/cortes-e201/{id_plan}/aprobaciones"),
+    # Plantillas ya tiene funciones en el editor nuevo. El modo anterior conserva
+    # sus permisos WorkOS y no necesita una sección legada adicional.
     ("GET", "/api/v1/contabilidad/tipos-asiento/{id_tipo}/plantillas"),
     ("POST", "/api/v1/contabilidad/tipos-asiento/{id_tipo}/plantillas"),
     ("GET", "/api/v1/contabilidad/plantillas/{id_plantilla}"),
     ("POST", "/api/v1/contabilidad/plantillas/simulaciones"),
+    ("POST", "/api/v1/contabilidad/plantillas/{id_plantilla}/solicitudes"),
     ("GET", "/api/v1/parametros/comisiones"),
     ("GET", "/api/v1/parametros/comisiones/{idComision}/tarifa"),
     ("POST", "/api/v1/parametros/comisiones"),

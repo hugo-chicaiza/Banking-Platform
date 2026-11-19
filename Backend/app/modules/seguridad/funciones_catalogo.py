@@ -360,6 +360,7 @@ FUNCIONES = (
                 "/subproductos/{id_sub_producto}/cupos",
                 "/subproductos/{id_sub_producto}/restricciones",
                 "/subproductos/{id_sub}/vigencias",
+                "/subproductos/{id_sub}/numeracion",
                 "/subproductos/{id_sub}/condiciones",
             )
         ),
@@ -423,6 +424,19 @@ FUNCIONES = (
                 "DELETE",
                 P + "/subproductos/{id_sub}/cupos/programaciones/{id_programacion}",
             ),
+        ),
+        "/productos",
+        ("productos.consultar",),
+        delegable=False,
+    ),
+    _f(
+        "productos.numeracion",
+        "Solicitar reglas de numeracion de cuentas",
+        "Productos",
+        PERMISOS["prd-numeracion"],
+        (
+            ("PUT", P + "/subproductos/{id_sub}/numeracion"),
+            ("POST", P + "/subproductos/{id_sub}/numeracion/ejemplo"),
         ),
         "/productos",
         ("productos.consultar",),
@@ -542,6 +556,29 @@ FUNCIONES = (
         (("POST", B + "/cuentas/importaciones/{id_importacion}/aplicar"),),
         "/contabilidad",
         ("contabilidad.importaciones.consultar",),
+    ),
+    _f(
+        "contabilidad.plantillas.consultar",
+        "Consultar plantillas contables",
+        "Contabilidad",
+        ("ADMIN", "SUPERVISOR", "AUDITOR", "CONTADOR"),
+        (
+            ("GET", B + "/tipos-asiento/{id_tipo}/plantillas"),
+            ("GET", B + "/plantillas/{id_plantilla}"),
+        ),
+        "/contabilidad/plantillas",
+    ),
+    _f(
+        "contabilidad.plantillas.editar",
+        "Simular y crear versiones de plantillas",
+        "Contabilidad",
+        PERMISOS["con-plantilla-editar"],
+        (
+            ("POST", B + "/tipos-asiento/{id_tipo}/plantillas"),
+            ("POST", B + "/plantillas/simulaciones"),
+        ),
+        "/contabilidad/plantillas",
+        ("contabilidad.plantillas.consultar",),
     ),
     _f(
         "contabilidad.asientos.consultar",

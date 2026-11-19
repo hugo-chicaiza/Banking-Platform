@@ -8,7 +8,7 @@ from collections import Counter
 from pathlib import PurePath
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, Header, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from sqlalchemy import Connection, text
 from starlette.concurrency import run_in_threadpool
 
@@ -16,6 +16,8 @@ from app.core.api.errors import ProblemDetailsRoute, problema
 from app.core.database.db import cooperativa
 from app.core.security.auth import UsuarioActual, require_permiso
 from app.core.security.operador import IdInterno, auditar, exigir_id_interno
+from app.modules.contabilidad.service import ahora_ecuador
+from app.modules.parametros import general
 
 COLUMNAS = ("CodigoCuenta", "NombreCuenta", "CodigoCuentaSuperior", "Naturaleza")
 PADRE = {1: 0, 2: 1, 4: 2, 6: 4}
@@ -185,10 +187,36 @@ async def subir(
     return await run_in_threadpool(guardar_revision, conn, actor, nombre, filas)
 
 
+def _limite_filas(conn: Connection) -> int:
+    # Las instalaciones anteriores al catalogo de parametros conservan el limite.
+    if (
+        conn.execute(text("SELECT OBJECT_ID(N'Parametros.Parametro', N'U')")).scalar()
+        is None
+    ):
+        return MAX_FILAS
+    try:
+        limite = general.valor(
+            conn, "CON_IMPORTACION_MAX_FILAS", ahora_ecuador().date()
+        )
+    except HTTPException as error:
+        if error.status_code != 404:
+            raise
+        return MAX_FILAS
+    if type(limite) is not int or limite <= 0:
+        raise problema(
+            503,
+            "LIMITE_IMPORTACION_INVALIDO",
+            "Revise el parametro de filas de importacion.",
+        )
+    return min(limite, MAX_FILAS)
+
+
 def guardar_revision(
     conn: Connection, actor: int, nombre: str, filas: list[dict[str, Any]]
 ) -> dict[str, Any]:
     with conn.begin():
+        if len(filas) > _limite_filas(conn):
+            raise archivo_invalido()
         revision = revisar(filas, leer_plan(conn))
         id_importacion = conn.execute(
             text("""

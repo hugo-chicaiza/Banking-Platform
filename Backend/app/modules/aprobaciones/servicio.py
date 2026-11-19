@@ -96,13 +96,14 @@ class Servicio:
             existe = seg.execute(
                 repo.consulta("""SELECT IdSolicitud FROM Seguridad.SolicitudAprobacion WITH(UPDLOCK,HOLDLOCK)
                 WHERE IdOrganizacion=:org AND CodigoTransaccion=:codigo AND TipoObjetivo=:tipo AND IdObjetivo=:objetivo
-                AND (IdAgencia=:agencia OR (IdAgencia IS NULL AND :agencia IS NULL)) AND EnCurso=1"""),
+                AND (IdAgencia=:agencia OR (IdAgencia IS NULL AND :agencia IS NULL)) AND (EnCurso=1 OR :unica=1)"""),
                 {
                     "org": actor.organizacion,
                     "codigo": codigo,
                     "tipo": objetivo.tipo,
                     "objetivo": objetivo.id,
                     "agencia": objetivo.agencia,
+                    "unica": operacion.solicitud_unica,
                 },
             ).scalar()
             if existe is not None:
@@ -305,13 +306,18 @@ class Servicio:
                 "SOLICITUD_DESACTUALIZADA",
                 "El objetivo cambio desde la solicitud.",
             )
-        operacion.manejador.aplicar(
-            conn,
-            objetivo,
-            contenido["cambio"],
-            fila["SolicitadoPor"],
-            fila["IdSolicitud"],
-        )
+        if operacion.aplicar_con_aprobador is not None:
+            if actor is None or actor.id_interno != fila["IdInternoResolutor"]:
+                raise RuntimeError("No se pudo acreditar al aprobador de la operacion.")
+            operacion.aplicar_con_aprobador(conn, objetivo, actor.id_interno)
+        else:
+            operacion.manejador.aplicar(
+                conn,
+                objetivo,
+                contenido["cambio"],
+                fila["SolicitadoPor"],
+                fila["IdSolicitud"],
+            )
         conn.execute(
             repo.consulta(
                 "INSERT Seguridad.AprobacionAplicada(IdOrganizacion,IdSolicitud,HashContenido,CodigoTransaccion) VALUES(:org,:id,:hash,:codigo)"

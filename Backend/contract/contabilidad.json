@@ -629,6 +629,24 @@
         "title": "Version",
         "type": "object"
       },
+      "VersionSolicitada": {
+        "properties": {
+          "idPlantillaAsiento": {
+            "title": "Idplantillaasiento",
+            "type": "integer"
+          },
+          "idSolicitud": {
+            "title": "Idsolicitud",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "idPlantillaAsiento",
+          "idSolicitud"
+        ],
+        "title": "VersionSolicitada",
+        "type": "object"
+      },
       "app__modules__contabilidad__corte_workos__Aprobacion": {
         "additionalProperties": false,
         "properties": {
@@ -5251,6 +5269,53 @@
         ]
       }
     },
+    "/api/v1/contabilidad/plantillas/{id_plantilla}/solicitudes": {
+      "post": {
+        "operationId": "enviar_pendiente_api_v1_contabilidad_plantillas__id_plantilla__solicitudes_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id_plantilla",
+            "required": true,
+            "schema": {
+              "title": "Id Plantilla",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VersionSolicitada"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "APIKeyCookie": []
+          }
+        ],
+        "summary": "Enviar Pendiente",
+        "tags": [
+          "contabilidad"
+        ]
+      }
+    },
     "/api/v1/contabilidad/tipos-asiento/{id_tipo}/plantillas": {
       "get": {
         "operationId": "listar_api_v1_contabilidad_tipos_asiento__id_tipo__plantillas_get",
@@ -5330,11 +5395,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": {
-                    "type": "integer"
-                  },
-                  "title": "Response Crear Api V1 Contabilidad Tipos Asiento  Id Tipo  Plantillas Post",
-                  "type": "object"
+                  "$ref": "#/components/schemas/VersionSolicitada"
                 }
               }
             },
@@ -5356,7 +5417,7 @@
             "APIKeyCookie": []
           }
         ],
-        "summary": "Crear",
+        "summary": "Crear Y Solicitar",
         "tags": [
           "contabilidad"
         ]
