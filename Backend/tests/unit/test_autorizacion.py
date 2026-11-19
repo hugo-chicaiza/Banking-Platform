@@ -354,6 +354,9 @@ ROLES_POR_RUTA: dict[tuple[str, str], tuple[str, ...]] = {
     ("PATCH", "/api/v1/agencias/{id_agencia}"): ("ADMIN",),
     # Productos: consultar exige prd-consultar (todos menos CAJERO en WorkOS); escribir prd-editar
     ("GET", "/api/v1/productos"): CONSULTA_PRODUCTOS,
+    ("GET", "/api/v1/productos/subproductos/{id_sub}/numeracion"): CONSULTA_PRODUCTOS,
+    ("PUT", "/api/v1/productos/subproductos/{id_sub}/numeracion"): ("ADMIN",),
+    ("POST", "/api/v1/productos/subproductos/{id_sub}/numeracion/ejemplo"): ("ADMIN",),
     ("GET", "/api/v1/productos/subproductos/{id_sub}/vigencias"): CONSULTA_PRODUCTOS,
     ("GET", "/api/v1/productos/subproductos/{id_sub}/condiciones"): CONSULTA_PRODUCTOS,
     ("POST", "/api/v1/productos/subproductos/{id_sub}/condiciones"): ("ADMIN",),
