@@ -17,7 +17,6 @@ from app.core.api.errors import problema, traducir_error_bd
 from app.core.security import audit
 from app.core.security.auth import Usuario
 from app.modules.parametros import repository as repo
-from app.modules.parametros.funciones import funcion_pendiente
 from app.modules.parametros.schemas import (
     AsociarComision,
     CobroComision,
@@ -213,26 +212,10 @@ def crear_comision(
     return respuesta
 
 
-def solicitar_cambio_valor(
-    conn: Connection,
-    id_comision: int,
-    cambios: dict[str, Any],
-    actor: int,
-    *,
-    usuario: Usuario | None = None,
-) -> None:
-    """Punto de integración E1-10 #367/E0-09: falta el servicio de solicitudes.
-
-    Cuando exista: registrar propuesta + actor + vigencia y devolver idSolicitud
-    con 202, sin actualizar Comisiones. El manejador de aprobación crea la nueva
-    vigencia. No sustituir esta dependencia por un UPDATE ni un 202 sin solicitud.
-    """
-    with funcion_pendiente("FUNCION_PARAMETRO_APROBACION", conn, usuario):
-        raise problema(
-            501,
-            "APROBACION_PARAMETRO_NO_DISPONIBLE",
-            "El cambio de valor requiere el flujo de aprobación de E1-10, aún no disponible.",
-        )
+def cambio_sensible(conn: Connection, id_: int, entrada: ComisionUpdate) -> bool:
+    if entrada.vigencia_desde is not None:
+        return True
+    return entrada.valor is not None and entrada.valor != _comision(conn, id_)["valor"]
 
 
 def actualizar_comision(
@@ -251,12 +234,12 @@ def actualizar_comision(
         evento["cambios"] = {
             k: {"antes": fila.get(k), "despues": v} for k, v in cambios.items()
         }
-        if entrada.vigencia_desde is not None:
-            _no_pasada(entrada.vigencia_desde)
         if (
             "valor" in cambios and cambios["valor"] != fila["valor"]
         ) or "vigencia_desde" in cambios:
-            solicitar_cambio_valor(conn, id_, cambios, actor, usuario=usuario)
+            raise problema(
+                409, "TARIFA_REQUIERE_APROBACION", "Solicite el cambio de tarifa."
+            )
         repo.actualizar_comision(conn, id_, cambios)
         respuesta = _respuesta(conn, _comision(conn, id_))
     return respuesta

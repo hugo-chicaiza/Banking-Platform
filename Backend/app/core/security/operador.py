@@ -123,6 +123,8 @@ def auditar(
                     f" motivo={_codigo_fallo(exc)}"
                 ),
                 roles=usuario.roles_texto(),
+                agencia=getattr(usuario, "id_agencia", None),
+                sesion=getattr(usuario, "id_sesion", None),
             )
         )
         raise
@@ -136,5 +138,7 @@ def auditar(
             ip=ip,
             descripcion=_descripcion(usuario, detalle, registro),
             roles=usuario.roles_texto(),
+            agencia=getattr(usuario, "id_agencia", None),
+            sesion=getattr(usuario, "id_sesion", None),
         )
     )

@@ -1,0 +1,163 @@
+# E0-02 · Restaurar un respaldo (ACTIVO, solo manual)
+#
+# modo=verificar (por defecto): descarga el respaldo de B2, lo descifra, comprueba su suma
+# y lo restaura en un SQL Server temporal dentro del runner; informa filas por tabla y el
+# tiempo empleado. No toca Azure; la copia desaparece con el runner (PCI E-236).
+# modo=azure: restaura en una base NUEVA de `enquohub` (nunca encima de la real). Exige
+# escribir RESTAURAR en `confirmar`. Ojo: una base nueva en Azure puede tener costo; bórrela
+# al terminar. Procedimiento: Backend/docs/E0-02-respaldos.md
+name: Restaurar respaldo de base de datos
+
+on:
+  workflow_dispatch:
+    inputs:
+      base:
+        description: Base del respaldo
+        type: choice
+        options: [CooperativaDB, SeguridadDB]
+        required: true
+      archivo:
+        description: "Archivo en B2 (vacío = el más reciente), p. ej. CooperativaDB_20261120T070000Z.bacpac.gz.enc"
+        required: false
+      modo:
+        description: verificar (SQL Server temporal) o azure (base nueva en enquohub)
+        type: choice
+        options: [verificar, azure]
+        default: verificar
+      destino:
+        description: "Solo modo azure: nombre de la base nueva (p. ej. CooperativaDB_restaurada_20261120)"
+        required: false
+      confirmar:
+        description: "Solo modo azure: escriba RESTAURAR"
+        required: false
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: restaurar-bd
+  cancel-in-progress: false
+
+env:
+  SQL_SERVER: enquohub
+  SQLPACKAGE_VERSION: "170.5.76"
+
+jobs:
+  restaurar:
+    name: Restaurar ${{ inputs.base }} (${{ inputs.modo }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment: respaldos
+    services:
+      sql:
+        image: mcr.microsoft.com/mssql/server:2022-latest
+        env:
+          ACCEPT_EULA: "Y"
+          # Contraseña de un contenedor que vive solo durante esta ejecución
+          MSSQL_SA_PASSWORD: Tmp-${{ github.run_id }}-Aa1!
+        ports: ["1433:1433"]
+    steps:
+      - name: Validar la solicitud
+        env:
+          MODO: ${{ inputs.modo }}
+          DESTINO: ${{ inputs.destino }}
+          CONFIRMAR: ${{ inputs.confirmar }}
+        run: |
+          set -euo pipefail
+          if [ "$MODO" = "azure" ]; then
+            [ "$CONFIRMAR" = "RESTAURAR" ] || { echo "Escriba RESTAURAR en 'confirmar'"; exit 1; }
+            [[ "$DESTINO" =~ ^[A-Za-z][A-Za-z0-9_]{2,60}$ ]] || { echo "Destino inválido"; exit 1; }
+            case "$DESTINO" in CooperativaDB|SeguridadDB|master) echo "Nunca se restaura encima de $DESTINO"; exit 1;; esac
+          fi
+          echo "INICIO=$(date -u +%s)" >> "$GITHUB_ENV"
+
+      - name: Instalar SqlPackage
+        run: |
+          dotnet tool install --global microsoft.sqlpackage --version "$SQLPACKAGE_VERSION"
+          echo "$HOME/.dotnet/tools" >> "$GITHUB_PATH"
+
+      - name: Descargar, verificar y descifrar
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.B2_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.B2_APP_KEY }}
+          AWS_DEFAULT_REGION: us-east-005
+          B2_BUCKET: ${{ secrets.B2_BUCKET }}
+          B2_ENDPOINT: ${{ secrets.B2_ENDPOINT }}
+          BACKUP_PASSPHRASE: ${{ secrets.BACKUP_PASSPHRASE }}
+          BASE: ${{ inputs.base }}
+          ARCHIVO: ${{ inputs.archivo }}
+        run: |
+          set -euo pipefail
+          S3="aws s3 --endpoint-url https://${B2_ENDPOINT}"
+          if [ -z "$ARCHIVO" ]; then
+            ARCHIVO=$($S3 ls "s3://${B2_BUCKET}/${BASE}/" | awk '{print $4}' | grep '\.enc$' | sort | tail -n 1)
+          fi
+          [[ "$ARCHIVO" =~ ^${BASE}_[0-9TZ]+\.bacpac\.gz\.enc$ ]] || { echo "Archivo inválido: $ARCHIVO"; exit 1; }
+          echo "Respaldo: $ARCHIVO"
+          echo "ARCHIVO=$ARCHIVO" >> "$GITHUB_ENV"
+          mkdir -p entrada
+          $S3 cp "s3://${B2_BUCKET}/${BASE}/${ARCHIVO}" entrada/ --only-show-errors
+          $S3 cp "s3://${B2_BUCKET}/${BASE}/${ARCHIVO}.sha256" entrada/ --only-show-errors
+          echo "$(cat "entrada/${ARCHIVO}.sha256")  entrada/${ARCHIVO}" | sha256sum -c -
+          openssl enc -d -aes-256-cbc -pbkdf2 -iter 600000 -in "entrada/${ARCHIVO}" -out entrada/base.bacpac.gz -pass env:BACKUP_PASSPHRASE
+          gunzip entrada/base.bacpac.gz
+          rm -f "entrada/${ARCHIVO}"
+
+      - name: Restaurar en SQL Server temporal y contar filas
+        if: inputs.modo == 'verificar'
+        env:
+          SA_PASSWORD: Tmp-${{ github.run_id }}-Aa1!
+          BASE: ${{ inputs.base }}
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 30); do
+            sqlpackage /Action:Import /SourceFile:entrada/base.bacpac /Quiet:True \
+              /TargetConnectionString:"Server=localhost,1433;Database=${BASE};User ID=sa;Password=${SA_PASSWORD};Encrypt=False;TrustServerCertificate=True" \
+              && break || { echo "esperando SQL Server ($i)"; sleep 10; }
+          done
+          # sqlcmd viene en la imagen ubuntu de GitHub
+          sqlcmd -S localhost -U sa -P "$SA_PASSWORD" -C -d "$BASE" -h -1 -W -Q \
+            "SET NOCOUNT ON; SELECT s.name+'.'+t.name, SUM(p.rows) FROM sys.tables t JOIN sys.schemas s ON s.schema_id=t.schema_id JOIN sys.partitions p ON p.object_id=t.object_id AND p.index_id IN (0,1) GROUP BY s.name, t.name ORDER BY 1" \
+            > conteo.txt
+          echo "Tablas restauradas: $(wc -l < conteo.txt)"
+          {
+            echo "### Restauración verificada: ${BASE}"
+            echo "- Respaldo: \`${ARCHIVO}\`"
+            echo "- Tiempo: $(( $(date -u +%s) - INICIO )) s · $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "- Tablas: $(wc -l < conteo.txt) · Filas: $(awk '{s+=$2} END {print s}' conteo.txt)"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Iniciar sesión en Azure (OIDC)
+        if: inputs.modo == 'azure'
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        with:
+          client-id: ${{ secrets.AZUREAPPSERVICE_CLIENTID_5769855C78C44FA798C2BEAAC67773A8 }}
+          tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_3ED80B0E825E4C2BA2CDD1A01AA83F5E }}
+          subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_5DBED6A2C4A34333A97D033402FFD8F2 }}
+
+      - name: Restaurar en una base nueva de enquohub
+        if: inputs.modo == 'azure'
+        env:
+          SQL_USER: ${{ secrets.SQL_ADMIN_USER }}
+          SQL_PASSWORD: ${{ secrets.SQL_ADMIN_PASSWORD }}
+          DESTINO: ${{ inputs.destino }}
+        run: |
+          set -euo pipefail
+          IP=$(curl -fsS https://api.ipify.org)
+          GRUPO=$(az sql server list --query "[?name=='${SQL_SERVER}'].resourceGroup | [0]" -o tsv)
+          REGLA="gh-restaurar-${GITHUB_RUN_ID}"
+          trap 'az sql server firewall-rule delete -g "$GRUPO" -s "$SQL_SERVER" -n "$REGLA" -o none || true' EXIT
+          az sql server firewall-rule create -g "$GRUPO" -s "$SQL_SERVER" -n "$REGLA" --start-ip-address "$IP" --end-ip-address "$IP" -o none
+          if az sql db show -g "$GRUPO" -s "$SQL_SERVER" -n "$DESTINO" -o none 2>/dev/null; then
+            echo "La base $DESTINO ya existe: no se sobrescribe"; exit 1
+          fi
+          sqlpackage /Action:Import /SourceFile:entrada/base.bacpac /Quiet:True \
+            /p:DatabaseEdition=Basic /p:DatabaseServiceObjective=Basic \
+            /TargetConnectionString:"Server=tcp:${SQL_SERVER}.database.windows.net,1433;Database=${DESTINO};User ID=${SQL_USER};Password=${SQL_PASSWORD};Encrypt=True;TrustServerCertificate=False"
+          echo "### Restaurada en Azure: ${DESTINO} (Basic). Bórrela cuando termine." >> "$GITHUB_STEP_SUMMARY"
+          echo "- Tiempo: $(( $(date -u +%s) - INICIO )) s" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Limpiar
+        if: always()
+        run: rm -rf entrada conteo.txt

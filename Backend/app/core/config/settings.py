@@ -76,6 +76,11 @@ class Settings(BaseSettings):
     app_env: Literal["development", "staging", "production"] = "production"
     app_name: str = "banking-platform-backend"
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
+    # E0-13: "texto" (una línea con trace=) o "json" (una línea JSON por registro)
+    log_formato: Literal["texto", "json"] = "texto"
+    # E0-05: minutos que un evento puede esperar en la bandeja de salida antes de que se
+    # alerte (registro AUD_RELEVO_ALERTA y evento en la bitácora)
+    aud_relevo_alerta_minutos: int = 10
     # Puerto no estándar; local solo en loopback. En Azure: APP_HOST=0.0.0.0 y WEBSITES_PORT=APP_PORT
     app_host: str = "127.0.0.1"
     app_port: int = 8471
@@ -107,6 +112,12 @@ class Settings(BaseSettings):
     seguridad_db_name: str = "SeguridadDB"
     seguridad_db_user: str = ""
     seguridad_db_password: SecretStr = SecretStr("")
+
+    # E0-01: ejecutor de migraciones. Apagado hasta que el responsable lo active. Usa el
+    # login ADMINISTRATIVO (cadena ODBC completa, secreto aparte), nunca el de la app.
+    migraciones_habilitadas: bool = False
+    migraciones_odbc_cooperativa: SecretStr = SecretStr("")
+    migraciones_odbc_seguridad: SecretStr = SecretStr("")
 
     atm_hsm_aes_key_hex: str = ""
     atm_hsm_pin_generation_key_hex: str = ""

@@ -89,6 +89,11 @@ ROLES_POR_RUTA: dict[tuple[str, str], tuple[str, ...]] = {
         "/api/v1/boveda/solicitudes-movimiento/{idSolicitudMovimiento}/cancelacion",
     ): ("SUPERVISOR", "ADMIN"),
     ("GET", "/api/v1/parametros/comisiones"): ("ADMIN", "SUPERVISOR", "ASESOR"),
+    ("GET", "/api/v1/parametros/comisiones/{idComision}/tarifa"): (
+        "ADMIN",
+        "SUPERVISOR",
+        "ASESOR",
+    ),
     ("POST", "/api/v1/parametros/comisiones"): ("ADMIN",),
     ("PATCH", "/api/v1/parametros/comisiones/{idComision}"): ("ADMIN",),
     ("GET", "/api/v1/parametros/exoneraciones"): ("ADMIN", "SUPERVISOR", "ASESOR"),

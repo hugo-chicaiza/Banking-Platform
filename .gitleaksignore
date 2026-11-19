@@ -2,3 +2,7 @@
 595c713515497af16bdfedd91827d9685169c284:BankingPlataformDocs/GitHubProject_Files/E0 Fundación/F-03 Autenticación y roles/AUT-01 POST auth-login.md:generic-api-key:56
 595c713515497af16bdfedd91827d9685169c284:BankingPlataformDocs/GitHubProject_Files/E0 Fundación/F-03 Autenticación y roles/AUT-01 POST auth-login.md:generic-api-key:57
 595c713515497af16bdfedd91827d9685169c284:BankingPlataformDocs/GitHubProject_Files/E0 Fundación/F-03 Autenticación y roles/AUT-02 POST auth-refresh.md:generic-api-key:45
+# False positives: claves falsas de las pruebas de enmascarado de registros (E0-13, commit d7256c9); el archivo ya las arma en tiempo de ejecución.
+d7256c96280a5e03a218f0c821734fc89b30eece:Backend/tests/unit/test_registros.py:jwt:32
+d7256c96280a5e03a218f0c821734fc89b30eece:Backend/tests/unit/test_registros.py:stripe-access-token:37
+d7256c96280a5e03a218f0c821734fc89b30eece:Backend/tests/unit/test_registros.py:stripe-access-token:38

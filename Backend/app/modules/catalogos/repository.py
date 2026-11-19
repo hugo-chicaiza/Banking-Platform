@@ -407,8 +407,9 @@ def listar_comisiones(conn: Connection) -> list[dict[str, Any]]:
         """
         SELECT c.IdComision AS id_comision, c.CodigoComision AS codigo_comision,
                c.TipoComision AS tipo_comision, c.TipoCalculo AS tipo_calculo,
-               c.Valor AS valor, ca.NombreCanal AS nombre_canal, c.Descripcion AS descripcion
+               v.Valor AS valor, ca.NombreCanal AS nombre_canal, c.Descripcion AS descripcion
         FROM Transacciones.Comisiones AS c
+        JOIN Transacciones.vw_ComisionValorPresentacion AS v ON v.IdComision = c.IdComision
         JOIN Canal.Canal AS ca ON ca.IdCanal = c.IdCanal
         WHERE c.Estado = 'A'
         ORDER BY c.TipoComision, c.CodigoComision

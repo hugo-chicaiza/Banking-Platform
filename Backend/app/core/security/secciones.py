@@ -209,6 +209,7 @@ FUERA_DEL_EDITOR = (
     ("GET", "/api/v1/contabilidad/plantillas/{id_plantilla}"),
     ("POST", "/api/v1/contabilidad/plantillas/simulaciones"),
     ("GET", "/api/v1/parametros/comisiones"),
+    ("GET", "/api/v1/parametros/comisiones/{idComision}/tarifa"),
     ("POST", "/api/v1/parametros/comisiones"),
     ("PATCH", "/api/v1/parametros/comisiones/{idComision}"),
     ("GET", "/api/v1/parametros/exoneraciones"),
