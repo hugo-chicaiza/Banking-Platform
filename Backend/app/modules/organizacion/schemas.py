@@ -157,6 +157,16 @@ class AgenciaEstado(CamelModel):
     estado: EstadoAgencia
 
 
+class PresentacionInstitucion(CamelModel):
+    """Datos públicos mínimos; no incluye información legal ni de auditoría."""
+
+    nombre: str | None
+    sitio_web: str | None
+    # Gestión de logos fuera del alcance actual; reservado en el contrato.
+    logo_url: None = None
+    origen: Literal["ENTIDAD", "ENTORNO", "SIN_CONFIGURAR"]
+
+
 EstadoEntidad = Literal["A", "I"]
 
 RucEntidad = Annotated[

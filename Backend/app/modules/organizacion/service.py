@@ -2,15 +2,18 @@
 
 import logging
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Any
+from urllib.parse import urlsplit
 
 from fastapi import HTTPException
 from pydantic.alias_generators import to_camel
 from sqlalchemy import Connection
-from sqlalchemy.exc import DBAPIError
+from sqlalchemy.exc import DBAPIError, SQLAlchemyError
 
 from app.core.api.errors import problema, traducir_error_bd
+from app.core.config.settings import Settings, get_settings
+from app.core.database.db import get_engine
 from app.core.security import audit
 from app.core.security.auth import Usuario
 from app.modules.aprobaciones.auditoria import ContextoAuditoria, encolar
@@ -26,9 +29,61 @@ from app.modules.organizacion.schemas import (
     EntidadCreate,
     EntidadUpdate,
     EstadoAgencia,
+    PresentacionInstitucion,
 )
 
 logger = logging.getLogger(__name__)
+
+
+def sitio_web_seguro(valor: str | None) -> str | None:
+    if not valor or any(ord(c) < 33 for c in valor.strip()):
+        return None
+    valor = valor.strip()
+    try:
+        url = urlsplit(valor)
+        if url.scheme != "https" or not url.hostname or url.username or url.password:
+            return None
+        _ = url.port
+    except ValueError:
+        return None
+    return valor
+
+
+def resolver_presentacion(
+    entidad: Mapping[str, Any] | None, settings: Settings
+) -> PresentacionInstitucion:
+    if entidad is not None:
+        nombre = (entidad.get("nombre_comercial") or "").strip()
+        nombre = nombre or (entidad.get("razon_social") or "").strip()
+        return PresentacionInstitucion(
+            nombre=nombre or None,
+            sitio_web=sitio_web_seguro(entidad.get("sitio_web")),
+            origen="ENTIDAD",
+        )
+    nombre = settings.cooperativa_nombre.strip()
+    return PresentacionInstitucion(
+        nombre=nombre or None,
+        sitio_web=sitio_web_seguro(settings.cooperativa_sitio_web) if nombre else None,
+        origen="ENTORNO" if nombre else "SIN_CONFIGURAR",
+    )
+
+
+def obtener_presentacion() -> PresentacionInstitucion:
+    """Lectura pública; una caída SQL no se confunde con falta de configuración."""
+    settings = get_settings()
+    entidad = None
+    if settings.cooperativa_db_server and settings.cooperativa_db_name:
+        try:
+            with get_engine("cooperativa").connect() as conn:
+                entidad = repo.obtener_presentacion_entidad(conn)
+        except SQLAlchemyError:
+            raise problema(
+                503,
+                "INSTITUCION_NO_DISPONIBLE",
+                "No se pudo consultar la presentación institucional.",
+            ) from None
+    return resolver_presentacion(entidad, settings)
+
 
 TABLA = "Organizacion.Agencia"
 SolicitarBaja = Callable[[str | None], SolicitudAceptada]
