@@ -583,5 +583,14 @@ def aprobar_arqueo(
             aprobada = repo.obtener_arqueo(conn, id_arqueo)
             if aprobada is None:
                 raise RuntimeError("No se encontró el arqueo aprobado")
-            registro.confirmar(conn)
+            if ajustes:
+                # Con diferencia: el evento apunta a los movimientos de ajuste
+                registro.confirmar(
+                    conn,
+                    objetivo="Boveda.MovimientoBoveda",
+                    id_objetivo=",".join(str(a) for a in ajustes),
+                    cambios={"idArqueoBoveda": id_arqueo},
+                )
+            else:
+                registro.confirmar(conn)
             return _arqueo(conn, aprobada)

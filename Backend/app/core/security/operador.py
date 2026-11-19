@@ -12,6 +12,7 @@ que necesitan el id interno responden 403 USUARIO_INTERNO_NO_VINCULADO: fallan c
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
+from decimal import Decimal
 from typing import Annotated, Any
 from uuid import uuid4
 
@@ -68,6 +69,121 @@ def agencia_de_consulta(usuario: Usuario, pedida: str | None) -> str | None:
     return exigir_agencia_autorizada(usuario, seleccion)
 
 
+# E0-05 B: montos que el evento lleva en `cambios`, leídos del mismo registro al que
+# apunta y dentro de la misma transacción (coinciden con lo guardado). Solo montos,
+# saldos y roles; sin números de cuenta ni datos del cliente.
+_MONTOS: dict[str, str] = {
+    "Transacciones.Transaccion": (
+        "SELECT t.Monto AS monto, m.RolCuenta AS rolCuenta, m.TipoMovimiento AS tipo, "
+        "m.Monto AS montoCuenta, m.SaldoAnterior AS saldoAnterior, m.SaldoPosterior AS saldoPosterior "
+        "FROM Transacciones.Transaccion t "
+        "LEFT JOIN Cuentas.MovimientoTransaccion m ON m.IdTransaccion = t.IdTransaccion "
+        "WHERE t.IdTransaccion = :id"
+    ),
+    "Boveda.MovimientoBoveda": (
+        "SELECT Monto AS monto, TipoMovimiento AS tipo, SaldoAnterior AS saldoAnterior, "
+        "SaldoPosterior AS saldoPosterior FROM Boveda.MovimientoBoveda WHERE IdMovimiento = :id"
+    ),
+    "Caja.JornadasCaja": "SELECT DineroInicial AS dineroInicial FROM Caja.JornadasCaja WHERE IdJornadaCaja = :id",
+    "Caja.CuadreCaja": (
+        "SELECT SaldoInicial AS saldoInicial, TotalDepositos AS totalDepositos, TotalRetiros AS totalRetiros, "
+        "TotalPagos AS totalPagos, TotalDotaciones AS totalDotaciones, "
+        "TotalDevolucionesBoveda AS totalDevoluciones, SaldoFinalFisico AS saldoFinalFisico, "
+        "DiferenciaDinero AS diferencia FROM Caja.CuadreCaja WHERE IdCuadreCaja = :id"
+    ),
+    "Boveda.ArqueoBoveda": (
+        "SELECT SaldoTeorico AS saldoTeorico, SaldoFisico AS saldoFisico "
+        "FROM Boveda.ArqueoBoveda WHERE IdArqueoBoveda = :id"
+    ),
+    "Boveda.SolicitudMovimientoBoveda": (
+        "SELECT Monto AS monto FROM Boveda.SolicitudMovimientoBoveda WHERE IdSolicitudMovimiento = :id"
+    ),
+}
+
+
+def _json(valor: Any) -> Any:
+    return str(valor) if isinstance(valor, Decimal) else valor
+
+
+def montos(conn: Connection, tabla: str, ids: str) -> dict[str, Any]:
+    """Montos del registro (o registros, ids separados por coma) al que apunta el evento."""
+    sql = _MONTOS.get(tabla)
+    if sql is None or not ids:
+        return {}
+    filas = []
+    for id_ in ids.split(","):
+        if not id_.strip().isdigit():
+            continue
+        resultado = conn.execute(text(sql), {"id": int(id_)}).mappings().all()
+        filas += [
+            {k: _json(v) for k, v in dict(f).items() if v is not None}
+            for f in resultado
+        ]
+    if tabla == "Transacciones.Transaccion" and filas:
+        cuentas = [
+            {k: f[k] for k in f if k != "monto"} for f in filas if "rolCuenta" in f
+        ]
+        return {"monto": filas[0].get("monto"), "cuentas": cuentas}
+    if len(filas) == 1:
+        return filas[0]
+    return {"movimientos": filas} if filas else {}
+
+
+def encolar_evento(
+    conn: Connection,
+    *,
+    codigo: str,
+    sujeto: str,
+    organizacion: str | None,
+    roles: list[str],
+    agencia: str | None,
+    sesion: str,
+    origen: str,
+    canal: str,
+    tabla: str,
+    id_objetivo: str,
+    descripcion: str,
+    cambios: dict[str, Any] | None = None,
+) -> None:
+    """E0-05 B: escribe un evento de éxito en `Auditoria.EventoPendiente` **dentro de la
+    transacción abierta de la operación** (los dos o ninguno); el relevo lo pasa a la
+    bitácora. Agrega los montos del registro al que apunta (`tabla`, `id_objetivo`).
+    Lo usan RegistroAuditado.confirmar (operadores) y atm.auditoria (terminales)."""
+    if not conn.in_transaction():
+        raise RuntimeError("el evento exige la transacción abierta de la operación")
+    # Importación diferida: aprobaciones depende de core, no al revés en la carga
+    from app.modules.aprobaciones.congelacion import congelar
+
+    contenido = congelar(
+        {
+            "codigo": codigo,
+            "sujeto": sujeto,
+            "idInterno": None,  # sin FK a Organizacion.Usuarios que pueda perder el evento
+            "organizacion": organizacion,
+            "roles": roles,
+            "agencia": agencia,
+            "sesion": sesion,
+            "origen": origen,
+            "correlacion": trace_id_actual.get() or "",
+            "canal": canal,
+            "tipoObjetivo": tabla,
+            "tablaAfectada": tabla,
+            "agenciaActor": agencia,
+            "idSolicitud": None,
+            "idObjetivo": id_objetivo,
+            "resultado": "Exitoso",
+            "descripcion": audit.texto_seguro(descripcion),
+            "cambios": {**montos(conn, tabla, id_objetivo), **(cambios or {})},
+        }
+    ).texto
+    conn.execute(
+        text(
+            "INSERT Auditoria.EventoPendiente(IdEvento,CodigoEvento,Contenido) VALUES(:id,:codigo,:contenido)"
+        ),
+        {"id": str(uuid4()), "codigo": codigo, "contenido": contenido},
+    )
+
+
 @dataclass
 class RegistroAuditado:
     """Lo completa la operación cuando conoce el id del registro creado.
@@ -99,44 +215,22 @@ class RegistroAuditado:
         apuntan a Transacciones.Transaccion; las internas, a su tabla de movimiento.
         Se llama justo antes de salir del `with conn.begin()`; montos, ids y estados, nunca
         datos personales."""
-        if not conn.in_transaction():
-            raise RuntimeError(
-                "confirmar() exige la transacción abierta de la operación"
-            )
-        # Importación diferida: aprobaciones depende de core, no al revés en la carga
-        from app.modules.aprobaciones.congelacion import congelar
-
         e = self._evento
         usuario: Usuario = e["usuario"]
-        tabla = objetivo or e["tabla"]
-        descripcion = _descripcion(usuario, e["detalle"], self)
-        contenido = congelar(
-            {
-                "codigo": e["accion"],
-                "sujeto": usuario.id_usuario,
-                "idInterno": None,  # mismo criterio que auditar(): sin FK que pierda el evento
-                "organizacion": usuario.id_organizacion,
-                "roles": list(usuario.roles),
-                "agencia": _agencia_leida(usuario),
-                "sesion": usuario.id_sesion,
-                "origen": e["ip"] or "",
-                "correlacion": trace_id_actual.get() or "",
-                "canal": "API",
-                "tipoObjetivo": tabla,
-                "tablaAfectada": tabla,
-                "agenciaActor": _agencia_leida(usuario),
-                "idSolicitud": None,
-                "idObjetivo": id_objetivo or self.id_registro or "",
-                "resultado": "Exitoso",
-                "descripcion": audit.texto_seguro(descripcion),
-                "cambios": cambios or {},
-            }
-        ).texto
-        conn.execute(
-            text(
-                "INSERT Auditoria.EventoPendiente(IdEvento,CodigoEvento,Contenido) VALUES(:id,:codigo,:contenido)"
-            ),
-            {"id": str(uuid4()), "codigo": e["accion"], "contenido": contenido},
+        encolar_evento(
+            conn,
+            codigo=e["accion"],
+            sujeto=usuario.id_usuario,
+            organizacion=usuario.id_organizacion,
+            roles=list(usuario.roles),
+            agencia=_agencia_leida(usuario),
+            sesion=usuario.id_sesion,
+            origen=e["ip"] or "",
+            canal="API",
+            tabla=objetivo or e["tabla"],
+            id_objetivo=id_objetivo or self.id_registro or "",
+            descripcion=_descripcion(usuario, e["detalle"], self),
+            cambios=cambios,
         )
         self._confirmado = True
 

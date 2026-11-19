@@ -50,15 +50,30 @@ def test_cada_operacion_de_dinero_confirma_dentro_de_su_transaccion(ruta):
     )
 
 
+class _Filas:
+    def __init__(self, filas):
+        self.filas = filas
+
+    def mappings(self):
+        return self
+
+    def all(self):
+        return self.filas
+
+
 class _Conn:
-    def __init__(self, en_transaccion=True):
+    def __init__(self, en_transaccion=True, filas=None):
         self.en_transaccion, self.sql, self.params = en_transaccion, "", {}
+        self.filas = filas or []
 
     def in_transaction(self):
         return self.en_transaccion
 
     def execute(self, sql, params):
+        if str(sql).startswith("SELECT"):
+            return _Filas(self.filas)
         self.sql, self.params = str(sql), params
+        return None
 
 
 def _usuario() -> Usuario:
@@ -155,3 +170,107 @@ def test_sin_confirmar_sigue_el_registro_directo(monkeypatch):
     with operador.auditar("LOGIN", "x", _usuario(), "ip", "x"):
         pass
     assert [e.resultado for e in registrados] == ["Exitoso"]
+
+
+def test_el_evento_lleva_los_montos_del_registro():
+    from decimal import Decimal
+
+    conn = _Conn(
+        filas=[
+            {
+                "monto": Decimal("80.00"),
+                "rolCuenta": "Origen",
+                "tipo": "D",
+                "montoCuenta": Decimal("80.00"),
+                "saldoAnterior": Decimal("100.00"),
+                "saldoPosterior": Decimal("20.00"),
+            }
+        ]
+    )
+    with operador.auditar(
+        "REGISTRAR_RETIRO", "Transacciones.Transaccion", _usuario(), "ip", "x"
+    ) as registro:
+        registro.id_registro = "12"
+        registro.confirmar(conn)  # type: ignore[arg-type]
+    cambios = json.loads(conn.params["contenido"])["cambios"]
+    assert cambios["monto"] == "80.00"
+    assert cambios["cuentas"] == [
+        {
+            "rolCuenta": "Origen",
+            "tipo": "D",
+            "montoCuenta": "80.00",
+            "saldoAnterior": "100.00",
+            "saldoPosterior": "20.00",
+        }
+    ]
+
+
+def test_montos_de_varios_movimientos_y_tabla_sin_montos():
+    from decimal import Decimal
+
+    conn = _Conn(filas=[{"monto": Decimal("5.00"), "tipo": "AjusteSobrante"}])
+    assert operador.montos(conn, "Boveda.MovimientoBoveda", "1,2") == {  # type: ignore[arg-type]
+        "movimientos": [{"monto": "5.00", "tipo": "AjusteSobrante"}] * 2
+    }
+    assert operador.montos(conn, "Boveda.BilleteSerie", "1") == {}  # type: ignore[arg-type]
+    assert operador.montos(conn, "Transacciones.Transaccion", "1;DROP") == {}  # type: ignore[arg-type]
+
+
+# ── ATM: listo para activar ──────────────────────────────────────────────────
+
+SERVICIOS_ATM = [
+    "app/modules/atm/retiros_service.py",
+    "app/modules/atm/transferencias_service.py",
+    "app/modules/atm/reversos_service.py",
+]
+
+
+@pytest.mark.parametrize("ruta", SERVICIOS_ATM)
+def test_atm_al_activarse_exige_evento_en_la_transaccion(ruta):
+    """Mientras `solicitar_*` responda «no habilitada» no hay nada que auditar; en cuanto
+    se active, el servicio debe llamar confirmar_atm() (dentro de su transacción)."""
+    arbol = ast.parse((BACKEND / ruta).read_text(encoding="utf-8"))
+    solicitudes = [
+        f
+        for f in arbol.body
+        if isinstance(f, ast.FunctionDef) and f.name.startswith("solicitar_")
+    ]
+    assert solicitudes
+    pendiente = all("raise no_habilitada()" in ast.unparse(f) for f in solicitudes)
+    assert pendiente or "confirmar_atm(" in ast.unparse(arbol), (
+        f"{ruta}: operación de dinero ATM sin confirmar_atm()"
+    )
+
+
+def test_confirmar_atm_escribe_el_evento_del_terminal():
+    from datetime import datetime
+
+    from app.modules.atm.auditoria import confirmar_atm
+    from app.modules.atm.session import SesionATM
+    from app.modules.atm.terminal_auth import TerminalAutenticado
+
+    sesion = SesionATM(
+        jti="jti-1",
+        fecha_expiracion=datetime(2030, 1, 1),
+        id_atm=3,
+        id_tarjeta=44,
+        cuentas=(9,),
+    )
+    terminal = TerminalAutenticado(
+        credential_id="c", codigo_atm="ATM00001", audit_user_id=1, digest=b"x"
+    )
+    conn = _Conn()
+    confirmar_atm(conn, "retiro", sesion, terminal, 501)  # type: ignore[arg-type]
+    contenido = json.loads(conn.params["contenido"])
+    assert conn.params["codigo"] == "ATM_RETIRO"
+    assert (contenido["canal"], contenido["sujeto"], contenido["idObjetivo"]) == (
+        "ATM",
+        "atm:ATM00001",
+        "501",
+    )
+    assert (
+        contenido["tablaAfectada"] == "Transacciones.Transaccion"
+        and contenido["cambios"]["idAtm"] == 3
+    )
+    with pytest.raises(RuntimeError):
+        confirmar_atm(_Conn(en_transaccion=False), "retiro", sesion, terminal, 501)  # type: ignore[arg-type]
