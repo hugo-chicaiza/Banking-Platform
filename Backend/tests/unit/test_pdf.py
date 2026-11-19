@@ -102,3 +102,81 @@ def test_respuesta_descarga_sin_cache():
         .startswith("inline;")
     )
     assert respuestas_pdf("Ficha")[200]["content"] == {"application/pdf": {}}
+
+
+# --- E0-18: institución desde su perfil, quién lo generó y zona horaria -------------
+
+
+def test_pie_con_quien_lo_genero_y_la_zona_de_la_institucion():
+    from datetime import UTC
+
+    from app.core.pdf import Institucion
+
+    doc = DocumentoPdf(
+        "Comprobante",
+        institucion=Institucion(nombre="Cooperativa Andina", ruc="1790012345001"),
+        generado_por="Ana Pérez",
+        zona=UTC,
+        nombre_zona="UTC",
+    )
+    doc.parrafo("Depósito")
+    texto = _texto(doc.contenido())
+    for esperado in (
+        "Cooperativa Andina",
+        "RUC 1790012345001",
+        "Generado por Ana P",
+        "UTC",
+        "Comprobante",
+    ):
+        assert esperado in texto, esperado
+
+
+def test_sin_quien_mantiene_el_pie_y_la_hora_de_ecuador():
+    texto = _texto(DocumentoPdf("Ficha", institucion="EnquoCoop").contenido())
+    assert "Generado el" in texto and "hora de Ecuador" in texto
+    assert "RUC" not in texto
+
+
+def test_institucion_actual_desde_el_perfil(monkeypatch):
+    from types import SimpleNamespace
+
+    from app.core.pdf import institucion_actual
+    from app.modules.organizacion import service
+
+    entidad = SimpleNamespace(
+        nombre_comercial=None,
+        razon_social="Cooperativa Andina Ltda.",
+        ruc="1790012345001",
+        sitio_web="https://andina.ec",
+    )
+    monkeypatch.setattr(service, "obtener_entidad", lambda conn: entidad)
+    datos = institucion_actual(None)  # type: ignore[arg-type]
+    assert (datos.nombre, datos.ruc, datos.sitio_web) == (
+        "Cooperativa Andina Ltda.",
+        "1790012345001",
+        "https://andina.ec",
+    )
+
+
+def test_institucion_actual_sin_perfil_usa_la_configuracion(monkeypatch):
+    from fastapi import HTTPException
+
+    from app.core.config.settings import get_settings
+    from app.core.pdf import institucion_actual
+    from app.modules.organizacion import service
+
+    def sin_perfil(conn):
+        raise HTTPException(status_code=404)
+
+    monkeypatch.setattr(service, "obtener_entidad", sin_perfil)
+    datos = institucion_actual(None)  # type: ignore[arg-type]
+    assert datos.nombre == get_settings().cooperativa_nombre and datos.ruc is None
+
+
+def test_el_generador_no_escribe_en_disco(tmp_path, monkeypatch):
+    # Todo se arma en memoria: con el directorio de trabajo vacío, sigue vacío
+    monkeypatch.chdir(tmp_path)
+    doc = DocumentoPdf("Reporte", institucion="EnquoCoop", generado_por="Ana")
+    doc.tabla(["A", "B"], [["1", "2"]] * 200)  # varias páginas
+    assert doc.contenido().startswith(b"%PDF")
+    assert list(tmp_path.iterdir()) == []
