@@ -107,6 +107,8 @@ class Parametro:
 
 
 def registro_inicial() -> Registro:
+    from app.modules.contabilidad.plantillas import OPERACION_PLANTILLA
+
     registro = Registro()
     registro.agregar(
         Operacion(
@@ -121,4 +123,5 @@ def registro_inicial() -> Registro:
     registro.agregar(OPERACION_BAJA)
     registro.agregar(OPERACION_TARIFA)
     registro.agregar(operacion_productos())
+    registro.agregar(OPERACION_PLANTILLA)
     return registro

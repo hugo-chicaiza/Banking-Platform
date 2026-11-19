@@ -31,6 +31,7 @@ PERMISOS: dict[str, tuple[str, ...]] = {
     "productos:aprobar": ("SUPERVISOR",),
     "prd-exportar": _TODOS,
     "con-plantilla-editar": ("CONTADOR",),
+    "con-plantilla-aprobar": ("CONTADOR",),
     "con-cuenta-editar": ("CONTADOR",),
     "con-reclasificacion-preparar": ("CONTADOR",),
     "con-reclasificacion-aprobar": ("CONTADOR",),

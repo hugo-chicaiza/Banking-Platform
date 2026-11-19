@@ -1,18 +1,22 @@
 """Administración y simulación de versiones del motor E4-01."""
 
+import hashlib
+import json
 from collections import Counter
 from datetime import date
 from decimal import Decimal
 from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import Connection, text
 
 from app.core.api.errors import ProblemDetailsRoute, problema
 from app.core.database.db import cooperativa
-from app.core.security.auth import require_permiso
+from app.core.security.auth import UsuarioActual, require_permiso
 from app.core.security.operador import IdInterno, exigir_id_interno
+from app.modules.aprobaciones.identidad import Actor
+from app.modules.aprobaciones.registro import Objetivo, Operacion, Plan
 from app.modules.contabilidad import repository
 from app.modules.contabilidad.asientos import ErrorContable, resolver_lineas
 
@@ -49,6 +53,11 @@ class Version(BaseModel):
     vigenciaDesde: date
     nombre: str = Field(min_length=1, max_length=100)
     lineas: list[Linea] = Field(min_length=2, max_length=100)
+
+
+class VersionSolicitada(BaseModel):
+    idPlantillaAsiento: int
+    idSolicitud: int
 
 
 class Simulacion(BaseModel):
@@ -148,7 +157,6 @@ def detalle(conn: Db, id_plantilla: int) -> dict[str, Any]:
     return {**fila, "lineas": repository.obtener_lineas_plantilla(conn, id_plantilla)}
 
 
-@router.post("/tipos-asiento/{id_tipo}/plantillas", status_code=202)
 def crear(
     conn: Db, id_tipo: int, datos: Version, id_interno: IdInterno
 ) -> dict[str, int]:
@@ -311,3 +319,172 @@ def confirmar_aprobacion(
             "desde": fila["VigenciaDesde"],
         },
     )
+
+
+def _id_objetivo(objetivo: Objetivo) -> int:
+    if objetivo.agencia is None and objetivo.id.isascii() and objetivo.id.isdecimal():
+        id_ = int(objetivo.id)
+        if 0 < id_ <= 2147483647:
+            return id_
+    raise problema(422, "OBJETIVO_INVALIDO", "La version de plantilla no es valida.")
+
+
+def _pendiente(conn: Connection, objetivo: Objetivo) -> dict[str, Any]:
+    id_ = _id_objetivo(objetivo)
+    repository.bloquear_contabilizacion(conn)
+    fila = (
+        conn.execute(
+            text(
+                "SELECT * FROM Contabilidad.PlantillaAsiento WITH (UPDLOCK,HOLDLOCK) WHERE IdPlantillaAsiento=:id"
+            ),
+            {"id": id_},
+        )
+        .mappings()
+        .one_or_none()
+    )
+    if fila is None:
+        raise problema(404, "PLANTILLA_NO_DEFINIDA", "La plantilla no existe.")
+    if fila["Estado"] or fila["CreadoPor"] is None:
+        raise problema(409, "PLANTILLA_NO_PENDIENTE", "La version no esta pendiente.")
+    return {**fila, "lineas": repository.obtener_lineas_plantilla(conn, id_)}
+
+
+def _huella(fila: dict[str, Any]) -> str:
+    return hashlib.sha256(
+        json.dumps(fila, default=str, sort_keys=True).encode()
+    ).hexdigest()
+
+
+class AprobacionPlantilla:
+    def preparar(
+        self, conn: Connection, objetivo: Objetivo, contenido: dict, hoy: date
+    ) -> Plan:
+        from app.modules.contabilidad.service import obtener_fecha_contable_actual
+
+        fila = _pendiente(conn, objetivo)
+        if fila["CreadoPor"] != contenido.get("creador"):
+            raise problema(
+                403, "SIN_PERMISO", "Solo el creador puede enviar esta version."
+            )
+        if fila["VigenciaDesde"] <= obtener_fecha_contable_actual(conn)["fecha"]:
+            raise problema(
+                409,
+                "VIGENCIA_INVALIDA",
+                "La vigencia debe iniciar despues del dia contable actual.",
+            )
+        propuesta = {
+            "idPlantillaAsiento": _id_objetivo(objetivo),
+            "vigenciaDesde": fila["VigenciaDesde"].isoformat(),
+        }
+        return Plan(
+            propuesta,
+            {"estado": "Pendiente"},
+            {**propuesta, "estado": "Programada"},
+            _huella(fila),
+        )
+
+    def version(self, conn: Connection, objetivo: Objetivo) -> str:
+        return _huella(_pendiente(conn, objetivo))
+
+    def aplicar(
+        self,
+        conn: Connection,
+        objetivo: Objetivo,
+        contenido: dict,
+        solicitante: str,
+        id_solicitud: int,
+    ) -> None:
+        raise RuntimeError("La plantilla requiere un aprobador autenticado.")
+
+
+def _aplicar_con_aprobador(
+    conn: Connection, objetivo: Objetivo, aprobador: int
+) -> None:
+    from app.modules.contabilidad.service import obtener_fecha_contable_actual
+
+    confirmar_aprobacion(
+        conn,
+        _id_objetivo(objetivo),
+        aprobador,
+        obtener_fecha_contable_actual(conn)["fecha"],
+    )
+
+
+OPERACION_PLANTILLA = Operacion(
+    "CON-PLANTILLA",
+    "PlantillaAsiento",
+    "cooperativa",
+    frozenset({"CONTADOR"}),
+    "con-plantilla-aprobar",
+    AprobacionPlantilla(),
+    tabla_auditada="Contabilidad.PlantillaAsiento",
+    evento_ejecucion="CON_PLANTILLA_PROGRAMADA",
+    solicitud_directa=False,
+    permiso_ejecucion="con-plantilla-editar",
+    aplicar_con_aprobador=_aplicar_con_aprobador,
+    solicitud_unica=True,
+)
+
+
+@router.post(
+    "/tipos-asiento/{id_tipo}/plantillas",
+    status_code=202,
+    response_model=VersionSolicitada,
+    operation_id="crear_api_v1_contabilidad_tipos_asiento__id_tipo__plantillas_post",
+)
+def crear_y_solicitar(
+    conn: Db,
+    id_tipo: int,
+    datos: Version,
+    id_interno: IdInterno,
+    usuario: UsuarioActual,
+    request: Request,
+) -> dict[str, int]:
+    from app.modules.aprobaciones import router as aprobaciones
+    from app.modules.contabilidad.service import obtener_fecha_contable_actual
+
+    actor = aprobaciones.actual(usuario)
+    aprobaciones.servicio().puede_solicitar(
+        actor, OPERACION_PLANTILLA, Objetivo("PlantillaAsiento", "", None)
+    )
+    if actor.id_interno != exigir_id_interno(id_interno):
+        raise problema(403, "SIN_PERMISO", "La identidad del creador no coincide.")
+    with conn.begin():
+        if datos.vigenciaDesde <= obtener_fecha_contable_actual(conn)["fecha"]:
+            raise problema(
+                409,
+                "VIGENCIA_INVALIDA",
+                "La vigencia debe iniciar despues del dia contable actual.",
+            )
+    creada = crear(conn, id_tipo, datos, id_interno)
+    return _enviar(creada["idPlantillaAsiento"], usuario, request, actor)
+
+
+def _enviar(
+    id_plantilla: int, usuario: UsuarioActual, request: Request, actor: Actor
+) -> dict[str, int]:
+    from app.modules.aprobaciones import router as aprobaciones
+    from app.modules.contabilidad.service import ahora_ecuador
+
+    id_solicitud = aprobaciones.servicio().solicitar(
+        actor,
+        OPERACION_PLANTILLA.codigo,
+        Objetivo(OPERACION_PLANTILLA.tipo_objetivo, str(id_plantilla), None),
+        {"creador": actor.id_interno},
+        ahora_ecuador().date(),
+        aprobaciones.contexto(request, usuario),
+    )
+    return {"idPlantillaAsiento": id_plantilla, "idSolicitud": id_solicitud}
+
+
+@router.post(
+    "/plantillas/{id_plantilla}/solicitudes",
+    status_code=202,
+    response_model=VersionSolicitada,
+)
+def enviar_pendiente(
+    id_plantilla: int, usuario: UsuarioActual, request: Request
+) -> dict[str, int]:
+    from app.modules.aprobaciones import router as aprobaciones
+
+    return _enviar(id_plantilla, usuario, request, aprobaciones.actual(usuario))

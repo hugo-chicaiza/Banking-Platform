@@ -208,6 +208,7 @@ FUERA_DEL_EDITOR = (
     ("POST", "/api/v1/contabilidad/tipos-asiento/{id_tipo}/plantillas"),
     ("GET", "/api/v1/contabilidad/plantillas/{id_plantilla}"),
     ("POST", "/api/v1/contabilidad/plantillas/simulaciones"),
+    ("POST", "/api/v1/contabilidad/plantillas/{id_plantilla}/solicitudes"),
     ("GET", "/api/v1/parametros/comisiones"),
     ("GET", "/api/v1/parametros/comisiones/{idComision}/tarifa"),
     ("POST", "/api/v1/parametros/comisiones"),

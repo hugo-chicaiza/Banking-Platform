@@ -89,3 +89,10 @@ saldo ATM vienen del protocolo ATM y no especifican el contrato de caja.
 Transacciones debe designar el generador y confirmar canal, país, tipos de
 movimiento y registro y reverso de comisiones. Una vez resueltos esos
 contratos, puede consumir CAJA_DEPOSITO usando el ejemplo anterior.
+### Alcance pendiente de #434
+
+Reutilizar el mismo motor. Conectar operaciones financieras solo cuando el
+modulo provea identificadores, matriz y transaccion de negocio. DOT_ATM es una
+semilla disponible, Bovedas usa un adaptador propio que ya comparte las rutinas
+SQL, y Credito requiere un flujo financiero definido. Ensayar por operacion la
+clave de reintento, el asiento y el rollback antes de cambiar los adaptadores.

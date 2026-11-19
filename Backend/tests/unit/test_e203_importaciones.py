@@ -107,3 +107,18 @@ def test_carga_csv_rechaza_limite_antes_de_guardar(monkeypatch):
         asyncio.run(importaciones.subir(Mock(), 101, request, "cuc.csv"))
     assert error.value.status_code == 422
     guardar.assert_not_called()
+
+
+def test_limite_configurable_preserva_tope_y_compatibilidad(monkeypatch):
+    from unittest.mock import Mock
+
+    from app.modules.contabilidad import importaciones
+
+    conn = Mock()
+    conn.execute.return_value.scalar.return_value = None
+    assert importaciones._limite_filas(conn) == 5000
+    conn.execute.return_value.scalar.return_value = 1
+    monkeypatch.setattr(importaciones.general, "valor", lambda *args: 10)
+    assert importaciones._limite_filas(conn) == 10
+    monkeypatch.setattr(importaciones.general, "valor", lambda *args: 6000)
+    assert importaciones._limite_filas(conn) == 5000

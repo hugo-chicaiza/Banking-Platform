@@ -275,3 +275,12 @@ segunda requiere autorización de la SEPS y sus instrucciones para
 reclasificar provisiones. El delta solo instala el catálogo.
 
 Fuente: https://www.seps.gob.ec/wp-content/uploads/Resolucio%CC%81n-No.-SEPS-IGT-2025-0100.pdf
+
+### Alcance de la siguiente entrega
+
+La edicion ordinaria del plan conserva su flujo. La segunda identidad se
+exige para reclasificar saldos. El guion cubre los tres custodios de efectivo
+(11010505, 11010510 y 11010515) y los dos auxiliares PN/PJ de ahorro. La revision
+de los destinos restantes y la conciliacion de cada custodio se pueden ensayar
+con una base aislada y una captura sintetica. Este cambio no requiere ejecutar
+ni autorizar un corte real.
