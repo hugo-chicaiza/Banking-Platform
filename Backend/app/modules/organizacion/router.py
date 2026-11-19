@@ -38,9 +38,27 @@ from app.modules.organizacion.schemas import (
     EntidadCreate,
     EntidadUpdate,
     EstadoAgencia,
+    PresentacionInstitucion,
 )
 
 _ROLES = ["ADMIN"]
+router_publico = APIRouter(
+    prefix="/institucion", tags=["Institución"], route_class=ProblemDetailsRoute
+)
+
+
+@router_publico.get(
+    "",
+    response_model=PresentacionInstitucion,
+    operation_id="InstitucionConsultar",
+    responses={503: RESPUESTAS_ERROR[503]},
+)
+def consultar_institucion(response: Response) -> PresentacionInstitucion:
+    """Solo presentación pública para login/encabezados. No escribe ni usa WorkOS."""
+    response.headers["Cache-Control"] = "no-store"
+    return service.obtener_presentacion()
+
+
 _ACEPTADA: dict[int | str, dict[str, Any]] = {
     202: {"model": SolicitudAceptada, "description": "Solicitud pendiente"}
 }

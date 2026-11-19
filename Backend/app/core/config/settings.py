@@ -182,8 +182,9 @@ class Settings(BaseSettings):
     sobre_pin_dias: Annotated[int, Field(ge=1, le=365)] = 30
     # Carpeta local mientras no hay MongoDB (solo fuera de producción)
     sobre_pin_dir: str = ".sobres_pin"
-    cooperativa_nombre: str = "EnquoCoop"
-    cooperativa_sitio_web: str = "www.coop.com.ec"
+    # Presentación previa al alta de Entidad; vacías = instalación sin configurar.
+    cooperativa_nombre: str = ""
+    cooperativa_sitio_web: str = ""
 
     # MongoDB (Azure Cosmos DB for MongoDB o Atlas). Vacío = sin MongoDB
     mongo_uri: SecretStr = SecretStr("")

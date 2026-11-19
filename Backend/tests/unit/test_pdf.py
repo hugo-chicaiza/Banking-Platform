@@ -187,7 +187,13 @@ def test_institucion_actual_desde_el_perfil(monkeypatch):
     )
 
 
-def test_institucion_actual_sin_perfil_usa_la_configuracion(monkeypatch):
+@pytest.mark.parametrize(
+    "nombre, esperado",
+    [("Institución de prueba", "Institución de prueba"), ("", "Sistema de gestión")],
+)
+def test_institucion_actual_sin_perfil_usa_la_configuracion(
+    monkeypatch, nombre, esperado
+):
     from fastapi import HTTPException
 
     from app.core.config.settings import get_settings
@@ -198,8 +204,9 @@ def test_institucion_actual_sin_perfil_usa_la_configuracion(monkeypatch):
         raise HTTPException(status_code=404)
 
     monkeypatch.setattr(service, "obtener_entidad", sin_perfil)
+    monkeypatch.setattr(get_settings(), "cooperativa_nombre", nombre)
     datos = institucion_actual(None)  # type: ignore[arg-type]
-    assert datos.nombre == get_settings().cooperativa_nombre and datos.ruc is None
+    assert datos.nombre == esperado and datos.ruc is None
 
 
 def test_el_generador_no_escribe_en_disco(tmp_path, monkeypatch):

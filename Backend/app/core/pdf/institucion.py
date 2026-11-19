@@ -24,7 +24,13 @@ class Institucion:
 
 
 def institucion_por_defecto() -> Institucion:
-    return Institucion(nombre=get_settings().cooperativa_nombre)
+    from app.modules.organizacion.service import resolver_presentacion
+
+    presentacion = resolver_presentacion(None, get_settings())
+    return Institucion(
+        nombre=presentacion.nombre or "Sistema de gestión",
+        sitio_web=presentacion.sitio_web,
+    )
 
 
 def institucion_actual(conn: Connection) -> Institucion:
@@ -41,8 +47,16 @@ def institucion_actual(conn: Connection) -> Institucion:
             type(exc).__name__,
         )
         return institucion_por_defecto()
+    presentacion = organizacion.resolver_presentacion(
+        {
+            "nombre_comercial": entidad.nombre_comercial,
+            "razon_social": entidad.razon_social,
+            "sitio_web": entidad.sitio_web,
+        },
+        get_settings(),
+    )
     return Institucion(
-        nombre=entidad.nombre_comercial or entidad.razon_social,
+        nombre=presentacion.nombre or "Sistema de gestión",
         ruc=entidad.ruc,
-        sitio_web=entidad.sitio_web,
+        sitio_web=presentacion.sitio_web,
     )

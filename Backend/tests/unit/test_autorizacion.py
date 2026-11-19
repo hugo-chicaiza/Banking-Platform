@@ -23,6 +23,7 @@ CONSULTA_PRODUCTOS = PERMISOS["prd-consultar"]
 
 AUTH = ()  # Cualquier usuario autenticado, sin rol específico
 _PUBLICAS = {
+    ("GET", "/api/v1/institucion"),  # #353: solo nombre/web, sin ficha legal ni sesión.
     ("GET", "/api/v1/auth/login"),
     ("GET", "/api/v1/auth/callback"),
     ("POST", "/api/v1/auth/logout"),  # AUT-03: idempotente, sin sesión responde 200
