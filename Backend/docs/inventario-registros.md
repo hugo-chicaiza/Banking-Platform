@@ -27,8 +27,9 @@ Los saltos de línea dentro de un valor se escriben como `\n` para que nadie pue
 
 ## Producción
 
-- No existen las rutas de documentación de la API (`/api/docs`, `/api/openapi.json`) ni la ruta de prueba del PIN pad
-  (`/api/v1/pruebas/*`); `tests/unit/test_registros.py` lo verifica arrancando la app con `APP_ENV=production`.
+- No existen las rutas de documentación de la API (`/api/docs`, `/api/openapi.json`), y la ruta de prueba del PIN pad
+  (`/api/v1/pruebas/*`) responde 404; `tests/unit/test_registros.py` lo verifica arrancando la app con
+  `APP_ENV=production`.
 - La dirección de origen se toma solo de la cabecera que pone el proxy, y con `PROXY_EXIGIDO` el backend rechaza el
   tráfico que no llega por el Worker (`SoloProxyMiddleware`).
 

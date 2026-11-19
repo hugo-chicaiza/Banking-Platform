@@ -83,9 +83,9 @@ app.include_router(caja_router, prefix=API_V1)
 app.include_router(boveda_router, prefix=API_V1)
 app.include_router(transacciones_router, prefix=API_V1)
 app.include_router(atm_router, prefix=API_V1)
-# PIN pad simulado para probar TAR-05 y ATM-01: en producción la ruta no existe (E0-13)
-if not is_prod:
-    app.include_router(tarjetas_pruebas_router, prefix=API_V1)
+# PIN pad simulado para probar TAR-05 y ATM-01: responde 404 en producción
+# (su dependencia _solo_fuera_de_produccion; tests/unit/test_registros.py lo verifica)
+app.include_router(tarjetas_pruebas_router, prefix=API_V1)
 
 # Público a propósito: verifica el despliegue sin sesión (fuera de /api, sin require_auth)
 app.include_router(smoke_test_router)  # SMOKE-TEST: borrar

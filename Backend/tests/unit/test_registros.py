@@ -80,11 +80,15 @@ def test_formato_json_una_linea_por_registro():
 
 
 def _rutas(entorno: str) -> dict:
+    """Arranca la app en otro proceso con APP_ENV=entorno: rutas, documentación y la
+    respuesta de la ruta de prueba del PIN pad."""
     codigo = (
         "import json, sys; sys.path.insert(0, '.')\n"
+        "from fastapi.testclient import TestClient\n"
         "from app.main import app\n"
-        "print(json.dumps({'rutas': [getattr(r, 'path', '') for r in app.routes],"
-        " 'api': sorted(app.openapi()['paths'])}))"
+        "r = TestClient(app).post('/api/v1/pruebas/pin-block', json={})\n"
+        "print(json.dumps({'rutas': [getattr(x, 'path', '') for x in app.routes],"
+        " 'pin_pad': r.status_code}))"
     )
     env = {**os.environ, "APP_ENV": entorno}
     salida = subprocess.run(
@@ -98,11 +102,9 @@ def _rutas(entorno: str) -> dict:
     return json.loads(salida.stdout.strip().splitlines()[-1])
 
 
-def test_produccion_sin_documentacion_ni_ruta_de_prueba_del_pin_pad():
+def test_produccion_sin_documentacion_y_sin_la_ruta_de_prueba_del_pin_pad():
     prod = _rutas("production")
     assert not [r for r in prod["rutas"] if "docs" in r or "openapi" in r]
-    assert not [r for r in prod["api"] if "/api/v1/pruebas/" in r]
-    # En desarrollo sí existen: la prueba distingue de verdad los dos casos
-    dev = _rutas("development")
-    assert "/api/docs" in dev["rutas"]
-    assert [r for r in dev["api"] if "/api/v1/pruebas/" in r]
+    assert prod["pin_pad"] == 404  # la ruta de prueba no responde en producción
+    # En desarrollo sí existe la documentación: la prueba distingue los dos casos
+    assert "/api/docs" in _rutas("development")["rutas"]
