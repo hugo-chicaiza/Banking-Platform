@@ -1,9 +1,11 @@
 """Atomic cut projection. Approval source below is explicitly a LOCAL fixture."""
 
 import json
+import os
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from decimal import Decimal
+from pathlib import Path
 
 from e201_sql_lab import (
     ROOT,
@@ -260,14 +262,34 @@ def run():
             assert next(
                 r["SaldoPropio"] for r in balances if r["CodigoCuenta"] == code
             ) == Decimal(amount)
+        auxiliares = rows(
+            c,
+            """
+            SELECT h.CodigoCuenta, p.CodigoCuenta AS Padre, h.EsImputable,
+                   h.SoloAutomatica, h.EsCatalogoRegulador, h.Estado
+            FROM Contabilidad.CuentasContables h
+            JOIN Contabilidad.CuentasContables p ON p.IdCuentaContable=h.IdCuentaSuperior
+            WHERE h.CodigoCuenta IN ('11010505','11010510','11010515','21013505','21013510')
+            """,
+        )
+        assert len(auxiliares) == len(values)
+        assert all(
+            a["Padre"] == a["CodigoCuenta"][:6]
+            and a["EsImputable"]
+            and a["SoloAutomatica"]
+            and not a["EsCatalogoRegulador"]
+            and a["Estado"]
+            for a in auxiliares
+        )
         assert all(
             r["SaldoPropio"] == 0 for r in balances if len(r["CodigoCuenta"]) == 6
         )
         checks["concurrent_single_cut"] = attempts
-        checks["historical_1768_lines_unchanged"] = history == rows(
+        assert history == rows(
             c,
             "SELECT * FROM Contabilidad.MovimientosContables WHERE IdMovimientoContable<=1768 ORDER BY IdMovimientoContable",
         )
+        checks["historical_1768_lines_unchanged"] = True
         borrador = new_entry(c, "E201-REGLAS-LAB")
         insertar_linea = """
             INSERT Contabilidad.MovimientosContables
@@ -290,6 +312,7 @@ def run():
             c.execute("""
             SELECT COUNT(*) FROM Contabilidad.CuentasContables
             WHERE CodigoCuenta='19902505' AND EsImputable=1 AND EsCatalogoRegulador=0
+              AND SoloAutomatica=0
         """).fetchval()
             == 1
         )
@@ -300,17 +323,33 @@ def run():
             == total_lineas
         )
         checks["shortage_auxiliary_idempotent_without_history_changes"] = True
+        c.execute(insertar_linea.format(asiento=borrador, codigo="19902505"))
+        checks["native_posting_rejects_unbalanced_entry"] = expect_error(
+            c, f"EXEC Contabilidad.usp_ContabilizarAsiento {borrador}", 51403
+        )
+        assert (
+            c.execute(
+                "SELECT Estado FROM Contabilidad.AsientoContable WHERE IdAsientoContable=?",
+                borrador,
+            ).fetchval()
+            == "BORRADOR"
+        )
         report = {
             "database": db,
             "azure_accessed": False,
             "approval_source": "Native SSMS rejection paths tested; successful cut uses a LOCAL FIXTURE. Two independent authenticated logins not available in this runner. E0-08 is not installed.",
             "checks": checks,
             "balances": balances,
+            "auxiliaries": auxiliares,
             "elements_before": before,
             "elements_after": after,
             "production_prerequisite": "DBA binds two verified accountant SQL identities, grants specific roles; positive approval requires separate original logins.",
         }
-        output = ROOT / "Backend/docs/e201/resultados_corte_atomico.json"
+        output = Path(
+            os.environ.get(
+                "E201_REPORT", ROOT / "Backend/docs/e201/resultados_corte_atomico.json"
+            )
+        )
         output.write_text(
             json.dumps(report, default=str, ensure_ascii=False, indent=2),
             encoding="utf-8",
