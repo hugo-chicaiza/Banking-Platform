@@ -199,6 +199,111 @@ def test_sql_caja_y_boveda_comparten_auxiliar_y_superiores(motor):
                 ).scalar_one() == 2 * (intento + 1)
 
 
+def proyectar_custodios_para_conciliacion(conn):
+    conn.exec_driver_sql("CREATE SCHEMA Caja")
+    conn.exec_driver_sql("CREATE SCHEMA ATM")
+    conn.exec_driver_sql("""
+        CREATE TABLE Caja.JornadasCaja (IdJornadaCaja int, DineroInicial decimal(18,2), Estado varchar(20));
+        CREATE TABLE Caja.DotacionesCaja (IdJornadaCaja int, Monto decimal(18,2), Estado varchar(20), TipoDotacion varchar(20));
+        CREATE TABLE Caja.MovimientosCaja (IdJornadaCaja int, IdTipoMovimiento int, Monto decimal(18,2));
+        CREATE TABLE Caja.TipoMovimientoCaja (IdTipoMovimientoCaja int, Naturaleza char(1));
+        CREATE TABLE Caja.DevolucionesCaja (IdJornadaCaja int, Monto decimal(18,2), Estado varchar(20));
+        CREATE TABLE ATM.Gaveta (IdDenominacion int, CantidadActual int);
+    """)
+
+
+def test_sql_e201_concilia_dotacion_de_500_por_custodio(motor):
+    ahora = datetime(2026, 11, 16, 10)
+    with motor.begin() as conn:
+        proyectar_custodios_para_conciliacion(conn)
+        conn.exec_driver_sql("""
+            UPDATE Boveda.Boveda SET SaldoActual=500 WHERE IdBoveda=1;
+            UPDATE Boveda.BovedaDenominacion SET CantidadActual=25 WHERE IdBoveda=1;
+            INSERT Caja.JornadasCaja VALUES (1,100,'ABIERTA');
+            INSERT ATM.Gaveta VALUES (1,1);
+            UPDATE Contabilidad.CuentasContables SET Saldo=700 WHERE CodigoCuenta='11010505';
+            UPDATE Contabilidad.CuentasContables SET Saldo=820 WHERE CodigoCuenta='110105';
+            INSERT Contabilidad.CuentasContables
+                (CodigoCuenta,NombreCuenta,Naturaleza,Saldo,Estado,FechaCreacion,EsImputable,IdCuentaSuperior)
+            VALUES ('11010510','Ventanillas','DEUDORA',100,1,GETDATE(),1,3),
+                   ('11010515','ATM','DEUDORA',20,1,GETDATE(),1,3);
+            INSERT Contabilidad.ConceptoContable VALUES (1);
+            INSERT Contabilidad.PlantillaAsiento
+                (CodigoPlantilla,IdConceptoContable,Origen,IdTipoAsiento,Nombre,Estado)
+            VALUES ('DOT_CAJA',1,'CAJA',1,'Dotación ficticia',1);
+            INSERT Contabilidad.PlantillaAsientoDetalle
+                (IdPlantillaAsiento,Orden,IdCuentaContable,TipoMovimiento,ComponenteImporte)
+            SELECT p.IdPlantillaAsiento, v.Orden, c.IdCuentaContable, v.Lado,'PRINCIPAL'
+            FROM Contabilidad.PlantillaAsiento p
+            CROSS JOIN (VALUES (1,'11010510','DEBITO'),(2,'11010505','CREDITO')) v(Orden,Codigo,Lado)
+            JOIN Contabilidad.CuentasContables c ON c.CodigoCuenta=v.Codigo
+            WHERE p.CodigoPlantilla='DOT_CAJA';
+        """)
+        apertura = contabilidad.crear_asiento_boveda(
+            conn,
+            {
+                "fecha": ahora.date(),
+                "ahora": ahora,
+                "agencia": "001",
+                "tipo_asiento": 1,
+                "actor": 7,
+                "fecha_contable": 1,
+                "concepto": "Apertura de la proyección local",
+            },
+        )
+        for cuenta, lado, monto in (
+            (1, "DEBITO", 700),
+            (5, "DEBITO", 100),
+            (6, "DEBITO", 20),
+            (2, "CREDITO", 820),
+        ):
+            contabilidad.linea_boveda(
+                conn, apertura, cuenta, "001", Decimal(monto), lado, ahora
+            )
+        conn.execute(
+            text("EXEC Contabilidad.usp_ContabilizarAsiento @IdAsientoContable=:id"),
+            {"id": apertura},
+        )
+        ruta = (
+            Path(__file__).resolve().parents[2]
+            / "migrations/20261118_bov04_conciliacion_efectivo.sql"
+        )
+        conn.exec_driver_sql(ruta.read_text(encoding="utf-8"))
+        vista = text("SELECT * FROM Contabilidad.vw_ConciliacionEfectivo")
+        assert conn.execute(vista).one() == (820, 700, 100, 20, 820, 0)
+
+        # Proyección de las escrituras físicas de CAJ-07, con mayor y vista reales.
+        conn.exec_driver_sql("""
+            UPDATE Boveda.Boveda SET SaldoActual=SaldoActual-500 WHERE IdBoveda=1;
+            UPDATE Boveda.BovedaDenominacion SET CantidadActual=CantidadActual-25 WHERE IdBoveda=1;
+            INSERT Caja.DotacionesCaja VALUES (1,500,'ACTIVA','ADICIONAL');
+        """)
+        asiento = caja.generar_asiento(
+            conn,
+            caja.OperacionContable(
+                "DOT_CAJA",
+                "E201:DOTACION:500",
+                "001",
+                1,
+                7,
+                ahora,
+                {"PRINCIPAL": Decimal(500)},
+            ),
+        )
+        assert [
+            (m["codigo_cuenta"], m["tipo_movimiento"], m["monto"])
+            for m in contabilidad.movimientos_asiento(conn, asiento)
+        ] == [("11010510", "DEBITO", 500), ("11010505", "CREDITO", 500)]
+        assert conn.execute(vista).one() == (820, 200, 600, 20, 820, 0)
+        saldos = saldos_contables(conn)
+        assert [saldos[c] for c in ("11010505", "11010510", "11010515", "110105")] == [
+            200,
+            600,
+            20,
+            820,
+        ]
+
+
 def test_sql_conciliacion_compara_definiciones_antes_del_reemplazo(motor):
     ruta = Path(__file__).resolve().parents[2] / "migrations"
     propuesta = (ruta / "20261118_bov04_conciliacion_efectivo.sql").read_text(
@@ -212,15 +317,8 @@ def test_sql_conciliacion_compara_definiciones_antes_del_reemplazo(motor):
     )
     ahora = datetime(2026, 11, 16, 10)
     with motor.begin() as conn:
-        conn.exec_driver_sql("CREATE SCHEMA Caja")
-        conn.exec_driver_sql("CREATE SCHEMA ATM")
+        proyectar_custodios_para_conciliacion(conn)
         conn.exec_driver_sql("""
-            CREATE TABLE Caja.JornadasCaja (IdJornadaCaja int, DineroInicial decimal(18,2), Estado varchar(20));
-            CREATE TABLE Caja.DotacionesCaja (IdJornadaCaja int, Monto decimal(18,2), Estado varchar(20), TipoDotacion varchar(20));
-            CREATE TABLE Caja.MovimientosCaja (IdJornadaCaja int, IdTipoMovimiento int, Monto decimal(18,2));
-            CREATE TABLE Caja.TipoMovimientoCaja (IdTipoMovimientoCaja int, Naturaleza char(1));
-            CREATE TABLE Caja.DevolucionesCaja (IdJornadaCaja int, Monto decimal(18,2), Estado varchar(20));
-            CREATE TABLE ATM.Gaveta (IdDenominacion int, CantidadActual int);
             INSERT Caja.JornadasCaja VALUES (1,20,'ABIERTA'), (2,100,'CERRADA');
             INSERT Caja.DotacionesCaja VALUES (1,20,'ACTIVA','INICIAL'),
                 (1,7,'ACTIVA','ADICIONAL'), (1,100,'ANULADA','ADICIONAL');
