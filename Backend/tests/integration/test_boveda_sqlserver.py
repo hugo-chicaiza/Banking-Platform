@@ -94,6 +94,34 @@ def saldos_contables(conn):
     )
 
 
+def test_sql_boveda_no_contabiliza_en_feriado_con_periodo_abierto(motor):
+    with motor.begin() as conn:
+        id_fecha = conn.scalar(
+            text("""
+            UPDATE Contabilidad.FechaContable SET EsFeriado=1
+            OUTPUT inserted.IdFechaContable WHERE Fecha='20261116'
+        """)
+        )
+        with pytest.raises(HTTPException) as error:
+            service.contabilidad.contabilizar_boveda(
+                conn,
+                agencia="001",
+                tipo="ProvisionExterna",
+                naturaleza="I",
+                monto=Decimal(20),
+                fecha_contable=id_fecha,
+                actor=9,
+                movimiento=1,
+                ahora=datetime(2026, 11, 16, 10),
+            )
+        assert error.value.status_code == 409
+        assert isinstance(error.value.detail, dict)
+        assert error.value.detail.get("code") == "PERIODO_CONTABLE_NO_ABIERTO"
+        assert (
+            conn.scalar(text("SELECT COUNT(*) FROM Contabilidad.AsientoContable")) == 0
+        )
+
+
 def test_sql_caja_y_boveda_comparten_auxiliar_y_superiores(motor):
     ahora = datetime(2026, 11, 16, 10)
     with motor.begin() as conn:

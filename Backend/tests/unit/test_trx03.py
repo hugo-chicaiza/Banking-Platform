@@ -271,6 +271,18 @@ def test_trx03_reverso_atm(ctx: Contexto) -> None:
     assert "motivo=Solicitud" in ctx.eventos[-1].descripcion
 
 
+def test_trx03_proveedor_sin_asiento_revierte_y_no_marca_original(
+    ctx: Contexto,
+) -> None:
+    deps = preparar_reverso(ctx)
+    deps.contabilizar.return_value = None
+    respuesta = solicitar_reverso(ctx)
+    assert (respuesta.status_code, code(respuesta)) == (500, "ASIENTO_NO_GENERADO")
+    assert ctx.conn.begin.return_value.__exit__.call_args.args[0] is not None
+    assert ctx.llamadas["insertar_transaccion"]
+    assert not ctx.llamadas["marcar_reversada"]
+
+
 def test_trx03_reverso_de_ventanilla_mueve_caja(
     ctx: Contexto,
 ) -> None:

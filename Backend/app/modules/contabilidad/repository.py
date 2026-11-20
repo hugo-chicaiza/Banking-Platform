@@ -362,7 +362,7 @@ def periodo_boveda(conn: Connection, id_fecha: int) -> dict[str, Any] | None:
         FROM Contabilidad.FechaContable f
         LEFT JOIN Contabilidad.PeriodoContable p WITH (UPDLOCK, HOLDLOCK)
                ON p.Anio = f.Anio AND p.Mes = f.Mes
-        WHERE f.IdFechaContable = :id
+        WHERE f.IdFechaContable = :id AND f.EsDiaContable = 1
     """,
         {"id": id_fecha},
     )
