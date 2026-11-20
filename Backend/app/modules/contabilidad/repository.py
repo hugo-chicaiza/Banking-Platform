@@ -467,13 +467,13 @@ def obtener_plantilla(
 
 
 def obtener_lineas_plantilla(
-    conn: Connection, id_plantilla: int
+    conn: Connection, id_plantilla: int, *, para_detalle: bool = False
 ) -> list[dict[str, Any]]:
     filas = conn.execute(
         text(
             """
             SELECT d.IdCuentaContable, d.TipoMovimiento, d.ComponenteImporte, d.OrigenCuenta, d.CodigoRol,
-                   c.Estado, c.EsImputable, c.CodigoCuenta
+                   c.Estado, c.EsImputable, c.CodigoCuenta, c.NombreCuenta, d.Orden
             FROM Contabilidad.PlantillaAsientoDetalle AS d WITH (HOLDLOCK)
             LEFT JOIN Contabilidad.CuentasContables AS c
                 ON c.IdCuentaContable = d.IdCuentaContable
@@ -483,6 +483,18 @@ def obtener_lineas_plantilla(
         ),
         {"id": id_plantilla},
     ).mappings()
+    if not para_detalle:
+        # La huella de E0-08 conserva los campos originales.
+        filas = filas.columns(
+            "IdCuentaContable",
+            "TipoMovimiento",
+            "ComponenteImporte",
+            "OrigenCuenta",
+            "CodigoRol",
+            "Estado",
+            "EsImputable",
+            "CodigoCuenta",
+        )
     return [dict(fila) for fila in filas]
 
 

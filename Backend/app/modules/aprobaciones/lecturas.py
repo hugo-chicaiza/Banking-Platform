@@ -17,6 +17,7 @@ from app.modules.aprobaciones.contratos import (
     SolicitudResumen,
 )
 from app.modules.aprobaciones.identidad import Actor
+from app.modules.aprobaciones.registro import Operacion
 from app.modules.aprobaciones.repositorio import consulta, obtener
 from app.modules.aprobaciones.servicio import Servicio
 from app.modules.parametros import general
@@ -185,6 +186,36 @@ def notificaciones(servicio: Servicio, actor: Actor, agencia: str | None) -> dic
         ],
         "total": filas[0]["TotalFiltrado"] if filas else 0,
     }
+
+
+def solicitud_global_por_objetivo(
+    servicio: Servicio, actor: Actor, operacion: Operacion, id_objetivo: str
+) -> SolicitudResumen | None:
+    with servicio.seguridad.connect() as seg:
+        fila = (
+            seg.execute(
+                consulta("""
+                SELECT TOP (1) * FROM Seguridad.SolicitudAprobacion
+                WHERE IdOrganizacion=:org AND CodigoTransaccion=:codigo
+                  AND TipoObjetivo=:tipo AND IdObjetivo=:objetivo AND IdAgencia IS NULL
+                  AND (SolicitadoPor=:actor OR :puede_revisar=1)
+                ORDER BY IdSolicitud DESC
+            """),
+                {
+                    "org": actor.organizacion,
+                    "codigo": operacion.codigo,
+                    "tipo": operacion.tipo_objetivo,
+                    "objetivo": id_objetivo,
+                    "actor": actor.sujeto,
+                    "puede_revisar": int(
+                        operacion.permiso_aprobacion in actor.permisos
+                    ),
+                },
+            )
+            .mappings()
+            .first()
+        )
+    return resumen(servicio, actor, dict(fila)) if fila is not None else None
 
 
 def detalle(servicio: Servicio, actor: Actor, id_: int) -> SolicitudDetalle:
