@@ -26,12 +26,41 @@ def test_rechaza_cambio_de_naturaleza_con_lineas():
     assert revisar(filas, plan)[0]["codigoError"] == "NATURALEZA_EN_USO"
 
 
+def test_revision_distingue_cambios_y_rechaza_auxiliares():
+    filas = leer_csv(
+        "cuc.csv",
+        CABECERA
+        + b"1,Activo,,DEUDORA\n11,Fondos,1,DEUDORA\n1101,Nueva,11,DEUDORA\n"
+        + b"11010101,Auxiliar,110101,DEUDORA\n",
+    )
+    cuenta = {
+        "naturaleza": "DEUDORA",
+        "regulador": True,
+        "imputable": False,
+    }
+    plan = {
+        "1": {**cuenta, "nombre": "Activo", "padre": None},
+        "11": {**cuenta, "nombre": "Anterior", "padre": "1"},
+        "11010101": {**cuenta, "nombre": "Auxiliar", "padre": "110101"},
+    }
+    revision = revisar(filas, plan)
+    assert [fila["resultado"] for fila in revision] == [
+        "Igual",
+        "Cambiada",
+        "Nueva",
+        "Error",
+    ]
+    assert revision[-1]["codigoError"] == "CODIGO_INVALIDO"
+
+
 @pytest.mark.parametrize(
     "nombre,contenido",
     [
         ("cuc.exe", CABECERA),
         ("cuc.csv", b"mal\xff"),
         ("cuc.csv", CABECERA + b"a,b,c\n"),
+        ("cuc.csv", b"Naturaleza,CodigoCuenta,NombreCuenta,CodigoCuentaSuperior\n"),
+        ("cuc.csv", CABECERA),
     ],
 )
 def test_archivo_invalido(nombre, contenido):
