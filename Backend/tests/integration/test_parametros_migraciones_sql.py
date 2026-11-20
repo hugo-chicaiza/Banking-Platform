@@ -6,6 +6,10 @@ from uuid import uuid4
 
 import pyodbc
 import pytest
+from fastapi import HTTPException
+from sqlalchemy import create_engine
+
+from app.modules.contabilidad import importaciones
 
 pytestmark = pytest.mark.skipif(
     os.environ.get("E009_LOCAL_DDL") != "1", reason="DDL opt-in solo SQL Server local"
@@ -65,6 +69,44 @@ def test_migracion_y_semillas_repetibles(laboratorio):
         laboratorio.execute("SELECT COUNT(*) FROM Parametros.ParametroValor").fetchval()
         == 7
     )
+
+
+def test_importacion_respeta_limite_vigente_y_semilla_repetible(laboratorio):
+    laboratorio.execute(sql("202611172000_parametros_estructura.up.sql"))
+    semilla = sql("202611191500_importacion_limite_filas.up.sql")
+    laboratorio.execute(semilla)
+    base = laboratorio.execute("SELECT DB_NAME()").fetchval()
+    motor = create_engine(
+        "mssql+pyodbc://",
+        creator=lambda: pyodbc.connect(
+            "DRIVER={ODBC Driver 18 for SQL Server};SERVER=lpc:.;"
+            f"Trusted_Connection=yes;Encrypt=no;DATABASE={base}"
+        ),
+    )
+    try:
+        with motor.connect() as conn:
+            assert importaciones._limite_filas(conn) == 5000
+        laboratorio.execute("""
+            UPDATE v SET Valor='1' FROM Parametros.ParametroValor v
+            JOIN Parametros.Parametro p ON p.IdParametro=v.IdParametro
+            WHERE p.Clave='CON_IMPORTACION_MAX_FILAS'
+        """)
+        laboratorio.execute(semilla)
+        with motor.connect() as conn:
+            assert importaciones._limite_filas(conn) == 1
+            conn.rollback()
+            filas = importaciones.leer_csv(
+                "qa.csv",
+                b"CodigoCuenta,NombreCuenta,CodigoCuentaSuperior,Naturaleza\n"
+                b"1,Activo,,DEUDORA\n11,Fondos,1,DEUDORA\n",
+            )
+            with pytest.raises(HTTPException) as error:
+                importaciones.guardar_revision(conn, 101, "qa.csv", filas)
+            assert error.value.status_code == 422
+            assert isinstance(error.value.detail, dict)
+            assert error.value.detail.get("code") == "ARCHIVO_INVALIDO"
+    finally:
+        motor.dispose()
 
 
 def test_fallo_antes_commit_revierte_toda_estructura(laboratorio):

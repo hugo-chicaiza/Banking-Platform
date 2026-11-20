@@ -681,33 +681,3 @@ def test_plantilla_resuelve_en_cola_con_segunda_identidad(laboratorio, monkeypat
             (True, None, aprobador.id_interno),
             (False, None, None),
         ]
-
-
-def test_importacion_respeta_limite_vigente_y_semilla_repetible(laboratorio):
-    from app.modules.contabilidad import importaciones
-
-    _, _, engines, _, _ = laboratorio
-    script = (
-        Path(__file__).resolve().parents[2]
-        / "migrations/cooperativa/202611191500_importacion_limite_filas.up.sql"
-    ).read_text(encoding="utf8")
-    with engines["cooperativa"].begin() as conn:
-        conn.exec_driver_sql("""
-            DECLARE @base sysname = DB_NAME();
-            EXEC sys.sp_set_session_context N'migration_database', @base;
-        """)
-        conn.exec_driver_sql(script)
-        assert importaciones._limite_filas(conn) == 5000
-        conn.exec_driver_sql("""
-            UPDATE v SET Valor='1' FROM Parametros.ParametroValor v
-            JOIN Parametros.Parametro p ON p.IdParametro=v.IdParametro
-            WHERE p.Clave='CON_IMPORTACION_MAX_FILAS'
-        """)
-        conn.exec_driver_sql(script)
-        assert importaciones._limite_filas(conn) == 1
-    with (
-        engines["cooperativa"].connect() as conn,
-        pytest.raises(HTTPException) as error,
-    ):
-        importaciones.guardar_revision(conn, CREADOR.id_interno, "qa.csv", [{}, {}])
-    assert error.value.status_code == 422
