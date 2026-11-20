@@ -89,10 +89,67 @@ saldo ATM vienen del protocolo ATM y no especifican el contrato de caja.
 Transacciones debe designar el generador y confirmar canal, país, tipos de
 movimiento y registro y reverso de comisiones. Una vez resueltos esos
 contratos, puede consumir CAJA_DEPOSITO usando el ejemplo anterior.
-### Alcance pendiente de #434
+## Entrega y cumplimiento de #434
 
-Reutilizar el mismo motor. Conectar operaciones financieras solo cuando el
-modulo provea identificadores, matriz y transaccion de negocio. DOT_ATM es una
-semilla disponible, Bovedas usa un adaptador propio que ya comparte las rutinas
-SQL, y Credito requiere un flujo financiero definido. Ensayar por operacion la
-clave de reintento, el asiento y el rollback antes de cambiar los adaptadores.
+### Motor contable
+
+El motor interno está terminado y verificado para el contrato de registro y
+reverso implementado. `generar_asiento` y `reversar` se invocan como funciones
+internas sobre la conexión SQL del llamador.
+
+| Criterio de aceptación | Evidencia y alcance |
+|---|---|
+| Servicio interno sin endpoint | Verificado para el motor. Caja lo invoca y Bóveda usa su adaptador con las rutinas SQL compartidas. La adopción de ATM financiero, ventanilla y crédito sigue pendiente |
+| Asiento y operación en la misma transacción | Verificado en el motor y en las integraciones habilitadas de Caja y Bóveda. El laboratorio verifica rollback de negocio ante rechazo del procedimiento contable. Cada nuevo consumidor debe demostrar esta propiedad en su operación real |
+| Numeración y contabilización nativas | Verificadas con `usp_GenerarNumeroAsiento` y `usp_ContabilizarAsiento` en SQL Server local |
+| Débitos iguales a créditos, cuentas imputables y calendario | Verificado para el alta y el reverso contables. Se cubren descuadre, cuentas no imputables, día inhábil y período cerrado |
+| Pruebas por tipo de operación y casos negativos | Verificadas para el motor y las integraciones habilitadas. Las pruebas de plantilla y de prevalidación ATM acreditan esos componentes. Quedan pendientes las pruebas financieras de extremo a extremo de los tres consumidores bloqueados |
+
+### Integraciones existentes
+
+CAJ-07 y CAJ-15 llaman al motor con `DOT_CAJA` y `DEV_CAJA`. BOV-04 y
+BOV-06 contabilizan con la matriz `PlantillaBoveda` y las rutinas SQL
+compartidas. La matriz por agencia sigue siendo responsabilidad de
+Contabilidad en cada ambiente.
+
+### Integraciones pendientes y tareas para los módulos responsables
+
+| Módulo | Operaciones integradas | Operaciones pendientes y dependencias | Verificación local |
+|---|---|---|---|
+| Caja | CAJ-07 dotación y CAJ-15 devolución usan `DOT_CAJA` y `DEV_CAJA` en la misma transacción SQL del movimiento. La clave contable usa el ID del movimiento. La devolución es un movimiento propio con plantilla, y la integración conserva las validaciones de custodia y jornada | El motor admite el espejo contable. No se identificó un endpoint bancario habilitado para anular estas operaciones como reverso | Pruebas CAJ-07 y CAJ-15, E4-01 y laboratorio combinado Caja/Bóveda |
+| Ventanilla y TRX-03 | CAJ-09 depósito, CAJ-11 retiro y TRX-03 reverso tienen adaptadores y límites transaccionales existentes. Ventanilla verifica `RegistroUnico`; TRX-03 verifica el estado y la existencia del reverso. Las rutas conservan su protección por bandera y proveedor | El proveedor de dinero sigue sin configuración. Para depósito existe `CAJA_DEPOSITO`. Transacciones y Contabilidad deben confirmar numeración, canal, país, códigos de caja, comisiones y reversos, auxiliar CAPITAL por subproducto y matriz para retiro | Suites de rutas con proveedores simulados, rechazo de un asiento ausente y ensayo de `CAJA_DEPOSITO` con cuenta de prueba |
+| ATM | Consulta de saldo, sesión y cambio de PIN no contabilizan dinero. Retiro ATM-03, transferencia ATM-05 y reverso ATM-08 tienen prevalidaciones y permanecen deshabilitados para escritura financiera. En el router actual no se encontró una ruta de depósito ATM | `DOT_ATM` está sembrada para custodia; no hay productor de dotación conectado. Para los flujos financieros faltan la matriz por operación y subproducto, idempotencia de la confirmación, comisiones, reglas de efectivo y dispensación y el enlace del reverso con su operación y asiento original | Pasaron los laboratorios locales de preparación, duplicados y bloqueos de ATM-03/05/08. ATM-02 quedó bloqueado por el esquema local de Cambio PIN y la ubicación de su captura de esquema. La plantilla `DOT_ATM` se prueba en E4-01 por separado |
+| Bóveda | La ejecución autorizada BOV-04 cubre provisión, envío de excedente y traslado. BOV-06 registra ajustes de arqueo aprobados. El adaptador usa `PlantillaBoveda` por agencia, tipo y naturaleza y comparte numeración, contabilización y actualización de saldos con E4-01. Inventario, movimientos y asiento comparten transacción. Las solicitudes y la aprobación del arqueo protegen contra duplicados | Contabilidad debe confirmar la matriz por agencia en el ambiente de destino. No se identificó un reverso financiero BOV dedicado | Laboratorio SQL de concurrencia, reintentos, rollback, arqueos, traslados y conciliación con Caja |
+| Crédito | Condiciones, solicitudes y simulación de amortización no generan asientos | Faltan flujos financieros de desembolso, cobro y reverso, más una matriz aprobada por producto/subproducto para principal, interés, mora, impuestos y comisiones según corresponda. Crédito debe proveer la transacción de negocio y sus claves de reintento | Pruebas de Crédito para condiciones y simulación. Sin integración financiera que ejecutar |
+
+El ensayo E4-01 comprueba período cerrado, reverso con auxiliar no imputable,
+espejo válido, idempotencia concurrente y rollback cuando el procedimiento
+nativo rechaza un descuadre después de escribir la cabecera y una línea.
+Ventanilla y TRX-03 abortan la transacción si el proveedor contable no devuelve
+un ID de asiento válido. Bóveda rechaza días no contables antes de numerar.
+
+Registrar en las issues de cada módulo las siguientes tareas:
+
+- **Ventanilla y Transacciones.** Proveer el adaptador financiero de CAJ-09,
+  CAJ-11 y TRX-03 con sus identificadores y reglas de comisión. Contabilidad
+  debe confirmar la matriz de retiro y reverso y los auxiliares por
+  subproducto para el depósito. Compartir la conexión del movimiento,
+  efectivo, comisión y asiento. Probar depósito, retiro y reverso reales,
+  duplicados y rollback ante fallo contable.
+- **ATM.** Implementar la operación de dotación que consume `DOT_ATM` y las
+  confirmaciones financieras de retiro, transferencia y reverso. El equipo
+  debe definir dispensación, conciliación, matriz, comisiones y cuentas por
+  subproducto con Contabilidad. Mantener la mutación SQL y el asiento en una
+  transacción, con control idempotente de la confirmación y vínculo al
+  original en reversos. Probar confirmación, repetición, reverso y compensación
+  ante fallo o dispensación incierta en el entorno del canal.
+- **Crédito.** Proveer desembolso, cobro y reverso. Acordar con Contabilidad
+  la matriz y cuentas por producto o subproducto para principal, intereses,
+  mora y cargos aplicables. Usar la transacción de negocio para registrar
+  asiento y movimientos del crédito y definir claves estables de reintento.
+  Probar desembolsos y pagos reales, sus reversos, duplicados y rollback.
+
+**Decisión de cierre.** Con los criterios actuales, #434 sigue abierto.
+Podría cerrarse como entrega del motor únicamente si los responsables
+acuerdan explícitamente el reparto de alcance y registran las integraciones
+pendientes en sus issues, con responsables y evidencia de aceptación propia.

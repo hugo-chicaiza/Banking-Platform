@@ -173,6 +173,16 @@ def test_caj09_falla_del_asiento_revierte_todo(ctx: Contexto) -> None:
     assert not ctx.llamadas["insertar_movimiento_caja"]
 
 
+def test_caj09_proveedor_sin_asiento_revierte_ventanilla(ctx: Contexto) -> None:
+    deps = preparar_ventanilla(ctx)
+    deps.contabilizar = lambda conn, datos: None  # type: ignore[method-assign, assignment]
+    respuesta = ctx.cliente.post(f"{BASE}/jornadas/55/depositos", json=CUERPO_DEPOSITO)
+    assert (respuesta.status_code, code(respuesta)) == (500, "ASIENTO_NO_GENERADO")
+    assert ctx.conn.begin.return_value.__exit__.call_args.args[0] is not None
+    assert ctx.llamadas["insertar_transaccion"]
+    assert not ctx.llamadas["insertar_movimiento_caja"]
+
+
 @pytest.mark.parametrize(
     "cambio",
     [

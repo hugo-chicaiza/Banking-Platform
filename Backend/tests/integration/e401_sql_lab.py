@@ -8,12 +8,15 @@ from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
 from unittest.mock import patch
+from uuid import uuid4
 
 from fastapi import HTTPException
 from sqlalchemy import create_engine, text
+from sqlalchemy.exc import DBAPIError
 
 from app.modules.contabilidad import repository
 from app.modules.contabilidad.asientos import (
+    ErrorContable,
     OperacionContable,
     generar_asiento,
     reversar,
@@ -138,6 +141,25 @@ def probar(database: str, laboratorio: Path) -> None:
             "app.modules.contabilidad.service.resolver_id_fecha_contable",
             return_value=9998,
         ):
+            conn.execute(
+                text("""
+                UPDATE Contabilidad.CuentasContables SET EsImputable=0
+                WHERE CodigoCuenta='11010510'
+            """)
+            )
+            try:
+                reversar(conn, id_asiento, "Prueba no imputable", actor=102)
+            except HTTPException as error:
+                assert isinstance(error.detail, dict)
+                assert error.detail.get("code") == "CUENTA_CONTABLE_NO_HABILITADA"
+            else:
+                raise AssertionError("El reverso admitió una cuenta no imputable.")
+            conn.execute(
+                text("""
+                UPDATE Contabilidad.CuentasContables SET EsImputable=1
+                WHERE CodigoCuenta='11010510'
+            """)
+            )
             espejo = reversar(conn, id_asiento, "Prueba local", actor=102)
         cabecera = repository.obtener_asiento(conn, espejo)
         assert cabecera is not None
@@ -195,6 +217,23 @@ def probar(database: str, laboratorio: Path) -> None:
     with engine.connect() as conn:
         assert repository.obtener_asiento(conn, id_asiento) is None
 
+    with engine.connect() as conn, conn.begin() as tx:
+        conn.execute(
+            text("""
+            UPDATE Contabilidad.PeriodoContable SET Estado='CERRADO'
+            WHERE Anio=2026 AND Mes=10
+        """)
+        )
+        clave = "E401_SQL_PERIODO_CERRADO"
+        try:
+            generar_asiento(conn, replace(operacion, clave_evento=clave))
+        except ErrorContable as error:
+            assert "período abierto" in str(error)
+        else:
+            raise AssertionError("El motor aceptó un período cerrado.")
+        assert repository.buscar_asiento_evento(conn, clave) is None
+        tx.rollback()
+
     with engine.connect() as conn:
         conn.execute(text("CREATE TABLE #E401_Negocio (Id int PRIMARY KEY)"))
         conn.commit()
@@ -217,12 +256,35 @@ def probar(database: str, laboratorio: Path) -> None:
         assert (
             conn.execute(text("SELECT COUNT(*) FROM #E401_Negocio")).scalar_one() == 0
         )
+        conn.commit()
+
+        insertar = repository.insertar_lineas_asiento
+        clave = "E401_SQL_FALLO_CONTABILIZACION"
+        try:
+            with (
+                conn.begin(),
+                patch.object(
+                    repository,
+                    "insertar_lineas_asiento",
+                    side_effect=lambda conexion, lineas: insertar(conexion, lineas[:1]),
+                ),
+            ):
+                conn.execute(text("INSERT #E401_Negocio VALUES (2)"))
+                generar_asiento(conn, replace(operacion, clave_evento=clave))
+        except DBAPIError as error:
+            assert "(51403)" in str(error.orig)
+        else:
+            raise AssertionError("El procedimiento aceptó un asiento descuadrado.")
+        assert conn.scalar(text("SELECT COUNT(*) FROM #E401_Negocio")) == 0
+        assert repository.buscar_asiento_evento(conn, clave) is None
+
+    evento_concurrente = replace(
+        operacion, clave_evento=f"E401_SQL_CONCURRENTE_{uuid4().hex}"
+    )
 
     def registrar(_):
         with engine.begin() as conn:
-            return generar_asiento(
-                conn, replace(operacion, clave_evento="E401_SQL_CONCURRENTE")
-            )
+            return generar_asiento(conn, evento_concurrente)
 
     with ThreadPoolExecutor(max_workers=2) as ejecutores:
         ids = list(ejecutores.map(registrar, range(2)))

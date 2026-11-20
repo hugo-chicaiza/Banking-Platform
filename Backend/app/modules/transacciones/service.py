@@ -28,6 +28,7 @@ from app.modules.transacciones import repository as repo
 from app.modules.transacciones.dependencias import (
     DatosAsiento,
     DependenciasOperacion,
+    contabilizar_operacion,
 )
 from app.modules.transacciones.repository import Fila
 from app.modules.transacciones.schemas import PageTransaccion, Transaccion
@@ -428,8 +429,9 @@ def reversar(
                 id_reverso,
             )
 
-            id_asiento = deps.contabilizar(
+            id_asiento = contabilizar_operacion(
                 conn,
+                deps,
                 DatosAsiento(
                     id_transaccion=id_reverso,
                     tipo_transaccion=original["TipoTransaccion"],
