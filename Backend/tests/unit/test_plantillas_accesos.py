@@ -16,6 +16,8 @@ from tests.sesion import simular_sesion, usuario_con_roles
 CONSULTA = "contabilidad.plantillas.consultar"
 EDICION = "contabilidad.plantillas.editar"
 LISTADO = "/api/v1/contabilidad/tipos-asiento/1/plantillas"
+GLOBAL = "/api/v1/contabilidad/plantillas"
+CATALOGOS = f"{GLOBAL}/catalogos"
 DETALLE = "/api/v1/contabilidad/plantillas/1"
 SIMULACION = "/api/v1/contabilidad/plantillas/simulaciones"
 
@@ -42,6 +44,8 @@ def test_cuatro_roles_consultan_sin_permiso_workos_equivalente(entorno, rol):
     with TestClient(app) as cliente:
         assert cliente.get(LISTADO).status_code == 200
         assert cliente.get(DETALLE).status_code == 200
+        assert cliente.get(GLOBAL).status_code == 200
+        assert cliente.get(CATALOGOS).status_code == 200
 
 
 @pytest.mark.parametrize("rol", ["ADMIN", "SUPERVISOR", "AUDITOR"])
@@ -70,6 +74,9 @@ def test_retirar_y_restaurar_consulta_bloquea_api_incluso_con_permiso_remoto(ent
         ajustes[CONSULTA, "SUPERVISOR"] = False
         assert cliente.get(LISTADO).status_code == 403
         assert cliente.get(DETALLE).status_code == 403
+        assert cliente.get(GLOBAL).status_code == 403
+        assert cliente.get(CATALOGOS).status_code == 403
+        assert cliente.get(f"{DETALLE}/solicitudes").status_code == 403
         ajustes[CONSULTA, "SUPERVISOR"] = True
         assert cliente.get(LISTADO).status_code == 200
 
@@ -113,5 +120,39 @@ def test_control_apagado_conserva_permiso_workos_anterior(entorno, monkeypatch):
 def test_catalogo_no_amplia_edicion_o_incluye_aprobacion():
     assert POR_ID[EDICION].roles_iniciales == ("CONTADOR",)
     assert POR_ID[EDICION].dependencias == (CONSULTA,)
-    assert len(POR_ID[EDICION].operaciones) == 2
+    assert len(POR_ID[EDICION].operaciones) == 3
     assert all("aprobacion" not in ruta for _, ruta in POR_ID[EDICION].operaciones)
+
+
+def test_filtros_validados_y_enviados_a_sql(entorno):
+    _, conn = entorno
+    simular_sesion(app, usuario_con_roles("CONTADOR"))
+    with TestClient(app) as cliente:
+        respuesta = cliente.get(
+            GLOBAL,
+            params={
+                "q": "caja",
+                "codigo": "DOT_CAJA",
+                "estado": 0,
+                "origen": "CAJA",
+                "idTipoAsiento": 7,
+            },
+        )
+        assert respuesta.status_code == 200
+        assert conn.execute.call_args.args[1] == {
+            "q": "caja",
+            "codigo": "DOT_CAJA",
+            "estado": 0,
+            "origen": "CAJA",
+            "id": 7,
+        }
+        conn.reset_mock()
+        for url in (
+            f"{GLOBAL}?estado=2",
+            f"{GLOBAL}?idTipoAsiento=0",
+            f"{GLOBAL}/{2**31}",
+        ):
+            respuesta = cliente.get(url)
+            assert respuesta.status_code == 400
+            assert respuesta.json()["code"] == "DATOS_INVALIDOS"
+        conn.execute.assert_not_called()

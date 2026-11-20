@@ -59,6 +59,39 @@ def probar(database: str) -> None:
             ],
         )
         nueva = plantillas.crear(conn, 1001, datos, 101)["idPlantillaAsiento"]
+        with conn.begin():
+            historial = plantillas.listar_global(
+                conn, q="ensayo", codigo="DOT_CAJA", estado=0, id_tipo=1001
+            )
+            assert historial[0]["IdPlantillaAsiento"] == nueva
+            assert historial[0]["CodigoConcepto"] and historial[0]["NombreTipoAsiento"]
+            assert all(f["CodigoPlantilla"] == "DOT_CAJA" for f in historial)
+            assert plantillas.listar_global(conn, q="%", codigo="DOT_CAJA") == []
+            assert (
+                plantillas.listar_global(conn, codigo="DOT_CAJA", origen="ORIGEN_QA")
+                == []
+            )
+            detalle = plantillas.detalle(conn, nueva)
+            assert any(
+                f["IdPlantillaAsiento"] == nueva
+                for f in plantillas.listar_global(conn, origen=detalle["Origen"])
+            )
+            assert detalle["VigenciaDesde"] == futuro
+            assert [f["CodigoCuenta"] for f in detalle["lineas"]] == [
+                c for _, c in lados
+            ]
+            assert all(f["NombreCuenta"] for f in detalle["lineas"])
+            assert [f["Orden"] for f in detalle["lineas"]] == [1, 2]
+            assert (
+                "NombreCuenta"
+                not in repository.obtener_lineas_plantilla(conn, nueva)[0]
+            )
+            catalogos = plantillas.catalogos(conn)
+            assert any(f["IdTipoAsiento"] == 1001 for f in catalogos["tiposAsiento"])
+            assert any(
+                f["IdConceptoContable"] == detalle["IdConceptoContable"]
+                for f in catalogos["conceptosContables"]
+            )
         try:
             with conn.begin():
                 plantillas.confirmar_aprobacion(conn, nueva, 101, hoy)
