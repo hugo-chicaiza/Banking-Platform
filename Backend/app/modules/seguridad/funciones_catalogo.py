@@ -361,6 +361,7 @@ FUNCIONES = (
                 "/subproductos/{id_sub_producto}/restricciones",
                 "/subproductos/{id_sub}/vigencias",
                 "/subproductos/{id_sub}/numeracion",
+                "/subproductos/{id_sub}/activacion",
                 "/subproductos/{id_sub}/condiciones",
             )
         ),
@@ -583,6 +584,28 @@ FUNCIONES = (
         ),
         "/contabilidad/plantillas",
         ("contabilidad.plantillas.consultar",),
+    ),
+    _f(
+        "contabilidad.cuentas_producto.consultar",
+        "Consultar cuentas contables de los productos",
+        "Contabilidad",
+        PERMISOS["prd-consultar"],
+        (
+            ("GET", B + "/cuentas-producto/clases"),
+            ("GET", B + "/cuentas-producto/tipos/{id_tipo}"),
+            ("GET", B + "/cuentas-producto/subproductos/{id_sub}"),
+        ),
+        "/contabilidad/cuentas-producto",
+    ),
+    _f(
+        "contabilidad.cuentas_producto.editar",
+        "Solicitar asignaciones de cuentas a productos",
+        "Contabilidad",
+        PERMISOS["con-cuenta-editar"],
+        (("PUT", B + "/cuentas-producto/tipos/{id_tipo}"),),
+        "/contabilidad/cuentas-producto",
+        ("contabilidad.cuentas_producto.consultar",),
+        delegable=False,
     ),
     _f(
         "contabilidad.asientos.consultar",

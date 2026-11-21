@@ -23,8 +23,8 @@ from app.core.security.operador import auditar, exigir_id_interno
 from app.modules.catalogos import repository as catalogos_repo
 from app.modules.catalogos import service as catalogos_service
 from app.modules.catalogos.subproductos import PREFIJO_TIPO_TARJETA, tipo_tarjeta_de
+from app.modules.productos import activacion, vinculos
 from app.modules.productos import repository as repo
-from app.modules.productos import vinculos
 from app.modules.productos.schemas import (
     ComisionFicha,
     CondicionesFicha,
@@ -248,6 +248,7 @@ def actualizar_producto(
                 raise problema(404, "PRODUCTO_NO_ENCONTRADO", "El producto no existe.")
             cambios = {c: getattr(datos, c) for c in campos}
             _sincronizar_estado(actual, cambios)
+            _reglas_de_estado(conn, actual, cambios, id_producto=id_producto)
             if set(cambios) - {"estado", "estado_catalogo"} and (
                 actual.get("estado_catalogo", "Borrador") != "Borrador"
                 or str(actual["estado"]).strip() == "A"
@@ -383,6 +384,7 @@ def actualizar_subproducto(
                 )
             cambios = {c: getattr(datos, c) for c in campos}
             _sincronizar_estado(actual, cambios)
+            _reglas_de_estado(conn, actual, cambios, id_sub=id_sub)
             if (
                 set(cambios) - {"estado", "estado_catalogo"}
                 and actual.get("estado_catalogo", "Borrador") != "Borrador"
@@ -563,6 +565,23 @@ def guardar_restricciones(
 
 def listar_tipos(conn: Connection) -> list[TipoProductoInfo]:
     return [TipoProductoInfo.model_validate(t) for t in repo.listar_tipos(conn)]
+
+
+def _reglas_de_estado(
+    conn: Connection,
+    actual: dict[str, Any],
+    cambios: dict[str, Any],
+    id_sub: int | None = None,
+    id_producto: int | None = None,
+) -> None:
+    """E3-06: activar exige la lista completa; retirar, que no queden cuentas abiertas."""
+    nuevo = cambios.get("estado_catalogo")
+    if nuevo is None or nuevo == actual.get("estado_catalogo"):
+        return
+    if nuevo == "Activo" and id_sub is not None:
+        activacion.exigir_activacion(conn, id_sub)
+    if nuevo == "Retirado":
+        activacion.exigir_retiro(conn, id_sub=id_sub, id_producto=id_producto)
 
 
 def _sincronizar_estado(actual: dict[str, Any], cambios: dict[str, Any]) -> None:

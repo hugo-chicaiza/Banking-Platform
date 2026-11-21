@@ -32,11 +32,13 @@ class ErrorContable(ValueError):
 
 
 def _auxiliar_imputable(cuenta: dict[str, Any] | None) -> bool:
+    # E3-05 (D-17): se registra en la cuenta del último nivel de su rama, tenga 4, 6 u 8
+    # dígitos (CUC sec. 7). Imputable implica sin hijas (trg_CuentasContables_PadreNoImputable).
     return bool(
         cuenta
         and cuenta["Estado"]
         and cuenta["EsImputable"]
-        and len(cuenta.get("CodigoCuenta", "00000000")) == 8
+        and not cuenta.get("TieneHijas")
     )
 
 

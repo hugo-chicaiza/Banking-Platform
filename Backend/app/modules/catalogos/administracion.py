@@ -145,6 +145,29 @@ CATALOGOS: dict[str, Catalogo] = {
                 Campo("tipoComision", "Tipo"),
                 Campo("tipoCalculo", "Cálculo"),
                 Campo("valor", "Valor", "numero", minimo=0),
+                # E3-05: la categoría del servicio (norma de servicios financieros) fija
+                # la cuenta de ingreso; el máximo es el cargo autorizado por la Junta.
+                Campo(
+                    "categoria",
+                    "Categoría del servicio",
+                    "opcion",
+                    editable=True,
+                    opciones=(
+                        "BASICO",
+                        "CARGO_MAXIMO",
+                        "DIFERENCIADO",
+                        "ENTRE_ENTIDADES",
+                    ),
+                ),
+                Campo(
+                    "valorMaximo",
+                    "Cargo máximo autorizado",
+                    "numero",
+                    editable=True,
+                    nulo=True,
+                    minimo=0,
+                ),
+                Campo("cuentaIngreso", "Cuenta de ingreso"),
                 Campo("nombreCanal", "Canal"),
                 Campo("descripcion", "Descripción", editable=True, maximo=250),
                 Campo("vigenciaDesde", "Vigente desde", "fecha"),
@@ -154,16 +177,21 @@ CATALOGOS: dict[str, Catalogo] = {
                 SELECT CAST(c.IdComision AS varchar(10)) AS id, c.Estado AS estado,
                        c.CodigoComision AS codigo, c.TipoComision AS tipoComision,
                        c.TipoCalculo AS tipoCalculo, v.Valor AS valor,
+                       c.Categoria AS categoria, c.ValorMaximo AS valorMaximo,
+                       cc.CodigoCuenta AS cuentaIngreso,
                        ca.NombreCanal AS nombreCanal, c.Descripcion AS descripcion,
                        v.VigenciaDesde AS vigenciaDesde, v.VigenciaHasta AS vigenciaHasta
                 FROM Transacciones.Comisiones AS c
                 JOIN Transacciones.vw_ComisionValorPresentacion AS v ON v.IdComision = c.IdComision
                 JOIN Canal.Canal AS ca ON ca.IdCanal = c.IdCanal
+                LEFT JOIN Contabilidad.CuentasContables AS cc ON cc.IdCuentaContable = c.IdCuentaContableIngreso
                 ORDER BY c.TipoComision, c.CodigoComision
             """,
             actualizar="""
                 UPDATE Transacciones.Comisiones SET
                     Descripcion = CASE WHEN :c_descripcion = 1 THEN :descripcion ELSE Descripcion END,
+                    Categoria = CASE WHEN :c_categoria = 1 THEN :categoria ELSE Categoria END,
+                    ValorMaximo = CASE WHEN :c_valorMaximo = 1 THEN :valorMaximo ELSE ValorMaximo END,
                     Estado = CASE WHEN :c_estado = 1 THEN :estado ELSE Estado END
                 WHERE IdComision = TRY_CAST(:id AS int)
             """,
@@ -812,6 +840,15 @@ _ALTA_BAJA: dict[str, AltaBaja] = {
             Campo("tipoCalculo", "Cálculo", "opcion", opciones=("Fijo", "Porcentaje")),
             Campo("valor", "Valor (USD o %)", "numero", minimo=0),
             Campo(
+                "categoria",
+                "Categoría del servicio",
+                "opcion",
+                opciones=("BASICO", "CARGO_MAXIMO", "DIFERENCIADO", "ENTRE_ENTIDADES"),
+            ),
+            Campo(
+                "valorMaximo", "Cargo máximo autorizado", "numero", nulo=True, minimo=0
+            ),
+            Campo(
                 "montoMinimo", "Cobro mínimo (solo %)", "dinero", nulo=True, minimo=0
             ),
             Campo(
@@ -826,10 +863,11 @@ _ALTA_BAJA: dict[str, AltaBaja] = {
             SET NOCOUNT ON;
             DECLARE @Ids TABLE (IdComision varchar(10));
             INSERT INTO Transacciones.Comisiones (CodigoComision, TipoComision, TipoCalculo,
-                Valor, MontoMinimo, MontoMaximo, IdCanal, Descripcion, VigenciaDesde)
+                Valor, MontoMinimo, MontoMaximo, IdCanal, Descripcion, VigenciaDesde,
+                Categoria, ValorMaximo)
             OUTPUT CAST(inserted.IdComision AS varchar(10)) INTO @Ids
             SELECT :codigo, :tipoComision, :tipoCalculo, :valor, :montoMinimo, :montoMaximo,
-                   c.IdCanal, :descripcion, :vigenciaDesde
+                   c.IdCanal, :descripcion, :vigenciaDesde, :categoria, :valorMaximo
             FROM Canal.Canal AS c
             WHERE c.CodigoCanal = :codigoCanal AND c.Estado = 'A';
             SELECT IdComision FROM @Ids;

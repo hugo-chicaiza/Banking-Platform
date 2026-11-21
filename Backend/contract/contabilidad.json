@@ -81,6 +81,353 @@
         "title": "Asiento",
         "type": "object"
       },
+      "Asignacion": {
+        "properties": {
+          "codigoCuenta": {
+            "title": "Codigocuenta",
+            "type": "string"
+          },
+          "codigoProducto": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Codigoproducto"
+          },
+          "codigoSubProducto": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Codigosubproducto"
+          },
+          "idClase": {
+            "title": "Idclase",
+            "type": "integer"
+          },
+          "idCuentaContable": {
+            "title": "Idcuentacontable",
+            "type": "integer"
+          },
+          "idCuentaProducto": {
+            "title": "Idcuentaproducto",
+            "type": "integer"
+          },
+          "idProducto": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Idproducto"
+          },
+          "idSolicitud": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Idsolicitud"
+          },
+          "idSubProducto": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Idsubproducto"
+          },
+          "nombreCuenta": {
+            "title": "Nombrecuenta",
+            "type": "string"
+          },
+          "vigenciaDesde": {
+            "format": "date",
+            "title": "Vigenciadesde",
+            "type": "string"
+          },
+          "vigenciaHasta": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Vigenciahasta"
+          }
+        },
+        "required": [
+          "idCuentaProducto",
+          "idClase",
+          "idProducto",
+          "codigoProducto",
+          "idSubProducto",
+          "codigoSubProducto",
+          "idCuentaContable",
+          "codigoCuenta",
+          "nombreCuenta",
+          "vigenciaDesde",
+          "vigenciaHasta",
+          "idSolicitud"
+        ],
+        "title": "Asignacion",
+        "type": "object"
+      },
+      "AsignacionesVista": {
+        "properties": {
+          "asignaciones": {
+            "items": {
+              "$ref": "#/components/schemas/Asignacion"
+            },
+            "title": "Asignaciones",
+            "type": "array"
+          },
+          "productos": {
+            "items": {
+              "$ref": "#/components/schemas/ProductoDelTipo"
+            },
+            "title": "Productos",
+            "type": "array"
+          },
+          "solicitudPendiente": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Solicitudpendiente"
+          },
+          "subproductos": {
+            "items": {
+              "$ref": "#/components/schemas/SubproductoDelTipo"
+            },
+            "title": "Subproductos",
+            "type": "array"
+          }
+        },
+        "required": [
+          "asignaciones",
+          "productos",
+          "subproductos",
+          "solicitudPendiente"
+        ],
+        "title": "AsignacionesVista",
+        "type": "object"
+      },
+      "Cambio": {
+        "additionalProperties": false,
+        "description": "Una asignación nueva (o el fin de una excepción si idCuentaContable es null).",
+        "properties": {
+          "idClase": {
+            "exclusiveMinimum": 0.0,
+            "maximum": 2147483647.0,
+            "title": "Idclase",
+            "type": "integer"
+          },
+          "idCuentaContable": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "maximum": 2147483647.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Idcuentacontable"
+          },
+          "idProducto": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "maximum": 2147483647.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Idproducto"
+          },
+          "idSubProducto": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "maximum": 2147483647.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Idsubproducto"
+          },
+          "vigenciaDesde": {
+            "format": "date",
+            "title": "Vigenciadesde",
+            "type": "string"
+          }
+        },
+        "required": [
+          "idClase",
+          "vigenciaDesde"
+        ],
+        "title": "Cambio",
+        "type": "object"
+      },
+      "Clase": {
+        "properties": {
+          "codigoRol": {
+            "title": "Codigorol",
+            "type": "string"
+          },
+          "codigoTipoCredito": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Codigotipocredito"
+          },
+          "codigoTipoProducto": {
+            "title": "Codigotipoproducto",
+            "type": "string"
+          },
+          "condicion": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Condicion"
+          },
+          "cuentaBase": {
+            "title": "Cuentabase",
+            "type": "string"
+          },
+          "idClase": {
+            "title": "Idclase",
+            "type": "integer"
+          },
+          "idTipoCredito": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Idtipocredito"
+          },
+          "idTipoProducto": {
+            "title": "Idtipoproducto",
+            "type": "integer"
+          },
+          "nivel": {
+            "enum": [
+              "TIPO",
+              "PRODUCTO"
+            ],
+            "title": "Nivel",
+            "type": "string"
+          },
+          "nombreCuentaBase": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nombrecuentabase"
+          },
+          "nombreRol": {
+            "title": "Nombrerol",
+            "type": "string"
+          },
+          "obligatorio": {
+            "title": "Obligatorio",
+            "type": "boolean"
+          },
+          "situacion": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Situacion"
+          },
+          "soloConTasa": {
+            "title": "Solocontasa",
+            "type": "boolean"
+          },
+          "tramo": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tramo"
+          }
+        },
+        "required": [
+          "idClase",
+          "idTipoProducto",
+          "codigoTipoProducto",
+          "idTipoCredito",
+          "codigoTipoCredito",
+          "codigoRol",
+          "nombreRol",
+          "situacion",
+          "condicion",
+          "tramo",
+          "cuentaBase",
+          "nombreCuentaBase",
+          "nivel",
+          "obligatorio",
+          "soloConTasa"
+        ],
+        "title": "Clase",
+        "type": "object"
+      },
       "CuentaContable": {
         "description": "Una cuenta del plan de cuentas (Contabilidad.CuentasContables).",
         "properties": {
@@ -484,6 +831,203 @@
         "title": "Plan",
         "type": "object"
       },
+      "ProductoDelTipo": {
+        "properties": {
+          "codigoProducto": {
+            "title": "Codigoproducto",
+            "type": "string"
+          },
+          "idProducto": {
+            "title": "Idproducto",
+            "type": "integer"
+          },
+          "idTipoCredito": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Idtipocredito"
+          },
+          "nombreProducto": {
+            "title": "Nombreproducto",
+            "type": "string"
+          }
+        },
+        "required": [
+          "idProducto",
+          "codigoProducto",
+          "nombreProducto",
+          "idTipoCredito"
+        ],
+        "title": "ProductoDelTipo",
+        "type": "object"
+      },
+      "Resuelta": {
+        "properties": {
+          "codigoRol": {
+            "title": "Codigorol",
+            "type": "string"
+          },
+          "codigoTipoCredito": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Codigotipocredito"
+          },
+          "codigoTipoProducto": {
+            "title": "Codigotipoproducto",
+            "type": "string"
+          },
+          "condicion": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Condicion"
+          },
+          "cuenta": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Asignacion"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "cuentaBase": {
+            "title": "Cuentabase",
+            "type": "string"
+          },
+          "idClase": {
+            "title": "Idclase",
+            "type": "integer"
+          },
+          "idTipoCredito": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Idtipocredito"
+          },
+          "idTipoProducto": {
+            "title": "Idtipoproducto",
+            "type": "integer"
+          },
+          "nivel": {
+            "enum": [
+              "TIPO",
+              "PRODUCTO"
+            ],
+            "title": "Nivel",
+            "type": "string"
+          },
+          "nombreCuentaBase": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nombrecuentabase"
+          },
+          "nombreRol": {
+            "title": "Nombrerol",
+            "type": "string"
+          },
+          "obligatorio": {
+            "title": "Obligatorio",
+            "type": "boolean"
+          },
+          "origen": {
+            "anyOf": [
+              {
+                "enum": [
+                  "TIPO",
+                  "PRODUCTO",
+                  "SUBPRODUCTO"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Origen"
+          },
+          "requerido": {
+            "title": "Requerido",
+            "type": "boolean"
+          },
+          "situacion": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Situacion"
+          },
+          "soloConTasa": {
+            "title": "Solocontasa",
+            "type": "boolean"
+          },
+          "tramo": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tramo"
+          }
+        },
+        "required": [
+          "idClase",
+          "idTipoProducto",
+          "codigoTipoProducto",
+          "idTipoCredito",
+          "codigoTipoCredito",
+          "codigoRol",
+          "nombreRol",
+          "situacion",
+          "condicion",
+          "tramo",
+          "cuentaBase",
+          "nombreCuentaBase",
+          "nivel",
+          "obligatorio",
+          "soloConTasa",
+          "requerido",
+          "origen",
+          "cuenta"
+        ],
+        "title": "Resuelta",
+        "type": "object"
+      },
       "Simulacion-Input": {
         "additionalProperties": false,
         "properties": {
@@ -542,6 +1086,143 @@
           "montos"
         ],
         "title": "Simulacion",
+        "type": "object"
+      },
+      "Solicitud": {
+        "additionalProperties": false,
+        "properties": {
+          "cambios": {
+            "items": {
+              "$ref": "#/components/schemas/Cambio"
+            },
+            "maxItems": 200,
+            "minItems": 1,
+            "title": "Cambios",
+            "type": "array"
+          }
+        },
+        "required": [
+          "cambios"
+        ],
+        "title": "Solicitud",
+        "type": "object"
+      },
+      "SolicitudAceptada": {
+        "properties": {
+          "estado": {
+            "const": "Pendiente",
+            "default": "Pendiente",
+            "title": "Estado",
+            "type": "string"
+          },
+          "idSolicitud": {
+            "exclusiveMinimum": 0.0,
+            "maximum": 9.223372036854776e+18,
+            "title": "Idsolicitud",
+            "type": "integer"
+          },
+          "requiereAprobacion": {
+            "const": true,
+            "default": true,
+            "title": "Requiereaprobacion",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "idSolicitud"
+        ],
+        "title": "SolicitudAceptada",
+        "type": "object"
+      },
+      "SubproductoCuentas": {
+        "properties": {
+          "aviso": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Aviso"
+          },
+          "codigoSubProducto": {
+            "title": "Codigosubproducto",
+            "type": "string"
+          },
+          "faltantes": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Faltantes",
+            "type": "array"
+          },
+          "idSubProducto": {
+            "title": "Idsubproducto",
+            "type": "integer"
+          },
+          "idTipoProducto": {
+            "title": "Idtipoproducto",
+            "type": "integer"
+          },
+          "roles": {
+            "items": {
+              "$ref": "#/components/schemas/Resuelta"
+            },
+            "title": "Roles",
+            "type": "array"
+          },
+          "tipoTarjeta": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tipotarjeta"
+          }
+        },
+        "required": [
+          "idSubProducto",
+          "codigoSubProducto",
+          "idTipoProducto",
+          "tipoTarjeta",
+          "aviso",
+          "faltantes",
+          "roles"
+        ],
+        "title": "SubproductoCuentas",
+        "type": "object"
+      },
+      "SubproductoDelTipo": {
+        "properties": {
+          "codigoSubProducto": {
+            "title": "Codigosubproducto",
+            "type": "string"
+          },
+          "idProducto": {
+            "title": "Idproducto",
+            "type": "integer"
+          },
+          "idSubProducto": {
+            "title": "Idsubproducto",
+            "type": "integer"
+          },
+          "nombreSubProducto": {
+            "title": "Nombresubproducto",
+            "type": "string"
+          }
+        },
+        "required": [
+          "idSubProducto",
+          "idProducto",
+          "codigoSubProducto",
+          "nombreSubProducto"
+        ],
+        "title": "SubproductoDelTipo",
         "type": "object"
       },
       "ValidationError": {
@@ -4944,6 +5625,259 @@
         ],
         "x-roles": [
           "CONTADOR"
+        ]
+      }
+    },
+    "/api/v1/contabilidad/cuentas-producto/clases": {
+      "get": {
+        "description": "Roles contables de cada tipo de producto y la cuenta bajo la que se asignan.",
+        "operationId": "listar_clases_api_v1_contabilidad_cuentas_producto_clases_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "idTipoProducto",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "maximum": 2147483647,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idtipoproducto"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/Clase"
+                  },
+                  "title": "Response Listar Clases Api V1 Contabilidad Cuentas Producto Clases Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "APIKeyCookie": []
+          }
+        ],
+        "summary": "Listar Clases",
+        "tags": [
+          "contabilidad"
+        ]
+      }
+    },
+    "/api/v1/contabilidad/cuentas-producto/subproductos/{id_sub}": {
+      "get": {
+        "description": "Cuentas que se aplican al subproducto y el nivel del que vienen.",
+        "operationId": "cuentas_de_subproducto_api_v1_contabilidad_cuentas_producto_subproductos__id_sub__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id_sub",
+            "required": true,
+            "schema": {
+              "exclusiveMinimum": 0,
+              "maximum": 2147483647,
+              "title": "Id Sub",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "fecha",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fecha"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubproductoCuentas"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "APIKeyCookie": []
+          }
+        ],
+        "summary": "Cuentas De Subproducto",
+        "tags": [
+          "contabilidad"
+        ]
+      }
+    },
+    "/api/v1/contabilidad/cuentas-producto/tipos/{id_tipo}": {
+      "get": {
+        "description": "Asignaciones vigentes y programadas de un tipo, con la solicitud en curso.",
+        "operationId": "listar_asignaciones_api_v1_contabilidad_cuentas_producto_tipos__id_tipo__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id_tipo",
+            "required": true,
+            "schema": {
+              "exclusiveMinimum": 0,
+              "maximum": 2147483647,
+              "title": "Id Tipo",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "fecha",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fecha"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AsignacionesVista"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "APIKeyCookie": []
+          }
+        ],
+        "summary": "Listar Asignaciones",
+        "tags": [
+          "contabilidad"
+        ]
+      },
+      "put": {
+        "description": "Cambios de asignación: quedan pendientes hasta que otra persona los apruebe.",
+        "operationId": "solicitar_api_v1_contabilidad_cuentas_producto_tipos__id_tipo__put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id_tipo",
+            "required": true,
+            "schema": {
+              "exclusiveMinimum": 0,
+              "maximum": 2147483647,
+              "title": "Id Tipo",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Solicitud"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SolicitudAceptada"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "APIKeyCookie": []
+          }
+        ],
+        "summary": "Solicitar",
+        "tags": [
+          "contabilidad"
         ]
       }
     },
