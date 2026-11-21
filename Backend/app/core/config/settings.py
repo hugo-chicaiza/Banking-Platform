@@ -1,8 +1,9 @@
+import re
 from functools import lru_cache
 from typing import Annotated, Literal
 from urllib.parse import urlsplit
 
-from pydantic import Field, SecretStr, field_validator
+from pydantic import Field, SecretStr, ValidationInfo, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Única excepción a HTTPS: el FE y el callback locales (Vite) en la máquina del dev
@@ -18,18 +19,76 @@ def _exigir_https(nombre: str, valor: str) -> None:
     raise ValueError(f"{nombre} debe usar https:// (http:// solo para localhost)")
 
 
+# Prefijo de las API keys del entorno Staging de WorkOS (las de producción: sk_live_)
+_PREFIJO_CLAVE_STAGING = "sk_test_"
+
+
+def _validar_regex_origen(regex: str, frontend_url: str | None, clave: str) -> None:
+    """FRONTEND_ORIGIN_REGEX solo en backend-dev: WorkOS Staging y hosts hermanos de
+    FRONTEND_URL (misma cuenta de Cloudflare). Si no se cumple, falla el arranque.
+    """
+    if not clave.startswith(_PREFIJO_CLAVE_STAGING):
+        raise ValueError(
+            "FRONTEND_ORIGIN_REGEX solo se permite con la API key de WorkOS Staging "
+            f"({_PREFIJO_CLAVE_STAGING}...)"
+        )
+    if not regex.startswith("^https://") or not regex.endswith("$"):
+        raise ValueError(
+            "FRONTEND_ORIGIN_REGEX debe empezar con ^https:// y terminar en $"
+        )
+    try:
+        patron = re.compile(regex)
+    except re.error as exc:
+        raise ValueError(
+            f"FRONTEND_ORIGIN_REGEX no es una regex válida: {exc}"
+        ) from None
+    host = urlsplit(frontend_url or "").hostname or ""
+    dominio = host.partition(".")[2]
+    if "." not in dominio:
+        raise ValueError(
+            "FRONTEND_ORIGIN_REGEX requiere un FRONTEND_URL con dominio propio "
+            "(p. ej. https://app.cuenta.workers.dev)"
+        )
+    # Debe terminar en el dominio de FRONTEND_URL escapado: \.cuenta\.workers\.dev$
+    sufijos = (
+        "\\." + dominio.replace(".", "\\.") + "$",
+        re.escape("." + dominio) + "$",
+    )
+    if not regex.endswith(sufijos):
+        raise ValueError(
+            f"FRONTEND_ORIGIN_REGEX debe terminar en {sufijos[0]} (dominio de "
+            "FRONTEND_URL)"
+        )
+    # Errores típicos (alternativas sin agrupar, comodines): no deben aceptar otro sitio.
+    # Sin control de http: el chequeo de ^https:// de arriba ya lo descarta
+    controles = (
+        "https://evil.com",
+        f"https://{host}.evil.com",
+        f"https://x.{dominio}.evil.com",
+    )
+    if any(patron.fullmatch(control) for control in controles):
+        raise ValueError("FRONTEND_ORIGIN_REGEX acepta hosts fuera de FRONTEND_URL")
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     app_env: Literal["development", "staging", "production"] = "production"
     app_name: str = "banking-platform-backend"
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
+    # E0-13: "texto" (una línea con trace=) o "json" (una línea JSON por registro)
+    log_formato: Literal["texto", "json"] = "texto"
+    # E0-05: minutos que un evento puede esperar en la bandeja de salida antes de que se
+    # alerte (registro AUD_RELEVO_ALERTA y evento en la bitácora)
+    aud_relevo_alerta_minutos: int = 10
     # Puerto no estándar; local solo en loopback. En Azure: APP_HOST=0.0.0.0 y WEBSITES_PORT=APP_PORT
     app_host: str = "127.0.0.1"
     app_port: int = 8471
     # Por minuto y por IP. Mientras no se configure el proxy en Azure, todos llegan con
     # la misma IP y comparten el límite.
     limite_peticiones_activo: bool = True
+    editor_accesos_activo: bool = False
+    editor_funciones_activo: bool = False
     limite_lectura_por_minuto: int = 300
     limite_escritura_por_minuto: int = 60
     limite_sensible_por_minuto: int = 5
@@ -46,11 +105,19 @@ class Settings(BaseSettings):
     cooperativa_db_name: str = "CooperativaDB"
     cooperativa_db_user: str = ""
     cooperativa_db_password: SecretStr = SecretStr("")
+    e201_servicio_sql_user: str = ""
+    e201_servicio_sql_password: SecretStr = SecretStr("")
 
     seguridad_db_server: str = ""
     seguridad_db_name: str = "SeguridadDB"
     seguridad_db_user: str = ""
     seguridad_db_password: SecretStr = SecretStr("")
+
+    # E0-01: ejecutor de migraciones. Apagado hasta que el responsable lo active. Usa el
+    # login ADMINISTRATIVO (cadena ODBC completa, secreto aparte), nunca el de la app.
+    migraciones_habilitadas: bool = False
+    migraciones_odbc_cooperativa: SecretStr = SecretStr("")
+    migraciones_odbc_seguridad: SecretStr = SecretStr("")
 
     atm_hsm_aes_key_hex: str = ""
     atm_hsm_pin_generation_key_hex: str = ""
@@ -85,6 +152,19 @@ class Settings(BaseSettings):
     workos_redirect_uri: str = ""
     # Origen del FE (esquema://host[:puerto], sin ruta): redirecciones y control CSRF
     frontend_url: str = ""
+    # Organización de WorkOS de la cooperativa (EnquoCoop): todos los usuarios internos
+    # son miembros de ella y su rol vive en esa membresía (C-05)
+    workos_organization_id: str = ""
+    # Solo backend-dev, nunca producción: orígenes extra del FE (previews de PR de
+    # Cloudflare), aceptados si llegan en X-Forwarded-Host desde el Worker. Ejemplo:
+    # ^https://[a-z0-9-]+-banking-platform-front\.cuenta\.workers\.dev$
+    frontend_origin_regex: str = ""
+    # ASVS 4.1.3 / 15.3.4: secreto compartido con el Worker de Cloudflare. Solo una
+    # petición que lo trae (X-Proxy-Secreto) puede fijar la IP del usuario (X-Cliente-Ip).
+    # Vacío (local) = se usa la IP de la conexión. Mismo valor que el secreto del Worker
+    proxy_secreto: SecretStr = SecretStr("")
+    # True = se rechaza (403) toda petición que no venga del Worker con el secreto
+    proxy_exigido: bool = False
 
     # HSM simulado de tarjetas (app/core/security/hsm.py): claves ficticias en hex.
     # Vacías = HSM no disponible (503). En producción nunca se usan. Deben ser las
@@ -102,12 +182,20 @@ class Settings(BaseSettings):
     sobre_pin_dias: Annotated[int, Field(ge=1, le=365)] = 30
     # Carpeta local mientras no hay MongoDB (solo fuera de producción)
     sobre_pin_dir: str = ".sobres_pin"
-    cooperativa_nombre: str = "EnquoCoop"
-    cooperativa_sitio_web: str = "www.coop.com.ec"
+    # Presentación previa al alta de Entidad; vacías = instalación sin configurar.
+    cooperativa_nombre: str = ""
+    cooperativa_sitio_web: str = ""
 
     # MongoDB (Azure Cosmos DB for MongoDB o Atlas). Vacío = sin MongoDB
     mongo_uri: SecretStr = SecretStr("")
     mongo_db: str = "banking_platform"
+
+    # Documentos (E5-08, P4-10): contenido cifrado (AES-256-GCM) en la colección
+    # `documentos` de MongoDB; sin clave o sin MONGO_URI responde 503.
+    documentos_clave: SecretStr = SecretStr("")  # AES-256-GCM: 64 hex
+    documentos_max_bytes: Annotated[int, Field(ge=1024, le=15 * 1024 * 1024)] = (
+        5 * 1024 * 1024
+    )
 
     # Vínculos administrados por despliegue, nunca por el navegador ni por email.
     workos_audit_user_ids: dict[
@@ -148,6 +236,19 @@ class Settings(BaseSettings):
             if not urlsplit(valor).netloc:
                 raise ValueError("WORKOS_REDIRECT_URI debe ser una URL completa")
             _exigir_https("WORKOS_REDIRECT_URI", valor)
+        return valor
+
+    # De campo y no de modelo: el error de Pydantic muestra solo este valor y no vuelca
+    # al log de arranque el resto de la configuración (claves y contraseñas).
+    # Va después de workos_api_key y frontend_url, que ya están en info.data.
+    @field_validator("frontend_origin_regex")
+    @classmethod
+    def _regex_origen(cls, valor: str, info: ValidationInfo) -> str:
+        if valor:
+            clave = info.data.get("workos_api_key") or SecretStr("")
+            _validar_regex_origen(
+                valor, info.data.get("frontend_url"), clave.get_secret_value()
+            )
         return valor
 
     def odbc_connection_string(self, db: Literal["cooperativa", "seguridad"]) -> str:

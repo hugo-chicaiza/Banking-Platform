@@ -16,6 +16,21 @@ from pydantic.alias_generators import to_camel
 
 from app.core.api.schemas import CamelModel, Money
 
+# Tipos compartidos (CAJ-05 y siguientes)
+
+ZONA_ECUADOR = ZoneInfo("America/Guayaquil")
+INT32_MAX = 2_147_483_647
+
+
+def a_ecuador(valor: datetime) -> datetime:
+    """Interpreta las fechas de la BD como hora local de Ecuador."""
+    if valor.tzinfo is None:
+        return valor.replace(tzinfo=ZONA_ECUADOR)
+    return valor.astimezone(ZONA_ECUADOR)
+
+
+FechaHoraEc = Annotated[datetime, AfterValidator(a_ecuador)]
+
 
 # CAJ-01
 class CajaFisica(CamelModel):
@@ -35,8 +50,9 @@ class Jornada(CamelModel):
     id_usuario: int
     id_caja_fisica: int
     id_agencia: str
-    fecha_hora_apertura: datetime
-    fecha_hora_cierre: datetime | None = None
+    # Igual que el resto de Caja: hora de Ecuador con su desfase (-05:00)
+    fecha_hora_apertura: FechaHoraEc
+    fecha_hora_cierre: FechaHoraEc | None = None
     dinero_inicial: Money
     estado: Literal["ABIERTA", "CERRADA", "CANCELADA"]
     observacion: str | None = None
@@ -50,19 +66,6 @@ class PageJornada(CamelModel):
 
 
 # --- CAJ-05: tipos y validaciones compartidas ---
-
-ZONA_ECUADOR = ZoneInfo("America/Guayaquil")
-INT32_MAX = 2_147_483_647
-
-
-def a_ecuador(valor: datetime) -> datetime:
-    """Interpreta las fechas de la BD como hora local de Ecuador."""
-    if valor.tzinfo is None:
-        return valor.replace(tzinfo=ZONA_ECUADOR)
-    return valor.astimezone(ZONA_ECUADOR)
-
-
-FechaHoraEc = Annotated[datetime, AfterValidator(a_ecuador)]
 
 MontoPositivo = Annotated[
     Decimal,
@@ -173,7 +176,9 @@ class JornadaOpen(Entrada):
 # --- CAJ-07: dotación ----------
 
 
-class Desglose(CamelModel):
+class Desglose(Entrada):
+    """Entrada como el cuerpo que la contiene: campos desconocidos son 400."""
+
     id_denominacion: IdInt
     cantidad: Annotated[int, Field(gt=0, le=100_000)]
 

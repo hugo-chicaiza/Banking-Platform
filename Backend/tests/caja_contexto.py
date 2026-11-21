@@ -23,7 +23,8 @@ from app.core.api.middleware import TraceIdMiddleware
 from app.core.database.db import cooperativa
 from app.core.security import audit
 from app.core.security.auth import Usuario, usuario_actual
-from app.core.security.operador import resolver_id_interno
+from app.core.security.operador import RegistroAuditado, resolver_id_interno
+from app.core.security.permisos import permisos_de
 from app.modules.caja import repository as caja_repo
 
 BASE = "/api/v1/caja"
@@ -44,7 +45,7 @@ def usuario(
         nombre="Usuario Prueba",
         email="prueba@example.com",
         roles=roles,
-        permisos=(),
+        permisos=permisos_de(roles),
         id_agencia=agencia,
         # Registrado (KeyUsuario): require_auth deja pasar. El id interno de caja se
         # simula aparte con resolver_id_interno
@@ -83,6 +84,30 @@ class Contexto:
             "registrar",
             self.eventos.append,
         )
+
+        # E0-05 B: el éxito de las operaciones de dinero va a la bandeja dentro de la
+        # transacción (confirmar). Se ejecuta el real (valida el contenido) y el evento
+        # queda también en self.eventos, como si ya lo hubiera pasado el relevo.
+        confirmar_real = RegistroAuditado.confirmar
+        eventos = self.eventos
+
+        def confirmar(registro: RegistroAuditado, conn: Any, **kwargs: Any) -> None:
+            confirmar_real(registro, conn, **kwargs)
+            e = registro._evento
+            eventos.append(
+                audit.EventoAuditoria(
+                    accion=e["accion"],
+                    tabla=kwargs.get("objetivo") or e["tabla"],
+                    id_registro=registro.id_registro,
+                    resultado="Exitoso",
+                    usuario=None,
+                    ip=e["ip"],
+                    descripcion=f"usuario={e['usuario'].id_usuario} {e['detalle']}"
+                    + (f" {registro.detalle}" if registro.detalle else ""),
+                )
+            )
+
+        monkeypatch.setattr(RegistroAuditado, "confirmar", confirmar)
 
     def como(
         self,

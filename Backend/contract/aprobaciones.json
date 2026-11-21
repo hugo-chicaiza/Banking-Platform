@@ -1,0 +1,975 @@
+{
+  "components": {
+    "schemas": {
+      "Bandeja": {
+        "properties": {
+          "diasResaltar": {
+            "title": "Diasresaltar",
+            "type": "integer"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/SolicitudResumen"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "page": {
+            "title": "Page",
+            "type": "integer"
+          },
+          "pageSize": {
+            "title": "Pagesize",
+            "type": "integer"
+          },
+          "pendientesParaMi": {
+            "title": "Pendientesparami",
+            "type": "integer"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "total",
+          "page",
+          "pageSize",
+          "pendientesParaMi",
+          "diasResaltar"
+        ],
+        "title": "Bandeja",
+        "type": "object"
+      },
+      "EstadoSolicitud": {
+        "enum": [
+          "Pendiente",
+          "Aprobada",
+          "Ejecutada",
+          "Rechazada",
+          "Cancelada",
+          "Fallida"
+        ],
+        "title": "EstadoSolicitud",
+        "type": "string"
+      },
+      "EventoSolicitud": {
+        "properties": {
+          "comentario": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Comentario"
+          },
+          "estadoAnterior": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/EstadoSolicitud"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "estadoNuevo": {
+            "$ref": "#/components/schemas/EstadoSolicitud"
+          },
+          "fechaEvento": {
+            "format": "date-time",
+            "title": "Fechaevento",
+            "type": "string"
+          },
+          "responsable": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Responsable"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "estadoAnterior",
+          "estadoNuevo",
+          "responsable",
+          "comentario",
+          "fechaEvento"
+        ],
+        "title": "EventoSolicitud",
+        "type": "object"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "title": "Detail",
+            "type": "array"
+          }
+        },
+        "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "Rechazo": {
+        "additionalProperties": false,
+        "properties": {
+          "comentario": {
+            "maxLength": 300,
+            "minLength": 1,
+            "title": "Comentario",
+            "type": "string"
+          }
+        },
+        "required": [
+          "comentario"
+        ],
+        "title": "Rechazo",
+        "type": "object"
+      },
+      "Responsable": {
+        "properties": {
+          "idInterno": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Idinterno"
+          },
+          "nombre": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nombre"
+          },
+          "sujeto": {
+            "title": "Sujeto",
+            "type": "string"
+          }
+        },
+        "required": [
+          "sujeto"
+        ],
+        "title": "Responsable",
+        "type": "object"
+      },
+      "Solicitar": {
+        "additionalProperties": false,
+        "properties": {
+          "codigoTransaccion": {
+            "maxLength": 20,
+            "minLength": 1,
+            "pattern": "^[A-Z0-9-]+$",
+            "title": "Codigotransaccion",
+            "type": "string"
+          },
+          "contenido": {
+            "additionalProperties": true,
+            "title": "Contenido",
+            "type": "object"
+          },
+          "idAgencia": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9]{3}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Idagencia"
+          },
+          "idObjetivo": {
+            "maxLength": 60,
+            "minLength": 1,
+            "title": "Idobjetivo",
+            "type": "string"
+          },
+          "tipoObjetivo": {
+            "maxLength": 40,
+            "minLength": 1,
+            "title": "Tipoobjetivo",
+            "type": "string"
+          }
+        },
+        "required": [
+          "codigoTransaccion",
+          "tipoObjetivo",
+          "idObjetivo",
+          "contenido"
+        ],
+        "title": "Solicitar",
+        "type": "object"
+      },
+      "SolicitudAceptada": {
+        "properties": {
+          "estado": {
+            "const": "Pendiente",
+            "default": "Pendiente",
+            "title": "Estado",
+            "type": "string"
+          },
+          "idSolicitud": {
+            "exclusiveMinimum": 0.0,
+            "maximum": 9.223372036854776e+18,
+            "title": "Idsolicitud",
+            "type": "integer"
+          },
+          "requiereAprobacion": {
+            "const": true,
+            "default": true,
+            "title": "Requiereaprobacion",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "idSolicitud"
+        ],
+        "title": "SolicitudAceptada",
+        "type": "object"
+      },
+      "SolicitudDetalle": {
+        "properties": {
+          "antes": {
+            "additionalProperties": true,
+            "title": "Antes",
+            "type": "object"
+          },
+          "codigoError": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Codigoerror"
+          },
+          "codigoTransaccion": {
+            "title": "Codigotransaccion",
+            "type": "string"
+          },
+          "comentario": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Comentario"
+          },
+          "despues": {
+            "additionalProperties": true,
+            "title": "Despues",
+            "type": "object"
+          },
+          "estado": {
+            "$ref": "#/components/schemas/EstadoSolicitud"
+          },
+          "eventos": {
+            "items": {
+              "$ref": "#/components/schemas/EventoSolicitud"
+            },
+            "title": "Eventos",
+            "type": "array"
+          },
+          "fechaResolucion": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fecharesolucion"
+          },
+          "fechaSolicitud": {
+            "format": "date-time",
+            "title": "Fechasolicitud",
+            "type": "string"
+          },
+          "idAgencia": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Idagencia"
+          },
+          "idObjetivo": {
+            "title": "Idobjetivo",
+            "type": "string"
+          },
+          "idSolicitud": {
+            "exclusiveMinimum": 0.0,
+            "maximum": 9.223372036854776e+18,
+            "title": "Idsolicitud",
+            "type": "integer"
+          },
+          "puedeAprobar": {
+            "default": false,
+            "title": "Puedeaprobar",
+            "type": "boolean"
+          },
+          "puedeCancelar": {
+            "default": false,
+            "title": "Puedecancelar",
+            "type": "boolean"
+          },
+          "puedeRechazar": {
+            "default": false,
+            "title": "Puederechazar",
+            "type": "boolean"
+          },
+          "resolutor": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Responsable"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "solicitante": {
+            "$ref": "#/components/schemas/Responsable"
+          },
+          "tipoObjetivo": {
+            "title": "Tipoobjetivo",
+            "type": "string"
+          }
+        },
+        "required": [
+          "idSolicitud",
+          "codigoTransaccion",
+          "tipoObjetivo",
+          "idObjetivo",
+          "idAgencia",
+          "estado",
+          "fechaSolicitud",
+          "solicitante",
+          "antes",
+          "despues",
+          "eventos"
+        ],
+        "title": "SolicitudDetalle",
+        "type": "object"
+      },
+      "SolicitudResumen": {
+        "properties": {
+          "codigoError": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Codigoerror"
+          },
+          "codigoTransaccion": {
+            "title": "Codigotransaccion",
+            "type": "string"
+          },
+          "comentario": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Comentario"
+          },
+          "estado": {
+            "$ref": "#/components/schemas/EstadoSolicitud"
+          },
+          "fechaResolucion": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fecharesolucion"
+          },
+          "fechaSolicitud": {
+            "format": "date-time",
+            "title": "Fechasolicitud",
+            "type": "string"
+          },
+          "idAgencia": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Idagencia"
+          },
+          "idObjetivo": {
+            "title": "Idobjetivo",
+            "type": "string"
+          },
+          "idSolicitud": {
+            "exclusiveMinimum": 0.0,
+            "maximum": 9.223372036854776e+18,
+            "title": "Idsolicitud",
+            "type": "integer"
+          },
+          "puedeAprobar": {
+            "default": false,
+            "title": "Puedeaprobar",
+            "type": "boolean"
+          },
+          "puedeCancelar": {
+            "default": false,
+            "title": "Puedecancelar",
+            "type": "boolean"
+          },
+          "puedeRechazar": {
+            "default": false,
+            "title": "Puederechazar",
+            "type": "boolean"
+          },
+          "resolutor": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Responsable"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "solicitante": {
+            "$ref": "#/components/schemas/Responsable"
+          },
+          "tipoObjetivo": {
+            "title": "Tipoobjetivo",
+            "type": "string"
+          }
+        },
+        "required": [
+          "idSolicitud",
+          "codigoTransaccion",
+          "tipoObjetivo",
+          "idObjetivo",
+          "idAgencia",
+          "estado",
+          "fechaSolicitud",
+          "solicitante"
+        ],
+        "title": "SolicitudResumen",
+        "type": "object"
+      },
+      "ValidationError": {
+        "properties": {
+          "ctx": {
+            "title": "Context",
+            "type": "object"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "title": "Location",
+            "type": "array"
+          },
+          "msg": {
+            "title": "Message",
+            "type": "string"
+          },
+          "type": {
+            "title": "Error Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError",
+        "type": "object"
+      },
+      "app__modules__aprobaciones__contratos__Aprobacion": {
+        "additionalProperties": false,
+        "properties": {
+          "comentario": {
+            "anyOf": [
+              {
+                "maxLength": 300,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Comentario"
+          }
+        },
+        "title": "Aprobacion",
+        "type": "object"
+      }
+    }
+  },
+  "info": {
+    "title": "Banking Platform · aprobaciones",
+    "version": "0.1.0"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/api/v1/aprobaciones": {
+      "get": {
+        "operationId": "bandeja_api_v1_aprobaciones_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "bandeja",
+            "required": false,
+            "schema": {
+              "default": "pendientes",
+              "enum": [
+                "pendientes",
+                "mias",
+                "resueltas"
+              ],
+              "title": "Bandeja",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "page",
+            "required": false,
+            "schema": {
+              "default": 1,
+              "minimum": 1,
+              "title": "Page",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "pageSize",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Pagesize",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Bandeja"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "APIKeyCookie": []
+          }
+        ],
+        "summary": "Bandeja",
+        "tags": [
+          "Aprobaciones"
+        ]
+      },
+      "post": {
+        "operationId": "solicitar_api_v1_aprobaciones_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Solicitar"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SolicitudAceptada"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "APIKeyCookie": []
+          }
+        ],
+        "summary": "Solicitar",
+        "tags": [
+          "Aprobaciones"
+        ]
+      }
+    },
+    "/api/v1/aprobaciones/accesos": {
+      "get": {
+        "operationId": "accesos_api_v1_aprobaciones_accesos_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Accesos Api V1 Aprobaciones Accesos Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "APIKeyCookie": []
+          }
+        ],
+        "summary": "Accesos",
+        "tags": [
+          "Aprobaciones"
+        ]
+      }
+    },
+    "/api/v1/aprobaciones/notificaciones": {
+      "get": {
+        "operationId": "notificaciones_api_v1_aprobaciones_notificaciones_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Notificaciones Api V1 Aprobaciones Notificaciones Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "APIKeyCookie": []
+          }
+        ],
+        "summary": "Notificaciones",
+        "tags": [
+          "Aprobaciones"
+        ]
+      }
+    },
+    "/api/v1/aprobaciones/{idSolicitud}": {
+      "get": {
+        "operationId": "ficha_api_v1_aprobaciones__idSolicitud__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "idSolicitud",
+            "required": true,
+            "schema": {
+              "exclusiveMinimum": 0,
+              "maximum": 9223372036854775807,
+              "title": "Idsolicitud",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SolicitudDetalle"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "APIKeyCookie": []
+          }
+        ],
+        "summary": "Ficha",
+        "tags": [
+          "Aprobaciones"
+        ]
+      }
+    },
+    "/api/v1/aprobaciones/{idSolicitud}/aprobar": {
+      "post": {
+        "operationId": "aprobar_api_v1_aprobaciones__idSolicitud__aprobar_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "idSolicitud",
+            "required": true,
+            "schema": {
+              "exclusiveMinimum": 0,
+              "maximum": 9223372036854775807,
+              "title": "Idsolicitud",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/app__modules__aprobaciones__contratos__Aprobacion"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Aprobar Api V1 Aprobaciones  Idsolicitud  Aprobar Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "APIKeyCookie": []
+          }
+        ],
+        "summary": "Aprobar",
+        "tags": [
+          "Aprobaciones"
+        ]
+      }
+    },
+    "/api/v1/aprobaciones/{idSolicitud}/cancelar": {
+      "post": {
+        "operationId": "cancelar_api_v1_aprobaciones__idSolicitud__cancelar_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "idSolicitud",
+            "required": true,
+            "schema": {
+              "exclusiveMinimum": 0,
+              "maximum": 9223372036854775807,
+              "title": "Idsolicitud",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/app__modules__aprobaciones__contratos__Aprobacion"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Cancelar Api V1 Aprobaciones  Idsolicitud  Cancelar Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "APIKeyCookie": []
+          }
+        ],
+        "summary": "Cancelar",
+        "tags": [
+          "Aprobaciones"
+        ]
+      }
+    },
+    "/api/v1/aprobaciones/{idSolicitud}/rechazar": {
+      "post": {
+        "operationId": "rechazar_api_v1_aprobaciones__idSolicitud__rechazar_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "idSolicitud",
+            "required": true,
+            "schema": {
+              "exclusiveMinimum": 0,
+              "maximum": 9223372036854775807,
+              "title": "Idsolicitud",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Rechazo"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Rechazar Api V1 Aprobaciones  Idsolicitud  Rechazar Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "APIKeyCookie": []
+          }
+        ],
+        "summary": "Rechazar",
+        "tags": [
+          "Aprobaciones"
+        ]
+      }
+    }
+  }
+}

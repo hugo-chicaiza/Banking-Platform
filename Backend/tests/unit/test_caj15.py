@@ -6,6 +6,7 @@ from typing import Any
 
 import pytest
 
+from app.modules.caja import service
 from app.modules.caja.router import router
 from tests.caja_contexto import (
     BASE,
@@ -35,6 +36,7 @@ CUERPO_DEVOLUCION = {
 
 def preparar_devolucion(ctx: Contexto) -> None:
     ctx.fake("obtener_jornada", JORNADA)
+    ctx.fake("autorizador_vigente", True)
     ctx.fake(
         "obtener_cuadre_de_jornada",
         cuadre(SaldoFinalFisico=Decimal("150.00"), DiferenciaDinero=Decimal(0)),
@@ -57,10 +59,20 @@ def preparar_devolucion(ctx: Contexto) -> None:
     )
 
 
-def test_caj15_devuelve_a_boveda(ctx: Contexto) -> None:
+def test_caj15_devuelve_a_boveda(
+    ctx: Contexto, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    operaciones = []
+    monkeypatch.setattr(
+        service,
+        "generar_asiento",
+        lambda conn, operacion: operaciones.append(operacion),
+    )
     preparar_devolucion(ctx)
     r = ctx.cliente.post(f"{BASE}/jornadas/55/devoluciones", json=CUERPO_DEVOLUCION)
     assert r.status_code == 201, r.text
+    assert [o.codigo_plantilla for o in operaciones] == ["DEV_CAJA"]
+    assert operaciones[0].clave_evento == "DEVOLUCION_CAJA:33"
     assert r.json()["idDevolucionCaja"] == 33
     assert r.json()["superaLimiteMaximo"] is False
     assert ctx.llamadas["registrar_devolucion"][0][:4] == (55, 70, 2, ID_SUPERVISOR)

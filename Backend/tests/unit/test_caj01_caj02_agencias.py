@@ -10,7 +10,7 @@ from app.modules.caja import repository, service
 from tests.sesion import usuario_con_roles
 
 
-def usuario_agencia(*roles, agencia="001"):
+def usuario_agencia(*roles: str, agencia: str | None = "001"):
     return replace(
         usuario_con_roles(*roles),
         id_agencia=agencia,
@@ -80,10 +80,10 @@ def test_caj01_admin_consulta_todas_agencias(monkeypatch):
         Mock(),
         id_agencia=None,
         activa=None,
-        usuario=usuario_con_roles("ADMIN"),
+        usuario=usuario_agencia("ADMIN", agencia=None),
     )
 
-    assert recibidos["id_agencia"] is None
+    assert recibidos["id_agencia"] == None
 
 
 def test_caj02_supervisor_restringe_agencia(monkeypatch):
@@ -142,7 +142,7 @@ def test_caj02_supervisor_bloquea_otra_agencia(monkeypatch):
     consulta.assert_not_called()
 
 
-@pytest.mark.parametrize("rol", ["CONTADOR", "AUDITOR"])
+@pytest.mark.parametrize("rol", ["ADMIN", "CONTADOR", "AUDITOR"])
 def test_caj02_roles_globales(monkeypatch, rol):
     recibidos = {}
 
@@ -158,7 +158,7 @@ def test_caj02_roles_globales(monkeypatch, rol):
 
     service.listar_jornadas(
         Mock(),
-        usuario=usuario_con_roles(rol),
+        usuario=usuario_agencia(rol, agencia=None if rol == "ADMIN" else "001"),
         id_agencia=None,
         id_usuario=None,
         estado=None,
@@ -169,4 +169,4 @@ def test_caj02_roles_globales(monkeypatch, rol):
         sort="fechaHoraApertura,desc",
     )
 
-    assert recibidos["id_agencia"] is None
+    assert recibidos["id_agencia"] == (None if rol == "ADMIN" else "001")

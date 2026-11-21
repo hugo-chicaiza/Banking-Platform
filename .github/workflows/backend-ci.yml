@@ -1,9 +1,12 @@
 name: Backend CI
 
+# E0-11: corre en TODO pull request hacia develop (antes solo en ramas feat/backend-*, así
+# un PR desde fix/ se integraba sin CI) y en push a ramas feat/ y fix/ del backend.
 on:
   push:
     branches:
       - 'feat/backend-*'
+      - 'fix/backend-*'
   pull_request:
     branches:
       - develop
@@ -17,9 +20,6 @@ permissions:
 jobs:
   quality-security:
     name: Backend Quality and Security
-    if: >-
-      github.event_name != 'pull_request' ||
-      startsWith(github.head_ref, 'feat/backend-')
     runs-on: ubuntu-latest
 
     steps:
@@ -70,13 +70,20 @@ jobs:
             echo "SKIPPED: No Python files found."
           fi
 
-      - name: Run tests
+      - name: Run tests (cobertura con piso)
+        # E0-11: falla si la cobertura de Backend/app baja del piso de Backend/.cobertura-piso
         run: |
-          if find Backend/tests -type f -name 'test_*.py' -print -quit 2>/dev/null | grep -q .; then
-            pytest Backend/tests
-          else
-            echo "SKIPPED: No tests found."
-          fi
+          pytest Backend/tests --cov=Backend/app --cov-report=term --cov-report=xml:cobertura.xml             --cov-fail-under="$(cat Backend/.cobertura-piso)"
+
+      - name: El piso de cobertura solo sube
+        if: github.event_name == 'pull_request'
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --depth=1 origin "${{ github.base_ref }}"
+          ANTES=$(git show "origin/${{ github.base_ref }}:Backend/.cobertura-piso" 2>/dev/null || echo 0)
+          AHORA=$(cat Backend/.cobertura-piso)
+          echo "piso: ${ANTES} -> ${AHORA}"
+          if [ "$AHORA" -lt "$ANTES" ]; then echo "El piso de cobertura no puede bajar (${ANTES} -> ${AHORA})"; exit 1; fi
 
       - name: Scan Python security issues
         run: |
@@ -88,11 +95,23 @@ jobs:
 
       - name: Audit dependencies
         run: |
-          if [ -f Backend/requirements.txt ]; then
-            pip-audit -r Backend/requirements.txt
-          else
-            echo "SKIPPED: requirements.txt not found."
-          fi
+          pip-audit -r Backend/requirements.txt
+
+      - name: Lista de componentes (SBOM CycloneDX)
+        # E0-11: en cada construcción; ASVS 15.1.2 · PCI E-003 a E-009
+        run: |
+          pip-audit -r Backend/requirements.txt -f cyclonedx-json -o sbom-backend.cdx.json || test -s sbom-backend.cdx.json
+
+      - name: Publicar SBOM y cobertura
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: backend-sbom-y-cobertura
+          path: |
+            sbom-backend.cdx.json
+            cobertura.xml
+          if-no-files-found: warn
+          retention-days: 90
 
       - name: Scan for secrets
         uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2

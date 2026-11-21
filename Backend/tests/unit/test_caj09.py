@@ -33,14 +33,17 @@ def ctx(monkeypatch: pytest.MonkeyPatch) -> Iterator[Contexto]:
     yield crear_contexto(monkeypatch, router)
 
 
-def test_caj09_sin_configuracion_responde_501_sin_tocar_bd(ctx: Contexto) -> None:
+def test_caj09_sin_configuracion_responde_404_sin_movimiento(ctx: Contexto) -> None:
+    ctx.conn.execute.return_value.mappings.return_value.first.return_value = None
     ctx.fake("buscar_por_registro_unico", None, trx_repo)
     r = ctx.cliente.post(f"{BASE}/jornadas/55/depositos", json=CUERPO_DEPOSITO)
-    assert r.status_code == 501
-    assert code(r) == "OPERACION_NO_HABILITADA"
+    assert r.status_code == 404
+    assert code(r) == "FUNCION_NO_DISPONIBLE"
     assert not ctx.llamadas["buscar_por_registro_unico"]
     ctx.conn.begin.assert_not_called()
     assert ctx.resultado_auditoria() == "Fallido"
+
+    ctx.conn.execute.assert_called_once()
 
 
 def test_caj09_deposito_completo(ctx: Contexto) -> None:
@@ -170,6 +173,16 @@ def test_caj09_falla_del_asiento_revierte_todo(ctx: Contexto) -> None:
     assert not ctx.llamadas["insertar_movimiento_caja"]
 
 
+def test_caj09_proveedor_sin_asiento_revierte_ventanilla(ctx: Contexto) -> None:
+    deps = preparar_ventanilla(ctx)
+    deps.contabilizar = lambda conn, datos: None  # type: ignore[method-assign, assignment]
+    respuesta = ctx.cliente.post(f"{BASE}/jornadas/55/depositos", json=CUERPO_DEPOSITO)
+    assert (respuesta.status_code, code(respuesta)) == (500, "ASIENTO_NO_GENERADO")
+    assert ctx.conn.begin.return_value.__exit__.call_args.args[0] is not None
+    assert ctx.llamadas["insertar_transaccion"]
+    assert not ctx.llamadas["insertar_movimiento_caja"]
+
+
 @pytest.mark.parametrize(
     "cambio",
     [
@@ -188,3 +201,31 @@ def test_caj09_validacion_400(ctx: Contexto, cambio: dict[str, Any]) -> None:
         f"{BASE}/jornadas/55/depositos", json={**CUERPO_DEPOSITO, **cambio}
     )
     assert r.status_code == 400
+
+
+def test_caj09_tipo_de_transaccion_no_configurado_falla_cerrado(ctx: Contexto) -> None:
+    # La naturaleza contable sale de Transacciones.TipoTransaccion; sin el tipo activo no
+    # se mueve dinero.
+    preparar_ventanilla(ctx)
+    ctx.fake("tipo_transaccion", None, trx_repo)
+    r = ctx.cliente.post(f"{BASE}/jornadas/55/depositos", json=CUERPO_DEPOSITO)
+    assert r.status_code == 500
+    assert code(r) == "CONFIGURACION_INCOMPLETA"
+    assert not ctx.llamadas.get("aplicar_movimiento_cuenta")
+
+
+def test_caj09_naturaleza_desde_la_base(ctx: Contexto) -> None:
+    preparar_ventanilla(ctx)
+    ctx.fake(
+        "tipo_transaccion",
+        {
+            "CodigoTipo": "Deposito",
+            "Naturaleza": "C",
+            "AfectaSaldo": True,
+            "Estado": "A",
+        },
+        trx_repo,
+    )
+    r = ctx.cliente.post(f"{BASE}/jornadas/55/depositos", json=CUERPO_DEPOSITO)
+    assert r.status_code == 201, r.text
+    assert ctx.llamadas["aplicar_movimiento_cuenta"][0][2] == "C"

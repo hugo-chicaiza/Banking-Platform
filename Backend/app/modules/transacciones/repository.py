@@ -176,6 +176,38 @@ def obtener_cuenta(
     return dict(fila) if fila is not None else None
 
 
+def restricciones_cuenta(
+    conn: Connection,
+    id_cuenta: int,
+) -> Fila | None:
+    """Estado del titular y permiso presencial del producto de la cuenta.
+
+    Solo lectura de Clientes y ProductosFinancieros (FK de Cuentas.Cuenta).
+    """
+    fila = (
+        conn.execute(
+            text(
+                """
+                SELECT
+                    cl.Estado AS EstadoCliente,
+                    p.PermiteOperacionesPresenciales
+                FROM Cuentas.Cuenta AS c
+                LEFT JOIN Clientes.Cliente AS cl
+                    ON cl.IdCliente = c.IdCliente
+                LEFT JOIN ProductosFinancieros.Producto AS p
+                    ON p.IdProducto = c.IdProducto
+                WHERE c.IdCuenta = :id
+                """
+            ),
+            {"id": id_cuenta},
+        )
+        .mappings()
+        .first()
+    )
+
+    return dict(fila) if fila is not None else None
+
+
 def saldo_disponible(
     conn: Connection,
     id_cuenta: int,
@@ -369,6 +401,26 @@ def aplicar_movimiento_cuenta(
     )
 
     return int(salida["IdMovimiento"])
+
+
+def tipo_transaccion(conn: Connection, codigo: str) -> dict | None:
+    """Fila de Transacciones.TipoTransaccion: naturaleza contable ('C' crédito, 'D' débito),
+    si afecta saldo y su estado. Es la fuente de verdad de cada tipo de operación."""
+    fila = (
+        conn.execute(
+            text(
+                """
+                SELECT CodigoTipo, Naturaleza, AfectaSaldo, Estado
+                FROM Transacciones.TipoTransaccion
+                WHERE CodigoTipo = :codigo
+                """
+            ),
+            {"codigo": codigo},
+        )
+        .mappings()
+        .first()
+    )
+    return dict(fila) if fila else None
 
 
 def id_tipo_movimiento_caja(

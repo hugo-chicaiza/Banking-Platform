@@ -173,8 +173,11 @@ router.include_router(_consultas_router, prefix="/cuentas")
 _ROLES_ESTADO_CUPOS = ["ASESOR", "SUPERVISOR", "ADMIN"]
 _ROLES_MODIFICAR_CUPO = ["SUPERVISOR", "ADMIN"]
 _ROLES_HISTORIAL_CUPO = ["SUPERVISOR", "AUDITOR", "ADMIN"]
-GestorEstadoCupos = Annotated[Usuario, Depends(require_roles(*_ROLES_ESTADO_CUPOS))]
-GestorCupo = Annotated[Usuario, Depends(require_roles(*_ROLES_MODIFICAR_CUPO))]
+LectorCupos = Annotated[Usuario, Depends(require_roles(*_ROLES_ESTADO_CUPOS))]
+GestorEstado = Annotated[
+    Usuario, Depends(require_roles("ASESOR", "SUPERVISOR", "ADMIN"))
+]
+GestorCupo = Annotated[Usuario, Depends(require_roles("SUPERVISOR", "ADMIN"))]
 AuditorCupo = Annotated[Usuario, Depends(require_roles(*_ROLES_HISTORIAL_CUPO))]
 IdRecurso = Annotated[int, Path(gt=0, le=2147483647)]
 _gestion_router = APIRouter(
@@ -197,7 +200,7 @@ def cambiar_estado_cuenta(
     idCuenta: IdRecurso,
     payload: CuentaEstadoUpdate,
     request: Request,
-    usuario: GestorEstadoCupos,
+    usuario: GestorEstado,
     modificado_por: UsuarioAuditoria,
     conn: Db,
 ) -> Cuenta:
@@ -220,7 +223,7 @@ def cambiar_estado_cuenta(
     openapi_extra={"x-roles": _ROLES_ESTADO_CUPOS},
 )
 def obtener_cupos(
-    idCuenta: IdRecurso, usuario: GestorEstadoCupos, conn: Db
+    idCuenta: IdRecurso, usuario: LectorCupos, conn: Db
 ) -> list[CupoEfectivo]:
     """Cupos vigentes y consumo en Ecuador para los roles internos publicados."""
     return service.obtener_cupos(conn, idCuenta)

@@ -12,6 +12,7 @@ from tests.caja_contexto import (
     ID_CAJERO,
     ID_SUPERVISOR,
     JORNADA,
+    TOTALES,
     Contexto,
     code,
     crear_contexto,
@@ -34,6 +35,8 @@ def preparar_autorizacion(ctx: Contexto, **cambios: Any) -> None:
     )
     ctx.fake("obtener_cuadre_de_jornada", {**contado, **cambios})
     ctx.fake("autorizar_cuadre", True)
+    # Sin movimientos después del conteo: los totales actuales son los del cuadre
+    ctx.fake("calcular_totales", TOTALES)
     ctx.fake("obtener_cuadre", {**contado, "IdAutorizadoPor": ID_SUPERVISOR})
 
 

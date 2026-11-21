@@ -11,6 +11,11 @@ from workos import WorkOSClient
 
 from app.core.config.settings import get_settings
 
+# Segundos de tolerancia de reloj al validar el access token (iat y exp). Con 0, un
+# reloj local apenas atrasado respecto a WorkOS rechaza el token recién emitido
+# ("The token is not yet valid (iat)") y el login falla.
+JWT_LEEWAY = 15.0
+
 
 @lru_cache
 def get_workos() -> WorkOSClient:
@@ -22,6 +27,7 @@ def get_workos() -> WorkOSClient:
     return WorkOSClient(
         api_key=settings.workos_api_key.get_secret_value(),
         client_id=settings.workos_client_id,
+        jwt_leeway=JWT_LEEWAY,
     )
 
 
@@ -45,6 +51,14 @@ def get_frontend_url() -> str:
     if not url:
         raise RuntimeError("Falta FRONTEND_URL en la configuración")
     return url
+
+
+def get_organizacion_id() -> str:
+    """Organización de la cooperativa (EnquoCoop) en WorkOS."""
+    organizacion = get_settings().workos_organization_id
+    if not organizacion:
+        raise RuntimeError("Falta WORKOS_ORGANIZATION_ID en la configuración")
+    return organizacion
 
 
 def get_redirect_uri() -> str:

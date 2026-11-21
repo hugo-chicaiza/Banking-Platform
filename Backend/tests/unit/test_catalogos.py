@@ -168,7 +168,7 @@ _PRODUCTO_CUENTA = {
 def test_productos_sin_filtro_devuelve_nulos_y_monto_numerico(client, monkeypatch):
     llamada = {}
 
-    def listar(_conn, tipo, tipo_tarjeta):
+    def listar(_conn, tipo, tipo_tarjeta, _edad=None):
         llamada["tipo"] = tipo
         llamada["tipo_tarjeta"] = tipo_tarjeta
         return [_PRODUCTO_CUENTA]
@@ -184,6 +184,8 @@ def test_productos_sin_filtro_devuelve_nulos_y_monto_numerico(client, monkeypatc
             "idProducto": 1,
             "codigoProducto": "AHO001",
             "nombreProducto": "Ahorro a la vista",
+            # Sin descripción cargada: el contrato devuelve null
+            "descripcion": None,
             "tipoProducto": "Cuenta",
             "montoAperturaMinimo": 20.0,
             "idTipoCredito": None,
@@ -206,7 +208,7 @@ def test_productos_sin_filtro_devuelve_nulos_y_monto_numerico(client, monkeypatc
 def test_productos_filtra_por_cada_tipo(client, monkeypatch, tipo):
     llamada = {}
 
-    def listar(_conn, recibido, _tipo_tarjeta):
+    def listar(_conn, recibido, _tipo_tarjeta, _edad=None):
         llamada["tipo"] = recibido
         return []
 
@@ -228,7 +230,7 @@ def test_productos_filtra_por_cada_tipo(client, monkeypatch, tipo):
 def test_productos_filtra_por_tipo_de_tarjeta(client, monkeypatch, params, esperado):
     llamada = {}
 
-    def listar(_conn, tipo, tipo_tarjeta):
+    def listar(_conn, tipo, tipo_tarjeta, _edad=None):
         llamada["args"] = (tipo, tipo_tarjeta)
         return []
 
@@ -286,7 +288,7 @@ def test_repositorio_filtra_subproductos_por_tipo_de_tarjeta(monkeypatch):
 
     credito = repository.listar_productos(None, None, "Credito")  # type: ignore[arg-type]
 
-    assert consultas == [{"tipo": "Tarjeta"}, {"tipo": "Tarjeta"}]
+    assert consultas == [{"tipo": "Tarjeta"}, {"tipo": "Tarjeta", "edad": None}]
     assert [s["id_sub_producto"] for s in credito[0]["subproductos"]] == [6]
     assert credito[0]["subproductos"][0]["tipo_tarjeta"] == "Credito"
     todos = repository.listar_productos(None, "Tarjeta")  # type: ignore[arg-type]

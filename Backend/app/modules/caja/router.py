@@ -15,12 +15,7 @@ from sqlalchemy import Connection
 from app.core.api.errors import RESPUESTAS_ERROR, ProblemDetailsRoute, solo_parametros
 from app.core.api.middleware import ip_cliente
 from app.core.database.db import cooperativa
-from app.core.security.auth import (
-    Usuario,
-    UsuarioActual,
-    require_auth,
-    require_roles,
-)
+from app.core.security.auth import Usuario, UsuarioActual, require_auth, require_roles
 from app.core.security.operador import IdInterno
 from app.modules.caja import service
 from app.modules.caja.schemas import (
@@ -43,6 +38,7 @@ from app.modules.caja.schemas import (
     ReversoRequest,
     SeriesBilletesRequest,
 )
+from app.modules.parametros.funciones import funcion_pendiente
 from app.modules.transacciones.dependencias import (
     DependenciasOperacion,
     dependencias_operacion,
@@ -148,7 +144,7 @@ def consultar_jornadas(
     id_agencia: CodigoAgencia = None,
     id_usuario: Annotated[
         int | None,
-        Query(alias="idUsuario", ge=1),
+        Query(alias="idUsuario", ge=1, le=INT32_MAX),
     ] = None,
     estado: Literal["ABIERTA", "CERRADA", "CANCELADA"] | None = None,
     desde: date | None = None,
@@ -545,16 +541,17 @@ def registrar_deposito(
     ],
 ) -> Comprobante:
     """Registra un depósito idempotente."""
-    comprobante, repeticion = service.operacion_ventanilla(
-        conn,
-        usuario,
-        id_interno,
-        id_jornada,
-        datos,
-        ip_cliente(request.scope),
-        deps,
-        "Deposito",
-    )
+    with funcion_pendiente("FUNCION_CAJA_DEPOSITO", conn, usuario):
+        comprobante, repeticion = service.operacion_ventanilla(
+            conn,
+            usuario,
+            id_interno,
+            id_jornada,
+            datos,
+            ip_cliente(request.scope),
+            deps,
+            "Deposito",
+        )
 
     if repeticion:
         response.status_code = 200
@@ -627,16 +624,17 @@ def registrar_retiro(
 
     La operación es idempotente por registroUnico.
     """
-    comprobante, repeticion = service.operacion_ventanilla(
-        conn,
-        usuario,
-        id_interno,
-        id_jornada,
-        datos,
-        ip_cliente(request.scope),
-        deps,
-        "Retiro",
-    )
+    with funcion_pendiente("FUNCION_CAJA_RETIRO", conn, usuario):
+        comprobante, repeticion = service.operacion_ventanilla(
+            conn,
+            usuario,
+            id_interno,
+            id_jornada,
+            datos,
+            ip_cliente(request.scope),
+            deps,
+            "Retiro",
+        )
 
     if repeticion:
         response.status_code = 200

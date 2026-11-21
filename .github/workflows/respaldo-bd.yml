@@ -1,0 +1,106 @@
+# E0-02 · Respaldo diario de CooperativaDB y SeguridadDB (ACTIVO)
+#
+# Exporta cada base (BACPAC con el login AdminRespaldos, solo lectura), la comprime, la
+# cifra (AES-256 con BACKUP_PASSPHRASE) y la sube a Backblaze B2. El bucket guarda 14 días
+# (regla de ciclo de vida). Para llegar a la base abre una regla temporal en el firewall de
+# `enquohub` con la IP del runner y la borra al terminar, pase lo que pase.
+# Procedimiento completo y restauración: Backend/docs/E0-02-respaldos.md
+name: Respaldo de bases de datos
+
+on:
+  schedule:
+    - cron: "0 7 * * *" # 02:00 en Ecuador
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write # OIDC con Azure, solo para la regla temporal del firewall
+
+concurrency:
+  group: respaldo-bd
+  cancel-in-progress: false
+
+env:
+  SQL_SERVER: enquohub
+  SQLPACKAGE_VERSION: "170.5.76"
+
+jobs:
+  respaldo:
+    name: Exportar, cifrar y subir
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment: respaldos
+    steps:
+      - name: Iniciar sesión en Azure (OIDC)
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        with:
+          client-id: ${{ secrets.AZUREAPPSERVICE_CLIENTID_5769855C78C44FA798C2BEAAC67773A8 }}
+          tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_3ED80B0E825E4C2BA2CDD1A01AA83F5E }}
+          subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_5DBED6A2C4A34333A97D033402FFD8F2 }}
+
+      - name: Identidad usada (nombre, sin exponer su ID)
+        env:
+          CLIENTE: ${{ secrets.AZUREAPPSERVICE_CLIENTID_5769855C78C44FA798C2BEAAC67773A8 }}
+        run: |
+          az identity list --query "[?clientId=='${CLIENTE}'].name | [0]" -o tsv || echo "sin permiso para listar identidades"
+
+      - name: Abrir el firewall solo para este runner
+        run: |
+          set -euo pipefail
+          IP=$(curl -fsS https://api.ipify.org)
+          GRUPO=$(az sql server list --query "[?name=='${SQL_SERVER}'].resourceGroup | [0]" -o tsv)
+          test -n "$GRUPO" || { echo "No se encontró el servidor ${SQL_SERVER}"; exit 1; }
+          echo "GRUPO=$GRUPO" >> "$GITHUB_ENV"
+          echo "REGLA=gh-respaldo-${GITHUB_RUN_ID}" >> "$GITHUB_ENV"
+          az sql server firewall-rule create -g "$GRUPO" -s "$SQL_SERVER" -n "gh-respaldo-${GITHUB_RUN_ID}" \
+            --start-ip-address "$IP" --end-ip-address "$IP" -o none
+
+      - name: Instalar SqlPackage
+        run: |
+          dotnet tool install --global microsoft.sqlpackage --version "$SQLPACKAGE_VERSION"
+          echo "$HOME/.dotnet/tools" >> "$GITHUB_PATH"
+
+      - name: Exportar, comprimir y cifrar
+        env:
+          SQL_USER: ${{ secrets.SQL_ADMIN_USER }}
+          SQL_PASSWORD: ${{ secrets.SQL_ADMIN_PASSWORD }}
+          BACKUP_PASSPHRASE: ${{ secrets.BACKUP_PASSPHRASE }}
+        run: |
+          set -euo pipefail
+          test -n "$BACKUP_PASSPHRASE" || { echo "Falta BACKUP_PASSPHRASE"; exit 1; }
+          FECHA=$(date -u +%Y%m%dT%H%M%SZ)
+          echo "FECHA=$FECHA" >> "$GITHUB_ENV"
+          mkdir -p salida
+          for BASE in CooperativaDB SeguridadDB; do
+            CADENA="Server=tcp:${SQL_SERVER}.database.windows.net,1433;Database=${BASE};User ID=${SQL_USER};Password=${SQL_PASSWORD};Encrypt=True;TrustServerCertificate=False;Connection Timeout=60"
+            sqlpackage /Action:Export /SourceConnectionString:"$CADENA" /TargetFile:"salida/${BASE}.bacpac" /Quiet:True
+            gzip -9 "salida/${BASE}.bacpac"
+            openssl enc -aes-256-cbc -pbkdf2 -iter 600000 -salt \
+              -in "salida/${BASE}.bacpac.gz" -out "salida/${BASE}_${FECHA}.bacpac.gz.enc" -pass env:BACKUP_PASSPHRASE
+            rm -f "salida/${BASE}.bacpac.gz"
+            sha256sum "salida/${BASE}_${FECHA}.bacpac.gz.enc" | awk '{print $1}' > "salida/${BASE}_${FECHA}.bacpac.gz.enc.sha256"
+            echo "${BASE}: $(du -h "salida/${BASE}_${FECHA}.bacpac.gz.enc" | cut -f1)"
+          done
+
+      - name: Subir a Backblaze B2
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.B2_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.B2_APP_KEY }}
+          AWS_DEFAULT_REGION: us-east-005
+          B2_BUCKET: ${{ secrets.B2_BUCKET }}
+          B2_ENDPOINT: ${{ secrets.B2_ENDPOINT }}
+        run: |
+          set -euo pipefail
+          for ARCHIVO in salida/*; do
+            BASE=$(basename "$ARCHIVO" | cut -d_ -f1)
+            aws s3 cp "$ARCHIVO" "s3://${B2_BUCKET}/${BASE}/$(basename "$ARCHIVO")" --endpoint-url "https://${B2_ENDPOINT}" --only-show-errors
+          done
+          aws s3 ls "s3://${B2_BUCKET}/" --recursive --endpoint-url "https://${B2_ENDPOINT}" | tail -n 8
+
+      - name: Cerrar el firewall
+        if: always()
+        run: |
+          if [ -n "${REGLA:-}" ] && [ -n "${GRUPO:-}" ]; then
+            az sql server firewall-rule delete -g "$GRUPO" -s "$SQL_SERVER" -n "$REGLA" -o none || true
+          fi
+          rm -rf salida

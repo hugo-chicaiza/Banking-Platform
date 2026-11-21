@@ -1,6 +1,6 @@
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, Path, Query
+from fastapi import APIRouter, Depends, Path, Query, Request, Response
 from sqlalchemy import Connection
 
 from app.core.api.errors import (
@@ -9,25 +9,34 @@ from app.core.api.errors import (
     problema,
     solo_parametros,
 )
+from app.core.api.middleware import ip_cliente
 from app.core.database.db import cooperativa
-from app.core.security.auth import require_auth
-from app.modules.catalogos import repository
+from app.core.security.auth import Usuario, require_auth, require_roles
+from app.modules.catalogos import administracion, confirmacion, repository, service
 from app.modules.catalogos.schemas import (
     ActividadEconomica,
     Agencia,
     Canal,
     Ciudad,
+    Comision,
     Denominacion,
     Pais,
     Producto,
+    Red,
+    Seguro,
+    SistemaAmortizacion,
+    TasaInteres,
+    TasaInteresCreate,
     TipoAntecedente,
     TipoCredito,
     TipoMovimientoCaja,
     TipoProducto,
+    TipoTasa,
 )
 from app.modules.catalogos.subproductos import TipoTarjeta
 
-# Catálogos de solo lectura: sin service.py porque no hay reglas de negocio
+# Catálogos de lectura para cualquier usuario autenticado. Solo las tasas de interés se
+# crean aquí (ADMIN); sus reglas están en service.py
 router = APIRouter(
     prefix="/catalogos",
     tags=["catalogos"],
@@ -58,6 +67,174 @@ def listar_canales(conn: Db) -> Any:
     return repository.listar_canales(conn)
 
 
+@router.get("/redes", response_model=list[Red])
+def listar_redes(conn: Db) -> Any:
+    return repository.listar_redes(conn)
+
+
+@router.get("/sistemas-amortizacion", response_model=list[SistemaAmortizacion])
+def listar_sistemas_amortizacion(conn: Db) -> Any:
+    return repository.listar_sistemas_amortizacion(conn)
+
+
+@router.get(
+    "/tasas-interes",
+    response_model=list[TasaInteres],
+    dependencies=[Depends(solo_parametros("idTipoCredito", "tipoTasa"))],
+)
+def listar_tasas_interes(
+    conn: Db,
+    id_tipo_credito: Annotated[
+        int | None, Query(alias="idTipoCredito", ge=1, le=2_147_483_647)
+    ] = None,
+    tipo_tasa: Annotated[TipoTasa | None, Query(alias="tipoTasa")] = None,
+) -> Any:
+    """Tasas activas (vigentes, futuras y vencidas); `vigente` dice cuáles aplican hoy."""
+    return service.listar_tasas_interes(conn, id_tipo_credito, tipo_tasa)
+
+
+@router.get("/comisiones", response_model=list[Comision])
+def listar_comisiones(conn: Db) -> Any:
+    """Comisiones y recargos activos, para vincularlos a productos y subproductos."""
+    return repository.listar_comisiones(conn)
+
+
+@router.get("/seguros", response_model=list[Seguro])
+def listar_seguros(conn: Db) -> Any:
+    return repository.listar_seguros(conn)
+
+
+@router.post(
+    "/tasas-interes",
+    response_model=TasaInteres,
+    status_code=201,
+    openapi_extra={"x-roles": ["ADMIN"]},
+)
+def crear_tasa_interes(
+    payload: TasaInteresCreate,
+    request: Request,
+    usuario: Annotated[Usuario, Depends(require_roles("ADMIN"))],
+    conn: Db,
+) -> Any:
+    """Las tasas no se editan: una nueva con su vigencia reemplaza a la anterior."""
+    return service.crear_tasa_interes(conn, payload, usuario, ip_cliente(request.scope))
+
+
+_ADMIN_LECTURA = ("ADMIN", "SUPERVISOR", "ASESOR")
+Clave = Annotated[str, Path(pattern=r"^[a-z-]{3,40}$")]
+IdRegistro = Annotated[str, Path(pattern=r"^[A-Za-z0-9]{1,15}$")]
+
+
+@router.get(
+    "/administracion",
+    openapi_extra={"x-roles": list(_ADMIN_LECTURA)},
+)
+def listar_catalogos_administrables(
+    _: Annotated[Usuario, Depends(require_roles(*_ADMIN_LECTURA))],
+    conn: Db,
+) -> list[dict[str, Any]]:
+    """Catálogos que se administran y la descripción de sus campos."""
+    return administracion.descriptores(conn)
+
+
+@router.post(
+    "/administracion/{clave}/confirmacion",
+    openapi_extra={"x-roles": ["ADMIN"]},
+)
+def pedir_confirmacion(
+    clave: Clave,
+    usuario: Annotated[Usuario, Depends(require_roles("ADMIN"))],
+) -> dict[str, Any]:
+    """Código de 4 caracteres y su token para crear o eliminar en un catálogo que puede
+    alterar la lógica de negocio. Se envían en X-Confirmacion-Codigo y
+    X-Confirmacion-Token; vencen a los 5 minutos."""
+    if clave not in confirmacion.CATALOGOS_CON_CONFIRMACION:
+        raise problema(
+            422, "CONFIRMACION_NO_APLICA", "Este catálogo no pide confirmación."
+        )
+    return confirmacion.emitir(usuario.id_usuario, clave)
+
+
+@router.get(
+    "/administracion/{clave}",
+    openapi_extra={"x-roles": list(_ADMIN_LECTURA)},
+)
+def listar_registros(
+    clave: Clave,
+    _: Annotated[Usuario, Depends(require_roles(*_ADMIN_LECTURA))],
+    conn: Db,
+) -> list[dict[str, Any]]:
+    """Todas las filas del catálogo, activas e inactivas."""
+    return administracion.listar(conn, clave)
+
+
+@router.post(
+    "/administracion/{clave}",
+    status_code=201,
+    openapi_extra={"x-roles": ["ADMIN"]},
+)
+def crear_registro(
+    clave: Clave,
+    payload: dict[str, Any],
+    request: Request,
+    usuario: Annotated[Usuario, Depends(require_roles("ADMIN"))],
+    conn: Db,
+) -> dict[str, Any]:
+    """Alta con los campos de `camposAlta`; código repetido: 409 CODIGO_DUPLICADO."""
+    confirmacion.exigir(
+        usuario.id_usuario,
+        clave,
+        request.headers.get("x-confirmacion-token"),
+        request.headers.get("x-confirmacion-codigo"),
+    )
+    return administracion.crear(
+        conn, clave, payload, usuario, ip_cliente(request.scope)
+    )
+
+
+@router.delete(
+    "/administracion/{clave}/{id_registro}",
+    status_code=204,
+    openapi_extra={"x-roles": ["ADMIN"]},
+)
+def eliminar_registro(
+    clave: Clave,
+    id_registro: IdRegistro,
+    request: Request,
+    usuario: Annotated[Usuario, Depends(require_roles("ADMIN"))],
+    conn: Db,
+) -> Response:
+    """Solo lo que nadie usa; si se usa, 409 ITEM_EN_USO y se desactiva en su lugar."""
+    confirmacion.exigir(
+        usuario.id_usuario,
+        clave,
+        request.headers.get("x-confirmacion-token"),
+        request.headers.get("x-confirmacion-codigo"),
+    )
+    administracion.eliminar(
+        conn, clave, id_registro, usuario, ip_cliente(request.scope)
+    )
+    return Response(status_code=204)
+
+
+@router.patch(
+    "/administracion/{clave}/{id_registro}",
+    openapi_extra={"x-roles": ["ADMIN"]},
+)
+def actualizar_registro(
+    clave: Clave,
+    id_registro: IdRegistro,
+    payload: dict[str, Any],
+    request: Request,
+    usuario: Annotated[Usuario, Depends(require_roles("ADMIN"))],
+    conn: Db,
+) -> dict[str, Any]:
+    """Edita los campos editables o el estado (A/I). Nada se borra."""
+    return administracion.actualizar(
+        conn, clave, id_registro, payload, usuario, ip_cliente(request.scope)
+    )
+
+
 @router.get("/agencias", response_model=list[Agencia])
 def listar_agencias(conn: Db) -> Any:
     return repository.listar_agencias(conn)
@@ -81,15 +258,20 @@ def listar_tipos_antecedente(conn: Db) -> Any:
 @router.get(
     "/productos",
     response_model=list[Producto],
-    dependencies=[Depends(solo_parametros("tipo", "tipoTarjeta"))],
+    dependencies=[Depends(solo_parametros("tipo", "tipoTarjeta", "idCliente"))],
 )
 def listar_productos(
     conn: Db,
     tipo: TipoProducto | None = None,
     tipo_tarjeta: Annotated[TipoTarjeta | None, Query(alias="tipoTarjeta")] = None,
+    id_cliente: Annotated[
+        int | None, Query(alias="idCliente", ge=1, le=2_147_483_647)
+    ] = None,
 ) -> Any:
     """Productos activos con sus subproductos. tipoTarjeta (Debito/Credito) deja solo
     los subproductos de tarjeta de ese tipo, para que la emisión sea congruente.
+    idCliente deja solo los subproductos para los que el cliente es elegible por edad
+    (E3-02 AC 6); un subproducto con límite de edad no se ofrece sin fecha de nacimiento.
     """
     if tipo_tarjeta is not None and tipo not in (None, "Tarjeta"):
         raise problema(
@@ -97,7 +279,26 @@ def listar_productos(
             "PARAMETRO_INVALIDO",
             "tipoTarjeta solo aplica a productos de tipo Tarjeta.",
         )
-    return repository.listar_productos(conn, tipo, tipo_tarjeta)
+    edad: int | None = None
+    if id_cliente is not None:
+        existe, nacimiento = repository.fecha_nacimiento_cliente(conn, id_cliente)
+        if not existe:
+            raise problema(404, "CLIENTE_NO_ENCONTRADO", "El cliente no existe.")
+        edad = service.edad_en(nacimiento) if nacimiento else -1
+    productos = repository.listar_productos(conn, tipo, tipo_tarjeta, edad)
+    if id_cliente is not None:
+        from app.modules.productos.service import cliente_elegible
+
+        for producto in productos:
+            producto["subproductos"] = [
+                s
+                for s in producto["subproductos"]
+                if cliente_elegible(
+                    conn, id_cliente, s["id_sub_producto"], service.hoy()
+                )[0]
+            ]
+        productos = [p for p in productos if p["subproductos"]]
+    return productos
 
 
 @router.get("/paises/{codigo_pais}/ciudades", response_model=list[Ciudad])

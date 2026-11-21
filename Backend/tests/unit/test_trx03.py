@@ -19,6 +19,7 @@ from app.modules.transacciones.dependencias import (
 from app.modules.transacciones.router import router
 from tests.caja_contexto import (
     ID_SUPERVISOR,
+    TOTALES,
     Contexto,
     code,
     crear_contexto,
@@ -167,8 +168,20 @@ def preparar_reverso(
     for metodo, respuesta in respuestas.items():
         ctx.fake(metodo, respuesta)
 
+    ctx.fake(
+        "obtener_cuenta",
+        {
+            "IdCuenta": 501,
+            "IdAgencia": "001",
+            "Saldo": Decimal("1000.00"),
+            "SaldoRetenido": Decimal("0.00"),
+            "Estado": "Activa",
+        },
+    )
+
     for metodo, respuesta in (
         ("id_fecha_contable", FECHA),
+        ("calcular_totales", TOTALES),
         ("obtener_jornada", {"Estado": "ABIERTA"}),
         ("obtener_cuadre_de_jornada", None),
     ):
@@ -207,13 +220,16 @@ def test_reverso_comparte_instante_con_el_calendario(
     assert ctx.llamadas["insertar_transaccion"][0][0]["fecha_hora"] == instante
 
 
-def test_trx03_sin_configuracion_501(ctx: Contexto) -> None:
+def test_trx03_sin_configuracion_404(ctx: Contexto) -> None:
+    ctx.conn.execute.return_value.mappings.return_value.first.return_value = None
     respuesta = solicitar_reverso(ctx)
 
-    assert respuesta.status_code == 501
-    assert code(respuesta) == "OPERACION_NO_HABILITADA"
+    assert respuesta.status_code == 404
+    assert code(respuesta) == "FUNCION_NO_DISPONIBLE"
     ctx.conn.begin.assert_not_called()
     assert ctx.eventos[-1].resultado == "Fallido"
+
+    ctx.conn.execute.assert_called_once()
 
 
 def test_trx03_reverso_atm(ctx: Contexto) -> None:
@@ -253,6 +269,18 @@ def test_trx03_reverso_atm(ctx: Contexto) -> None:
     assert ctx.llamadas["marcar_reversada"] == [(ID_ORIGINAL,)]
     assert not ctx.llamadas["insertar_movimiento_caja"]
     assert "motivo=Solicitud" in ctx.eventos[-1].descripcion
+
+
+def test_trx03_proveedor_sin_asiento_revierte_y_no_marca_original(
+    ctx: Contexto,
+) -> None:
+    deps = preparar_reverso(ctx)
+    deps.contabilizar.return_value = None
+    respuesta = solicitar_reverso(ctx)
+    assert (respuesta.status_code, code(respuesta)) == (500, "ASIENTO_NO_GENERADO")
+    assert ctx.conn.begin.return_value.__exit__.call_args.args[0] is not None
+    assert ctx.llamadas["insertar_transaccion"]
+    assert not ctx.llamadas["marcar_reversada"]
 
 
 def test_trx03_reverso_de_ventanilla_mueve_caja(

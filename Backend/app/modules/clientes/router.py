@@ -43,6 +43,7 @@ Db = Annotated[Connection, Depends(cooperativa)]
 
 # Roles de cada tarea (GitHubProject_Files): 403 SIN_PERMISO si no tiene ninguno
 _ASESOR_ADMIN = [Depends(require_roles("ASESOR", "ADMIN"))]
+_EDITAR_CLIENTE = [Depends(require_roles("ASESOR", "ADMIN"))]
 
 _consultas_router = APIRouter(route_class=ProblemDetailsRoute)
 _ROLES_CONSULTA = ["ASESOR", "CAJERO", "SUPERVISOR", "ADMIN"]
@@ -150,7 +151,7 @@ def validar_identificacion(
     operation_id="CLI02",
     response_model=Cliente,
     status_code=201,
-    dependencies=_ASESOR_ADMIN,
+    dependencies=_EDITAR_CLIENTE,
 )
 def registrar_cliente(
     payload: ClienteCreate,
@@ -199,7 +200,7 @@ def listar_direcciones(
     operation_id="CLI10",
     response_model=Direccion,
     status_code=201,
-    dependencies=_ASESOR_ADMIN,
+    dependencies=_EDITAR_CLIENTE,
 )
 def agregar_direccion(
     idCliente: int,
@@ -225,7 +226,7 @@ def agregar_direccion(
     "/{idCliente}/direcciones/{idDireccion}",
     operation_id="CLI11",
     response_model=Direccion,
-    dependencies=_ASESOR_ADMIN,
+    dependencies=_EDITAR_CLIENTE,
 )
 def editar_direccion(
     idCliente: int,
@@ -252,7 +253,7 @@ def editar_direccion(
     "/{idCliente}/direcciones/{idDireccion}",
     operation_id="CLI12",
     status_code=204,
-    dependencies=_ASESOR_ADMIN,
+    dependencies=_EDITAR_CLIENTE,
 )
 def eliminar_direccion(
     idCliente: int,
@@ -274,13 +275,9 @@ def eliminar_direccion(
 
 
 def _ip_cliente(request: Request) -> str:
-    """Obtiene la IP del cliente desde los headers o la conexión."""
-    forwarded = request.headers.get("x-forwarded-for")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
-    if request.client:
-        return request.client.host
-    return "127.0.0.1"
+    """IP confiable del usuario: X-Forwarded-For no se lee porque el cliente puede
+    falsificarlo (ASVS 4.1.3); ip_cliente solo acepta la que fija el Worker."""
+    return ip_cliente(request.scope)
 
 
 _riesgo_router = APIRouter(route_class=ProblemDetailsRoute)
@@ -372,6 +369,13 @@ def cambiar_estado_cliente(
     conn: Db,
 ) -> Cliente:
     """Transición explícita, con comprobación de productos para la baja."""
+    from app.modules.seguridad import funciones
+
+    autorizacion = (
+        {"funcion_autorizada": True}
+        if funciones.autorizar_operacion(request, usuario)
+        else {}
+    )
     return service.cambiar_estado_cliente(
         conn,
         idCliente,
@@ -379,6 +383,7 @@ def cambiar_estado_cliente(
         modificado_por,
         ip_cliente(request.scope),
         usuario.roles,
+        **autorizacion,
     )
 
 

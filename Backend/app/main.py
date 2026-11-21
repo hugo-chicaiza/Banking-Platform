@@ -4,19 +4,31 @@ from fastapi import FastAPI
 # from app.core.config import get_settings
 # from app.core.middleware import TraceIdMiddleware
 # from app.core.rate_limit import LimitePeticionesMiddleware
-from app.core.api.middleware import HstsMiddleware, TraceIdMiddleware
+from app.core.api.middleware import (
+    HstsMiddleware,
+    SoloProxyMiddleware,
+    TraceIdMiddleware,
+)
 from app.core.api.rate_limit import LimitePeticionesMiddleware
 from app.core.config.logs import configurar_logging
 from app.core.config.settings import get_settings
 from app.core.security.audit import AccesoDenegadoMiddleware
+from app.modules.aprobaciones.router import router as aprobaciones_router
 from app.modules.atm.router import router as atm_router
 from app.modules.auth.router import router as auth_router
+from app.modules.auth.router import router_usuarios
+from app.modules.boveda.router import router as boveda_router
 from app.modules.caja.router import router as caja_router
 from app.modules.catalogos.router import router as catalogos_router
 from app.modules.clientes.router import router as clientes_router
 from app.modules.contabilidad.router import router as contabilidad_router
 from app.modules.creditos.router import router as creditos_router
 from app.modules.cuentas.router import router as cuentas_router
+from app.modules.organizacion.router import router as organizacion_router
+from app.modules.organizacion.router import router_publico as institucion_router
+from app.modules.parametros.router import router as parametros_router
+from app.modules.productos.router import router as productos_router
+from app.modules.seguridad.router import router as seguridad_router
 from app.modules.tarjetas.router import router as tarjetas_router
 from app.modules.tarjetas.router import router_pruebas as tarjetas_pruebas_router
 from app.modules.transacciones.router import router as transacciones_router
@@ -25,7 +37,7 @@ from app.smoke_test import router as smoke_test_router  # SMOKE-TEST: borrar
 settings = get_settings()
 is_prod = settings.app_env == "production"
 # Antes de crear la app, para que los mensajes del arranque ya salgan con el formato
-configurar_logging(settings.log_level)
+configurar_logging(settings.log_level, settings.log_formato)
 
 app = FastAPI(
     title=settings.app_name,
@@ -48,21 +60,33 @@ if settings.limite_peticiones_activo:
 # Fuera de development: en localhost el navegador recordaría HSTS para otros proyectos
 if settings.app_env != "development":
     app.add_middleware(HstsMiddleware)
+# ASVS 4.1.3: en Azure, solo tráfico que llega por el Worker con el secreto compartido
+if settings.proxy_exigido:
+    app.add_middleware(SoloProxyMiddleware)
 # Debe ir de último: se ejecuta primero el último agregado y así el 429 lleva traceId
 app.add_middleware(TraceIdMiddleware)
 
 API_V1 = "/api/v1"
 app.include_router(auth_router, prefix=API_V1)
+app.include_router(aprobaciones_router, prefix=API_V1)
+app.include_router(router_usuarios, prefix=API_V1)
 app.include_router(catalogos_router, prefix=API_V1)
 app.include_router(clientes_router, prefix=API_V1)
 app.include_router(contabilidad_router, prefix=API_V1)
 app.include_router(creditos_router, prefix=API_V1)
 app.include_router(cuentas_router, prefix=API_V1)
+app.include_router(organizacion_router, prefix=API_V1)
+app.include_router(institucion_router, prefix=API_V1)
+app.include_router(parametros_router, prefix=API_V1)
+app.include_router(productos_router, prefix=API_V1)
+app.include_router(seguridad_router, prefix=API_V1)
 app.include_router(tarjetas_router, prefix=API_V1)
 app.include_router(caja_router, prefix=API_V1)
+app.include_router(boveda_router, prefix=API_V1)
 app.include_router(transacciones_router, prefix=API_V1)
 app.include_router(atm_router, prefix=API_V1)
 # PIN pad simulado para probar TAR-05 y ATM-01: responde 404 en producción
+# (su dependencia _solo_fuera_de_produccion; tests/unit/test_registros.py lo verifica)
 app.include_router(tarjetas_pruebas_router, prefix=API_V1)
 
 # Público a propósito: verifica el despliegue sin sesión (fuera de /api, sin require_auth)

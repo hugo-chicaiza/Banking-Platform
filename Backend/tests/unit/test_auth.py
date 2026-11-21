@@ -1,11 +1,15 @@
 """AUT-01..04 y core/security.py (patrón BFF) sin red: WorkOS simulado."""
 
 import base64
+import hashlib
+import json
+import time
 from types import SimpleNamespace
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
 import httpx
+import jwt as pyjwt
 import pytest
 from cryptography.fernet import Fernet
 from fastapi import APIRouter, Depends, FastAPI
@@ -24,7 +28,7 @@ from workos.types.user_management.session import (
 from app.core.api.errors import ProblemDetailsRoute
 from app.core.config.settings import get_settings
 from app.core.security import auth as security
-from app.core.security.auth import COOKIE_SESION, require_roles
+from app.core.security.auth import COOKIE_SESION, require_permiso, require_roles
 from app.integrations import workos_client
 from app.main import app
 from app.modules.auth import service
@@ -64,7 +68,7 @@ class _Sesion:
             "organization_id": "org_1",
             "role": self._workos.roles[0] if self._workos.roles else None,
             "roles": self._workos.roles,
-            "permissions": ["cuentas:crear"],
+            "permissions": self._workos.permisos,
             # Como en WorkOS real: la copia del usuario en la cookie no trae metadatos
             "user": self._workos.usuario.model_copy(update={"metadata": {}}),
         }
@@ -108,7 +112,8 @@ class _UserManagement:
 
     def __init__(self) -> None:
         self.usuario = _usuario()
-        self.roles: list[str] = ["cajero"]
+        self.roles: list[str] = ["org-cajero"]
+        self.permisos: list[str] = ["caja:operar"]
         self.sesiones: dict[str, str] = {
             "sellada-vigente": "vigente",
             "sellada-vencida": "vencida",
@@ -116,12 +121,19 @@ class _UserManagement:
         self.error: Exception | None = None
         self.error_jwks: Exception | None = None
         self.renovaciones = 0
-        # Vínculos guardados en la base: KeyAgencia -> IdAgencia, KeyUsuario -> UsuarioID
-        self.agencias: dict[str, str] = {"org_1": "001"}
-        self.internos: dict[str, int] = {}
+        # Vínculos guardados en la base (KeyUsuario): AgenciaID y UsuarioID
+        self.agencias: dict[str, str] = {"user_1": "001"}
+        # user_1 es un usuario interno Activo; sin entrada aquí, no registrado
+        self.internos: dict[str, int] = {"user_1": 1}
         self.consultas_base = 0
         self.roles_registrados: dict[str, str | None] = {}
         self.llamadas: list[tuple[str, dict[str, Any]]] = []
+        # Sesiones del usuario en WorkOS (list_sessions); session_1 es la del login
+        self.sesiones_usuario = [SimpleNamespace(id="session_1", status="active")]
+        self.error_sesiones: Exception | None = None
+        # Cookie que entrega authenticate_with_code (una real con _sellar si el test
+        # necesita leer su sid)
+        self.sellada_login: str | None = None
 
     def get_authorization_url(self, **kwargs: Any) -> str:
         self.llamadas.append(("authorize", kwargs))
@@ -131,13 +143,23 @@ class _UserManagement:
         self.llamadas.append(("code", kwargs))
         if self.error:
             raise self.error
-        self.sesiones["sellada-nueva"] = "vigente"
-        return SimpleNamespace(sealed_session="sellada-nueva", user=self.usuario)
+        sellada = self.sellada_login or "sellada-nueva"
+        self.sesiones[sellada] = "vigente"
+        return SimpleNamespace(sealed_session=sellada, user=self.usuario)
 
     def load_sealed_session(self, *, sealed_session: str, cookie_password: str):
         clave = get_settings().workos_cookie_password.get_secret_value()
         assert cookie_password == clave
         return _Sesion(self, sealed_session)
+
+    def list_sessions(self, *, user_id: str) -> list[Any]:
+        self.llamadas.append(("list_sessions", {"user_id": user_id}))
+        if self.error_sesiones:
+            raise self.error_sesiones
+        return list(self.sesiones_usuario)
+
+    def revoke_session(self, *, session_id: str) -> None:
+        self.llamadas.append(("revoke_session", {"session_id": session_id}))
 
     def get_logout_url(self, session_id: str, return_to: str) -> str:
         self.llamadas.append(("logout", {"session_id": session_id}))
@@ -152,12 +174,15 @@ def _configuracion(monkeypatch):
     monkeypatch.setenv("WORKOS_COOKIE_PASSWORD", Fernet.generate_key().decode())
     monkeypatch.setenv("WORKOS_REDIRECT_URI", CALLBACK)
     monkeypatch.setenv("FRONTEND_URL", FRONT + "/")
+    monkeypatch.setenv("WORKOS_ORGANIZATION_ID", "org_1")
     get_settings.cache_clear()
     workos_client.get_cookie_password.cache_clear()
     security._renovaciones.clear()
+    security._revocadas.clear()
     yield
     get_settings.cache_clear()
     workos_client.get_cookie_password.cache_clear()
+    security._revocadas.clear()
 
 
 @pytest.fixture()
@@ -166,10 +191,11 @@ def workos(monkeypatch) -> _UserManagement:
     cliente = SimpleNamespace(user_management=falso)
     monkeypatch.setattr(security, "get_workos", lambda: cliente)
     monkeypatch.setattr(service, "get_workos", lambda: cliente)
+    monkeypatch.setattr(service, "_vincular", lambda *args: None)
 
-    def agencia(id_organizacion: str | None) -> str | None:
+    def agencia(id_workos: str) -> str | None:
         falso.consultas_base += 1
-        return falso.agencias.get(id_organizacion or "")
+        return falso.agencias.get(id_workos)
 
     def interno(id_workos: str, roles: str | None) -> int | None:
         falso.consultas_base += 1
@@ -177,6 +203,16 @@ def workos(monkeypatch) -> _UserManagement:
         return falso.internos.get(id_workos)
 
     monkeypatch.setattr(security, "_agencia_db", agencia)
+    monkeypatch.setattr(
+        security, "_agencia_operativa_db", lambda llave, sid, roles: agencia(llave)
+    )
+    monkeypatch.setattr(
+        security,
+        "_agencias_permitidas_db",
+        lambda llave, roles: (
+            (falso.agencias[llave],) if llave in falso.agencias else ()
+        ),
+    )
     monkeypatch.setattr(security, "_id_interno_db", interno)
     return falso
 
@@ -203,6 +239,25 @@ def _con_sesion(sellada: str = "sellada-vigente", **extra: str) -> dict[str, str
     return {"Cookie": f"{COOKIE_SESION}={sellada}", **extra}
 
 
+def _sellar(
+    workos: "_UserManagement",
+    estado: str,
+    *,
+    sid: str = "session_1",
+    hace: float = 60,
+) -> str:
+    """Cookie cifrada como la de WorkOS: un access token con sid e iat (emitido hace
+    `hace` segundos). Así motivo_rechazo puede leerla; el falso decide si sirve.
+    """
+    token = pyjwt.encode(
+        {"sid": sid, "iat": int(time.time() - hace)}, "x" * 32, algorithm="HS256"
+    )
+    clave = get_settings().workos_cookie_password.get_secret_value()
+    sellada = Fernet(clave).encrypt(json.dumps({"access_token": token}).encode())
+    workos.sesiones[sellada.decode()] = estado
+    return sellada.decode()
+
+
 def _iniciar(client: TestClient, return_to: str = "/clientes") -> tuple[str, str]:
     """GET /login: devuelve el state de la URL y el valor de la cookie de state."""
     r = client.get(f"{BASE}/login", params={"return_to": return_to})
@@ -211,19 +266,30 @@ def _iniciar(client: TestClient, return_to: str = "/clientes") -> tuple[str, str
     return state, cookie
 
 
-def _callback(client: TestClient, cookie_state: str | None, **params: str):
-    cabeceras = {"Cookie": f"{COOKIE_STATE}={cookie_state}"} if cookie_state else {}
+def _callback(
+    client: TestClient,
+    cookie_state: str | None,
+    sesion: str | None = None,
+    **params: str,
+):
+    """`sesion`: la cookie de sesión que ya tenía el navegador."""
+    cookies = [f"{COOKIE_STATE}={cookie_state}"] if cookie_state else []
+    if sesion:
+        cookies.append(f"{COOKIE_SESION}={sesion}")
+    cabeceras = {"Cookie": "; ".join(cookies)} if cookies else {}
     return client.get(f"{BASE}/callback", params=params, headers=cabeceras)
 
 
 # --- AUT-01 GET /auth/login --------------------------------------------------------
 
 
-def test_login_redirige_al_hosted_ui_con_state(client, workos):
+def test_login_redirige_al_hosted_ui_con_state_y_pkce(client, workos):
     r = client.get(f"{BASE}/login", params={"return_to": "/clientes?page=2"})
 
     assert r.status_code == 302
     assert r.headers["location"].startswith(AUTHORIZE)
+    # AuthKit pide credenciales siempre, aunque su sesión del navegador siga viva
+    assert parse_qs(urlsplit(r.headers["location"]).query)["max_age"] == ["0"]
     assert r.headers["cache-control"] == "no-store"
     argumentos = workos.llamadas[0][1]
     assert argumentos["provider"] == "authkit"
@@ -231,8 +297,15 @@ def test_login_redirige_al_hosted_ui_con_state(client, workos):
     cookie = _cookies(r)[COOKIE_STATE]
     for atributo in ("HttpOnly", "Secure", "SameSite=lax", "Path=/", "Max-Age=600"):
         assert atributo in cookie
-    state, destino = cookie.split(";")[0].split("=", 1)[1].split(".", 1)
+    state, verificador, destino = cookie.split(";")[0].split("=", 1)[1].split(".")
     assert state == argumentos["state"] and len(state) >= 43
+    assert len(verificador) == 43
+    assert verificador != state
+    resumen = hashlib.sha256(verificador.encode("ascii")).digest()
+    assert argumentos["code_challenge"] == base64.urlsafe_b64encode(
+        resumen
+    ).decode().rstrip("=")
+    assert verificador not in r.headers["location"]
     assert _ruta(destino) == "/clientes?page=2"
 
 
@@ -243,7 +316,7 @@ def test_login_redirige_al_hosted_ui_con_state(client, workos):
 def test_login_return_to_externo_vuelve_al_inicio(client, workos, return_to):
     _, cookie = _iniciar(client, return_to)
 
-    assert _ruta(cookie.split(".", 1)[1]) == "/"
+    assert _ruta(cookie.split(".", 2)[2]) == "/"
 
 
 # --- AUT-01 GET /auth/callback -----------------------------------------------------
@@ -264,11 +337,150 @@ def test_callback_crea_la_sesion_y_vuelve_a_return_to(
     for atributo in ("HttpOnly", "Secure", "SameSite=lax", "Path=/"):
         assert atributo in sesion
     assert "Domain" not in sesion
+    # Cookie de sesión del navegador: la duración la impone WorkOS
+    assert "Max-Age" not in sesion and "expires" not in sesion.lower()
     assert "Max-Age=0" in cookies[COOKIE_STATE]
-    argumentos = workos.llamadas[-1][1]
+    argumentos = dict(workos.llamadas)["code"]
     assert argumentos["code"] == "code-1"
+    assert argumentos["code_verifier"] == cookie.split(".", 2)[1]
     assert argumentos["session"]["seal_session"] is True
     assert eventos_auditados[-1].resultado == "Exitoso"
+
+
+def _revocadas(workos: "_UserManagement") -> list[str]:
+    return [d["session_id"] for n, d in workos.llamadas if n == "revoke_session"]
+
+
+def test_callback_con_otra_sesion_abierta_no_entra_y_la_abierta_sigue(
+    client, workos, eventos_auditados
+):
+    workos.sesiones_usuario += [
+        SimpleNamespace(id="session_celular", status="active"),
+    ]
+    state, cookie = _iniciar(client)
+
+    r = _callback(client, cookie, code="code-1", state=state)
+
+    assert r.headers["location"] == f"{FRONT}/login?error=SESION_ABIERTA"
+    assert COOKIE_SESION not in _cookies(r)
+    # Solo se descarta la sesión nueva; la del otro dispositivo no se toca
+    assert _revocadas(workos) == ["session_1"]
+    assert security.motivo_revocacion("session_celular") is None
+    assert eventos_auditados[-1].resultado == "Fallido"
+
+
+def test_callback_ignora_sesiones_cerradas_o_vencidas(client, workos):
+    workos.sesiones_usuario += [
+        SimpleNamespace(id="session_vieja", status="revoked"),
+        SimpleNamespace(
+            id="session_vencida", status="active", expires_at="2026-01-01T00:00:00Z"
+        ),
+    ]
+    state, cookie = _iniciar(client)
+
+    r = _callback(client, cookie, code="code-1", state=state)
+
+    assert r.headers["location"] == f"{FRONT}/clientes"
+    assert COOKIE_SESION in _cookies(r)
+    assert _revocadas(workos) == []
+
+
+def test_callback_desde_el_mismo_navegador_reemplaza_su_sesion(client, workos):
+    # Volvió a iniciar sesión en el navegador donde ya tenía la sesión "session_previa"
+    previa = _sellar(workos, "usada", sid="session_previa")
+    workos.sesiones_usuario += [
+        SimpleNamespace(id="session_previa", status="active"),
+    ]
+    state, cookie = _iniciar(client)
+
+    r = _callback(client, cookie, sesion=previa, code="code-1", state=state)
+
+    assert r.headers["location"] == f"{FRONT}/clientes"
+    assert _cookies(r)[COOKIE_SESION].startswith(f"{COOKIE_SESION}=sellada-nueva;")
+    assert _revocadas(workos) == ["session_previa"]
+
+
+def test_callback_cookie_de_otra_sesion_no_salta_la_regla(client, workos):
+    # La cookie del navegador es de una sesión distinta a la que está abierta
+    previa = _sellar(workos, "usada", sid="session_otra")
+    workos.sesiones_usuario += [
+        SimpleNamespace(id="session_celular", status="active"),
+    ]
+    state, cookie = _iniciar(client)
+
+    r = _callback(client, cookie, sesion=previa, code="code-1", state=state)
+
+    assert r.headers["location"] == f"{FRONT}/login?error=SESION_ABIERTA"
+    assert _revocadas(workos) == ["session_1"]
+
+
+def test_callback_sin_poder_cerrar_otras_sesiones_no_entra(client, workos):
+    cuerpo = {"code": "error_de_prueba", "message": "x"}
+    workos.error_sesiones = AuthenticationException(
+        httpx.Response(401, json=cuerpo), cuerpo
+    )
+    state, cookie = _iniciar(client)
+
+    r = _callback(client, cookie, code="code-1", state=state)
+
+    assert r.headers["location"] == f"{FRONT}/login?error=AUTENTICACION_NO_DISPONIBLE"
+    assert COOKIE_SESION not in _cookies(r)
+    # La sesión nueva no queda viva en WorkOS
+    assert ("revoke_session", {"session_id": "session_1"}) in workos.llamadas
+
+
+def test_callback_usuario_no_habilitado_no_crea_sesion_y_la_revoca(
+    client, workos, eventos_auditados
+):
+    # Bloqueado, Inactivo o sin vínculo: no hay fila Activa con su KeyUsuario
+    workos.internos.clear()
+    state, cookie = _iniciar(client)
+
+    r = _callback(client, cookie, code="code-1", state=state)
+
+    assert r.headers["location"] == f"{FRONT}/login?error=USUARIO_NO_HABILITADO"
+    assert COOKIE_SESION not in _cookies(r)
+    assert ("revoke_session", {"session_id": "session_1"}) in workos.llamadas
+    assert eventos_auditados[-1].resultado == "Fallido"
+
+
+def test_callback_sesion_sin_organizacion_no_crea_sesion(client, workos, monkeypatch):
+    # Membresía inactiva: WorkOS entrega la sesión sin organización
+    monkeypatch.setenv("WORKOS_ORGANIZATION_ID", "org_enquocoop")
+    get_settings.cache_clear()
+
+    def vincular_prohibido(*args):
+        pytest.fail("Una organizacion ajena no debe alcanzar SQL")
+
+    monkeypatch.setattr(service, "_vincular", vincular_prohibido)
+    workos.sellada_login = _sellar(workos, "vigente", sid="session_9")
+    state, cookie = _iniciar(client)
+
+    r = _callback(client, cookie, code="code-1", state=state)
+
+    assert r.headers["location"] == f"{FRONT}/login?error=USUARIO_NO_HABILITADO"
+    assert COOKIE_SESION not in _cookies(r)
+    # Se rechaza antes de tocar la base, pero la sesión que creó WorkOS no queda viva
+    assert _revocadas(workos) == ["session_9"]
+
+
+def test_callback_sin_llaves_de_workos_no_crea_sesion(client, workos):
+    state, cookie = _iniciar(client)
+    workos.error_jwks = PyJWKClientConnectionError("sin red")
+
+    r = _callback(client, cookie, code="code-1", state=state)
+
+    assert r.headers["location"] == f"{FRONT}/login?error=AUTENTICACION_NO_DISPONIBLE"
+    assert COOKIE_SESION not in _cookies(r)
+
+
+def test_me_usuario_bloqueado_con_sesion_viva_403(client, workos):
+    workos.internos.clear()
+
+    r = client.get(f"{BASE}/me", headers=_con_sesion())
+
+    assert r.status_code == 403
+    assert r.json()["code"] == "USUARIO_NO_REGISTRADO"
 
 
 @pytest.mark.parametrize("cookie_state", [None, "otro-state.Lw", "sin-punto", "x.%%"])
@@ -283,6 +495,25 @@ def test_callback_state_invalido_no_crea_sesion(
     assert COOKIE_SESION not in _cookies(r)
     assert [metodo for metodo, _ in workos.llamadas] == ["authorize"]
     assert eventos_auditados[-1].resultado == "Fallido"
+
+
+@pytest.mark.parametrize("verificador", [None, "", "invalido"])
+def test_callback_sin_verificador_valido_no_canjea_el_codigo(
+    client, workos, verificador
+):
+    state, cookie = _iniciar(client)
+    destino = cookie.split(".", 2)[2]
+    cookie = (
+        f"{state}.{destino}"
+        if verificador is None
+        else f"{state}.{verificador}.{destino}"
+    )
+
+    r = _callback(client, cookie, code="code-1", state=state)
+
+    assert r.headers["location"] == f"{FRONT}/login?error=SOLICITUD_INVALIDA"
+    assert COOKIE_SESION not in _cookies(r)
+    assert [metodo for metodo, _ in workos.llamadas] == ["authorize"]
 
 
 def test_callback_usuario_cancelo(client, workos):
@@ -326,18 +557,49 @@ def test_me_usuario_con_un_rol(client, workos):
         "email": "maria.lopez@correo.ec",
         "idOrganizacion": "org_1",
         "roles": ["CAJERO"],
-        "permisos": ["cuentas:crear"],
+        "permisos": ["caja:operar"],
         "idAgencia": "001",
     }
     assert "set-cookie" not in r.headers
 
 
 def test_me_usuario_con_varios_roles(client, workos):
-    workos.roles = ["asesor", "SUPERVISOR", "aprobador-credito", "member"]
+    # "member" y "admin" son roles propios de WorkOS: no cuentan
+    workos.roles = [
+        "org-asesor",
+        "org-supervisor",
+        "org-aprobador-credito",
+        "member",
+        "admin",
+    ]
 
     r = client.get(f"{BASE}/me", headers=_con_sesion())
 
     assert r.json()["roles"] == ["ASESOR", "SUPERVISOR", "APROBADOR_CREDITO"]
+
+
+def test_roles_de_organizacion_con_prefijo_org(client, workos):
+    # Slugs que se crean en WorkOS (C-05): org-<rol>
+    workos.roles = ["org-aprobador-credito"]
+
+    r = client.get(f"{BASE}/me", headers=_con_sesion())
+
+    assert r.json()["roles"] == ["APROBADOR_CREDITO"]
+
+
+def test_slug_rol_es_el_inverso_de_normalizar():
+    for rol in security.ROLES:
+        assert security.normalizar_roles([security.slug_rol(rol)], None) == (rol,)
+    with pytest.raises(ValueError):
+        security.slug_rol("MEMBER")
+
+
+def test_sesion_de_otra_organizacion_es_rechazada(client, workos, monkeypatch):
+    monkeypatch.setenv("WORKOS_ORGANIZATION_ID", "org_enquocoop")
+    get_settings.cache_clear()
+    r = client.get(f"{BASE}/me", headers=_con_sesion())
+    assert r.status_code == 403
+    assert r.json()["code"] == "ORGANIZACION_NO_AUTORIZADA"
 
 
 def test_me_sin_agencia_vigente(client, workos):
@@ -350,17 +612,18 @@ def test_me_sin_agencia_vigente(client, workos):
     assert cuerpo["nombre"] == "maria.lopez@correo.ec"
 
 
-def test_agencia_sale_del_vinculo_de_la_organizacion(client, workos):
+def test_agencia_sale_de_agencia_id_del_usuario(client, workos):
     cuerpo = client.get(f"{BASE}/me", headers=_con_sesion()).json()
 
-    # La organización de la sesión (org_1) está vinculada a la agencia 001
+    # Organizacion.Usuarios.AgenciaID del usuario vinculado (KeyUsuario = user_1)
     assert cuerpo["idAgencia"] == "001"
-    assert workos.consultas_base == 1
+    # Una para require_auth (vínculo Activo) y otra para la agencia
+    assert workos.consultas_base == 2
 
 
 def test_cambio_de_vinculo_aplica_sin_volver_a_iniciar_sesion(client, workos):
     client.get(f"{BASE}/me", headers=_con_sesion())
-    workos.agencias["org_1"] = "002"
+    workos.agencias["user_1"] = "002"
 
     cuerpo = client.get(f"{BASE}/me", headers=_con_sesion()).json()
 
@@ -368,7 +631,7 @@ def test_cambio_de_vinculo_aplica_sin_volver_a_iniciar_sesion(client, workos):
     assert cuerpo["idAgencia"] == "002"
 
 
-def test_organizacion_sin_vinculo_no_tiene_agencia(client, workos):
+def test_usuario_sin_agencia_no_tiene_agencia(client, workos):
     workos.agencias.clear()
 
     assert client.get(f"{BASE}/me", headers=_con_sesion()).json()["idAgencia"] is None
@@ -384,8 +647,8 @@ def test_vinculos_solo_se_consultan_si_se_usan(workos):
 
     assert sesion.usuario.agencia() == "001"
     assert sesion.usuario.agencia() == "001"
-    assert sesion.usuario.interno() is None
-    assert sesion.usuario.interno() is None
+    assert sesion.usuario.interno() == 1
+    assert sesion.usuario.interno() == 1
     # Una consulta por dato y por petición
     assert workos.consultas_base == 2
 
@@ -414,6 +677,7 @@ def test_usuario_no_registrado_se_rechaza_antes_de_la_ruta(client, workos):
     prueba = FastAPI()
     prueba.include_router(router)
     cliente = TestClient(prueba, raise_server_exceptions=False)
+    workos.internos.clear()
 
     r = cliente.get("/protegida", headers=_con_sesion())
     assert r.status_code == 403
@@ -434,8 +698,7 @@ def test_vinculo_falla_cerrado_si_la_base_falla(monkeypatch):
     monkeypatch.setattr(security, "get_engine", caida)
 
     assert security._id_interno_db("user_1", "ADMIN") is None
-    assert security._agencia_db("org_1") is None
-    assert security._agencia_db(None) is None
+    assert security._agencia_db("user_1") is None
 
 
 def test_me_con_token_vencido_renueva_la_cookie(client, workos):
@@ -475,6 +738,69 @@ def test_me_cookie_invalida_401_y_la_borra(client, workos):
     assert "Max-Age=0" in _cookies(r)[COOKIE_SESION]
 
 
+def test_me_sesion_revocada_401_al_instante(client, workos):
+    # El access token sigue vigente, pero el sid está en la caché de revocadas
+    sellada = _sellar(workos, "vigente")
+    security.revocar_sesion_local("session_1")
+
+    r = client.get(f"{BASE}/me", headers=_con_sesion(sellada))
+
+    assert r.status_code == 401
+    assert r.json()["code"] == "SESION_REVOCADA"
+    assert "Max-Age=0" in _cookies(r)[COOKIE_SESION]
+
+
+def test_me_sesion_revocada_tambien_al_renovar(client, workos):
+    sellada = _sellar(workos, "vencida")
+    security.revocar_sesion_local("session_1")
+
+    r = client.get(f"{BASE}/me", headers=_con_sesion(sellada))
+
+    assert r.status_code == 401
+    assert r.json()["code"] == "SESION_REVOCADA"
+    assert COOKIE_SESION in _cookies(r)
+    assert "Max-Age=0" in _cookies(r)[COOKIE_SESION]
+
+
+def test_me_sin_renovar_hace_mas_de_15_min_es_inactiva(client, workos):
+    # WorkOS rechaza la renovación; el último access token es de hace 16 min
+    sellada = _sellar(workos, "usada", hace=16 * 60)
+
+    r = client.get(f"{BASE}/me", headers=_con_sesion(sellada))
+
+    assert r.status_code == 401
+    assert r.json()["code"] == "SESION_INACTIVA"
+    assert "inactividad" in r.json()["detail"]
+
+
+def test_me_con_uso_reciente_que_no_renueva_es_expirada(client, workos):
+    # Renovó hace 2 min y WorkOS rechaza: alcanzó las 8 h
+    sellada = _sellar(workos, "usada", hace=2 * 60)
+
+    r = client.get(f"{BASE}/me", headers=_con_sesion(sellada))
+
+    assert r.status_code == 401
+    assert r.json()["code"] == "SESION_EXPIRADA"
+
+
+def test_me_cookie_ilegible_es_no_autenticado(client, workos):
+    r = client.get(f"{BASE}/me", headers=_con_sesion("basura"))
+
+    assert r.json()["code"] == "NO_AUTENTICADO"
+
+
+def test_la_revocacion_vence_con_su_ttl():
+    security.revocar_sesion_local("session_x")
+    vence, motivo = security._revocadas["session_x"]
+    assert motivo == "SESION_REVOCADA"
+    assert vence - time.monotonic() >= security.DURACION_ACCESS_TOKEN
+
+    security._revocadas["session_x"] = (time.monotonic() - 1, motivo)
+
+    assert security.motivo_revocacion("session_x") is None
+    assert "session_x" not in security._revocadas
+
+
 def test_me_llaves_de_workos_inaccesibles_503(client, workos):
     workos.error_jwks = PyJWKClientConnectionError("sin red")
 
@@ -499,6 +825,16 @@ def test_refresh_sin_sesion_401(client, workos):
 
     assert r.status_code == 401
     assert r.json()["code"] == "NO_AUTENTICADO"
+
+
+def test_refresh_de_sesion_revocada_401_con_motivo(client, workos):
+    sellada = _sellar(workos, "vigente")
+    security.revocar_sesion_local("session_1")
+
+    r = client.post(f"{BASE}/refresh", headers=_con_sesion(sellada, origin=FRONT))
+
+    assert r.status_code == 401
+    assert r.json()["code"] == "SESION_REVOCADA"
 
 
 def test_refresh_desde_otro_origen_403(client, workos):
@@ -548,6 +884,137 @@ def test_logout_desde_otro_sitio_403(client, workos):
     assert r.status_code == 403
 
 
+# --- Previews de PR de Cloudflare (FRONTEND_ORIGIN_REGEX, solo backend-dev) --------
+
+FRONT_DEV = "https://banking-platform-front.diegosebastia94.workers.dev"
+CALLBACK_DEV = f"{FRONT_DEV}/api/v1/auth/callback"
+PREVIEW_HOST = "pr-12-banking-platform-front.diegosebastia94.workers.dev"
+PREVIEW = f"https://{PREVIEW_HOST}"
+DESDE_PREVIEW = {"x-forwarded-host": PREVIEW_HOST}
+
+
+@pytest.fixture()
+def preview(monkeypatch):
+    """Configuración de backend-dev: WorkOS Staging y regex de previews."""
+    monkeypatch.setenv("FRONTEND_URL", FRONT_DEV)
+    monkeypatch.setenv("WORKOS_REDIRECT_URI", CALLBACK_DEV)
+    monkeypatch.setenv("WORKOS_API_KEY", "sk_test_prueba")
+    monkeypatch.setenv(
+        "FRONTEND_ORIGIN_REGEX",
+        r"^https://[a-z0-9-]+-banking-platform-front\.diegosebastia94\.workers\.dev$",
+    )
+    get_settings.cache_clear()
+
+
+def _iniciar_desde(client: TestClient, cabeceras: dict[str, str]) -> tuple[str, str]:
+    r = client.get(
+        f"{BASE}/login", params={"return_to": "/clientes"}, headers=cabeceras
+    )
+    state = parse_qs(urlsplit(r.headers["location"]).query)["state"][0]
+    cookie = _cookies(r)[COOKIE_STATE].split(";")[0].split("=", 1)[1]
+    return state, cookie
+
+
+def test_login_desde_preview_vuelve_al_callback_de_la_preview(client, workos, preview):
+    r = client.get(f"{BASE}/login", headers=DESDE_PREVIEW)
+
+    assert workos.llamadas[0][1]["redirect_uri"] == f"{PREVIEW}/api/v1/auth/callback"
+    cookie = _cookies(r)[COOKIE_STATE]
+    for atributo in ("HttpOnly", "Secure", "SameSite=lax", "Path=/", "Max-Age=600"):
+        assert atributo in cookie
+    assert "Domain" not in cookie
+
+
+@pytest.mark.parametrize(
+    "cabeceras",
+    [
+        {},
+        {"x-forwarded-host": FRONT_DEV.removeprefix("https://")},
+        {"x-forwarded-host": "evil.com"},
+        {"x-forwarded-host": f"{PREVIEW_HOST}.evil.com"},
+    ],
+)
+def test_login_fuera_de_preview_usa_workos_redirect_uri(
+    client, workos, preview, cabeceras
+):
+    client.get(f"{BASE}/login", headers=cabeceras)
+
+    assert workos.llamadas[0][1]["redirect_uri"] == CALLBACK_DEV
+
+
+def test_sin_regex_se_ignora_x_forwarded_host(client, workos):
+    client.get(f"{BASE}/login", headers=DESDE_PREVIEW)
+    r = _callback(client, None, code="code-1", state="x")
+
+    assert workos.llamadas[0][1]["redirect_uri"] == CALLBACK
+    assert r.headers["location"] == f"{FRONT}/login?error=SOLICITUD_INVALIDA"
+
+
+def test_callback_desde_preview_vuelve_a_la_preview(client, workos, preview):
+    state, cookie = _iniciar_desde(client, DESDE_PREVIEW)
+
+    r = client.get(
+        f"{BASE}/callback",
+        params={"code": "code-1", "state": state},
+        headers={"Cookie": f"{COOKIE_STATE}={cookie}", **DESDE_PREVIEW},
+    )
+
+    assert r.headers["location"] == f"{PREVIEW}/clientes"
+    assert _cookies(r)[COOKIE_SESION].startswith(f"{COOKIE_SESION}=sellada-nueva;")
+
+
+def test_callback_con_error_desde_preview_vuelve_al_login_de_la_preview(
+    client, workos, preview
+):
+    r = client.get(
+        f"{BASE}/callback",
+        params={"code": "code-1", "state": "otro"},
+        headers=DESDE_PREVIEW,
+    )
+
+    assert r.headers["location"] == f"{PREVIEW}/login?error=SOLICITUD_INVALIDA"
+    assert COOKIE_SESION not in _cookies(r)
+
+
+def test_logout_desde_preview_vuelve_al_login_de_la_preview(client, workos, preview):
+    r = client.post(
+        f"{BASE}/logout", headers=_con_sesion(origin=PREVIEW, **DESDE_PREVIEW)
+    )
+
+    assert r.status_code == 200
+    assert f"return_to={PREVIEW}/login" in r.json()["logoutUrl"]
+
+
+def test_logout_sin_sesion_desde_preview(client, workos, preview):
+    r = client.post(f"{BASE}/logout", headers=DESDE_PREVIEW)
+
+    assert r.json() == {"logoutUrl": f"{PREVIEW}/login"}
+
+
+@pytest.mark.parametrize(
+    ("origin", "cabeceras", "estado"),
+    [
+        (PREVIEW, DESDE_PREVIEW, 204),
+        (FRONT_DEV, DESDE_PREVIEW, 204),
+        (PREVIEW, {}, 403),
+        (
+            PREVIEW,
+            {
+                "x-forwarded-host": "pr-13-banking-platform-front.diegosebastia94.workers.dev"
+            },
+            403,
+        ),
+        ("https://evil.com", {"x-forwarded-host": "evil.com"}, 403),
+    ],
+)
+def test_verificar_origen_con_preview(
+    client, workos, preview, origin, cabeceras, estado
+):
+    r = client.post(f"{BASE}/refresh", headers=_con_sesion(origin=origin, **cabeceras))
+
+    assert r.status_code == estado
+
+
 # --- core/security.py --------------------------------------------------------------
 
 
@@ -571,11 +1038,39 @@ def test_require_roles_403_sin_el_rol(workos):
 
 
 def test_require_roles_permite_con_el_rol(workos):
-    workos.roles = ["admin"]
+    workos.roles = ["org-admin"]
 
     r = _app_con_roles().get("/solo-admin", headers=_con_sesion())
 
     assert r.status_code == 200
+
+
+def _app_con_permiso() -> TestClient:
+    rutas = APIRouter(route_class=ProblemDetailsRoute)
+
+    @rutas.post("/editar", dependencies=[Depends(require_permiso("prd-editar"))])
+    def editar() -> dict[str, bool]:
+        return {"ok": True}
+
+    prueba = FastAPI()
+    prueba.include_router(rutas)
+    return TestClient(prueba)
+
+
+def test_require_permiso_lo_decide_el_permiso_no_el_rol(workos):
+    # Escribir depende del permiso de WorkOS: ADMIN sin él no pasa; CAJERO con él sí
+    workos.roles, workos.permisos = ["org-admin"], ["prd-exportar"]
+    r = _app_con_permiso().post("/editar", headers=_con_sesion())
+    assert r.status_code == 403 and r.json()["code"] == "SIN_PERMISO"
+
+    workos.roles, workos.permisos = ["org-cajero"], ["prd-editar"]
+    assert _app_con_permiso().post("/editar", headers=_con_sesion()).status_code == 200
+
+
+def test_require_permiso_rechaza_permisos_desconocidos():
+    # Los permisos por módulo se retiraron de WorkOS: pedirlos es un error de código
+    with pytest.raises(ValueError, match="productos:editar"):
+        require_permiso("productos:editar")
 
 
 def test_require_roles_rechaza_roles_desconocidos():
@@ -598,3 +1093,60 @@ def test_cookie_password_invalida(monkeypatch):
 
     with pytest.raises(RuntimeError, match="Fernet"):
         workos_client.get_cookie_password()
+
+
+@pytest.mark.parametrize(
+    "agencia,status", [(None, 403), ("001", 403), ("002", 409), ("1", 409)]
+)
+def test_precondicion_agencia_no_concede_permisos(client, workos, agencia, status):
+    headers = _con_sesion(Origin=FRONT)
+    if agencia is not None:
+        headers["X-Agencia-Contexto"] = agencia
+    r = client.post("/api/v1/usuarios", headers=headers, json={})
+    assert r.status_code == status
+    if status == 409:
+        assert r.json()["code"] == "CONTEXTO_AGENCIA_DESACTUALIZADO"
+
+
+def test_token_recien_emitido_con_reloj_local_atrasado_es_valido(monkeypatch):
+    # El reloj local va 2 s detrás de WorkOS: el iat del token queda "en el futuro"
+    from cryptography.hazmat.primitives.asymmetric import rsa
+
+    monkeypatch.setenv("WORKOS_API_KEY", "sk_test_prueba")
+    monkeypatch.setenv("WORKOS_CLIENT_ID", "client_prueba")
+    get_settings.cache_clear()
+    workos_client.get_workos.cache_clear()
+    llave = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    ahora = int(time.time())
+    token = pyjwt.encode(
+        {"sid": "session_1", "iat": ahora + 2, "exp": ahora + 300},
+        llave,
+        algorithm="RS256",
+    )
+    clave = workos_client.get_cookie_password()
+    usuario = _usuario().model_dump(mode="json")
+    try:
+        gestion = workos_client.get_workos().user_management
+        sellada = gestion.load_sealed_session(
+            sealed_session=Fernet(clave)
+            .encrypt(json.dumps({"access_token": token, "user": usuario}).encode())
+            .decode(),
+            cookie_password=clave,
+        )
+        monkeypatch.setattr(
+            sellada,
+            "jwks",
+            SimpleNamespace(
+                get_signing_key_from_jwt=lambda _t: SimpleNamespace(
+                    key=llave.public_key()
+                )
+            ),
+        )
+
+        resultado = sellada.authenticate()
+    finally:
+        workos_client.get_workos.cache_clear()
+
+    assert workos_client.JWT_LEEWAY >= 2
+    assert resultado.authenticated is True
+    assert resultado.session_id == "session_1"

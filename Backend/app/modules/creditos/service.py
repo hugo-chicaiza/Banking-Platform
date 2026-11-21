@@ -47,8 +47,19 @@ def _sin_tasa_vigente():
     return problema(
         404,
         "TASA_NO_VIGENTE",
-        "No hay una tasa vigente para el tipo de crédito, monto y plazo indicados.",
+        "No hay una tasa vigente vinculada a este producto para el monto y plazo"
+        " indicados. Vincula una tasa al producto o subproducto.",
     )
+
+
+def _exigir_producto(id_producto: int | None, id_sub_producto: int | None) -> None:
+    """Solo rigen las tasas vinculadas: sin producto no hay de dónde tomarlas."""
+    if id_producto is None and id_sub_producto is None:
+        raise problema(
+            422,
+            "PRODUCTO_REQUERIDO",
+            "Indica el producto o subproducto: la tasa es la vinculada a él.",
+        )
 
 
 def obtener_condiciones(
@@ -57,15 +68,21 @@ def obtener_condiciones(
     monto: Decimal | None = None,
     plazo_meses: int | None = None,
     hoy: date | None = None,
+    id_producto: int | None = None,
+    id_sub_producto: int | None = None,
 ) -> CondicionesCredito:
     """CRE-01: tasa, plazo máximo, seguros e impuestos vigentes de un tipo de crédito.
 
     Raises:
         HTTPException 404 TASA_NO_VIGENTE
+        HTTPException 422 PRODUCTO_REQUERIDO
         HTTPException 500 TASA_VIGENTE_DUPLICADA
     """
+    _exigir_producto(id_producto, id_sub_producto)
     hoy = hoy or _hoy()
-    tasas = repository.tasas_vigentes(conn, id_tipo_credito, hoy)
+    tasas = repository.tasas_vigentes(
+        conn, id_tipo_credito, hoy, id_producto, id_sub_producto
+    )
     candidatas = [
         t
         for t in tasas
@@ -94,13 +111,17 @@ def simular(
     """CRE-02: tabla de amortización con seguros e impuestos. No guarda nada.
 
     Raises:
-        HTTPException 404 TASA_NO_VIGENTE (el tipo no tiene ninguna tasa vigente)
+        HTTPException 404 TASA_NO_VIGENTE (no hay tasa vinculada vigente)
+        HTTPException 422 PRODUCTO_REQUERIDO
         HTTPException 422 MONTO_FUERA_DE_RANGO
         HTTPException 422 PLAZO_SUPERA_MAXIMO
         HTTPException 500 TASA_VIGENTE_DUPLICADA
     """
+    _exigir_producto(datos.id_producto, datos.id_sub_producto)
     hoy = hoy or _hoy()
-    tasas = repository.tasas_vigentes(conn, datos.id_tipo_credito, hoy)
+    tasas = repository.tasas_vigentes(
+        conn, datos.id_tipo_credito, hoy, datos.id_producto, datos.id_sub_producto
+    )
     if not tasas:
         raise _sin_tasa_vigente()
     por_monto = [t for t in tasas if _monto_en_rango(t, datos.monto)]

@@ -14,8 +14,10 @@ from app.core.api.errors import (
     problema,
     solo_parametros,
 )
+from app.core.api.middleware import ip_cliente
 from app.core.config.settings import get_settings
 from app.core.database.db import cooperativa, get_engine
+from app.core.pdf import respuesta_pdf, respuestas_pdf
 from app.core.security.auth import UsuarioAuditoria, require_auth, require_roles
 from app.modules.tarjetas import service
 from app.modules.tarjetas.schemas import (
@@ -105,9 +107,8 @@ async def _leer_pin_prueba(request: Request) -> tuple[int, SecretStr]:
 
 
 def _ip(request: Request) -> str | None:
-    # X-Forwarded-For no se lee aquí porque el cliente puede falsificarlo. En Azure esta
-    # será la IP del proxy hasta configurarlo.
-    return request.client.host if request.client else None
+    # La IP confiable la resuelve ip_cliente (solo del Worker con el secreto)
+    return ip_cliente(request.scope)
 
 
 # TAR-01. Roles: ASESOR, ADMIN
@@ -227,12 +228,7 @@ def regenerar_pin(
 @router.get(
     "/{idTarjeta}/sobre-pin",
     response_class=Response,
-    responses={
-        200: {
-            "content": {"application/pdf": {}},
-            "description": "Sobre de PIN (PDF). Se entrega una sola vez.",
-        }
-    },
+    responses=respuestas_pdf("Sobre de PIN (PDF). Se entrega una sola vez."),
     dependencies=[
         Depends(require_roles("ASESOR", "SUPERVISOR", "ADMIN")),
         Depends(solo_parametros()),
@@ -248,15 +244,7 @@ def sobre_pin(
     temporal para entregar al cliente con la tarjeta. Luego queda Entregado.
     """
     pdf = service.entregar_sobre_pin(conn, id_tarjeta, usuario, _ip(request))
-    return Response(
-        content=pdf,
-        media_type="application/pdf",
-        headers={
-            "Content-Disposition": f'attachment; filename="sobre-pin-{id_tarjeta}.pdf"',
-            "Cache-Control": "no-store",
-            "X-Content-Type-Options": "nosniff",
-        },
-    )
+    return respuesta_pdf(pdf, f"sobre-pin-{id_tarjeta}.pdf")
 
 
 # TAR-06. Roles: SUPERVISOR, AUDITOR, ADMIN

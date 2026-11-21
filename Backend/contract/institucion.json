@@ -1,0 +1,140 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Banking Platform · institucion",
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/api/v1/institucion": {
+      "get": {
+        "tags": [
+          "Institución"
+        ],
+        "summary": "Consultar Institucion",
+        "description": "Solo presentación pública para login/encabezados. No escribe ni usa WorkOS.",
+        "operationId": "InstitucionConsultar",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PresentacionInstitucion"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service Unavailable",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "properties": {
+                    "type": {
+                      "type": "string"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "integer"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "detail": {
+                      "type": "string"
+                    },
+                    "traceId": {
+                      "type": "string"
+                    },
+                    "bloqueos": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "errors": {
+                      "items": {
+                        "properties": {
+                          "field": {
+                            "type": "string"
+                          },
+                          "message": {
+                            "type": "string"
+                          }
+                        },
+                        "type": "object"
+                      },
+                      "type": "array"
+                    }
+                  },
+                  "type": "object",
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "code",
+                    "detail",
+                    "traceId"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "PresentacionInstitucion": {
+        "properties": {
+          "nombre": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nombre"
+          },
+          "sitioWeb": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sitioweb"
+          },
+          "logoUrl": {
+            "type": "null",
+            "title": "Logourl"
+          },
+          "origen": {
+            "type": "string",
+            "enum": [
+              "ENTIDAD",
+              "ENTORNO",
+              "SIN_CONFIGURAR"
+            ],
+            "title": "Origen"
+          }
+        },
+        "type": "object",
+        "required": [
+          "nombre",
+          "sitioWeb",
+          "origen"
+        ],
+        "title": "PresentacionInstitucion",
+        "description": "Datos públicos mínimos; no incluye información legal ni de auditoría."
+      }
+    }
+  }
+}

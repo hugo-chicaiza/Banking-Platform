@@ -22,17 +22,16 @@ import threading
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from functools import lru_cache
 from pathlib import Path
 from typing import Any, Literal, Protocol
 
 from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-from fpdf import FPDF
-from fpdf.enums import XPos, YPos
 from pydantic import SecretStr
 
 from app.core.config.settings import get_settings
+from app.core.database.mongo import coleccion
+from app.core.pdf import DocumentoPdf
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +39,6 @@ OrigenSobre = Literal["Aprobacion", "Regeneracion"]
 
 COLECCION = "sobres_pin"
 _NONCE_GCM = 12
-_TIMEOUT_MONGO_MS = 5000
 
 
 class ErrorSobre(Exception):
@@ -64,51 +62,35 @@ class AlmacenNoDisponible(ErrorSobre):
 
 def construir_pdf(pin: SecretStr, cooperativa: str, sitio_web: str) -> bytes:
     """Una página A4: bienvenida, sitio web, indicación de cambio y el PIN centrado al
-    final. Sin número de tarjeta ni datos del cliente.
+    final. Sin número de tarjeta ni datos del cliente, y sin encabezado ni pie.
     """
-    pdf = FPDF(format="A4")
-    pdf.set_title("Sobre de PIN")
-    pdf.set_creator(cooperativa)
-    pdf.set_margins(25, 30, 25)
-    pdf.set_auto_page_break(auto=False)
-    pdf.add_page()
-
-    pdf.set_font("Helvetica", "B", 22)
-    pdf.multi_cell(0, 12, f"Bienvenido a la Cooperativa {cooperativa}", align="C")
-    pdf.ln(10)
-
-    pdf.set_font("Helvetica", "", 13)
-    pdf.multi_cell(
-        0,
-        8,
-        f"Para conocer los beneficios de tu tarjeta ingresa a {sitio_web}",
-        align="C",
+    doc = DocumentoPdf(
+        "Sobre de PIN",
+        institucion=cooperativa,
+        encabezado=False,
+        pie=False,
+        margenes=(25, 30, 25),
+        salto_automatico=False,
     )
-    pdf.ln(8)
-    pdf.set_font("Helvetica", "", 11)
-    pdf.multi_cell(
-        0,
-        7,
+    doc.titulo(f"Bienvenido a la Cooperativa {cooperativa}", tamano=22, alineacion="C")
+    doc.espacio(7)
+    doc.parrafo(
+        f"Para conocer los beneficios de tu tarjeta ingresa a {sitio_web}",
+        tamano=13,
+        alineacion="C",
+    )
+    doc.espacio(6)
+    doc.parrafo(
         "Este es tu PIN temporal. Antes de usar tu tarjeta, cámbialo en cualquier "
         "cajero automático de la cooperativa. No lo compartas con nadie: ningún "
         "funcionario de la cooperativa te lo pedirá.",
-        align="C",
+        alineacion="C",
     )
-
     # El PIN, centrado al final de la hoja
-    pdf.set_y(-90)
-    pdf.set_font("Helvetica", "", 12)
-    pdf.cell(0, 8, "Tu PIN", align="C", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
-    pdf.set_font("Courier", "B", 40)
-    pdf.cell(
-        0,
-        20,
-        " ".join(pin.get_secret_value()),
-        align="C",
-        new_x=XPos.LMARGIN,
-        new_y=YPos.NEXT,
+    doc.destacado(
+        " ".join(pin.get_secret_value()), etiqueta="Tu PIN", desde_abajo_mm=90
     )
-    return bytes(pdf.output())
+    return doc.contenido()
 
 
 # --- Cifrado ---------------------------------------------------------------------
@@ -424,16 +406,6 @@ class ServicioSobres:
         return self.cifrador.descifrar(id_tarjeta, sobre.id_sobre, sobre.contenido)
 
 
-@lru_cache
-def _coleccion_mongo(uri: str, base: str) -> Any:
-    from pymongo import MongoClient
-
-    cliente: Any = MongoClient(
-        uri, serverSelectionTimeoutMS=_TIMEOUT_MONGO_MS, tz_aware=True
-    )
-    return cliente[base][COLECCION]
-
-
 def obtener_servicio() -> ServicioSobres | None:
     """None si no se pueden generar sobres: sin SOBRE_PIN_CLAVE, o en producción sin
     MONGO_URI. Nunca conecta a MongoDB sin MONGO_URI.
@@ -452,7 +424,7 @@ def obtener_servicio() -> ServicioSobres | None:
     uri = s.mongo_uri.get_secret_value()
     almacen: Almacen
     if uri:
-        almacen = AlmacenMongo(_coleccion_mongo(uri, s.mongo_db))
+        almacen = AlmacenMongo(coleccion(COLECCION))
     elif s.app_env != "production":
         almacen = AlmacenDisco(Path(s.sobre_pin_dir))
     else:

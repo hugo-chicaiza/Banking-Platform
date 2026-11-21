@@ -11,6 +11,7 @@ from pydantic import ValidationError
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.core.api.errors import RESPUESTAS_ERROR, ProblemDetailsRoute, problema
+from app.core.api.middleware import ip_cliente
 from app.core.database.db import get_engine
 from app.modules.atm import (
     cambio_pin_service,
@@ -36,6 +37,7 @@ from app.modules.atm.terminal_auth import (
     require_terminal,
     revalidar_terminal,
 )
+from app.modules.parametros.funciones import funcion_pendiente
 from app.modules.transacciones.dependencias import (
     DependenciasOperacion,
     dependencias_operacion,
@@ -164,7 +166,7 @@ def autenticar_atm(
                 conn,
                 solicitud.entrada,
                 usuario_bloqueo=solicitud.terminal.audit_user_id,
-                ip=request.client.host if request.client else None,
+                ip=ip_cliente(request.scope),
             )
         )
     revalidar_terminal(solicitud.terminal)
@@ -236,7 +238,7 @@ def consultar_saldo_atm(
                 sesion,
                 terminal,
                 entrada,
-                request.client.host if request.client else None,
+                ip_cliente(request.scope),
             )
     except SQLAlchemyError:
         raise saldo_service._no_disponible() from None
@@ -312,7 +314,7 @@ def cambiar_pin_atm(
         solicitud.sesion,
         solicitud.terminal,
         solicitud.entrada,
-        request.client.host if request.client else None,
+        ip_cliente(request.scope),
     )
     return Response(status_code=204)
 
@@ -346,7 +348,7 @@ async def leer_transferencia_atm(
 
 @router.post(
     "/transferencias",
-    status_code=501,
+    status_code=404,
     response_class=Response,
     operation_id="ATM05",
     description="Implementación parcial. Operación financiera deshabilitada hasta integrar G-06/AC-01 y resolver sus contratos pendientes.",
@@ -362,7 +364,7 @@ async def leer_transferencia_atm(
         },
     },
     responses={
-        501: {
+        404: {
             "description": "Operación financiera no habilitada.",
             "content": RESPUESTAS_ERROR[500]["content"],
         }
@@ -372,10 +374,11 @@ def transferir_atm(
     solicitud: Annotated[TransferenciaAutenticada, Depends(leer_transferencia_atm)],
     dependencias: Annotated[DependenciasOperacion, Depends(dependencias_operacion)],
 ) -> Response:
-    # No abrir CooperativaDB, numerar, calcular comisiones ni invocar escritores.
-    transferencias_service.solicitar_transferencia(
-        solicitud.sesion, solicitud.terminal, solicitud.entrada, dependencias
-    )
+    with funcion_pendiente("FUNCION_ATM_TRANSFERENCIA"):
+        # No numerar, calcular comisiones ni invocar escritores.
+        transferencias_service.solicitar_transferencia(
+            solicitud.sesion, solicitud.terminal, solicitud.entrada, dependencias
+        )
 
 
 @dataclass(frozen=True, repr=False)
@@ -404,7 +407,7 @@ async def leer_reverso_atm(
 
 @router.post(
     "/reversos",
-    status_code=501,
+    status_code=404,
     response_class=Response,
     operation_id="ATM08",
     description="ATM-08 parcial: reversos financieros deshabilitados hasta resolver contabilidad, idempotencia y reglas de efectivo.",
@@ -418,7 +421,7 @@ async def leer_reverso_atm(
         },
     },
     responses={
-        501: {
+        404: {
             "description": "Operación financiera no habilitada.",
             "content": RESPUESTAS_ERROR[500]["content"],
         }
@@ -428,9 +431,10 @@ def reversar_atm(
     solicitud: Annotated[ReversoAutenticado, Depends(leer_reverso_atm)],
     dependencias: Annotated[DependenciasOperacion, Depends(dependencias_operacion)],
 ) -> Response:
-    reversos_service.solicitar_reverso(
-        solicitud.sesion, solicitud.terminal, solicitud.entrada, dependencias
-    )
+    with funcion_pendiente("FUNCION_ATM_REVERSO"):
+        reversos_service.solicitar_reverso(
+            solicitud.sesion, solicitud.terminal, solicitud.entrada, dependencias
+        )
 
 
 @dataclass(frozen=True, repr=False)
@@ -461,7 +465,7 @@ async def leer_retiro_atm(
 
 @router.post(
     "/retiros",
-    status_code=501,
+    status_code=404,
     response_class=Response,
     operation_id="ATM03",
     description="ATM-03 parcial: retiros deshabilitados hasta resolver contabilidad y dispensación.",
@@ -475,7 +479,7 @@ async def leer_retiro_atm(
         },
     },
     responses={
-        501: {
+        404: {
             "description": "Operación financiera no habilitada.",
             "content": RESPUESTAS_ERROR[500]["content"],
         }
@@ -485,6 +489,7 @@ def retirar_atm(
     solicitud: Annotated[RetiroAutenticado, Depends(leer_retiro_atm)],
     dependencias: Annotated[DependenciasOperacion, Depends(dependencias_operacion)],
 ) -> Response:
-    retiros_service.solicitar_retiro(
-        solicitud.sesion, solicitud.terminal, solicitud.entrada, dependencias
-    )
+    with funcion_pendiente("FUNCION_ATM_RETIRO"):
+        retiros_service.solicitar_retiro(
+            solicitud.sesion, solicitud.terminal, solicitud.entrada, dependencias
+        )

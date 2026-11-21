@@ -1,5 +1,6 @@
 """TRX-02: pruebas del detalle de transacciones."""
 
+from dataclasses import replace
 from typing import Any
 
 import pytest
@@ -95,7 +96,7 @@ def test_trx02_contador_ve_otra_agencia(
     ctx: Contexto,
     transaccion: dict[str, Any],
 ) -> None:
-    ctx.usuario = usuario("CONTADOR")
+    ctx.usuario = replace(usuario("CONTADOR"), id_agencias=("001", "002"))
 
     transaccion["AgenciaOperacion"] = "002"
     ctx.fake("obtener_transaccion", transaccion)

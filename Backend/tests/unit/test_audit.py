@@ -108,7 +108,8 @@ def test_escritura_exitosa_se_audita(monkeypatch, eventos_auditados):
         "301",
         "Exitoso",
     )
-    assert evento.usuario == ID_AUDITORIA and evento.ip == "testclient"
+    # ip_cliente: "testclient" no es una IP válida y no va a la auditoría (ASVS 4.1.3)
+    assert evento.usuario == ID_AUDITORIA and evento.ip == "desconocida"
     assert "Regeneración de PIN" in evento.descripcion
     assert conn.connection.driver_connection.timeout == 0
     assert conn.connection.driver_connection.lock_timeout == -1

@@ -15,7 +15,13 @@ from sqlalchemy import Connection
 
 from app.core.api.errors import problema
 from app.core.security.auth import Usuario
-from app.core.security.operador import auditar, exigir_agencia, exigir_id_interno
+from app.core.security.operador import (
+    agencia_de_consulta,
+    auditar,
+    exigir_agencia,
+    exigir_agencia_autorizada,
+    exigir_id_interno,
+)
 from app.modules.caja import repository as repo
 from app.modules.caja.repository import Fila
 from app.modules.caja.schemas import (
@@ -38,11 +44,13 @@ from app.modules.caja.schemas import (
     PageMovimientoCaja,
     SeriesBilletesRequest,
 )
+from app.modules.contabilidad.asientos import OperacionContable, generar_asiento
 from app.modules.contabilidad.service import ahora_ecuador
 from app.modules.transacciones import repository as trx_repo
 from app.modules.transacciones.dependencias import (
     DatosAsiento,
     DependenciasOperacion,
+    contabilizar_operacion,
 )
 
 ROLES_GLOBALES = frozenset({"CONTADOR", "AUDITOR", "ADMIN"})
@@ -59,19 +67,7 @@ def agencia_consultable(
     Los demás usuarios solamente pueden consultar su agencia asignada.
     """
 
-    if set(usuario.roles) & roles_globales:
-        return pedida
-
-    propia = exigir_agencia(usuario)
-
-    if pedida is not None and pedida != propia:
-        raise problema(
-            403,
-            "SIN_ACCESO_AGENCIA",
-            "No tiene acceso a los datos de esa agencia.",
-        )
-
-    return propia
+    return agencia_de_consulta(usuario, pedida)
 
 
 def _caja(fila: Fila) -> CajaFisica:
@@ -244,9 +240,21 @@ def verificar_alcance(
     roles = set(usuario.roles) & set(permitidos)
 
     if roles & ROLES_GLOBALES:
+        try:
+            exigir_agencia_autorizada(usuario, str(jornada["IdAgencia"]).strip())
+        except HTTPException as exc:
+            if exc.status_code == 403:
+                raise jornada_no_encontrada() from None
+            raise
         return "GLOBAL"
 
     if "SUPERVISOR" in roles:
+        try:
+            exigir_agencia_autorizada(usuario, str(jornada["IdAgencia"]).strip())
+        except HTTPException as exc:
+            if exc.status_code == 403:
+                raise jornada_no_encontrada() from None
+            raise
         if jornada["IdAgencia"] == exigir_agencia(usuario):
             return "SUPERVISOR"
         raise jornada_no_encontrada()
@@ -539,7 +547,7 @@ def cancelar_jornada(
             ip,
             f"jornada={id_jornada}",
             str(id_jornada),
-        ),
+        ) as registro,
         conn.begin(),
     ):
         jornada = jornada_bloqueada(
@@ -582,6 +590,7 @@ def cancelar_jornada(
                 "La jornada no está ABIERTA.",
             )
 
+        registro.confirmar(conn)
         return _recargar_jornada(
             conn,
             id_jornada,
@@ -675,6 +684,7 @@ def abrir_jornada(
 
             registro.id_registro = str(id_jornada)
 
+            registro.confirmar(conn)
             return _recargar_jornada(
                 conn,
                 id_jornada,
@@ -757,6 +767,38 @@ def validar_custodia(
         )
 
 
+def verificar_autorizador(modo: str, autorizado_por: int) -> None:
+    """Con el cajero como actor, autorizadoPor llega en el cuerpo (D-11): al menos
+    debe ser un supervisor Activo. Con el supervisor como actor ya coincide con él.
+    """
+    if modo == "CAJERO" and not repo.autorizador_vigente(autorizado_por):
+        raise problema(
+            422,
+            "AUTORIZADOR_NO_VALIDO",
+            "autorizadoPor no corresponde a un supervisor activo.",
+        )
+
+
+def monto_de_desglose(conn: Connection, desglose: list[Desglose]) -> Decimal:
+    """Suma valor facial x cantidad; 422 si alguna denominación no existe."""
+    valores = repo.valores_denominaciones(
+        conn,
+        [d.id_denominacion for d in desglose],
+    )
+
+    if len(valores) != len(desglose):
+        raise problema(
+            422,
+            "DENOMINACION_NO_ENCONTRADA",
+            "Una denominación no existe.",
+        )
+
+    return sum(
+        (decimal(valores[d.id_denominacion]) * d.cantidad for d in desglose),
+        Decimal(0),
+    )
+
+
 def registrar_dotacion(
     conn: Connection,
     usuario: Usuario,
@@ -798,6 +840,22 @@ def registrar_dotacion(
                 jornada["IdUsuario"],
             )
 
+            verificar_autorizador(modo, datos.autorizado_por)
+
+            # El cuadre toma SaldoInicial = DineroInicial (FK CuadreCaja ->
+            # JornadasCaja) y no suma la INICIAL: si difieren, el efectivo real
+            # nunca cuadraría. Con la jornada aún sin actividad, se puede cancelar.
+            if datos.tipo_dotacion == "INICIAL" and monto_de_desglose(
+                conn, datos.desglose
+            ) != decimal(jornada["DineroInicial"]):
+                raise problema(
+                    422,
+                    "DOTACION_INICIAL_NO_COINCIDE",
+                    "La dotación INICIAL debe ser igual al dinero inicial de la jornada.",
+                )
+
+            ahora = ahora_ecuador()
+            id_fecha = fecha_contable(conn, ahora)
             salida = repo.registrar_dotacion(
                 conn,
                 id_jornada,
@@ -806,17 +864,36 @@ def registrar_dotacion(
                 datos.tipo_dotacion,
                 desglose_json(datos.desglose),
                 datos.observacion,
-                fecha_contable(conn),
+                id_fecha,
             )
 
             id_dotacion = int(salida["IdDotacionCaja"])
             registro.id_registro = str(id_dotacion)
+            id_movimiento = str(salida["IdMovimientoBoveda"])
 
             fila = repo.obtener_dotacion(conn, id_dotacion)
 
             if fila is None:
                 raise RuntimeError("La dotación no se encontró tras registrarla")
 
+            generar_asiento(
+                conn,
+                OperacionContable(
+                    codigo_plantilla="DOT_CAJA",
+                    clave_evento=f"DOTACION_CAJA:{id_dotacion}",
+                    id_agencia=jornada["IdAgencia"].strip(),
+                    id_fecha_contable=id_fecha,
+                    id_usuario=actor,
+                    fecha_hora=ahora,
+                    importes={"PRINCIPAL": decimal(fila["Monto"])},
+                ),
+            )
+            registro.confirmar(
+                conn,
+                objetivo="Boveda.MovimientoBoveda",
+                id_objetivo=id_movimiento,
+                cambios={"idDotacionCaja": registro.id_registro},
+            )
             return _dotacion(
                 fila,
                 bool(salida["BovedaBajoMinimo"]),
@@ -907,6 +984,7 @@ def generar_cuadre(
 
             registro.id_registro = str(id_cuadre)
 
+            registro.confirmar(conn)
             return _recargar_cuadre(conn, id_cuadre)
 
 
@@ -979,6 +1057,13 @@ def registrar_conteo(
 
             diferencia = fisico - saldo_esperado(totales)
 
+            # CuadreCaja guarda solo el último conteo: el anterior queda en la
+            # auditoría para que una reescritura no borre el rastro (A-15).
+            registro.detalle = (
+                f"conteoAnterior={cuadre['SaldoFinalFisico']}"
+                f" conteo={fisico} diferencia={diferencia}"
+            )
+
             if not repo.registrar_conteo(
                 conn,
                 cuadre["IdCuadreCaja"],
@@ -994,6 +1079,7 @@ def registrar_conteo(
                     "El cuadre ya fue cerrado.",
                 )
 
+            registro.confirmar(conn)
             return _recargar_cuadre(
                 conn,
                 cuadre["IdCuadreCaja"],
@@ -1080,6 +1166,8 @@ def registrar_devolucion(
                 jornada["IdUsuario"],
             )
 
+            verificar_autorizador(modo, datos.autorizado_por)
+
             salida = repo.registrar_devolucion(
                 conn,
                 id_jornada,
@@ -1092,6 +1180,7 @@ def registrar_devolucion(
 
             id_devolucion = int(salida["IdDevolucionCaja"])
             registro.id_registro = str(id_devolucion)
+            id_movimiento = str(salida["IdMovimientoBoveda"])
 
             fila = repo.obtener_devolucion(
                 conn,
@@ -1101,6 +1190,25 @@ def registrar_devolucion(
             if fila is None:
                 raise RuntimeError("La devolución no se encontró tras registrarla")
 
+            ahora = ahora_ecuador()
+            generar_asiento(
+                conn,
+                OperacionContable(
+                    codigo_plantilla="DEV_CAJA",
+                    clave_evento=f"DEVOLUCION_CAJA:{id_devolucion}",
+                    id_agencia=jornada["IdAgencia"].strip(),
+                    id_fecha_contable=cuadre["IdFechaContable"],
+                    id_usuario=actor,
+                    fecha_hora=ahora,
+                    importes={"PRINCIPAL": decimal(fila["Monto"])},
+                ),
+            )
+            registro.confirmar(
+                conn,
+                objetivo="Boveda.MovimientoBoveda",
+                id_objetivo=id_movimiento,
+                cambios={"idDevolucionCaja": registro.id_registro},
+            )
             return Devolucion(
                 id_devolucion_caja=fila["IdDevolucionCaja"],
                 id_jornada_caja=fila["IdJornadaCaja"],
@@ -1113,6 +1221,21 @@ def registrar_devolucion(
 
 
 # --- CAJ-17: autorización del cuadre ----------
+
+
+def exigir_conteo_vigente(conn: Connection, id_jornada: int, cuadre: Fila) -> None:
+    """409 si los totales cambiaron después del último conteo físico.
+
+    Una devolución o una dotación posterior al conteo cambia el saldo esperado.
+    Autorizar ese conteo dejaría la jornada sin salida: CAJ-18 lo rechaza por
+    desactualizado y CAJ-16 ya no admite un conteo nuevo sobre un cuadre autorizado.
+    """
+    if saldo_esperado(_totales(conn, id_jornada)) != saldo_esperado(cuadre):
+        raise problema(
+            409,
+            "CUADRE_DESACTUALIZADO",
+            "Hubo movimientos después del conteo; registre el conteo otra vez.",
+        )
 
 
 def autorizar_cuadre(
@@ -1182,6 +1305,8 @@ def autorizar_cuadre(
                     "El cuadre ya fue autorizado.",
                 )
 
+            exigir_conteo_vigente(conn, id_jornada, cuadre)
+
             if (
                 cuadre["EstadoCuadre"] in ("SOBRANTE", "FALTANTE")
                 and not datos.observaciones
@@ -1204,6 +1329,7 @@ def autorizar_cuadre(
                     "El cuadre ya fue autorizado.",
                 )
 
+            registro.confirmar(conn)
             return _recargar_cuadre(
                 conn,
                 cuadre["IdCuadreCaja"],
@@ -1228,7 +1354,7 @@ def cerrar_jornada(
         ip,
         f"jornada={id_jornada}",
         str(id_jornada),
-    ):
+    ) as registro:
         actor = exigir_id_interno(id_interno)
 
         with conn.begin():
@@ -1277,14 +1403,7 @@ def cerrar_jornada(
 
             # Comprobar que los totales no cambiaron
             # después del conteo físico.
-            totales_actuales = _totales(conn, id_jornada)
-
-            if saldo_esperado(totales_actuales) != saldo_esperado(cuadre):
-                raise problema(
-                    409,
-                    "CUADRE_DESACTUALIZADO",
-                    "Hubo movimientos después del conteo; registre el conteo otra vez.",
-                )
+            exigir_conteo_vigente(conn, id_jornada, cuadre)
 
             # Si existe diferencia, exigir autorización.
             if (
@@ -1305,12 +1424,32 @@ def cerrar_jornada(
                     "La jornada ya está CERRADA.",
                 )
 
+            registro.confirmar(conn)
             return _recargar_jornada(conn, id_jornada)
 
 
 # --- CAJ-09: depósito en ventanilla ----------
 
+# Códigos de Transacciones.TipoTransaccion que admite la ventanilla. Naturaleza, estado
+# y si afecta saldo se leen de esa tabla; el evento es REGISTRAR_<CODIGO> (catálogo
+# Auditoria.TipoEvento; la prueba del catálogo lo exige para cada valor).
 TipoVentanilla = Literal["Deposito", "Retiro"]
+
+
+def evento_ventanilla(tipo: str) -> str:
+    return f"REGISTRAR_{tipo.upper()}"
+
+
+def _tipo_configurado(conn: Connection, tipo: str) -> dict:
+    """Tipo de transacción desde la base; sin él (o inactivo) la operación no corre."""
+    fila = trx_repo.tipo_transaccion(conn, tipo)
+    if fila is None or fila["Estado"] != "A" or fila["Naturaleza"] not in ("C", "D"):
+        raise problema(
+            500,
+            "CONFIGURACION_INCOMPLETA",
+            "Falta configurar el tipo de transacción.",
+        )
+    return fila
 
 
 def _validar_desglose(
@@ -1327,24 +1466,7 @@ def _validar_desglose(
             )
         return
 
-    valores = repo.valores_denominaciones(
-        conn,
-        [d.id_denominacion for d in datos.desglose],
-    )
-
-    if len(valores) != len(datos.desglose):
-        raise problema(
-            422,
-            "DENOMINACION_NO_ENCONTRADA",
-            "Una denominación no existe.",
-        )
-
-    total = sum(
-        (decimal(valores[d.id_denominacion]) * d.cantidad for d in datos.desglose),
-        Decimal(0),
-    )
-
-    if total != datos.monto:
+    if monto_de_desglose(conn, datos.desglose) != datos.monto:
         raise problema(
             422,
             "DESGLOSE_NO_COINCIDE_CON_MONTO",
@@ -1407,6 +1529,28 @@ def _validar_repeticion(
         )
 
 
+def verificar_operable_en_ventanilla(conn: Connection, id_cuenta: int) -> None:
+    """Titular Activo y producto que admite operaciones presenciales.
+
+    Falla cerrada: sin datos del titular o del producto, la operación no sigue.
+    """
+    restricciones = trx_repo.restricciones_cuenta(conn, id_cuenta) or {}
+
+    if restricciones.get("EstadoCliente") != "Activo":
+        raise problema(
+            409,
+            "CLIENTE_NO_ACTIVO",
+            "El cliente no está Activo.",
+        )
+
+    if not restricciones.get("PermiteOperacionesPresenciales"):
+        raise problema(
+            409,
+            "PRODUCTO_SIN_OPERACION_PRESENCIAL",
+            "El producto de la cuenta no admite operaciones en ventanilla.",
+        )
+
+
 def operacion_ventanilla(
     conn: Connection,
     usuario: Usuario,
@@ -1420,7 +1564,7 @@ def operacion_ventanilla(
     """Depósito o retiro. Devuelve (comprobante, es_repeticion)."""
 
     with auditar(
-        "REGISTRAR_" + tipo.upper(),
+        evento_ventanilla(tipo),
         "Transacciones.Transaccion",
         usuario,
         ip,
@@ -1499,10 +1643,14 @@ def operacion_ventanilla(
                     "La jornada ya tiene cuadre; no admite operaciones.",
                 )
 
+            configurado = _tipo_configurado(conn, tipo)
+            # Crédito a la cuenta = entra efectivo a la caja (depósito); débito = sale
+            ingreso = configurado["Naturaleza"] == "C"
+
             _validar_desglose(
                 conn,
                 datos,
-                obligatorio=tipo == "Deposito",
+                obligatorio=ingreso,
             )
 
             cuenta = trx_repo.obtener_cuenta(
@@ -1524,12 +1672,14 @@ def operacion_ventanilla(
                     "La cuenta no está Activa.",
                 )
 
+            verificar_operable_en_ventanilla(conn, datos.id_cuenta)
+
             id_canal = deps.id_canal_ventanilla
             comision = Decimal(0)
             descripcion = "Aprobada"
             fecha_hora = ahora_ecuador()
 
-            if tipo == "Retiro":
+            if not ingreso:
                 autorizacion = trx_repo.autorizar_operacion(
                     conn,
                     datos.id_cuenta,
@@ -1617,7 +1767,7 @@ def operacion_ventanilla(
                 conn,
                 id_transaccion,
                 datos.id_cuenta,
-                "C" if tipo == "Deposito" else "D",
+                configurado["Naturaleza"],
                 None,
                 datos.monto,
                 id_fecha,
@@ -1630,8 +1780,9 @@ def operacion_ventanilla(
                     comision,
                 )
 
-            id_asiento = deps.contabilizar(
+            id_asiento = contabilizar_operacion(
                 conn,
+                deps,
                 DatosAsiento(
                     id_transaccion=id_transaccion,
                     tipo_transaccion=tipo,
@@ -1642,7 +1793,7 @@ def operacion_ventanilla(
                 ),
             )
 
-            naturaleza = "I" if tipo == "Deposito" else "E"
+            naturaleza = "I" if ingreso else "E"
 
             id_tipo = trx_repo.id_tipo_movimiento_caja(
                 conn,
@@ -1679,8 +1830,9 @@ def operacion_ventanilla(
             if fila is None:
                 raise RuntimeError("La transacción no se encontró tras registrarla")
 
-            denominaciones = datos.desglose if tipo == "Retiro" else None
+            denominaciones = datos.desglose if not ingreso else None
 
+            registro.confirmar(conn)
             return (
                 _comprobante(
                     conn,
@@ -1722,7 +1874,7 @@ def registrar_series(
             f"cantidad={datos.cantidad_declarada}"
         ),
         str(id_transaccion),
-    ):
+    ) as registro:
         cajero = exigir_id_interno(id_interno)
 
         with conn.begin():
@@ -1782,3 +1934,4 @@ def registrar_series(
                 datos.cantidad_declarada,
                 json.dumps(datos.series),
             )
+            registro.confirmar(conn)

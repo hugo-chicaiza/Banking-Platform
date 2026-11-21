@@ -1,6 +1,7 @@
 """CAJ-07 · POST /api/v1/caja/jornadas/{idJornada}/dotaciones (pruebas sin BD)."""
 
 from collections.abc import Iterator
+from decimal import Decimal
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -10,6 +11,7 @@ from sqlalchemy.exc import DBAPIError
 
 from app.core.api.errors import traducir_error_bd
 from app.core.database.procedimientos import ejecutar_con_salidas
+from app.modules.caja import service
 from app.modules.caja.router import router
 from app.modules.caja.schemas import Desglose
 from app.modules.caja.service import desglose_json, validar_custodia
@@ -29,6 +31,7 @@ from tests.caja_contexto import (
 
 @pytest.fixture
 def ctx(monkeypatch: pytest.MonkeyPatch) -> Iterator[Contexto]:
+    monkeypatch.setattr(service, "generar_asiento", lambda conn, operacion: 1)
     yield crear_contexto(monkeypatch, router)
 
 
@@ -42,6 +45,9 @@ CUERPO_DOTACION = {
 
 def preparar_dotacion(ctx: Contexto) -> None:
     ctx.fake("obtener_jornada", JORNADA)
+    # 10 x 10.05 = 100.50 = DineroInicial de JORNADA (la INICIAL debe coincidir)
+    ctx.fake("valores_denominaciones", {1: Decimal("10.05")})
+    ctx.fake("autorizador_vigente", True)
     ctx.fake("id_fecha_contable", 20261104)
     ctx.fake(
         "registrar_dotacion",
@@ -50,10 +56,20 @@ def preparar_dotacion(ctx: Contexto) -> None:
     ctx.fake("obtener_dotacion", DOTACION)
 
 
-def test_caj07_registra_dotacion_inicial(ctx: Contexto) -> None:
+def test_caj07_registra_dotacion_inicial(
+    ctx: Contexto, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    operaciones = []
+    monkeypatch.setattr(
+        service,
+        "generar_asiento",
+        lambda conn, operacion: operaciones.append(operacion),
+    )
     preparar_dotacion(ctx)
     r = ctx.cliente.post(f"{BASE}/jornadas/55/dotaciones", json=CUERPO_DOTACION)
     assert r.status_code == 201, r.text
+    assert [o.codigo_plantilla for o in operaciones] == ["DOT_CAJA"]
+    assert operaciones[0].clave_evento == "DOTACION_CAJA:801"
     cuerpo = r.json()
     assert cuerpo["idDotacionCaja"] == 801
     assert cuerpo["bovedaBajoMinimo"] is True

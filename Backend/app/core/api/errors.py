@@ -32,6 +32,11 @@ _DB_NUMERO_RE = re.compile(r"\((\d+)\) \(SQL\w+\)")
 _DB_DUPLICADO = frozenset({2627, 2601})
 # Tabla de F-04. 52004 no aparece allí, pero lo necesita TAR-01
 _DB_ERRORES: dict[int, tuple[int, str, str]] = {
+    59010: (
+        409,
+        "SOLICITUD_MOVIMIENTO_INMUTABLE",
+        "La solicitud y sus datos no se pueden modificar ni eliminar.",
+    ),
     # Contabilidad responde lo mismo cuando lo detecta en Python (CON-02)
     51016: (
         500,
@@ -88,6 +93,7 @@ _ESQUEMA_PROBLEMA: dict[str, Any] = {
         "code": {"type": "string"},
         "detail": {"type": "string"},
         "traceId": {"type": "string"},
+        "bloqueos": {"type": "array", "items": {"type": "string"}},
         "errors": {
             "type": "array",
             "items": {
@@ -106,7 +112,7 @@ RESPUESTAS_ERROR: dict[int | str, dict[str, Any]] = {
         "description": HTTPStatus(estado).phrase,
         "content": {_MEDIA_TYPE: {"schema": _ESQUEMA_PROBLEMA}},
     }
-    for estado in (400, 401, 403, 404, 409, 422, 429, 500)
+    for estado in (400, 401, 403, 404, 409, 422, 429, 500, 503)
 }
 
 
@@ -117,6 +123,7 @@ def respuesta_problema(
     detail: str,
     errors: list[dict[str, str]] | None = None,
     headers: Mapping[str, str] | None = None,
+    bloqueos: list[str] | None = None,
 ) -> JSONResponse:
     contenido: dict[str, Any] = {
         "type": "about:blank",
@@ -126,6 +133,8 @@ def respuesta_problema(
         "detail": detail,
         "traceId": obtener_trace_id(scope),
     }
+    if bloqueos is not None:
+        contenido["bloqueos"] = bloqueos
     if errors:
         contenido["errors"] = errors
     return JSONResponse(
@@ -140,12 +149,17 @@ def respuesta_problema(
     )
 
 
-def problema(status: int, code: str, message: str) -> HTTPException:
+def problema(
+    status: int, code: str, message: str, *, bloqueos: list[str] | None = None
+) -> HTTPException:
     """Error de negocio que ProblemDetailsRoute convierte en ProblemDetails.
 
     El mensaje lo ve el usuario: que sea fijo, sin ids ni datos de la petición.
     """
-    return HTTPException(status_code=status, detail={"code": code, "message": message})
+    detalle: dict[str, Any] = {"code": code, "message": message}
+    if bloqueos is not None:
+        detalle["bloqueos"] = bloqueos
+    return HTTPException(status_code=status, detail=detalle)
 
 
 def traducir_error_bd(
@@ -226,14 +240,21 @@ def _campos_invalidos(exc: RequestValidationError) -> list[dict[str, str]]:
 
 def _respuesta_http(request: Request, exc: StarletteHTTPException) -> JSONResponse:
     detalle: Any = exc.detail
+    bloqueos = None
     if isinstance(detalle, dict):
+        bloqueos = detalle.get("bloqueos")
         code = str(detalle.get("code", f"HTTP_{exc.status_code}"))
         mensaje = str(detalle.get("message", HTTPStatus(exc.status_code).phrase))
     else:
         code = f"HTTP_{exc.status_code}"
         mensaje = str(detalle)
     return respuesta_problema(
-        request.scope, exc.status_code, code, mensaje, headers=exc.headers
+        request.scope,
+        exc.status_code,
+        code,
+        mensaje,
+        headers=exc.headers,
+        bloqueos=bloqueos,
     )
 
 

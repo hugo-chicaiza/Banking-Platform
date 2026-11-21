@@ -17,6 +17,7 @@ from starlette.requests import Request
 
 from app.core.api.errors import ProblemDetailsRoute
 from app.core.security.auth import Usuario, require_auth
+from app.core.security.permisos import permisos_de
 from app.main import app
 from app.modules.cuentas import repository, router, service
 from app.modules.cuentas.schemas import (
@@ -183,16 +184,16 @@ def test_abrir_cuenta_201(monkeypatch: pytest.MonkeyPatch):
     def abrir(*args, **kwargs):
         llamada.update(kwargs)
         # El servicio aplica la regla global aunque una fuente antigua traiga otro dato.
-        return _cuenta_row(id_moneda=978)
+        return _cuenta_row(id_moneda=978, numero_cuenta="220000000015")
 
     monkeypatch.setattr(repository, "abrir_cuenta", abrir)
     monkeypatch.setattr(
-        service, "_generar_numero_cuenta", lambda conn, tipo: "AH00000001"
+        service, "siguiente_numero_cuenta", lambda conn, sub, agencia: "220000000015"
     )
     db = _fake_conn()
     body = _abrir_cuenta(db).model_dump(mode="json", by_alias=True)
     assert body["idCuenta"] == 501
-    assert body["numeroCuenta"] == "AH00000001"
+    assert body["numeroCuenta"] == "220000000015"
     assert body["estado"] == "ACTIVA"
     assert body["saldo"] == 0.0
     assert body["saldoRetenido"] == 0.0
@@ -861,7 +862,7 @@ def test_router_apertura_conserva_payload_y_creado_por(monkeypatch: pytest.Monke
         nombre="Asesor",
         email="asesor@example.ec",
         roles=("ASESOR",),
-        permisos=(),
+        permisos=permisos_de(("ASESOR",)),
         id_agencia="001",
     )
     assert router.abrir_cuenta(payload, usuario, 12, cast(Connection, db)) is cuenta
@@ -1536,7 +1537,7 @@ def sesion_cuentas(monkeypatch):
         nombre="Interno",
         email="interno@example.ec",
         roles=("ADMIN",),
-        permisos=(),
+        permisos=permisos_de(("ADMIN",)),
         id_agencia="001",
         id_interno=12,
     )
@@ -1600,7 +1601,9 @@ def test_cta_roles_efectivos_http(
     from dataclasses import replace
 
     usuario, dependencia = sesion_cuentas
-    app.dependency_overrides[dependencia] = lambda: replace(usuario, roles=(rol,))
+    app.dependency_overrides[dependencia] = lambda: replace(
+        usuario, roles=(rol,), permisos=permisos_de((rol,))
+    )
     respuesta = asyncio.run(_http_cuentas(method, path, body))
     assert respuesta.status_code == (200 if rol in permitidos else 403)
     if rol not in permitidos:
