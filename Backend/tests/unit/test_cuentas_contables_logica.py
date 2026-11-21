@@ -198,6 +198,15 @@ def test_alta_padre_inexistente_es_404(client, repo, eventos_auditados):
     assert "motivo=CUENTA_SUPERIOR_NO_ENCONTRADA" in evento.descripcion
 
 
+def test_alta_de_6_digitos_bajo_cuenta_de_ultimo_nivel(client, repo, monkeypatch):
+    # E3-05: 1402 sin subcuentas del catálogo (como 2105) admite una de 6 dígitos
+    monkeypatch.setattr(repository, "tiene_hijas", lambda _c, _i: False)
+    r = client.post(_BASE, json={**_ALTA, "codigoCuenta": "140205"})
+
+    assert r.status_code == 201, r.text
+    assert repo["insertados"][0]["codigo"] == "140205"
+
+
 @pytest.mark.parametrize(
     "codigo",
     [
@@ -209,7 +218,8 @@ def test_alta_padre_inexistente_es_404(client, repo, eventos_auditados):
         "140205991",  # 9 dígitos
     ],
 )
-def test_alta_codigo_que_no_corresponde_es_422(client, repo, codigo):
+def test_alta_codigo_que_no_corresponde_es_422(client, repo, codigo, monkeypatch):
+    monkeypatch.setattr(repository, "tiene_hijas", lambda _c, _i: True)
     r = client.post(_BASE, json={**_ALTA, "codigoCuenta": codigo})
 
     assert r.status_code == 422

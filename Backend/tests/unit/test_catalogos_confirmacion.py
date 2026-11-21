@@ -158,6 +158,8 @@ COMISION = {
     "montoMinimo": None,
     "montoMaximo": None,
     "codigoCanal": "VENT",
+    "categoria": "CARGO_MAXIMO",
+    "valorMaximo": 0.5,
     "descripcion": "Recargo en gasolineras",
     "vigenciaDesde": "2026-12-01",
 }

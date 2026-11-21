@@ -94,7 +94,9 @@ RUTAS_POR_SECCION: dict[str, tuple[tuple[str, str], ...]] = {
         ("PATCH", "/api/v1/organizacion/agencias/{id_agencia}/estado"),
     ),
     "productos.consultar": (
+        ("GET", "/api/v1/contabilidad/cuentas-producto/subproductos/{id_sub}"),
         ("GET", "/api/v1/productos/subproductos/{id_sub}/vigencias"),
+        ("GET", "/api/v1/productos/subproductos/{id_sub}/activacion"),
         ("GET", "/api/v1/productos/subproductos/{id_sub}/numeracion"),
         ("PUT", "/api/v1/productos/subproductos/{id_sub}/numeracion"),
         ("POST", "/api/v1/productos/subproductos/{id_sub}/numeracion/ejemplo"),
@@ -157,6 +159,9 @@ RUTAS_POR_SECCION: dict[str, tuple[tuple[str, str], ...]] = {
         ("POST", "/api/v1/contabilidad/cuentas/importaciones"),
         ("GET", "/api/v1/contabilidad/cuentas/importaciones/{id_importacion}"),
         ("POST", "/api/v1/contabilidad/cuentas/importaciones/{id_importacion}/aplicar"),
+        ("GET", "/api/v1/contabilidad/cuentas-producto/clases"),
+        ("GET", "/api/v1/contabilidad/cuentas-producto/tipos/{id_tipo}"),
+        ("PUT", "/api/v1/contabilidad/cuentas-producto/tipos/{id_tipo}"),
     ),
     "contabilidad.asientos": (
         ("GET", "/api/v1/contabilidad/asientos"),

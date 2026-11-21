@@ -154,6 +154,18 @@ def existe_codigo(conn: Connection, codigo: str) -> bool:
     return fila is not None
 
 
+def tiene_hijas(conn: Connection, id_cuenta: int) -> bool:
+    fila = _one(
+        conn,
+        """
+        SELECT TOP (1) 1 AS existe FROM Contabilidad.CuentasContables WITH (HOLDLOCK)
+        WHERE IdCuentaSuperior = :id
+        """,
+        {"id": id_cuenta},
+    )
+    return fila is not None
+
+
 def tiene_movimientos(conn: Connection, id_cuenta: int) -> bool:
     """Si la cuenta tiene filas en MovimientosContables. HOLDLOCK bloquea el rango
     de IX_MovimientosContables_Cuenta hasta el commit: nadie registra un movimiento
@@ -579,9 +591,12 @@ def cuenta_para_plantilla(conn: Connection, id_cuenta: int) -> dict[str, Any] | 
     return _one(
         conn,
         """
-        SELECT Estado, EsImputable, CodigoCuenta
-        FROM Contabilidad.CuentasContables WITH (HOLDLOCK)
-        WHERE IdCuentaContable=:id
+        SELECT c.Estado, c.EsImputable, c.CodigoCuenta,
+               CASE WHEN EXISTS (SELECT 1 FROM Contabilidad.CuentasContables h
+                                 WHERE h.IdCuentaSuperior = c.IdCuentaContable)
+                    THEN 1 ELSE 0 END AS TieneHijas
+        FROM Contabilidad.CuentasContables c WITH (HOLDLOCK)
+        WHERE c.IdCuentaContable=:id
         """,
         {"id": id_cuenta},
     )

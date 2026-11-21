@@ -147,6 +147,19 @@ def _no_habilitada() -> HTTPException:
     )
 
 
+def _subcuenta_de_ultimo_nivel(
+    conn: Connection, padre: dict[str, Any], codigo: str
+) -> bool:
+    """E3-05: el CUC permite "adicionar dígitos a las subcuentas de los últimos niveles"
+    cuando el catálogo no trae ese nivel. Una cuenta de 4 dígitos sin hijas (p. ej. 2105)
+    admite una subcuenta de 6; las que ya tienen subcuentas del regulador, no."""
+    return (
+        len(padre["codigo_cuenta"]) == 4
+        and len(codigo) == 6
+        and not repository.tiene_hijas(conn, padre["id_cuenta_contable"])
+    )
+
+
 def _codigo_no_corresponde() -> HTTPException:
     return problema(
         422,
@@ -231,7 +244,9 @@ def crear_cuenta_contable(
                     )
                 if not codigo.startswith(padre["codigo_cuenta"]):
                     raise _codigo_no_corresponde()
-                if len(codigo) != NIVEL_AUXILIAR:
+                if len(codigo) != NIVEL_AUXILIAR and not _subcuenta_de_ultimo_nivel(
+                    conn, padre, codigo
+                ):
                     raise _codigo_no_corresponde()
                 if repository.existe_codigo(conn, codigo):
                     raise _codigo_duplicado()

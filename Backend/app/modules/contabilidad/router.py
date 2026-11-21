@@ -22,6 +22,7 @@ from app.modules.contabilidad.schemas import (
 )
 from app.modules.parametros.funciones import funcion_pendiente
 
+from .cuentas_producto_api import router as cuentas_producto_router
 from .plantillas import router as plantillas_router
 
 router = APIRouter(
@@ -33,6 +34,7 @@ router = APIRouter(
 Db = Annotated[Connection, Depends(cooperativa)]
 
 router.include_router(plantillas_router)
+router.include_router(cuentas_producto_router)
 
 # ---------------------------------------------------------------------------
 # AC-02 · Fecha contable

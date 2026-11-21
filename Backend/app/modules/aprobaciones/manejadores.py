@@ -8,6 +8,7 @@ from sqlalchemy import Connection
 from app.core.api.errors import problema
 from app.core.api.schemas import CamelModel
 from app.modules.aprobaciones.registro import Objetivo, Operacion, Plan, Registro
+from app.modules.contabilidad.cuentas_producto import operacion as operacion_mapeo
 from app.modules.organizacion.aprobacion import OPERACION_BAJA
 from app.modules.parametros import general
 from app.modules.parametros.aprobacion_comision import OPERACION_TARIFA
@@ -128,4 +129,5 @@ def registro_inicial() -> Registro:
     registro.agregar(operacion_productos())
     registro.agregar(operacion_numeracion())
     registro.agregar(OPERACION_PLANTILLA)
+    registro.agregar(operacion_mapeo())
     return registro
