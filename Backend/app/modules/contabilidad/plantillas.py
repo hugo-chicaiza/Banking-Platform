@@ -91,15 +91,16 @@ def validar_lineas(conn: Connection, lineas: list[Linea]) -> list[dict[str, Any]
         cuenta = {}
         if linea.origen == "FIJA" and linea.cuenta is not None and linea.rol is None:
             cuenta = repository.cuenta_para_plantilla(conn, linea.cuenta) or {}
+            # E3-05 (D-17): se registra en el último nivel de la rama, no solo a 8 dígitos.
             if (
                 not cuenta.get("Estado")
                 or not cuenta.get("EsImputable")
-                or len(cuenta["CodigoCuenta"]) != 8
+                or cuenta.get("TieneHijas")
             ):
                 raise problema(
                     422,
                     "CUENTA_CONTABLE_NO_HABILITADA",
-                    "La cuenta fija debe ser un auxiliar activo.",
+                    "La cuenta fija debe ser activa, imputable y del último nivel.",
                 )
         elif (
             linea.origen in ("PRODUCTO", "CONTRAPRODUCTO")

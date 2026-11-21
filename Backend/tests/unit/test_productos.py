@@ -22,6 +22,7 @@ from app.core.security.auth import ROLES
 from app.core.security.permisos import PERMISOS
 from app.modules.aprobaciones import router as apr
 from app.modules.aprobaciones.identidad import Actor
+from app.modules.productos import activacion
 from app.modules.productos import repository as repo
 from app.modules.productos.programacion import validar_cupos
 from app.modules.productos.programacion_schemas import CuposNuevos
@@ -170,6 +171,9 @@ def bd(monkeypatch: pytest.MonkeyPatch) -> BdFalsa:
         "eliminar_producto": lambda _c, i: falsa.productos.pop(i),
     }.items():
         monkeypatch.setattr(repo, nombre, funcion)
+    # E3-06: la lista de activación se prueba aparte; aquí se da por completa.
+    monkeypatch.setattr(activacion, "faltantes", lambda *_a: [])
+    monkeypatch.setattr(activacion, "exigir_retiro", lambda *_a, **_k: None)
     return falsa
 
 
@@ -432,6 +436,33 @@ def test_desactivar_subproducto(bd, admin, asesor):
     )
     r = admin.patch(f"{BASE}/subproductos/{sub['idSubProducto']}", json={"estado": "I"})
     assert r.status_code == 200 and r.json()["estado"] == "I"
+
+
+def test_activar_sin_cuentas_contables_es_422(bd, admin, monkeypatch):
+    id_ = admin.post(BASE, json=AHORRO).json()["idProducto"]
+    sub = admin.post(
+        f"{BASE}/{id_}/subproductos",
+        json={"codigoSubProducto": "AHO009-PN", "nombreSubProducto": "Sin cuentas"},
+    ).json()
+    monkeypatch.setattr(
+        activacion,
+        "faltantes",
+        lambda *_a: [
+            {
+                "codigo": "CUENTAS_CONTABLES",
+                "descripcion": "Cuentas contables",
+                "cumple": False,
+                "detalle": "Faltan: CAPITAL.",
+            }
+        ],
+    )
+    r = admin.patch(
+        f"{BASE}/subproductos/{sub['idSubProducto']}",
+        json={"estadoCatalogo": "Activo"},
+    )
+    assert r.status_code == 409
+    assert r.json()["code"] == "ACTIVACION_INCOMPLETA"
+    assert "CAPITAL" in r.json()["detail"]
 
 
 def test_producto_inexistente(bd, admin):

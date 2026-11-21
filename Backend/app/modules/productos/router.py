@@ -20,7 +20,13 @@ from app.core.database.db import cooperativa
 from app.core.security.auth import Usuario, UsuarioActual, require_auth, require_permiso
 from app.modules.aprobaciones import router as aprobaciones
 from app.modules.aprobaciones.contratos import SolicitudAceptada
-from app.modules.productos import numeracion_api, programacion_api, service, vinculos
+from app.modules.productos import (
+    activacion,
+    numeracion_api,
+    programacion_api,
+    service,
+    vinculos,
+)
 from app.modules.productos.programacion_schemas import CuposNuevos, RestriccionNueva
 from app.modules.productos.schemas import (
     CupoCanalVista,
@@ -354,3 +360,4 @@ def eliminar_producto(
 
 router.include_router(programacion_api.router)
 router.include_router(numeracion_api.router)
+router.include_router(activacion.router)

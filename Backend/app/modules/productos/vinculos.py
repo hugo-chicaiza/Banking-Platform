@@ -24,6 +24,7 @@ from sqlalchemy.exc import DBAPIError
 from app.core.api.errors import problema, traducir_error_bd
 from app.core.security.auth import Usuario
 from app.core.security.operador import auditar, exigir_id_interno
+from app.modules.catalogos.subproductos import tipo_tarjeta_de
 from app.modules.productos import repository as repo
 from app.modules.productos.schemas import VinculosEntrada, VinculosVista
 
@@ -267,7 +268,11 @@ def _guardar(
 
 
 def _validar(
-    conn: Connection, producto: dict[str, Any], destino: Destino, datos: VinculosEntrada
+    conn: Connection,
+    producto: dict[str, Any],
+    destino: Destino,
+    datos: VinculosEntrada,
+    id_: int | None = None,
 ) -> None:
     tipo = producto["tipo_producto"]
     tasas = _filas(
@@ -317,6 +322,13 @@ def _validar(
             "COMISION_NO_EXISTE",
             "Hay comisiones que no existen o están inactivas.",
         )
+    if tipo == "Credito" and comisiones:
+        # Res. 165-2015-F art. 12: se prohíbe cobrar comisiones por operaciones de crédito.
+        raise problema(
+            422,
+            "COMISION_NO_APLICA_CREDITO",
+            "Un producto de crédito no lleva comisiones.",
+        )
     if destino == "producto" and any(c.exonerado for c in datos.comisiones):
         raise problema(
             422,
@@ -334,6 +346,13 @@ def _validar(
     ) != len(seguros):
         raise problema(
             422, "SEGURO_NO_EXISTE", "Hay seguros que no existen o están inactivos."
+        )
+    if seguros and not _admite_seguro(conn, tipo, destino, id_):
+        # COMF art. 250: los seguros se exigen en operaciones de crédito.
+        raise problema(
+            422,
+            "SEGURO_SOLO_CREDITO",
+            "Los seguros se vinculan solo a créditos o a tarjetas de crédito.",
         )
     if datos.sistemas_amortizacion:
         if tipo != "Credito":
@@ -356,6 +375,17 @@ def _validar(
                 "SISTEMA_NO_EXISTE",
                 "Hay sistemas de amortización que no existen o están inactivos.",
             )
+
+
+def _admite_seguro(
+    conn: Connection, tipo: str, destino: Destino, id_: int | None
+) -> bool:
+    if tipo == "Credito":
+        return True
+    if tipo != "Tarjeta" or destino != "subproducto" or id_ is None:
+        return False
+    sub = repo.obtener_subproducto(conn, id_)
+    return sub is not None and tipo_tarjeta_de(sub["codigo_sub_producto"]) == "Credito"
 
 
 def _se_solapan(a: dict[str, Any], b: dict[str, Any]) -> bool:
@@ -429,7 +459,7 @@ def guardar(
                 )
             )
         try:
-            _validar(conn, producto, destino, datos)
+            _validar(conn, producto, destino, datos, id_)
             _guardar(conn, destino, id_, datos, actor, tablas)
             conn.commit()
         except DBAPIError as exc:

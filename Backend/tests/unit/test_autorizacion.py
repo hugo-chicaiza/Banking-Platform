@@ -355,9 +355,21 @@ ROLES_POR_RUTA: dict[tuple[str, str], tuple[str, ...]] = {
     # Productos: consultar exige prd-consultar (todos menos CAJERO en WorkOS); escribir prd-editar
     ("GET", "/api/v1/productos"): CONSULTA_PRODUCTOS,
     ("GET", "/api/v1/productos/subproductos/{id_sub}/numeracion"): CONSULTA_PRODUCTOS,
+    # E3-05: cuentas contables de los productos
+    ("GET", "/api/v1/contabilidad/cuentas-producto/clases"): CONSULTA_PRODUCTOS,
+    (
+        "GET",
+        "/api/v1/contabilidad/cuentas-producto/tipos/{id_tipo}",
+    ): CONSULTA_PRODUCTOS,
+    (
+        "GET",
+        "/api/v1/contabilidad/cuentas-producto/subproductos/{id_sub}",
+    ): CONSULTA_PRODUCTOS,
+    ("PUT", "/api/v1/contabilidad/cuentas-producto/tipos/{id_tipo}"): ("CONTADOR",),
     ("PUT", "/api/v1/productos/subproductos/{id_sub}/numeracion"): ("ADMIN",),
     ("POST", "/api/v1/productos/subproductos/{id_sub}/numeracion/ejemplo"): ("ADMIN",),
     ("GET", "/api/v1/productos/subproductos/{id_sub}/vigencias"): CONSULTA_PRODUCTOS,
+    ("GET", "/api/v1/productos/subproductos/{id_sub}/activacion"): CONSULTA_PRODUCTOS,
     ("GET", "/api/v1/productos/subproductos/{id_sub}/condiciones"): CONSULTA_PRODUCTOS,
     ("POST", "/api/v1/productos/subproductos/{id_sub}/condiciones"): ("ADMIN",),
     ("DELETE", "/api/v1/productos/subproductos/{id_sub}/condiciones/{id_registro}"): (
@@ -630,7 +642,13 @@ def test_rol_fuera_de_la_tarea_recibe_403(client, ruta, roles):
 def test_roles_de_la_tarea_pasan_el_control(client, ruta, monkeypatch):
     roles = ROLES_POR_RUTA[ruta]
     usuario = usuario_con_roles(*roles)
-    if ruta[1].startswith(("/api/v1/aprobaciones", "/api/v1/productos")) or ruta[1] in {
+    if ruta[1].startswith(
+        (
+            "/api/v1/aprobaciones",
+            "/api/v1/productos",
+            "/api/v1/contabilidad/cuentas-producto",
+        )
+    ) or ruta[1] in {
         "/api/v1/parametros",
         "/api/v1/parametros/{clave}",
         "/api/v1/parametros/{clave}/valores",
