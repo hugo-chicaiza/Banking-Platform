@@ -8,7 +8,7 @@ from collections import Counter
 from pathlib import PurePath
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Path, Request
 from sqlalchemy import Connection, text
 from starlette.concurrency import run_in_threadpool
 
@@ -16,6 +16,7 @@ from app.core.api.errors import ProblemDetailsRoute, problema
 from app.core.database.db import cooperativa
 from app.core.security.auth import UsuarioActual, require_permiso
 from app.core.security.operador import IdInterno, auditar, exigir_id_interno
+from app.modules.contabilidad.schemas import INT32_MAX
 from app.modules.contabilidad.service import ahora_ecuador
 from app.modules.parametros import general
 
@@ -30,6 +31,7 @@ router = APIRouter(
     dependencies=[Depends(require_permiso("con-cuenta-editar"))],
 )
 Db = Annotated[Connection, Depends(cooperativa)]
+IdImportacion = Annotated[int, Path(ge=1, le=INT32_MAX)]
 
 
 def archivo_invalido() -> Exception:
@@ -68,7 +70,11 @@ def leer_csv(nombre: str, contenido: bytes) -> list[dict[str, Any]]:
     return filas
 
 
-def revisar(filas: list[dict[str, Any]], plan: dict[str, Any]) -> list[dict[str, Any]]:
+def revisar(
+    filas: list[dict[str, Any]],
+    plan: dict[str, Any],
+    nombres_invalidos: frozenset[int] = frozenset(),
+) -> list[dict[str, Any]]:
     codigos = Counter(fila["CodigoCuenta"] for fila in filas)
     validas = set(plan)
     resultados = {}
@@ -86,6 +92,7 @@ def revisar(filas: list[dict[str, Any]], plan: dict[str, Any]) -> list[dict[str,
         elif (
             not nombre
             or len(nombre) > 150
+            or fila["numeroFila"] in nombres_invalidos
             or naturaleza not in ("DEUDORA", "ACREEDORA")
         ):
             error = "DATOS_INVALIDOS"
@@ -143,6 +150,40 @@ def leer_plan(conn: Connection) -> dict[str, Any]:
     return {f["codigo"]: f for f in filas}
 
 
+def revisar_catalogo(
+    conn: Connection, filas: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    # ISNULL convierte al tipo y capacidad de NombreCuenta. La comparación binaria
+    # detecta sustituciones y truncamientos que una comparación de texto ignoraría.
+    nombres_invalidos = (
+        conn.execute(
+            text("""
+            SELECT f.numeroFila
+            FROM OPENJSON(:filas) WITH (
+                numeroFila int, NombreCuenta nvarchar(max)
+            ) f
+            OUTER APPLY (SELECT TOP (0) NombreCuenta FROM Contabilidad.CuentasContables) c
+            WHERE CONVERT(varbinary(max), f.NombreCuenta) <>
+                CONVERT(varbinary(max), CONVERT(nvarchar(max), ISNULL(c.NombreCuenta, f.NombreCuenta)))
+        """),
+            {
+                "filas": json.dumps(
+                    [
+                        {
+                            "numeroFila": f["numeroFila"],
+                            "NombreCuenta": f["NombreCuenta"],
+                        }
+                        for f in filas
+                    ]
+                )
+            },
+        )
+        .scalars()
+        .all()
+    )
+    return revisar(filas, leer_plan(conn), frozenset(nombres_invalidos))
+
+
 def obtener(conn: Connection, id_importacion: int, actor: int) -> dict[str, Any]:
     fila = (
         conn.execute(
@@ -161,6 +202,12 @@ def obtener(conn: Connection, id_importacion: int, actor: int) -> dict[str, Any]
         raise problema(404, "IMPORTACION_NO_ENCONTRADA", "No existe la importación.")
     datos = dict(fila)
     datos["revision"] = json.loads(datos.pop("Revision"))
+    cantidades = Counter(fila["resultado"] for fila in datos["revision"])
+    datos.update(
+        FilasNuevas=cantidades["Nueva"],
+        FilasCambiadas=cantidades["Cambiada"],
+        FilasIguales=cantidades["Igual"],
+    )
     datos["estado"] = "Aplicada" if datos["AplicadoPor"] is not None else "Revision"
     return datos
 
@@ -217,7 +264,7 @@ def guardar_revision(
     with conn.begin():
         if len(filas) > _limite_filas(conn):
             raise archivo_invalido()
-        revision = revisar(filas, leer_plan(conn))
+        revision = revisar_catalogo(conn, filas)
         id_importacion = conn.execute(
             text("""
             INSERT Contabilidad.ImportacionCatalogo (NombreArchivo,Revision,Filas,FilasError,CargadoPor)
@@ -235,14 +282,16 @@ def guardar_revision(
 
 
 @router.get("/{id_importacion}")
-def detalle(conn: Db, id_importacion: int, id_interno: IdInterno) -> dict[str, Any]:
+def detalle(
+    conn: Db, id_importacion: IdImportacion, id_interno: IdInterno
+) -> dict[str, Any]:
     return obtener(conn, id_importacion, exigir_id_interno(id_interno))
 
 
 @router.post("/{id_importacion}/aplicar")
 def aplicar_ruta(
     conn: Db,
-    id_importacion: int,
+    id_importacion: IdImportacion,
     id_interno: IdInterno,
     usuario: UsuarioActual,
     request: Request,
@@ -271,7 +320,7 @@ def aplicar(conn: Connection, id_importacion: int, actor: int) -> dict[str, Any]
                 "Corrija el archivo y vuelva a cargarlo.",
             )
         revision = datos["revision"]
-        if revisar(revision, leer_plan(conn)) != revision:
+        if revisar_catalogo(conn, revision) != revision:
             raise problema(
                 409,
                 "CATALOGO_CAMBIO",

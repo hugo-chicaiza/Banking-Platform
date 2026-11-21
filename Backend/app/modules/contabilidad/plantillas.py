@@ -7,18 +7,20 @@ from datetime import date
 from decimal import Decimal
 from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Path, Query, Request
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import Connection, text
 
-from app.core.api.errors import ProblemDetailsRoute, problema
+from app.core.api.errors import RESPUESTAS_ERROR, ProblemDetailsRoute, problema
 from app.core.database.db import cooperativa
 from app.core.security.auth import UsuarioActual, require_permiso
 from app.core.security.operador import IdInterno, exigir_id_interno
+from app.modules.aprobaciones.contratos import SolicitudResumen
 from app.modules.aprobaciones.identidad import Actor
 from app.modules.aprobaciones.registro import Objetivo, Operacion, Plan
 from app.modules.contabilidad import repository
 from app.modules.contabilidad.asientos import ErrorContable, resolver_lineas
+from app.modules.contabilidad.schemas import INT32_MAX
 
 router = APIRouter(
     route_class=ProblemDetailsRoute,
@@ -27,6 +29,8 @@ router = APIRouter(
     dependencies=[Depends(require_permiso("con-plantilla-editar"))],
 )
 Db = Annotated[Connection, Depends(cooperativa)]
+IdContable = Annotated[int, Path(ge=1, le=INT32_MAX)]
+IdCuenta = Annotated[int, Field(gt=0, le=INT32_MAX)]
 
 
 class Linea(BaseModel):
@@ -44,7 +48,7 @@ class Linea(BaseModel):
         "DIFERENCIA",
         "TOTAL",
     ]
-    cuenta: int | None = Field(default=None, gt=0)
+    cuenta: IdCuenta | None = None
     rol: str | None = Field(default=None, min_length=1, max_length=30)
 
 
@@ -67,9 +71,9 @@ class Simulacion(BaseModel):
 
     lineas: list[Linea] = Field(min_length=2, max_length=100)
     montos: dict[str, Decimal]
-    producto: dict[str, int] = Field(default_factory=dict)
-    contraproducto: dict[str, int] = Field(default_factory=dict)
-    comision: int | None = Field(default=None, gt=0)
+    producto: dict[str, IdCuenta] = Field(default_factory=dict)
+    contraproducto: dict[str, IdCuenta] = Field(default_factory=dict)
+    comision: IdCuenta | None = None
 
 
 def validar_lineas(conn: Connection, lineas: list[Linea]) -> list[dict[str, Any]]:
@@ -129,26 +133,96 @@ def validar_lineas(conn: Connection, lineas: list[Linea]) -> list[dict[str, Any]
     return resultado
 
 
-@router.get("/tipos-asiento/{id_tipo}/plantillas")
-def listar(conn: Db, id_tipo: int) -> list[dict[str, Any]]:
+def _listar(
+    conn: Connection,
+    id_tipo: int | None = None,
+    q: str | None = None,
+    codigo: str | None = None,
+    estado: int | None = None,
+    origen: str | None = None,
+) -> list[dict[str, Any]]:
     filas = conn.execute(
         text("""
-        SELECT IdPlantillaAsiento, CodigoPlantilla, Version, Nombre, VigenciaDesde,
-               VigenciaHasta, Estado, CreadoPor, AprobadoPor, FechaAprobacion
-        FROM Contabilidad.PlantillaAsiento WHERE IdTipoAsiento=:id
-        ORDER BY CodigoPlantilla, Version DESC
+        SELECT p.IdPlantillaAsiento, p.CodigoPlantilla, p.Version, p.Nombre,
+               p.VigenciaDesde, p.VigenciaHasta, p.Estado, p.CreadoPor, p.AprobadoPor,
+               p.FechaAprobacion, p.Origen, p.IdTipoAsiento, p.IdConceptoContable,
+               t.Codigo AS CodigoTipoAsiento, t.Nombre AS NombreTipoAsiento,
+               c.CodigoConcepto, c.ConceptoDetalle
+        FROM Contabilidad.PlantillaAsiento p
+        LEFT JOIN Contabilidad.TiposAsiento t ON t.IdTipoAsiento=p.IdTipoAsiento
+        LEFT JOIN Contabilidad.ConceptoContable c ON c.IdConceptoContable=p.IdConceptoContable
+        WHERE (:id IS NULL OR p.IdTipoAsiento=:id)
+          AND (:codigo IS NULL OR p.CodigoPlantilla=:codigo)
+          AND (:q IS NULL OR CHARINDEX(:q,p.Nombre)>0 OR CHARINDEX(:q,p.CodigoPlantilla)>0)
+          AND (:estado IS NULL OR p.Estado=:estado)
+          AND (:origen IS NULL OR p.Origen=:origen)
+        ORDER BY p.CodigoPlantilla, p.Version DESC, p.IdPlantillaAsiento DESC
     """),
-        {"id": id_tipo},
+        {"id": id_tipo, "q": q, "codigo": codigo, "estado": estado, "origen": origen},
     ).mappings()
     return [dict(f) for f in filas]
 
 
+@router.get(
+    "/plantillas", responses={400: RESPUESTAS_ERROR[400], 403: RESPUESTAS_ERROR[403]}
+)
+def listar_global(
+    conn: Db,
+    q: Annotated[str | None, Query(min_length=1, max_length=100)] = None,
+    codigo: Annotated[str | None, Query(min_length=1, max_length=50)] = None,
+    estado: Annotated[int | None, Query(ge=0, le=1)] = None,
+    origen: Annotated[str | None, Query(min_length=1, max_length=30)] = None,
+    id_tipo: Annotated[
+        int | None, Query(alias="idTipoAsiento", ge=1, le=INT32_MAX)
+    ] = None,
+) -> list[dict[str, Any]]:
+    return _listar(conn, id_tipo, q, codigo, estado, origen)
+
+
+@router.get("/tipos-asiento/{id_tipo}/plantillas")
+def listar(conn: Db, id_tipo: IdContable) -> list[dict[str, Any]]:
+    return _listar(conn, id_tipo)
+
+
+@router.get("/plantillas/catalogos")
+def catalogos(conn: Db) -> dict[str, list[dict[str, Any]]]:
+    tipos = (
+        conn.execute(
+            text("""
+        SELECT IdTipoAsiento, Codigo, Nombre, Descripcion, EsManual, Estado
+        FROM Contabilidad.TiposAsiento ORDER BY Nombre, IdTipoAsiento
+    """)
+        )
+        .mappings()
+        .all()
+    )
+    conceptos = (
+        conn.execute(
+            text("""
+        SELECT IdConceptoContable, CodigoConcepto, ConceptoDetalle, Estado
+        FROM Contabilidad.ConceptoContable ORDER BY CodigoConcepto, IdConceptoContable
+    """)
+        )
+        .mappings()
+        .all()
+    )
+    return {
+        "tiposAsiento": [dict(fila) for fila in tipos],
+        "conceptosContables": [dict(fila) for fila in conceptos],
+    }
+
+
 @router.get("/plantillas/{id_plantilla}")
-def detalle(conn: Db, id_plantilla: int) -> dict[str, Any]:
+def detalle(conn: Db, id_plantilla: IdContable) -> dict[str, Any]:
     fila = (
         conn.execute(
             text("""
-        SELECT * FROM Contabilidad.PlantillaAsiento WHERE IdPlantillaAsiento=:id
+        SELECT p.*, t.Codigo AS CodigoTipoAsiento, t.Nombre AS NombreTipoAsiento,
+               c.CodigoConcepto, c.ConceptoDetalle
+        FROM Contabilidad.PlantillaAsiento p
+        LEFT JOIN Contabilidad.TiposAsiento t ON t.IdTipoAsiento=p.IdTipoAsiento
+        LEFT JOIN Contabilidad.ConceptoContable c ON c.IdConceptoContable=p.IdConceptoContable
+        WHERE p.IdPlantillaAsiento=:id
     """),
             {"id": id_plantilla},
         )
@@ -157,7 +231,29 @@ def detalle(conn: Db, id_plantilla: int) -> dict[str, Any]:
     )
     if fila is None:
         raise problema(404, "PLANTILLA_NO_DEFINIDA", "La plantilla no existe.")
-    return {**fila, "lineas": repository.obtener_lineas_plantilla(conn, id_plantilla)}
+    return {
+        **fila,
+        "lineas": repository.obtener_lineas_plantilla(
+            conn, id_plantilla, para_detalle=True
+        ),
+    }
+
+
+@router.get(
+    "/plantillas/{id_plantilla}/solicitudes", response_model=SolicitudResumen | None
+)
+def solicitud_version(
+    id_plantilla: IdContable, usuario: UsuarioActual
+) -> SolicitudResumen | None:
+    from app.modules.aprobaciones import lecturas
+    from app.modules.aprobaciones import router as aprobaciones
+
+    return lecturas.solicitud_global_por_objetivo(
+        aprobaciones.servicio(),
+        aprobaciones.actual(usuario),
+        OPERACION_PLANTILLA,
+        str(id_plantilla),
+    )
 
 
 def crear(
@@ -437,7 +533,7 @@ OPERACION_PLANTILLA = Operacion(
 )
 def crear_y_solicitar(
     conn: Db,
-    id_tipo: int,
+    id_tipo: IdContable,
     datos: Version,
     id_interno: IdInterno,
     usuario: UsuarioActual,
@@ -486,7 +582,7 @@ def _enviar(
     response_model=VersionSolicitada,
 )
 def enviar_pendiente(
-    id_plantilla: int, usuario: UsuarioActual, request: Request
+    id_plantilla: IdContable, usuario: UsuarioActual, request: Request
 ) -> dict[str, int]:
     from app.modules.aprobaciones import router as aprobaciones
 

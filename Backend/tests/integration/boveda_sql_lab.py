@@ -119,6 +119,16 @@ class LaboratorioBoveda:
                 "20261117_e401_versiones.sql",
             ):
                 self.ejecutar_script(raw, BACKEND / "migrations" / nombre)
+            with closing(raw.cursor()) as cursor:
+                cursor.execute(
+                    "EXEC sys.sp_set_session_context @key=N'migration_database', @value=?",
+                    self.database,
+                )
+            self.ejecutar_script(
+                raw,
+                BACKEND
+                / "migrations/cooperativa/202611180802_aprobaciones_entrega.up.sql",
+            )
         self.engine = create_engine(
             "mssql+pyodbc://", creator=lambda: self.abrir(self.database)
         )

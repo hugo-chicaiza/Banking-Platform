@@ -31,6 +31,15 @@ class ErrorContable(ValueError):
     """La operación no puede generar un asiento válido."""
 
 
+def _auxiliar_imputable(cuenta: dict[str, Any] | None) -> bool:
+    return bool(
+        cuenta
+        and cuenta["Estado"]
+        and cuenta["EsImputable"]
+        and len(cuenta.get("CodigoCuenta", "00000000")) == 8
+    )
+
+
 def resolver_lineas(
     plantilla: list[dict[str, Any]],
     importes: Mapping[str, Decimal],
@@ -63,12 +72,7 @@ def resolver_lineas(
                 if conn is not None and id_cuenta is not None
                 else None
             )
-        if (
-            cuenta is None
-            or not cuenta["Estado"]
-            or not cuenta["EsImputable"]
-            or len(cuenta.get("CodigoCuenta", "00000000")) != 8
-        ):
+        if not _auxiliar_imputable(cuenta):
             raise ErrorContable("La cuenta debe ser un auxiliar activo e imputable.")
         lado = detalle["TipoMovimiento"]
         if lado == "DEBITO":
@@ -258,6 +262,13 @@ def reversar(
         raise problema(
             409, "PERIODO_CONTABLE_NO_ABIERTO", "El período contable no está abierto."
         )
+    for cuenta in sorted({m["id_cuenta_contable"] for m in detalle}):
+        if not _auxiliar_imputable(repository.cuenta_para_plantilla(conn, cuenta)):
+            raise problema(
+                409,
+                "CUENTA_CONTABLE_NO_HABILITADA",
+                "El reverso requiere auxiliares activos e imputables.",
+            )
     espejo = repository.insertar_asiento_automatico(
         conn,
         {

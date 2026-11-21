@@ -564,6 +564,9 @@ FUNCIONES = (
         "Contabilidad",
         ("ADMIN", "SUPERVISOR", "AUDITOR", "CONTADOR"),
         (
+            ("GET", B + "/plantillas"),
+            ("GET", B + "/plantillas/catalogos"),
+            ("GET", B + "/plantillas/{id_plantilla}/solicitudes"),
             ("GET", B + "/tipos-asiento/{id_tipo}/plantillas"),
             ("GET", B + "/plantillas/{id_plantilla}"),
         ),
@@ -577,6 +580,7 @@ FUNCIONES = (
         (
             ("POST", B + "/tipos-asiento/{id_tipo}/plantillas"),
             ("POST", B + "/plantillas/simulaciones"),
+            ("POST", B + "/plantillas/{id_plantilla}/solicitudes"),
         ),
         "/contabilidad/plantillas",
         ("contabilidad.plantillas.consultar",),

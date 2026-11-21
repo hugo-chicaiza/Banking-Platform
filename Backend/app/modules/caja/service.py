@@ -50,6 +50,7 @@ from app.modules.transacciones import repository as trx_repo
 from app.modules.transacciones.dependencias import (
     DatosAsiento,
     DependenciasOperacion,
+    contabilizar_operacion,
 )
 
 ROLES_GLOBALES = frozenset({"CONTADOR", "AUDITOR", "ADMIN"})
@@ -1779,8 +1780,9 @@ def operacion_ventanilla(
                     comision,
                 )
 
-            id_asiento = deps.contabilizar(
+            id_asiento = contabilizar_operacion(
                 conn,
+                deps,
                 DatosAsiento(
                     id_transaccion=id_transaccion,
                     tipo_transaccion=tipo,

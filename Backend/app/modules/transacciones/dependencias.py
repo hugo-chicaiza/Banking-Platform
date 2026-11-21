@@ -92,6 +92,19 @@ def _no_habilitada() -> Exception:
     )
 
 
+def contabilizar_operacion(
+    conn: Connection, deps: DependenciasOperacion, datos: DatosAsiento
+) -> int:
+    id_asiento = deps.contabilizar(conn, datos)
+    if id_asiento is None or id_asiento <= 0:
+        raise problema(
+            500,
+            "ASIENTO_NO_GENERADO",
+            "No se pudo generar el asiento de la operación.",
+        )
+    return id_asiento
+
+
 class DependenciasNoConfiguradas:
     """Falla cerrada: ninguna operación de dinero corre sin las brechas resueltas."""
 

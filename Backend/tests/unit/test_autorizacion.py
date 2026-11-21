@@ -476,6 +476,11 @@ ROLES_POR_RUTA.update(
             "/api/v1/contabilidad/cuentas/importaciones/{id_importacion}/aplicar",
         ): ("CONTADOR",),
         ("GET", "/api/v1/contabilidad/plantillas/{id_plantilla}"): ("CONTADOR",),
+        ("GET", "/api/v1/contabilidad/plantillas"): ("CONTADOR",),
+        ("GET", "/api/v1/contabilidad/plantillas/catalogos"): ("CONTADOR",),
+        ("GET", "/api/v1/contabilidad/plantillas/{id_plantilla}/solicitudes"): (
+            "CONTADOR",
+        ),
         ("GET", "/api/v1/contabilidad/tipos-asiento/{id_tipo}/plantillas"): (
             "CONTADOR",
         ),

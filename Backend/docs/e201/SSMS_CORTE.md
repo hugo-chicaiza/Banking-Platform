@@ -14,7 +14,8 @@ evidencia de ese corte real; no se inventó una fecha ni un resultado de consult
    incluye el motor, sus dependencias y la aprobación temporal descrita abajo.
    Instalar después de 001. Su instalación no crea auxiliares ni cambia flags.
    Las llamadas están al final comentadas; las fases son preparación, aprobación
-   desde otra identidad y ejecución. No ejecutar aparte el antiguo 002.
+   desde otra identidad y ejecución. El delta vigente del catálogo se
+   identifica en la sección «Resolución SEPS-IGT-2025-100».
 
 El archivo `004_corte_completo_ssms.sql` es la fuente canónica del corte y su aprobación. Las rutinas de altas/hash/motor interno no
 reciben EXEC para los roles de negocio. Se retiró el DML directo del adaptador
@@ -276,11 +277,83 @@ reclasificar provisiones. El delta solo instala el catálogo.
 
 Fuente: https://www.seps.gob.ec/wp-content/uploads/Resolucio%CC%81n-No.-SEPS-IGT-2025-0100.pdf
 
-### Alcance de la siguiente entrega
+## Verificación final de #371
 
-La edicion ordinaria del plan conserva su flujo. La segunda identidad se
-exige para reclasificar saldos. El guion cubre los tres custodios de efectivo
-(11010505, 11010510 y 11010515) y los dos auxiliares PN/PJ de ahorro. La revision
-de los destinos restantes y la conciliacion de cada custodio se pueden ensayar
-con una base aislada y una captura sintetica. Este cambio no requiere ejecutar
-ni autorizar un corte real.
+### Evidencia de SQL Server local
+
+Las comprobaciones siguientes usaron proyecciones y bases de ensayo locales.
+La evidencia incluye el corte atómico de efectivo y ahorro, la conservación
+del histórico y la conciliación proyectada de la dotación. La validación de
+sesiones reales y los importes del ambiente autorizado siguen pendientes.
+
+| Criterio | Evidencia local y alcance |
+|---|---|
+| Catálogo de 1, 2, 4 y 6 dígitos | CSV consolidado con 1.183 códigos y jerarquía validada. Tras aplicar el delta en la proyección local se obtuvieron 7, 44, 276 y 856 cuentas por nivel, respectivamente. Se conservó el catálogo y su historial. El almacenamiento admite códigos históricos de 10 dígitos |
+| Auxiliares de 8 dígitos | Los cinco destinos del corte son activos, imputables, internos y tienen `SoloAutomatica=1`. Los padres `110105` y `210135` quedan agrupadores. El auxiliar `19902505` de faltantes es imputable y tiene `SoloAutomatica=0`; el script 005 comprueba esa configuración y su repetibilidad |
+| Movimientos ordinarios | El laboratorio confirmó el rechazo de movimientos nuevos en el agrupador `110105` y de asientos manuales en el auxiliar automático `11010505`. La excepción de reclasificación se limita a líneas autorizadas |
+| Conservación y rollback | El ensayo comparó las 1.768 líneas históricas completas, comprobó que se preservaron los totales por elemento y registró una sola aplicación concurrente. El fallo inducido revirtió altas, flags, saldos, cabecera, líneas y consumo del recibo. El procedimiento nativo rechazó un asiento descuadrado y mantuvo su borrador |
+| Separación de personas | El canal SSMS rechazó la misma identidad original y probó el éxito del corte con un recibo simulado. El ensayo institucional SQL emitió un recibo para dos sujetos distintos de prueba y rechazó autoaprobación, hash inválido, repetición y permiso revocado. Queda la evidencia con identidades y sesiones reales en el ambiente autorizado |
+| Edición ordinaria | Conserva su flujo de mantenimiento. E0-02 y E0-05 quedan fuera de la autorización de edición. La separación de identidades se aplica a la reclasificación |
+
+### Destinos comprobados
+
+Importes de la proyección local. Los agrupadores conservan el subtotal y
+quedan con saldo propio cero para estas dos familias.
+
+| Origen | Auxiliar | Uso | Saldo propio tras el corte |
+|---|---|---|---:|
+| `110105` | `11010505` | Bóveda | $262.955,63 |
+| `110105` | `11010510` | Ventanillas | $560,00 |
+| `110105` | `11010515` | ATM | $9.860,00 |
+| `210135` | `21013505` | Ahorro PN | $86.646,76 |
+| `210135` | `21013510` | Ahorro PJ | $76.000,00 |
+
+Los destinos de efectivo suman $273.375,63 y los de ahorro $162.646,76.
+`19902505` bajo `199025` es un alta verificada para faltantes. El ensayo
+conservó sus movimientos históricos y el alta no reclasificó saldos.
+
+### Dotación de $500
+
+El laboratorio SQL de Bóveda proyectó las escrituras físicas de CAJ-07 y
+ejecutó `DOT_CAJA` y la vista real `vw_ConciliacionEfectivo` en la misma
+transacción. El asiento debitó $500 a `11010510` y acreditó $500 a
+`11010505`. Los saldos contables coincidieron con el físico proyectado.
+Esta evidencia es local y no ejecuta el procedimiento de custodia CAJ-07.
+
+| Custodio | Antes | Después |
+|---|---:|---:|
+| Bóveda | $700,00 | $200,00 |
+| Ventanillas | $100,00 | $600,00 |
+| ATM | $20,00 | $20,00 |
+| Total físico y contable | $820,00 | $820,00 |
+| Diferencia | $0,00 | $0,00 |
+
+### Bloqueos de cierre y verificaciones pendientes en Azure
+
+Contabilidad debe aprobar la matriz de destinos restantes y la evidencia
+del corte real. La proyección local encontró los siguientes saldos propios
+fuera de `EFECTIVO_AHORRO`. Son importes del ensayo. Sirven para identificar
+qué debe conciliarse, sin establecer una cuenta de destino.
+
+| Origen y saldo local | Definición que falta | Equipos que deben confirmarla |
+|---|---|---|
+| `1402` consumo $8.013,00 y `1404` microcrédito $1.494,06 | Desglose por producto o subproducto, cartera y auxiliar de 8 dígitos por destino | Crédito/E9 y Contabilidad |
+| `110110` caja chica $200,00 y `110310` entidades financieras $379.755,52 | Custodio o contraparte y auxiliar conciliado con su registro operativo | Tesorería y Contabilidad |
+| `1690` cuentas por cobrar $60,00, `2504` retenciones $25,00 y `2590` cuentas por pagar $1,48 | Desglose por concepto y contraparte, y auxiliar correspondiente | Contabilidad con responsables de cobros, retenciones y pagos |
+| `2990` otros $10,00 | Confirmar el origen del saldo y, si hay sobrantes de caja, el auxiliar interno bajo `299005` | Caja y Contabilidad |
+| `3103` aportes $500.000,00 | Conciliar con el registro de aportes y aprobar el auxiliar | Socios y Contabilidad |
+| `5104` intereses y descuentos de cartera $209,97 y `5490` otros servicios $5,00 | Identificar producto y concepto de ingreso; confirmar auxiliares de destino | Crédito/Productos y Contabilidad |
+
+Los responsables del ambiente autorizado y Contabilidad deben adjuntar la evidencia
+del corte real (fecha, mayor, físico por custodio y ahorro PN/PJ), verificar
+si existen los auxiliares antiguos `11010501`, `11010502` y `11010503` y
+conciliarlos si corresponde. También deben demostrar la aprobación positiva
+con dos personas autorizadas. Hasta contar con esa evidencia y con los
+destinos pendientes, #371 sigue abierto.
+
+Esta entrega incluye pruebas y documentación. Durante su verificación
+se trabajó exclusivamente en SQL Server local, sin migraciones ni cortes
+en Azure.
+
+Para conservar el reporte JSON existente al repetir el laboratorio,
+indique en `E201_REPORT` una ruta de salida local separada.
