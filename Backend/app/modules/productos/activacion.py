@@ -18,10 +18,6 @@ from app.modules.parametros.service import hoy
 
 # Tipos cuyo dinero entra por canales: necesitan cupos en al menos uno.
 TIPOS_CON_CUPOS = ("CUENTA_AHORRO", "CUENTA_CORRIENTE")
-# Estados que ya no cuentan como abiertos para retirar un producto.
-CUENTA_CERRADA = ("Cerrada", "Cancelada")
-TARJETA_CERRADA = ("Cancelada", "Rechazada", "Anulada")
-CREDITO_CERRADO = ("DESISTIDA", "RECHAZADA", "CANCELADA", "ANULADA")
 
 DESCRIPCION = {
     "PRODUCTO_ACTIVO": "El producto está activo",
@@ -161,31 +157,36 @@ def exigir_activacion(conn: Connection, id_sub: int) -> None:
         )
 
 
+# Consultas fijas (sin SQL armado): ¿queda algo abierto del subproducto o de cualquiera de
+# los subproductos del producto?
+_ABIERTOS = {
+    "cuentas": """
+        SELECT TOP (1) 1 FROM Cuentas.Cuenta
+        WHERE (IdSubProducto = :sub OR IdSubProducto IN (
+                SELECT IdSubProducto FROM ProductosFinancieros.SubProducto WHERE IdProducto = :prod))
+          AND Estado NOT IN ('Cerrada', 'Cancelada')
+    """,
+    "tarjetas": """
+        SELECT TOP (1) 1 FROM Tarjeta.Tarjeta
+        WHERE (IdSubProducto = :sub OR IdSubProducto IN (
+                SELECT IdSubProducto FROM ProductosFinancieros.SubProducto WHERE IdProducto = :prod))
+          AND Estado NOT IN ('Cancelada', 'Rechazada', 'Anulada')
+    """,
+    "créditos": """
+        SELECT TOP (1) 1 FROM Credito.CreditoSolicitud
+        WHERE (IdSubProducto = :sub OR IdSubProducto IN (
+                SELECT IdSubProducto FROM ProductosFinancieros.SubProducto WHERE IdProducto = :prod))
+          AND Estado NOT IN ('DESISTIDA', 'RECHAZADA', 'CANCELADA', 'ANULADA')
+    """,
+}
+
+
 def exigir_retiro(
     conn: Connection, id_sub: int | None = None, id_producto: int | None = None
 ) -> None:
     """Retirar es final: sin cuentas, tarjetas ni créditos abiertos del subproducto o producto."""
-    filtro = (
-        "IdSubProducto = :sub"
-        if id_sub is not None
-        else (
-            "IdSubProducto IN (SELECT IdSubProducto FROM ProductosFinancieros.SubProducto WHERE IdProducto = :prod)"
-        )
-    )
     p = {"sub": id_sub, "prod": id_producto}
-    abiertos = [
-        nombre
-        for nombre, tabla, cerrados in (
-            ("cuentas", "Cuentas.Cuenta", CUENTA_CERRADA),
-            ("tarjetas", "Tarjeta.Tarjeta", TARJETA_CERRADA),
-            ("créditos", "Credito.CreditoSolicitud", CREDITO_CERRADO),
-        )
-        if _existe(
-            conn,
-            f"SELECT TOP (1) 1 FROM {tabla} WHERE {filtro} AND Estado NOT IN ({','.join(repr(e) for e in cerrados)})",
-            **p,
-        )
-    ]
+    abiertos = [nombre for nombre, sql in _ABIERTOS.items() if _existe(conn, sql, **p)]
     if abiertos:
         raise problema(
             409,
