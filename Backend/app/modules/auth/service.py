@@ -14,7 +14,7 @@ import secrets
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, TypedDict
 from urllib.parse import urlsplit
 
 import httpx
@@ -1064,6 +1064,17 @@ def actualizar_usuario(
 # --- AUT-09 ------------------------------------------------------------------------
 
 
+class _RolesWorkOS(TypedDict, total=False):
+    role_slug: str
+    role_slugs: list[str]
+
+
+def _parametros_roles_workos(slugs: list[str]) -> _RolesWorkOS:
+    if len(slugs) == 1:
+        return {"role_slug": slugs[0]}
+    return {"role_slugs": slugs}
+
+
 def _aplicar_rol_en_workos(
     fila: repository.Fila,
     key: str | None,
@@ -1072,8 +1083,7 @@ def _aplicar_rol_en_workos(
     deshacer: Deshacer,
 ) -> None:
     gestion = get_workos().user_management
-    slugs = [slug_rol(rol) for rol in roles]
-    seleccion = {"role_slug": slugs[0]} if len(slugs) == 1 else {"role_slugs": slugs}
+    seleccion = _parametros_roles_workos([slug_rol(rol) for rol in roles])
     if key:
         membresia = _membresia(key)
         if membresia is None:
@@ -1086,12 +1096,7 @@ def _aplicar_rol_en_workos(
             deshacer.append(lambda: gestion.delete_organization_membership(creada.id))
             return
         id_membresia = membresia.id
-        anteriores = sorted(_slugs(membresia))
-        restaurar = (
-            {"role_slug": anteriores[0]}
-            if len(anteriores) == 1
-            else {"role_slugs": anteriores}
-        )
+        restaurar = _parametros_roles_workos(sorted(_slugs(membresia)))
         with _workos("update_organization_membership"):
             gestion.update_organization_membership(
                 organization_membership_id=id_membresia, **seleccion
@@ -1119,7 +1124,7 @@ def cambiar_rol(
     ip: str,
 ) -> UsuarioDetalle:
     """Reemplaza los roles y revoca las sesiones emitidas con el conjunto anterior."""
-    nuevos = tuple(normalizar_roles(datos.roles or [datos.rol], None))
+    nuevos = normalizar_roles(datos.roles, datos.rol)
     with auditar(
         "CAMBIAR_ROL",
         _TABLA_USUARIOS,
