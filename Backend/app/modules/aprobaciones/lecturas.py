@@ -102,7 +102,7 @@ def listar(
         "global": int(actor.global_admin),
         "agencias": list(actor.agencias),
         "agencia": agencia,
-        "auditoria": int("AUDITOR" in actor.roles),
+        "auditoria": int("AUDITOR" in actor.roles or "org-exportar" in actor.permisos),
         "actor": actor.sujeto,
         "codigos": codigos,
         "bandeja": bandeja,

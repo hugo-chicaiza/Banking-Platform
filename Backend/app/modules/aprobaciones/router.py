@@ -108,7 +108,8 @@ def accesos(actor: Actual, cola: Cola, usuario: UsuarioActual) -> dict[str, Any]
         "puedeVer": creador
         or aprobador
         or propia.total > 0
-        or "AUDITOR" in actor.roles,
+        or "AUDITOR" in actor.roles
+        or exportacion.PERMISO_EXPORTAR in actor.permisos,
         "puedeSolicitar": creador,
         "pendientesParaMi": propia.pendientes_para_mi,
         "diasResaltar": propia.dias_resaltar,

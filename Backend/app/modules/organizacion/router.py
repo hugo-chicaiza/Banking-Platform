@@ -41,8 +41,6 @@ from app.modules.organizacion.schemas import (
     EstadoAgencia,
     PresentacionInstitucion,
 )
-from app.modules.seguridad import service as seguridad_service
-from app.modules.seguridad.schemas import RolVista
 
 _ROLES = ["ADMIN"]
 router_publico = APIRouter(
@@ -99,14 +97,13 @@ IdAgenciaPath = Annotated[str, Path(pattern=r"^[0-9A-Z]{3}$")]
 def autorizar_listado_agencias(
     request: Request, usuario: UsuarioActual, formato: Literal["csv"] | None = None
 ) -> Usuario:
-    if formato == "csv":
+    directorio = request.url.path.endswith("/directorio-agencias")
+    if formato == "csv" or (
+        directorio and exportacion.PERMISO_EXPORTAR in usuario.permisos
+    ):
         exportacion.autorizar(usuario)
     else:
-        roles = (
-            ("ADMIN", "AUDITOR")
-            if request.url.path.endswith("/directorio-agencias")
-            else _ROLES
-        )
+        roles = ("ADMIN", "AUDITOR") if directorio else _ROLES
         require_roles(*roles)(usuario, request)
     return usuario
 
@@ -152,38 +149,6 @@ def listar_agencias(
         "Organizacion.Agencia",
         ("idAgencia", "codigo", "tipoAgencia", "estado"),
         ((a.id_agencia, a.codigo, a.tipo_agencia, a.estado) for a in agencias),
-    )
-
-
-@router.get(
-    "/seguridad/matriz-roles",
-    tags=["organizacion"],
-    operation_id="OrganizacionMatrizRoles",
-    response_model=list[RolVista],
-    responses=exportacion.RESPUESTA_CSV,
-    dependencies=[Depends(solo_parametros("formato"))],
-)
-def matriz_roles(
-    request: Request,
-    usuario: UsuarioActual,
-    formato: Literal["csv"] | None = None,
-) -> list[RolVista] | Response:
-    if formato is None:
-        require_roles("ADMIN", "AUDITOR")(usuario, request)
-        return seguridad_service.listar_roles()
-    exportacion.autorizar(usuario)
-    roles = seguridad_service.listar_roles()
-    return exportacion.responder_csv(
-        usuario,
-        ip_cliente(request.scope),
-        "matriz-roles",
-        "Seguridad.Grupos",
-        ("rol", "nombre", "permiso"),
-        (
-            (rol.rol, rol.nombre, permiso)
-            for rol in roles
-            for permiso in rol.permisos or [""]
-        ),
     )
 
 

@@ -464,6 +464,9 @@ _ORDENES = frozenset(
         "email",
         "estado",
         "fechaCreacion",
+        "idUsuario",
+        "idAgencia",
+        "roles",
     )
     for direccion in ("asc", "desc")
 )
@@ -773,6 +776,8 @@ def listar_usuarios(
     page: int,
     page_size: int,
     sort: str | None,
+    id_usuario: int | None = None,
+    nombre: str | None = None,
 ) -> PageUsuario:
     filas, total = repository.listar_usuarios(
         conn,
@@ -784,6 +789,8 @@ def listar_usuarios(
         orden=orden_listado(sort),
         page=page,
         page_size=page_size,
+        id_usuario=id_usuario,
+        nombre=nombre.strip() if nombre else None,
     )
     return PageUsuario(
         items=[_resumen(f) for f in filas], page=page, page_size=page_size, total=total

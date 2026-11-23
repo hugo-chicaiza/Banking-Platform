@@ -16,10 +16,11 @@ from app.core.security.operador import exigir_id_interno
 RESPUESTA_CSV: dict[int | str, dict[str, Any]] = {
     200: {"content": {"text/csv": {"schema": {"type": "string"}}}}
 }
+PERMISO_EXPORTAR = "org-exportar"
 
 
 def autorizar(usuario: Usuario) -> None:
-    if "org-exportar" not in usuario.permisos:
+    if PERMISO_EXPORTAR not in usuario.permisos:
         raise problema(403, "SIN_PERMISO", "No tiene permiso para exportar listados.")
 
 

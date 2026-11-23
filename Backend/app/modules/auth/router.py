@@ -226,14 +226,13 @@ directorio_router = APIRouter(
 def autorizar_listado_usuarios(
     request: Request, usuario: UsuarioActual, formato: Literal["csv"] | None = None
 ) -> Usuario:
-    if formato == "csv":
+    directorio = request.url.path.endswith("/directorio-usuarios")
+    if formato == "csv" or (
+        directorio and exportacion.PERMISO_EXPORTAR in usuario.permisos
+    ):
         exportacion.autorizar(usuario)
     else:
-        roles = (
-            ("ADMIN", "AUDITOR")
-            if request.url.path.endswith("/directorio-usuarios")
-            else ("ADMIN",)
-        )
+        roles = ("ADMIN", "AUDITOR") if directorio else ("ADMIN",)
         require_roles(*roles)(usuario, request)
     return usuario
 
@@ -260,6 +259,8 @@ def listar_usuarios(
                 "q",
                 "estado",
                 "idAgencia",
+                "idUsuario",
+                "nombre",
                 "rol",
                 "vinculado",
                 "page",
@@ -271,6 +272,10 @@ def listar_usuarios(
     ],
     conn: ConexionSeguridad,
     q: Annotated[str | None, Query(max_length=100)] = None,
+    filtro_id_usuario: Annotated[
+        int | None, Query(alias="idUsuario", ge=1, le=2147483647)
+    ] = None,
+    nombre: Annotated[str | None, Query(max_length=100)] = None,
     estado: EstadoUsuario | None = None,
     id_agencia: Annotated[
         str | None, Query(alias="idAgencia", pattern=r"^\d{3}$")
@@ -283,7 +288,8 @@ def listar_usuarios(
     formato: Literal["csv"] | None = None,
 ) -> PageUsuario | Response:
     """Usuarios internos con búsqueda (username, nombres, apellidos, email), filtros y
-    paginación. Orden: username, nombres, apellidos, email, estado o fechaCreacion
+    paginación. Orden: idUsuario, username, nombres, apellidos, email, roles,
+    idAgencia, estado o fechaCreacion,
     con ,asc o ,desc (por defecto fechaCreacion,desc).
     """
     if formato == "csv":
@@ -297,6 +303,8 @@ def listar_usuarios(
             orden=service.orden_listado(sort),
             page=page,
             page_size=page_size,
+            id_usuario=filtro_id_usuario,
+            nombre=nombre.strip() if nombre else None,
         )
         return exportacion.responder_csv(
             usuario,
@@ -339,6 +347,8 @@ def listar_usuarios(
         page=page,
         page_size=page_size,
         sort=sort,
+        id_usuario=filtro_id_usuario,
+        nombre=nombre,
     )
 
 

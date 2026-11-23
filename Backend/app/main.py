@@ -26,6 +26,7 @@ from app.modules.creditos.router import router as creditos_router
 from app.modules.cuentas.router import router as cuentas_router
 from app.modules.organizacion.router import router as organizacion_router
 from app.modules.organizacion.router import router_publico as institucion_router
+from app.modules.parametros.mantenimiento import historial_auditoria_router
 from app.modules.parametros.router import router as parametros_router
 from app.modules.productos.router import router as productos_router
 from app.modules.seguridad.router import router as seguridad_router
@@ -79,6 +80,7 @@ app.include_router(cuentas_router, prefix=API_V1)
 app.include_router(organizacion_router, prefix=API_V1)
 app.include_router(institucion_router, prefix=API_V1)
 app.include_router(parametros_router, prefix=API_V1)
+app.include_router(historial_auditoria_router, prefix=API_V1)
 app.include_router(productos_router, prefix=API_V1)
 app.include_router(seguridad_router, prefix=API_V1)
 app.include_router(tarjetas_router, prefix=API_V1)

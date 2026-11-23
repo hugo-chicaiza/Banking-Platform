@@ -35,6 +35,13 @@ router = APIRouter(
     dependencies=[Depends(require_auth)],
 )
 Coop = Annotated[Connection, Depends(cooperativa)]
+historial_auditoria_router = APIRouter(
+    prefix="/seguridad/historial-parametros",
+    tags=["seguridad"],
+    route_class=ProblemDetailsRoute,
+    responses=RESPUESTAS_ERROR,
+    dependencies=[Depends(require_auth)],
+)
 Actual = aprobaciones.Actual
 Cola = aprobaciones.Cola
 LECTURA = []
@@ -221,6 +228,7 @@ def presentar(
     }
 
 
+@historial_auditoria_router.get("", operation_id="OrganizacionParametrosAuditoria")
 @router.get(
     "",
     dependencies=LECTURA
@@ -233,6 +241,7 @@ def presentar(
     ],
 )
 def listar(
+    request: Request,
     conn: Coop,
     usuario: UsuarioActual,
     actor: Actual,
@@ -243,7 +252,11 @@ def listar(
     page: int = Query(1, ge=1),
     page_size: int = Query(25, alias="pageSize", ge=1, le=100),
 ) -> dict[str, Any]:
-    lectura(actor)
+    if not (
+        request.url.path.startswith("/api/v1/seguridad/historial-parametros")
+        and exportacion.PERMISO_EXPORTAR in actor.permisos
+    ):
+        lectura(actor)
     agencia = alcance(actor, usuario, id_agencia)
     # Parametros son pocos; no se interpolan filtros del usuario en SQL.
     filas = (
@@ -291,6 +304,13 @@ def listar(
     }
 
 
+@historial_auditoria_router.get(
+    "/{clave}",
+    operation_id="OrganizacionHistorialParametro",
+    response_model=dict[str, Any],
+    responses=exportacion.RESPUESTA_CSV,
+    dependencies=[Depends(solo_parametros("idAgencia", "formato"))],
+)
 @router.get(
     "/{clave}",
     response_model=dict[str, Any],
@@ -306,7 +326,11 @@ def consultar(
     id_agencia: str | None = Query(None, alias="idAgencia", pattern=r"^\d{3}$"),
     formato: Literal["csv"] | None = None,
 ) -> dict[str, Any] | Response:
-    lectura(actor)
+    if not (
+        request.url.path.startswith("/api/v1/seguridad/historial-parametros/")
+        and exportacion.PERMISO_EXPORTAR in actor.permisos
+    ):
+        lectura(actor)
     if formato == "csv":
         exportacion.autorizar(usuario)
     resultado = detalle(conn, clave, alcance(actor, usuario, id_agencia), hoy(), actor)
@@ -316,7 +340,7 @@ def consultar(
         usuario,
         ip_cliente(request.scope),
         "parametros-historial",
-        "Sistema.ParametroValor",
+        "Parametros.ParametroValor",
         (
             "clave",
             "agencia",
