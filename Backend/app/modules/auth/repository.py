@@ -14,6 +14,19 @@ from sqlalchemy import Connection, RowMapping, bindparam, text
 Fila = RowMapping
 
 
+def bloquear_cambios_administrativos(conn: Connection) -> bool:
+    resultado = conn.scalar(
+        text("""
+        DECLARE @resultado int;
+        EXEC @resultado = sys.sp_getapplock
+            @Resource = N'E104_ADMIN_ACTIVO', @LockMode = 'Exclusive',
+            @LockOwner = 'Transaction', @LockTimeout = 10000;
+        SELECT @resultado;
+    """)
+    )
+    return resultado is not None and resultado >= 0
+
+
 # --- AUT-01: vínculo con WorkOS ------------------------------------------------------
 
 

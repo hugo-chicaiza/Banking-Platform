@@ -91,6 +91,7 @@ class UsuarioResumen(CamelModel):
     email: str
     # Rol de la membresía en EnquoCoop (copia en Organizacion.Usuarios.RolesWorkOS)
     rol: str | None
+    roles: list[str] = Field(default_factory=list)
     estado: EstadoUsuario
     id_agencia: str | None
     # KeyUsuario no nulo: ya aceptó la invitación e inició sesión
@@ -171,8 +172,17 @@ class UsuarioUpdate(CamelModel):
 
 
 class RolUpdate(CamelModel):
-    """AUT-09: un solo rol por usuario."""
+    """AUT-09: conjunto completo de roles o formato legado de un rol."""
 
     model_config = ConfigDict(extra="forbid")
 
-    rol: Rol
+    rol: Rol | None = None
+    roles: list[Rol] | None = Field(default=None, min_length=1, max_length=7)
+
+    @model_validator(mode="after")
+    def _validar_roles(self) -> Self:
+        if (self.rol is None) == (self.roles is None):
+            raise ValueError("Envíe rol o roles.")
+        if self.roles is not None and len(set(self.roles)) != len(self.roles):
+            raise ValueError("Los roles deben ser distintos.")
+        return self

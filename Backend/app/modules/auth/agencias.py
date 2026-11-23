@@ -110,6 +110,8 @@ def sincronizar_traslado(
     repo.historico(
         conn, usuario, "PRINCIPAL", None, anterior, nueva, actor_id, actor.agencia()
     )
+    if anterior is not None and anterior != nueva:
+        repo.trasladar_contextos_vigentes(conn, usuario, anterior, nueva)
 
 
 def _usuario(conn: Connection, id_: int, bloquear: bool = False):
@@ -157,6 +159,12 @@ def guardar(
         "AUT-MULTIAGENCIA",
         str(id_),
     ):
+        if actor_id == id_:
+            raise problema(
+                403,
+                "AUTOGESTION_NO_PERMITIDA",
+                "No puede cambiar sus propias asignaciones de agencia.",
+            )
         try:
             fila = _usuario(conn, id_, True)
             roles = normalizar_roles((fila["RolesWorkOS"] or "").split(","), None)
@@ -184,7 +192,7 @@ def guardar(
             ):
                 raise problema(
                     409,
-                    "CAJERO_CON_JORNADA_ABIERTA",
+                    "USUARIO_CON_JORNADA_ABIERTA",
                     "Cierre la jornada antes de cambiar las asignaciones.",
                 )
             if "CAJERO" in roles and anterior != datos.id_agencia_principal:

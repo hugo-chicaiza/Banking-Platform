@@ -14,7 +14,7 @@ import secrets
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, TypedDict
 from urllib.parse import urlsplit
 
 import httpx
@@ -526,8 +526,12 @@ def _duplicado() -> HTTPException:
     )
 
 
+def _roles(fila: repository.Fila) -> tuple[str, ...]:
+    return tuple(normalizar_roles((fila["RolesWorkOS"] or "").split(","), None))
+
+
 def _rol(fila: repository.Fila) -> str | None:
-    roles = normalizar_roles((fila["RolesWorkOS"] or "").split(","), None)
+    roles = _roles(fila)
     return roles[0] if roles else None
 
 
@@ -539,6 +543,7 @@ def _resumen(fila: repository.Fila) -> UsuarioResumen:
         apellidos=fila["Apellidos"],
         email=fila["Email"],
         rol=_rol(fila),
+        roles=list(_roles(fila)),
         estado=fila["Estado"],
         id_agencia=codigo_agencia(fila["AgenciaID"]),
         vinculado=fila["KeyUsuario"] is not None,
@@ -618,6 +623,21 @@ def _invitacion_pendiente(email: str) -> Invitation | None:
         return next((i for i in invitaciones if i.state == "pending"), None)
 
 
+def _revocar_invitacion_pendiente(
+    fila: repository.Fila, usuario: Usuario, deshacer: Deshacer
+) -> None:
+    pendiente = _invitacion_pendiente(fila["Email"])
+    if pendiente is None:
+        return
+    rol = _rol(fila)
+    if rol is None:
+        raise problema(
+            409, "INVITACION_SIN_ROL", "La invitación no tiene un rol restaurable."
+        )
+    _revocar_invitacion(pendiente.id)
+    deshacer.append(lambda: _invitar(fila["Email"], rol, usuario))
+
+
 def _membresia(id_workos: str) -> OrganizationMembership | None:
     with _workos("list_organization_memberships"):
         membresias = get_workos().user_management.list_organization_memberships(
@@ -670,7 +690,7 @@ def _resolver_sin_vinculo(conn: Connection, fila: repository.Fila) -> str | None
 
 
 def _slugs(membresia: OrganizationMembership) -> set[str]:
-    roles = membresia.roles or [membresia.role]
+    roles = membresia.roles or ([membresia.role] if membresia.role else [])
     return {rol["slug"] for rol in roles}
 
 
@@ -687,19 +707,31 @@ def _revocar_sesiones(id_workos: str) -> None:
                 revocar_sesion_local(sesion.id)
 
 
+def _serializar_cambios_administrativos(conn: Connection) -> None:
+    if not repository.bloquear_cambios_administrativos(conn):
+        raise problema(
+            409,
+            "USUARIOS_OCUPADOS",
+            "Hay otro cambio de acceso en curso. Intente nuevamente.",
+        )
+
+
 def _validar_ultimo_admin(conn: Connection, fila: repository.Fila) -> None:
     """Cuenta como ADMIN real: Activo, vinculado y con membresía activa org-admin."""
-    if _rol(fila) != "ADMIN" or fila["Estado"] != "Activo" or not fila["KeyUsuario"]:
+    if fila["Estado"] != "Activo" or not fila["KeyUsuario"]:
         return
     with _workos("list_organization_memberships"):
-        ids = [
+        ids = {
             m.user_id
             for m in get_workos().user_management.list_organization_memberships(
                 organization_id=get_organizacion_id(), statuses=["active"]
             )
-            if _SLUG_ADMIN in _slugs(m) and m.user_id != fila["KeyUsuario"]
-        ]
-    if repository.contar_activos_vinculados(conn, ids, fila["UsuarioID"]) == 0:
+            if _SLUG_ADMIN in _slugs(m)
+        }
+    if fila["KeyUsuario"] not in ids:
+        return
+    otros = sorted(ids - {fila["KeyUsuario"]})
+    if repository.contar_activos_vinculados(conn, otros, fila["UsuarioID"]) == 0:
         raise problema(
             409, "ULTIMO_ADMIN", "No se puede quitar el último administrador activo."
         )
@@ -884,9 +916,7 @@ def _sincronizar_pendiente(
     """
     if not nuevo_estado and not nuevo_email:
         return
-    pendiente = _invitacion_pendiente(fila["Email"])
-    if pendiente is not None:
-        _revocar_invitacion(pendiente.id)
+    _revocar_invitacion_pendiente(fila, usuario, deshacer)
     rol = _rol(fila)
     if (nuevo_estado or fila["Estado"]) == "Activo" and rol is not None:
         nueva = _invitar(nuevo_email or fila["Email"], rol, usuario)
@@ -933,6 +963,8 @@ def actualizar_usuario(
         deshacer: Deshacer = []
         try:
             with conn.begin():
+                if cambios.estado is not None:
+                    _serializar_cambios_administrativos(conn)
                 fila = _cargar(conn, id_usuario, bloquear=True)
                 nuevo_estado = (
                     cambios.estado if cambios.estado != fila["Estado"] else None
@@ -948,13 +980,13 @@ def actualizar_usuario(
                     else None
                 )
 
+                if id_usuario == id_admin and (nuevo_estado or agencia):
+                    raise problema(
+                        403,
+                        "AUTOGESTION_NO_PERMITIDA",
+                        "No puede cambiar su propia agencia ni su estado.",
+                    )
                 if nuevo_estado and nuevo_estado != "Activo":
-                    if id_usuario == id_admin:
-                        raise problema(
-                            409,
-                            "OPERACION_SOBRE_SI_MISMO",
-                            "No puede bloquear ni desactivar su propio usuario.",
-                        )
                     _validar_ultimo_admin(conn, fila)
                 if nuevo_email and repository.existe_duplicado(
                     conn,
@@ -972,7 +1004,7 @@ def actualizar_usuario(
                     ):
                         raise problema(
                             409,
-                            "CAJERO_CON_JORNADA_ABIERTA",
+                            "USUARIO_CON_JORNADA_ABIERTA",
                             "Cierre la jornada antes de cambiar la agencia.",
                         )
                     _validar_agencia(conn_coop, agencia)
@@ -1018,7 +1050,7 @@ def actualizar_usuario(
                         fila, nuevo_estado, nuevo_email, usuario, deshacer
                     )
                 # Otra base: va al final para no dejarla cambiada si algo antes falla
-                if agencia and _rol(fila) == "CAJERO":
+                if agencia and "CAJERO" in _roles(fila):
                     _mover_cajero(conn_coop, id_usuario, agencia, id_admin)
         except IntegrityError:
             _deshacer(deshacer)
@@ -1032,41 +1064,52 @@ def actualizar_usuario(
 # --- AUT-09 ------------------------------------------------------------------------
 
 
+class _RolesWorkOS(TypedDict, total=False):
+    role_slug: str
+    role_slugs: list[str]
+
+
+def _parametros_roles_workos(slugs: list[str]) -> _RolesWorkOS:
+    if len(slugs) == 1:
+        return {"role_slug": slugs[0]}
+    return {"role_slugs": slugs}
+
+
 def _aplicar_rol_en_workos(
     fila: repository.Fila,
     key: str | None,
-    rol: str,
+    roles: tuple[str, ...],
     usuario: Usuario,
     deshacer: Deshacer,
 ) -> None:
     gestion = get_workos().user_management
+    seleccion = _parametros_roles_workos([slug_rol(rol) for rol in roles])
     if key:
         membresia = _membresia(key)
         if membresia is None:
             with _workos("create_organization_membership"):
-                gestion.create_organization_membership(
+                creada = gestion.create_organization_membership(
                     user_id=key,
                     organization_id=get_organizacion_id(),
-                    role_slug=slug_rol(rol),
+                    **seleccion,
                 )
+            deshacer.append(lambda: gestion.delete_organization_membership(creada.id))
             return
         id_membresia = membresia.id
-        anterior = membresia.role["slug"]
+        restaurar = _parametros_roles_workos(sorted(_slugs(membresia)))
         with _workos("update_organization_membership"):
             gestion.update_organization_membership(
-                organization_membership_id=id_membresia, role_slug=slug_rol(rol)
+                organization_membership_id=id_membresia, **seleccion
             )
         deshacer.append(
             lambda: gestion.update_organization_membership(
-                organization_membership_id=id_membresia, role_slug=anterior
+                organization_membership_id=id_membresia, **restaurar
             )
         )
     elif fila["Estado"] == "Activo":
         # Sin usuario en WorkOS: la invitación lleva el rol, así que se reemplaza
-        pendiente = _invitacion_pendiente(fila["Email"])
-        if pendiente is not None:
-            _revocar_invitacion(pendiente.id)
-        nueva = _invitar(fila["Email"], rol, usuario)
+        _revocar_invitacion_pendiente(fila, usuario, deshacer)
+        nueva = _invitar(fila["Email"], roles[0], usuario)
         id_nueva = nueva.id
         deshacer.append(lambda: _revocar_invitacion(id_nueva))
 
@@ -1077,25 +1120,47 @@ def cambiar_rol(
     id_usuario: int,
     datos: RolUpdate,
     usuario: Usuario,
+    id_admin: int,
     ip: str,
 ) -> UsuarioDetalle:
-    """Reemplaza el rol (uno) y cierra las sesiones del usuario: el rol nuevo aplica
-    al instante (401 SESION_REVOCADA) y entra de nuevo con él.
-    """
+    """Reemplaza los roles y revoca las sesiones emitidas con el conjunto anterior."""
+    nuevos = normalizar_roles(datos.roles, datos.rol)
     with auditar(
         "CAMBIAR_ROL",
         _TABLA_USUARIOS,
         usuario,
         ip,
-        f"AUT-09 rol={datos.rol}",
+        f"AUT-09 roles={','.join(nuevos)}",
         str(id_usuario),
     ):
+        if id_usuario == id_admin:
+            raise problema(
+                403, "AUTOGESTION_NO_PERMITIDA", "No puede cambiar su propio rol."
+            )
         deshacer: Deshacer = []
         try:
             with conn.begin():
+                _serializar_cambios_administrativos(conn)
                 fila = _cargar(conn, id_usuario, bloquear=True)
-                actual = _rol(fila)
-                if actual != datos.rol:
+                actuales = _roles(fila)
+                if len(actuales) > 1 and datos.roles is None:
+                    raise problema(
+                        409,
+                        "USUARIO_CON_MULTIPLES_ROLES",
+                        "La edición de un solo rol no puede reemplazar varios roles asignados.",
+                    )
+                hay_cambios = set(actuales) != set(nuevos)
+                if not hay_cambios and fila["KeyUsuario"]:
+                    membresia = _membresia(fila["KeyUsuario"])
+                    if membresia is None or _slugs(membresia) != {
+                        slug_rol(rol) for rol in nuevos
+                    }:
+                        raise problema(
+                            409,
+                            "ROLES_DESINCRONIZADOS",
+                            "Los roles de WorkOS difieren del registro local. Revise los accesos antes de guardar.",
+                        )
+                if hay_cambios:
                     from app.modules.caja import repository as caja_repo
 
                     if caja_repo.jornada_abierta_de_usuario(
@@ -1106,19 +1171,25 @@ def cambiar_rol(
                             "CAJERO_CON_JORNADA_ABIERTA",
                             "Cierre la jornada antes de cambiar el rol.",
                         )
-                    if actual == "ADMIN":
+                    if "ADMIN" not in nuevos:
                         _validar_ultimo_admin(conn, fila)
                     key = fila["KeyUsuario"] or _resolver_sin_vinculo(conn, fila)
+                    if len(nuevos) > 1 and not key:
+                        raise problema(
+                            409,
+                            "USUARIO_PENDIENTE_DE_VINCULO",
+                            "El usuario debe aceptar su invitación antes de recibir varios roles.",
+                        )
                     ids = agencias_repo.asignaciones(conn, id_usuario)
                     multiagencia.validar_matriz(
-                        (datos.rol,), ids, codigo_agencia(fila["AgenciaID"])
+                        nuevos, ids, codigo_agencia(fila["AgenciaID"])
                     )
-                    repository.actualizar_rol(conn, id_usuario, datos.rol)
-                    _aplicar_rol_en_workos(fila, key, datos.rol, usuario, deshacer)
+                    repository.actualizar_rol(conn, id_usuario, ",".join(nuevos))
+                    _aplicar_rol_en_workos(fila, key, nuevos, usuario, deshacer)
                     if key:
                         _revocar_sesiones(key)
                     # Deja de ser cajero: se cierra su asignación vigente (otra base)
-                    if actual == "CAJERO":
+                    if "CAJERO" in actuales and "CAJERO" not in nuevos:
                         try:
                             repository.cerrar_asignacion(conn_coop, id_usuario)
                             conn_coop.commit()
