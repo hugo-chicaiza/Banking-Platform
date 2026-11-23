@@ -12,7 +12,9 @@ TipoDocumento = Literal["C", "R", "P"]
 TipoCliente = Literal["Natural", "Juridico"]
 Genero = Literal["M", "F"]
 EstadoCivil = Literal["Soltero", "Casado", "Divorciado", "Viudo", "Union Libre"]
-TipoDireccion = Literal["Domicilio", "Trabajo", "Correspondencia", "Otra"]
+TipoDireccion = Annotated[
+    str, Field(min_length=1, max_length=20, pattern=r"^[^\x00-\x1f\x7f]+$")
+]
 EstadoCliente = Literal[
     "Pendiente", "Activo", "Bloqueado", "Inactivo", "Cerrado", "Eliminado", "Suspendido"
 ]

@@ -21,6 +21,16 @@ from typing import Any, cast
 from unittest.mock import MagicMock
 
 import pytest
+
+
+@pytest.fixture(autouse=True)
+def _catalogo_direcciones_aislado(monkeypatch):
+    """Estos casos usan repositorios falsos; el catálogo SQL se prueba por separado."""
+    from app.modules.clientes import service
+
+    monkeypatch.setattr(service, "validar_tipo_direccion", lambda conn, codigo: None)
+
+
 from pydantic import ValidationError
 from sqlalchemy import Connection
 

@@ -32,6 +32,7 @@ from app.modules.clientes.schemas import (
     TipoDocumento,
     ValidacionIdentificacion,
 )
+from app.modules.clientes.visibilidad import aplicar_visibilidad, puede_ver_direcciones
 
 router = APIRouter(
     tags=["clientes"],
@@ -59,6 +60,7 @@ _ROLES_CONSULTA = ["ASESOR", "CAJERO", "SUPERVISOR", "ADMIN"]
 )
 def listar_clientes(
     conn: Db,
+    usuario: Annotated[Usuario, Depends(require_auth)],
     q: str | None = None,
     identificacion: str | None = None,
     tipo_cliente: Annotated[TipoCliente | None, Query(alias="tipoCliente")] = None,
@@ -68,7 +70,7 @@ def listar_clientes(
     sort: str | None = None,
 ) -> PageCliente:
     """Busca clientes por filtros combinados, con paginación (CLI-03 / C-03)."""
-    return service.listar_clientes(
+    resultado = service.listar_clientes(
         conn,
         q=q,
         identificacion=identificacion,
@@ -78,6 +80,7 @@ def listar_clientes(
         page_size=page_size,
         sort=sort,
     )
+    return aplicar_visibilidad(resultado, usuario)
 
 
 @_consultas_router.get(
@@ -88,9 +91,11 @@ def listar_clientes(
     dependencies=[Depends(require_roles(*_ROLES_CONSULTA))],
     openapi_extra={"x-roles": _ROLES_CONSULTA},
 )
-def obtener_cliente(idCliente: int, conn: Db) -> Cliente:
+def obtener_cliente(
+    idCliente: int, conn: Db, usuario: Annotated[Usuario, Depends(require_auth)]
+) -> Cliente:
     """Detalle del cliente con sus direcciones activas (CLI-04 / C-03)."""
-    return service.obtener_cliente(conn, idCliente)
+    return aplicar_visibilidad(service.obtener_cliente(conn, idCliente), usuario)
 
 
 @_consultas_router.get(
@@ -101,9 +106,11 @@ def obtener_cliente(idCliente: int, conn: Db) -> Cliente:
     dependencies=[Depends(require_roles("ASESOR", "SUPERVISOR", "ADMIN"))],
     openapi_extra={"x-roles": ["ASESOR", "SUPERVISOR", "ADMIN"]},
 )
-def obtener_perfil_cliente(idCliente: int, conn: Db) -> ClientePerfil:
+def obtener_perfil_cliente(
+    idCliente: int, conn: Db, usuario: Annotated[Usuario, Depends(require_auth)]
+) -> ClientePerfil:
     """Datos generales, riesgo vigente y productos financieros (CLI-08 / C-06)."""
-    return service.obtener_perfil_cliente(conn, idCliente)
+    return aplicar_visibilidad(service.obtener_perfil_cliente(conn, idCliente), usuario)
 
 
 # ---------------------------------------------------------------------------
@@ -158,6 +165,7 @@ def registrar_cliente(
     request: Request,
     creado_por: UsuarioAuditoria,
     conn: Db,
+    usuario: Annotated[Usuario, Depends(require_auth)],
 ) -> Any:
     """Registra un cliente (Natural o Jurídico) con su dirección principal (CLI-02 / C-01).
 
@@ -165,8 +173,13 @@ def registrar_cliente(
     """
     # Obtener IP del cliente para auditoría en ClientesHis
     direccion_ip = _ip_cliente(request)
+    visibles = puede_ver_direcciones(usuario)
 
-    return service.registrar_cliente(conn, payload, creado_por, direccion_ip)
+    return aplicar_visibilidad(
+        service.registrar_cliente(conn, payload, creado_por, direccion_ip),
+        usuario,
+        permitido=visibles,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -349,8 +362,13 @@ def editar_cliente(
     conn: Db,
 ) -> Cliente:
     """Edita datos y audita cada cambio con la identidad vinculada en el servidor."""
-    return service.editar_cliente(
-        conn, idCliente, payload, modificado_por, ip_cliente(request.scope)
+    visibles = puede_ver_direcciones(usuario)
+    return aplicar_visibilidad(
+        service.editar_cliente(
+            conn, idCliente, payload, modificado_por, ip_cliente(request.scope)
+        ),
+        usuario,
+        permitido=visibles,
     )
 
 
@@ -376,7 +394,8 @@ def cambiar_estado_cliente(
         if funciones.autorizar_operacion(request, usuario)
         else {}
     )
-    return service.cambiar_estado_cliente(
+    visibles = puede_ver_direcciones(usuario)
+    resultado = service.cambiar_estado_cliente(
         conn,
         idCliente,
         payload,
@@ -385,6 +404,7 @@ def cambiar_estado_cliente(
         usuario.roles,
         **autorizacion,
     )
+    return aplicar_visibilidad(resultado, usuario, permitido=visibles)
 
 
 @_edicion_router.get(

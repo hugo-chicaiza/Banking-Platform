@@ -365,7 +365,7 @@ def _direcciones_por_clientes(
                Estado               AS estado
         FROM Clientes.Direcciones
         WHERE IdCliente IN :ids_clientes
-          AND Estado IN ('Activo', 'Inactivo')
+          AND Estado IN ('Activo', 'Inactivo', 'Eliminado')
           AND (:solo_activas = 0 OR Estado = 'Activo')
         ORDER BY IdCliente, EsPrincipal DESC, IdDireccion ASC
         """).bindparams(bindparam("ids_clientes", expanding=True))
@@ -378,7 +378,7 @@ def _direcciones_por_clientes(
 
 
 def listar_direcciones(conn: Connection, id_cliente: int) -> list[dict[str, Any]]:
-    """Direcciones Activo/Inactivo del cliente, principal primero (CLI-09)."""
+    """Incluye retiradas, sin perder su estado original ni la auditoría (CLI-09)."""
     return _direcciones_por_clientes(conn, [id_cliente], solo_activas=False)
 
 

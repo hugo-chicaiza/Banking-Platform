@@ -202,6 +202,7 @@ COMPARTIDAS = tuple(
         "tipos-credito",
         "actividades-economicas",
         "tipos-antecedente",
+        "tipos-direccion",
         "productos",
     )
 )
