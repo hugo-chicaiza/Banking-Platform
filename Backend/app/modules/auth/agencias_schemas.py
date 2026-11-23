@@ -36,6 +36,11 @@ class SeleccionAgencia(CamelModel):
     id_agencia: AgenciaId | None
 
 
+class TrasladoUsuario(CamelModel):
+    model_config = ConfigDict(extra="forbid")
+    id_agencia: AgenciaId
+
+
 class ContextoAgencias(CamelModel):
     id_agencia: str | None
     id_agencia_principal: str | None

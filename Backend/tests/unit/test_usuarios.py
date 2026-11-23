@@ -214,13 +214,27 @@ class _WorkOS:
         self._membresia(id_membresia).status = "active"
 
     def update_organization_membership(
-        self, *, organization_membership_id: str, role_slug: str
+        self,
+        *,
+        organization_membership_id: str,
+        role_slug: str | None = None,
+        role_slugs: list[str] | None = None,
     ) -> None:
-        self._registrar("update_membership", (organization_membership_id, role_slug))
-        self._membresia(organization_membership_id).role = {"slug": role_slug}
+        self._registrar(
+            "update_membership", (organization_membership_id, role_slugs or role_slug)
+        )
+        membresia = self._membresia(organization_membership_id)
+        membresia.role = {"slug": role_slug} if role_slug else None
+        membresia.roles = (
+            [{"slug": slug} for slug in role_slugs] if role_slugs else None
+        )
 
-    def create_organization_membership(self, **kwargs: Any) -> None:
+    def create_organization_membership(self, **kwargs: Any) -> Any:
         self._registrar("create_membership", kwargs)
+        return SimpleNamespace(id="om_nueva")
+
+    def delete_organization_membership(self, id_membresia: str) -> None:
+        self._registrar("delete_membership", id_membresia)
 
     def update_user(self, **kwargs: Any) -> None:
         self._registrar("update_user", kwargs)
@@ -378,6 +392,7 @@ def base(monkeypatch) -> _Base:
         "vinculado_a_otro": vinculado_a_otro,
         "vincular_por_id": vincular_por_id,
         "contar_activos_vinculados": contar_activos_vinculados,
+        "bloquear_cambios_administrativos": lambda _conn: True,
         "bloqueo_vigente": bloqueo_vigente,
         "abrir_bloqueo": abrir_bloqueo,
         "cerrar_bloqueos": cerrar_bloqueos,
@@ -468,6 +483,19 @@ def base(monkeypatch) -> _Base:
     monkeypatch.setattr(
         agencias_repo, "contexto", lambda _c, sid, id_: datos.contextos.get((sid, id_))
     )
+
+    def trasladar_contextos(_conn, id_, anterior, nueva):
+        for (_sid, usuario), contexto in datos.contextos.items():
+            if (
+                usuario == id_
+                and contexto["agencia"] == anterior
+                and contexto["vigente"]
+            ):
+                contexto["agencia"] = nueva
+
+    monkeypatch.setattr(
+        agencias_repo, "trasladar_contextos_vigentes", trasladar_contextos
+    )
     monkeypatch.setattr(
         agencias_repo,
         "guardar_contexto",
@@ -548,6 +576,7 @@ def test_listar_usuarios_paginado(client, base):
         "apellidos": "López",
         "email": "u3@correo.ec",
         "rol": "ASESOR",
+        "roles": ["ASESOR"],
         "estado": "Activo",
         "idAgencia": "001",
         "vinculado": False,
@@ -817,8 +846,27 @@ def test_desbloquear_cierra_el_bloqueo_y_reactiva(client, base, workos):
 def test_no_puede_bloquearse_a_si_mismo(client, workos):
     r = client.patch(f"{BASE}/{ID_AUDITORIA}", json={"estado": "Inactivo"})
 
-    assert r.status_code == 409
-    assert r.json()["code"] == "OPERACION_SOBRE_SI_MISMO"
+    assert r.status_code == 403
+    assert r.json()["code"] == "AUTOGESTION_NO_PERMITIDA"
+
+
+def test_no_puede_cambiar_su_propia_agencia(client, workos):
+    r = client.patch(f"{BASE}/{ID_AUDITORIA}", json={"idAgencia": "002"})
+
+    assert r.status_code == 403
+    assert r.json()["code"] == "AUTOGESTION_NO_PERMITIDA"
+    assert workos.llamadas == []
+
+
+def test_no_puede_cambiar_su_propio_rol(client, workos, eventos_auditados):
+    r = client.put(f"{BASE}/{ID_AUDITORIA}/roles", json={"rol": "CAJERO"})
+
+    assert r.status_code == 403
+    assert r.json()["code"] == "AUTOGESTION_NO_PERMITIDA"
+    assert workos.llamadas == []
+    evento = next(e for e in eventos_auditados if e.accion == "CAMBIAR_ROL")
+    assert evento.resultado == "Fallido"
+    assert "AUTOGESTION_NO_PERMITIDA" in evento.descripcion
 
 
 def test_desactivar_pendiente_revoca_la_invitacion(client, workos):
@@ -856,6 +904,20 @@ def test_cambiar_email_de_pendiente_reenvia_la_invitacion(client, workos):
     assert (envio["email"], envio["role_slug"]) == ("nuevo@correo.ec", "org-asesor")
 
 
+def test_error_de_commit_restaura_invitacion_al_correo_anterior(
+    client, base, workos, conn
+):
+    conn.fallar_commit = True
+
+    r = client.patch(f"{BASE}/3", json={"email": "nuevo@correo.ec"})
+
+    assert r.status_code == 500
+    assert base.usuarios[3]["Email"] == "u3@correo.ec"
+    assert [i.email for i in workos.invitaciones if i.state == "pending"] == [
+        "u3@correo.ec"
+    ]
+
+
 def test_email_duplicado_al_editar(client, workos):
     r = client.patch(f"{BASE}/2", json={"email": "u3@correo.ec"})
 
@@ -863,8 +925,9 @@ def test_email_duplicado_al_editar(client, workos):
     assert r.json()["code"] == "USUARIO_DUPLICADO"
 
 
-def test_cambiar_agencia_de_cajero_mueve_su_asignacion(client, base):
-    r = client.patch(f"{BASE}/2", json={"idAgencia": "002"})
+@pytest.mark.parametrize(("metodo", "sufijo"), [("PATCH", ""), ("PUT", "/agencia")])
+def test_cambiar_agencia_de_cajero_mueve_su_asignacion(client, base, metodo, sufijo):
+    r = client.request(metodo, f"{BASE}/2{sufijo}", json={"idAgencia": "002"})
 
     assert r.status_code == 200
     assert r.json()["idAgencia"] == "002"
@@ -939,6 +1002,41 @@ def test_cambiar_rol_sin_poder_cerrar_sesiones_se_revierte(client, base, workos)
     assert ("update_membership", ("om_2", "org-cajero")) in workos.llamadas
 
 
+def test_fallo_de_sesion_restaura_todos_los_roles_del_proveedor(client, base, workos):
+    workos.membresias["user_2"].roles = [
+        {"slug": "org-cajero"},
+        {"slug": "org-auditor"},
+    ]
+    workos.errores["list_sessions"] = _http_error(ServerException)
+
+    r = client.put(f"{BASE}/2/roles", json={"rol": "SUPERVISOR"})
+
+    assert r.status_code == 503
+    assert base.usuarios[2]["RolesWorkOS"] == "CAJERO"
+    assert service._slugs(workos.membresias["user_2"]) == {"org-cajero", "org-auditor"}
+
+
+def test_fallo_de_sesion_revierte_membresia_nueva(client, workos):
+    del workos.membresias["user_2"]
+    workos.errores["list_sessions"] = _http_error(ServerException)
+
+    r = client.put(f"{BASE}/2/roles", json={"rol": "SUPERVISOR"})
+
+    assert r.status_code == 503
+    assert ("delete_membership", "om_nueva") in workos.llamadas
+
+
+def test_edicion_de_un_rol_preserva_asignaciones_multiples(client, base, workos):
+    base.usuarios[2]["RolesWorkOS"] = "CAJERO,AUDITOR"
+
+    r = client.put(f"{BASE}/2/roles", json={"rol": "SUPERVISOR"})
+
+    assert r.status_code == 409
+    assert r.json()["code"] == "USUARIO_CON_MULTIPLES_ROLES"
+    assert base.usuarios[2]["RolesWorkOS"] == "CAJERO,AUDITOR"
+    assert workos.llamadas == []
+
+
 def test_cambiar_rol_de_pendiente_reemplaza_la_invitacion(client, workos):
     r = client.put(f"{BASE}/3/roles", json={"rol": "CONTADOR"})
 
@@ -947,43 +1045,122 @@ def test_cambiar_rol_de_pendiente_reemplaza_la_invitacion(client, workos):
     assert dict(workos.llamadas)["send_invitation"]["role_slug"] == "org-contador"
 
 
-def test_mismo_rol_no_llama_a_workos(client, workos):
+def test_mismo_rol_solo_consulta_workos(client, workos):
     r = client.put(f"{BASE}/2/roles", json={"rol": "CAJERO"})
 
     assert r.status_code == 200
-    assert workos.llamadas == []
+    assert workos.nombres() == ["list_organization_memberships"]
+
+
+def test_mismos_roles_locales_detectan_deriva_en_workos(client, base, workos):
+    base.usuarios[2]["RolesWorkOS"] = "CAJERO,AUDITOR"
+
+    r = client.put(f"{BASE}/2/roles", json={"roles": ["AUDITOR", "CAJERO"]})
+
+    assert r.status_code == 409
+    assert r.json()["code"] == "ROLES_DESINCRONIZADOS"
+    assert workos.nombres() == ["list_organization_memberships"]
+    assert base.usuarios[2]["RolesWorkOS"] == "CAJERO,AUDITOR"
 
 
 def test_rol_invalido_o_varios_roles(client):
     assert client.put(f"{BASE}/2/roles", json={"rol": "GERENTE"}).status_code == 400
-    assert client.put(f"{BASE}/2/roles", json={"roles": ["ADMIN"]}).status_code == 400
+    assert client.put(f"{BASE}/2/roles", json={"roles": []}).status_code == 400
+    assert (
+        client.put(
+            f"{BASE}/2/roles", json={"roles": ["CONTADOR", "CONTADOR"]}
+        ).status_code
+        == 400
+    )
+    assert (
+        client.put(
+            f"{BASE}/2/roles", json={"rol": "ADMIN", "roles": ["AUDITOR"]}
+        ).status_code
+        == 400
+    )
 
 
-def test_ultimo_admin_no_pierde_el_rol(client, base, workos):
-    r = client.put(f"{BASE}/1/roles", json={"rol": "AUDITOR"})
+def test_usuario_vinculado_puede_tener_varios_roles(client, base, workos):
+    r = client.put(f"{BASE}/2/roles", json={"roles": ["CAJERO", "AUDITOR"]})
+
+    assert r.status_code == 200
+    assert set(r.json()["roles"]) == {"CAJERO", "AUDITOR"}
+    assert set(base.usuarios[2]["RolesWorkOS"].split(",")) == {"CAJERO", "AUDITOR"}
+    assert service._slugs(workos.membresias["user_2"]) == {"org-cajero", "org-auditor"}
+    assert base.asignaciones[0]["Estado"] == 1
+
+
+def test_multirrol_pendiente_exige_vinculo(client, base, workos):
+    r = client.put(f"{BASE}/3/roles", json={"roles": ["ASESOR", "AUDITOR"]})
+
+    assert r.status_code == 409
+    assert r.json()["code"] == "USUARIO_PENDIENTE_DE_VINCULO"
+    assert base.usuarios[3]["RolesWorkOS"] == "ASESOR"
+    assert "revoke_invitation" not in workos.nombres()
+
+
+@pytest.fixture
+def otro_editor(client, monkeypatch):
+    monkeypatch.setitem(
+        app.dependency_overrides,
+        auth.usuario_actual,
+        lambda: replace(ADMIN, id_usuario="user_2", id_interno=2),
+    )
+    monkeypatch.setitem(app.dependency_overrides, auth.id_usuario_auditoria, lambda: 2)
+    return client
+
+
+def test_ultimo_admin_no_pierde_el_rol(otro_editor, base, workos):
+    r = otro_editor.put(f"{BASE}/1/roles", json={"rol": "AUDITOR"})
 
     assert r.status_code == 409
     assert r.json()["code"] == "ULTIMO_ADMIN"
     assert base.usuarios[1]["RolesWorkOS"] == "ADMIN"
 
 
-def test_admin_con_otro_admin_real_si_puede_cambiar(client, base, workos):
+def test_ultimo_admin_protegido_si_sql_tiene_roles_desactualizados(
+    otro_editor, base, workos
+):
+    base.usuarios[1]["RolesWorkOS"] = "CONTADOR"
+
+    r = otro_editor.put(f"{BASE}/1/roles", json={"roles": ["CONTADOR", "AUDITOR"]})
+
+    assert r.status_code == 409
+    assert r.json()["code"] == "ULTIMO_ADMIN"
+    assert service._slugs(workos.membresias["user_1"]) == {"org-admin"}
+    assert "update_membership" not in workos.nombres()
+
+
+def test_cambio_concurrente_de_acceso_se_rechaza_antes_de_workos(
+    client, base, workos, monkeypatch
+):
+    monkeypatch.setattr(repository, "bloquear_cambios_administrativos", lambda _: False)
+
+    r = client.patch(f"{BASE}/2", json={"estado": "Inactivo"})
+
+    assert r.status_code == 409
+    assert r.json()["code"] == "USUARIOS_OCUPADOS"
+    assert base.usuarios[2]["Estado"] == "Activo"
+    assert workos.llamadas == []
+
+
+def test_admin_con_otro_admin_real_si_puede_cambiar(otro_editor, base, workos):
     base.usuarios[5] = _fila(5, RolesWorkOS="ADMIN")
     workos.membresias["user_5"] = SimpleNamespace(
         id="om_5", user_id="user_5", status="active", role={"slug": "org-admin"}
     )
     workos.membresias["user_5"].roles = None
 
-    r = client.put(f"{BASE}/1/roles", json={"rol": "AUDITOR"})
+    r = otro_editor.put(f"{BASE}/1/roles", json={"rol": "AUDITOR"})
 
     assert r.status_code == 200
 
 
-def test_admin_sin_membresia_activa_no_cuenta(client, base, workos):
+def test_admin_sin_membresia_activa_no_cuenta(otro_editor, base, workos):
     # Fila con rol ADMIN pero sin membresía activa en WorkOS: no es un ADMIN real
     base.usuarios[5] = _fila(5, RolesWorkOS="ADMIN")
 
-    r = client.put(f"{BASE}/1/roles", json={"rol": "AUDITOR"})
+    r = otro_editor.put(f"{BASE}/1/roles", json={"rol": "AUDITOR"})
 
     assert r.status_code == 409
 

@@ -180,6 +180,8 @@ RUTAS_POR_SECCION: dict[str, tuple[tuple[str, str], ...]] = {
         ("GET", "/api/v1/usuarios/{idUsuario}/agencias"),
         ("PUT", "/api/v1/usuarios/{idUsuario}/agencias"),
         ("GET", "/api/v1/usuarios/{idUsuario}/agencias/historial"),
+        ("GET", "/api/v1/usuarios/{idUsuario}/historial"),
+        ("PUT", "/api/v1/usuarios/{idUsuario}/agencia"),
     ),
 }
 

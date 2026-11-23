@@ -468,6 +468,8 @@ ROLES_POR_RUTA.update(
         ("GET", "/api/v1/usuarios/{idUsuario}/agencias"): ("ADMIN",),
         ("PUT", "/api/v1/usuarios/{idUsuario}/agencias"): ("ADMIN",),
         ("GET", "/api/v1/usuarios/{idUsuario}/agencias/historial"): ("ADMIN",),
+        ("PUT", "/api/v1/usuarios/{idUsuario}/agencia"): ("ADMIN",),
+        ("GET", "/api/v1/usuarios/{idUsuario}/historial"): ("ADMIN",),
         ("GET", "/api/v1/contabilidad/cuentas/importaciones/{id_importacion}"): (
             "CONTADOR",
         ),

@@ -49,6 +49,7 @@ from app.modules.auth.agencias_schemas import (
     ContextoAgencias,
     HistorialAgencias,
     SeleccionAgencia,
+    TrasladoUsuario,
 )
 from app.modules.auth.schemas import (
     EstadoUsuario,
@@ -314,21 +315,43 @@ def actualizar_usuario(
 
 
 @router_usuarios.put(
+    "/{idUsuario}/agencia", response_model=UsuarioDetalle, operation_id="E104Agencia"
+)
+def trasladar_usuario(
+    request: Request,
+    admin: EditorUsuarios,
+    id_admin: UsuarioAuditoria,
+    id_usuario: IdUsuario,
+    datos: TrasladoUsuario,
+    conn: ConexionSeguridad,
+    conn_coop: ConexionCooperativa,
+) -> UsuarioDetalle:
+    return service.actualizar_usuario(
+        conn,
+        conn_coop,
+        id_usuario,
+        UsuarioUpdate(id_agencia=datos.id_agencia),
+        admin,
+        id_admin,
+        ip_cliente(request.scope),
+    )
+
+
+@router_usuarios.put(
     "/{idUsuario}/roles", response_model=UsuarioDetalle, operation_id="AUT09"
 )
 def cambiar_rol(
     request: Request,
     admin: EditorUsuarios,
+    id_admin: UsuarioAuditoria,
     id_usuario: IdUsuario,
     datos: RolUpdate,
     conn: ConexionSeguridad,
     conn_coop: ConexionCooperativa,
 ) -> UsuarioDetalle:
-    """Reemplaza el rol del usuario (uno) y cierra sus sesiones: vuelve a entrar con
-    el rol nuevo. Regla: no se quita el último ADMIN.
-    """
+    """Reemplaza el conjunto de roles y cierra las sesiones del usuario."""
     return service.cambiar_rol(
-        conn, conn_coop, id_usuario, datos, admin, ip_cliente(request.scope)
+        conn, conn_coop, id_usuario, datos, admin, id_admin, ip_cliente(request.scope)
     )
 
 
@@ -374,6 +397,11 @@ def guardar_agencias(
     )
 
 
+@router_usuarios.get(
+    "/{idUsuario}/historial",
+    response_model=HistorialAgencias,
+    operation_id="E104HistorialAgencias",
+)
 @router_usuarios.get(
     "/{idUsuario}/agencias/historial",
     response_model=HistorialAgencias,
