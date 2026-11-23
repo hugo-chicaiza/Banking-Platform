@@ -90,7 +90,7 @@ def listar(
         WHERE IdOrganizacion=:org
         AND (:global=1 OR IdAgencia IS NULL OR IdAgencia IN :agencias)
         AND (:agencia IS NULL OR IdAgencia IS NULL OR IdAgencia=:agencia)
-        AND (SolicitadoPor=:actor OR CodigoTransaccion IN :codigos)
+        AND (SolicitadoPor=:actor OR CodigoTransaccion IN :codigos OR (:auditoria=1 AND :bandeja='resueltas'))
         AND ((:bandeja='mias' AND SolicitadoPor=:actor)
           OR (:bandeja='pendientes' AND Estado='Pendiente' AND SolicitadoPor<>:actor AND CodigoTransaccion IN :codigos)
           OR (:bandeja='resueltas' AND Estado NOT IN('Pendiente','Aprobada')))
@@ -102,6 +102,7 @@ def listar(
         "global": int(actor.global_admin),
         "agencias": list(actor.agencias),
         "agencia": agencia,
+        "auditoria": int("AUDITOR" in actor.roles),
         "actor": actor.sujeto,
         "codigos": codigos,
         "bandeja": bandeja,

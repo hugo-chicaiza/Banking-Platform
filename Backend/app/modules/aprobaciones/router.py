@@ -5,7 +5,7 @@ from functools import lru_cache
 from typing import Annotated, Any, Literal
 from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, Depends, Path, Query, Request
+from fastapi import APIRouter, Depends, Path, Query, Request, Response
 from pydantic import ConfigDict, Field, field_validator
 
 from app.core.api.errors import ProblemDetailsRoute, problema
@@ -27,6 +27,7 @@ from app.modules.aprobaciones.motores import motor
 from app.modules.aprobaciones.registro import Objetivo
 from app.modules.aprobaciones.scheduler import lifespan
 from app.modules.aprobaciones.servicio import Servicio
+from app.modules.organizacion import exportacion
 
 router = APIRouter(
     prefix="/aprobaciones",
@@ -104,29 +105,67 @@ def accesos(actor: Actual, cola: Cola, usuario: UsuarioActual) -> dict[str, Any]
         op.permiso_aprobacion in actor.permisos for op in cola.registro.operaciones()
     )
     return {
-        "puedeVer": creador or aprobador or propia.total > 0,
+        "puedeVer": creador
+        or aprobador
+        or propia.total > 0
+        or "AUDITOR" in actor.roles,
         "puedeSolicitar": creador,
         "pendientesParaMi": propia.pendientes_para_mi,
         "diasResaltar": propia.dias_resaltar,
     }
 
 
-@router.get("", response_model=Bandeja)
+@router.get("", response_model=Bandeja, responses=exportacion.RESPUESTA_CSV)
 def bandeja(
+    request: Request,
     actor: Actual,
     cola: Cola,
     usuario: UsuarioActual,
     bandeja: Literal["pendientes", "mias", "resueltas"] = "pendientes",
     page: Annotated[int, Query(ge=1)] = 1,
     page_size: Annotated[int, Query(alias="pageSize", ge=1, le=100)] = 20,
-) -> Bandeja:
-    return lecturas.listar(
+    formato: Literal["csv"] | None = None,
+) -> Bandeja | Response:
+    if formato == "csv":
+        exportacion.autorizar(usuario)
+    resultado = lecturas.listar(
         cola,
         actor,
         bandeja,
         page,
         page_size,
         None if actor.global_admin else usuario.agencia(),
+    )
+    if formato is None:
+        return resultado
+    return exportacion.responder_csv(
+        usuario,
+        ip_cliente(request.scope),
+        "aprobaciones",
+        "Seguridad.SolicitudAprobacion",
+        (
+            "idSolicitud",
+            "operacion",
+            "agencia",
+            "estado",
+            "solicitante",
+            "fechaSolicitud",
+            "resolutor",
+            "fechaResolucion",
+        ),
+        (
+            (
+                s.id_solicitud,
+                s.codigo_transaccion,
+                s.id_agencia,
+                s.estado,
+                s.solicitante.nombre,
+                s.fecha_solicitud,
+                s.resolutor.nombre if s.resolutor else None,
+                s.fecha_resolucion,
+            )
+            for s in resultado.items
+        ),
     )
 
 

@@ -604,6 +604,23 @@
               "title": "Pagesize",
               "type": "integer"
             }
+          },
+          {
+            "in": "query",
+            "name": "formato",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "const": "csv",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Formato"
+            }
           }
         ],
         "responses": {
@@ -612,6 +629,11 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/Bandeja"
+                }
+              },
+              "text/csv": {
+                "schema": {
+                  "type": "string"
                 }
               }
             },

@@ -755,6 +755,13 @@ def _estado_invitacion(email: str) -> EstadoInvitacion | None:
 # --- AUT-05 ------------------------------------------------------------------------
 
 
+def orden_listado(sort: str | None) -> str:
+    orden = sort or _ORDEN_POR_DEFECTO
+    if orden not in _ORDENES:
+        raise problema(400, "SORT_INVALIDO", "El ordenamiento solicitado no es válido.")
+    return orden
+
+
 def listar_usuarios(
     conn: Connection,
     *,
@@ -767,9 +774,6 @@ def listar_usuarios(
     page_size: int,
     sort: str | None,
 ) -> PageUsuario:
-    orden = sort or _ORDEN_POR_DEFECTO
-    if orden not in _ORDENES:
-        raise problema(400, "SORT_INVALIDO", "El ordenamiento solicitado no es válido.")
     filas, total = repository.listar_usuarios(
         conn,
         q=q.strip() if q else None,
@@ -777,7 +781,7 @@ def listar_usuarios(
         agencia_id=int(id_agencia) if id_agencia else None,
         rol=rol,
         vinculado=vinculado,
-        orden=orden,
+        orden=orden_listado(sort),
         page=page,
         page_size=page_size,
     )

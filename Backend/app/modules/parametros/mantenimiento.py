@@ -2,7 +2,7 @@
 
 import json
 from datetime import UTC, date, timedelta
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, Path, Query, Request, Response
 from pydantic import ConfigDict, Field, field_validator
@@ -14,6 +14,7 @@ from app.core.api.errors import (
     problema,
     solo_parametros,
 )
+from app.core.api.middleware import ip_cliente
 from app.core.api.schemas import CamelModel
 from app.core.database.db import cooperativa
 from app.core.security.auth import UsuarioActual, require_auth
@@ -24,6 +25,7 @@ from app.modules.aprobaciones.contratos import SolicitudAceptada
 from app.modules.aprobaciones.identidad import Actor
 from app.modules.aprobaciones.motores import motor
 from app.modules.aprobaciones.registro import Objetivo
+from app.modules.organizacion import exportacion
 from app.modules.parametros import general
 from app.modules.parametros.service import hoy
 
@@ -55,7 +57,7 @@ class ValorNuevo(CamelModel):
 
 
 def lectura(actor: Actor) -> None:
-    if not set(actor.roles).intersection({"ADMIN", "SUPERVISOR", "ASESOR"}):
+    if not set(actor.roles).intersection({"ADMIN", "SUPERVISOR", "ASESOR", "AUDITOR"}):
         raise problema(
             403, "SIN_PERMISO", "No tiene acceso al mantenimiento de parametros."
         )
@@ -289,16 +291,56 @@ def listar(
     }
 
 
-@router.get("/{clave}", dependencies=LECTURA + [Depends(solo_parametros("idAgencia"))])
+@router.get(
+    "/{clave}",
+    response_model=dict[str, Any],
+    responses=exportacion.RESPUESTA_CSV,
+    dependencies=LECTURA + [Depends(solo_parametros("idAgencia", "formato"))],
+)
 def consultar(
+    request: Request,
     clave: str,
     conn: Coop,
     usuario: UsuarioActual,
     actor: Actual,
     id_agencia: str | None = Query(None, alias="idAgencia", pattern=r"^\d{3}$"),
-) -> dict[str, Any]:
+    formato: Literal["csv"] | None = None,
+) -> dict[str, Any] | Response:
     lectura(actor)
-    return detalle(conn, clave, alcance(actor, usuario, id_agencia), hoy(), actor)
+    if formato == "csv":
+        exportacion.autorizar(usuario)
+    resultado = detalle(conn, clave, alcance(actor, usuario, id_agencia), hoy(), actor)
+    if formato is None:
+        return resultado
+    return exportacion.responder_csv(
+        usuario,
+        ip_cliente(request.scope),
+        "parametros-historial",
+        "Sistema.ParametroValor",
+        (
+            "clave",
+            "agencia",
+            "estado",
+            "valor",
+            "desde",
+            "hasta",
+            "fechaCreacion",
+            "responsable",
+        ),
+        (
+            (
+                clave,
+                v["idAgencia"],
+                v["estado"],
+                v["valor"],
+                v["vigenciaDesde"],
+                v["vigenciaHasta"],
+                v["fechaCreacion"],
+                v["responsable"],
+            )
+            for v in resultado["historial"]
+        ),
+    )
 
 
 def cancelar_futuro(
