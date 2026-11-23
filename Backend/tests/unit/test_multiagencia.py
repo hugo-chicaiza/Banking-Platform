@@ -11,7 +11,7 @@ from app.core.security.operador import agencia_de_consulta, exigir_agencia_autor
 from app.main import app
 from app.modules.auth import agencias
 from app.modules.auth import agencias_repository as repo
-from tests.sesion import simular_sesion, usuario_con_roles
+from tests.sesion import ID_AUDITORIA, simular_sesion, usuario_con_roles
 from tests.unit import test_usuarios as fixtures_usuarios
 from tests.unit.test_usuarios import ADMIN, BASE, NUEVO, _http_error
 
@@ -39,6 +39,18 @@ def workos(request):
 @pytest.fixture
 def client(request):
     return request.getfixturevalue("client_original")
+
+
+def test_admin_no_modifica_sus_propias_asignaciones(client, base):
+    antes = copy.deepcopy(base.estado())
+    r = client.put(
+        f"{BASE}/{ID_AUDITORIA}/agencias",
+        json={"idAgencias": ["002"], "idAgenciaPrincipal": "002", "version": 0},
+    )
+
+    assert r.status_code == 403
+    assert r.json()["code"] == "AUTOGESTION_NO_PERMITIDA"
+    assert base.estado() == antes
 
 
 def test_admin_agrega_revoca_y_cambia_principal(client, base, workos):
@@ -163,7 +175,7 @@ def test_jornada_abierta_bloquea_asignaciones_y_cambio_rol(client, base):
         BASE + "/2/agencias",
         json={"idAgencias": ["002"], "idAgenciaPrincipal": "002", "version": 0},
     )
-    assert r.status_code == 409 and r.json()["code"] == "CAJERO_CON_JORNADA_ABIERTA"
+    assert r.status_code == 409 and r.json()["code"] == "USUARIO_CON_JORNADA_ABIERTA"
     r = client.put(BASE + "/2/roles", json={"rol": "CONTADOR"})
     assert r.status_code == 409 and r.json()["code"] == "CAJERO_CON_JORNADA_ABIERTA"
 
@@ -202,6 +214,41 @@ def test_contexto_confirmado_y_revocacion_no_hacen_fallback(client, base):
     r = client.get("/api/v1/auth/agencias")
     assert r.status_code == 200 and r.json()["idAgencia"] is None
     assert r.json()["requiereSeleccionAgencia"] is True
+
+
+def test_traslado_actualiza_misma_sesion_y_registra_ambas_agencias(client, base):
+    roles = ("CAJERO",)
+    sid = "sid-traslado"
+    cajero = replace(
+        ADMIN,
+        id_usuario="user_2",
+        id_sesion=sid,
+        id_interno=2,
+        roles=roles,
+        permisos=(),
+        cargar_agencia=lambda: agencias.resolver_sesion("user_2", sid, roles),
+        cargar_agencias=lambda: agencias.alcance_sesion("user_2", roles),
+    )
+    simular_sesion(app, cajero)
+    assert client.get("/api/v1/auth/me").json()["idAgencia"] == "001"
+
+    simular_sesion(app, ADMIN)
+    r = client.put(BASE + "/2/agencia", json={"idAgencia": "002"})
+    assert r.status_code == 200, r.text
+    eventos = client.get(BASE + "/2/historial").json()["items"]
+    assert {(e["accion"], e["idAgencia"]) for e in eventos} >= {
+        ("REVOCAR", "001"),
+        ("ASIGNAR", "002"),
+    }
+    assert all(e["fechaUtc"] for e in eventos)
+
+    siguiente_peticion = replace(cajero)
+    simular_sesion(app, siguiente_peticion)
+    assert client.get("/api/v1/auth/me").json()["idAgencia"] == "002"
+    assert agencia_de_consulta(siguiente_peticion, "002") == "002"
+    with pytest.raises(HTTPException) as error:
+        agencia_de_consulta(siguiente_peticion, "001")
+    assert error.value.status_code == 403
 
 
 def test_principal_y_sesiones_no_se_confunden(client, base):

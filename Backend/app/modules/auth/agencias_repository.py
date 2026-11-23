@@ -126,6 +126,20 @@ def guardar_contexto(conn: Connection, sid: bytes, usuario: int, agencia: str) -
     )
 
 
+def trasladar_contextos_vigentes(
+    conn: Connection, usuario: int, anterior: str, nueva: str
+) -> None:
+    conn.execute(
+        text("""
+            UPDATE Seguridad.ContextoAgenciaSesion
+            SET IdAgencia = :nueva, FechaCambioUTC = SYSUTCDATETIME()
+            WHERE UsuarioID = :usuario AND IdAgencia = :anterior
+              AND ExpiraUTC > SYSUTCDATETIME()
+        """),
+        {"usuario": usuario, "anterior": anterior, "nueva": nueva},
+    )
+
+
 def historial(
     conn: Connection, usuario: int, page: int, size: int
 ) -> tuple[list[dict[str, Any]], int]:
