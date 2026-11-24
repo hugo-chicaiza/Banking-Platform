@@ -5,10 +5,11 @@ prd-exportar (permisos generales de WorkOS, ver core/security/permisos.py).
 Solo se elimina un Borrador sin uso.
 """
 
+from datetime import datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Path, Request, Response
-from sqlalchemy import Connection
+from sqlalchemy import Connection, text
 
 from app.core.api.errors import (
     RESPUESTAS_ERROR,
@@ -16,12 +17,17 @@ from app.core.api.errors import (
     solo_parametros,
 )
 from app.core.api.middleware import ip_cliente
+from app.core.api.schemas import CamelModel
 from app.core.database.db import cooperativa
 from app.core.security.auth import Usuario, UsuarioActual, require_auth, require_permiso
 from app.modules.aprobaciones import router as aprobaciones
 from app.modules.aprobaciones.contratos import SolicitudAceptada
+from app.modules.aprobaciones.motores import motor
+from app.modules.aprobaciones.registro import Objetivo
+from app.modules.parametros.service import hoy
 from app.modules.productos import (
     activacion,
+    estado_aprobacion,
     numeracion_api,
     programacion_api,
     service,
@@ -58,6 +64,109 @@ IdPath = Annotated[int, Path(ge=1, le=2_147_483_647)]
 
 Lector = Annotated[Usuario, Depends(require_permiso("prd-consultar"))]
 Administrador = Annotated[Usuario, Depends(require_permiso("prd-editar"))]
+GestorEstado = Annotated[Usuario, Depends(require_permiso("prd-estado"))]
+
+
+def _solicitar_estado(
+    tipo: str,
+    id_: int,
+    datos: estado_aprobacion.CambioEstado,
+    request: Request,
+    usuario: Usuario,
+    actor: aprobaciones.Actual,
+    cola: aprobaciones.Cola,
+) -> SolicitudAceptada:
+    solicitud = cola.solicitar(
+        actor,
+        estado_aprobacion.CODIGO,
+        Objetivo(tipo, str(id_), None),
+        datos.model_dump(mode="json"),
+        hoy(),
+        aprobaciones.contexto(request, usuario),
+    )
+    return SolicitudAceptada(id_solicitud=solicitud)
+
+
+@router.post("/{id_producto}/estado", status_code=202, operation_id="PRDProductoEstado")
+def solicitar_estado_producto(
+    id_producto: IdPath,
+    datos: estado_aprobacion.CambioEstado,
+    request: Request,
+    usuario: GestorEstado,
+    actor: aprobaciones.Actual,
+    cola: aprobaciones.Cola,
+) -> SolicitudAceptada:
+    return _solicitar_estado(
+        "Producto", id_producto, datos, request, usuario, actor, cola
+    )
+
+
+@router.post(
+    "/subproductos/{id_sub_producto}/estado",
+    status_code=202,
+    operation_id="PRDSubproductoEstado",
+)
+def solicitar_estado_subproducto(
+    id_sub_producto: IdPath,
+    datos: estado_aprobacion.CambioEstado,
+    request: Request,
+    usuario: GestorEstado,
+    actor: aprobaciones.Actual,
+    cola: aprobaciones.Cola,
+) -> SolicitudAceptada:
+    return _solicitar_estado(
+        "SubProducto", id_sub_producto, datos, request, usuario, actor, cola
+    )
+
+
+class EntradaHistorialEstado(CamelModel):
+    id_solicitud: int
+    antes: str
+    despues: str
+    fecha_inicio: datetime
+    solicitante: str
+    aprobador: str
+
+
+def _historial_estado(
+    tipo: str, id_: int, usuario: Usuario
+) -> list[EntradaHistorialEstado]:
+    with motor("seguridad").connect() as conn:
+        return [
+            EntradaHistorialEstado.model_validate(dict(fila))
+            for fila in conn.execute(
+                text("""
+                    SELECT s.IdSolicitud AS idSolicitud, JSON_VALUE(s.Antes, '$.estado') AS antes,
+                        JSON_VALUE(s.Despues, '$.estado') AS despues,
+                        CONVERT(varchar(33), e.FechaEvento, 126) + 'Z' AS fechaInicio,
+                        s.NombreSolicitante AS solicitante, s.NombreResolutor AS aprobador
+                    FROM Seguridad.SolicitudAprobacion s
+                    JOIN Seguridad.SolicitudAprobacionEvento e
+                      ON e.IdSolicitud = s.IdSolicitud AND e.EstadoNuevo = 'Ejecutada'
+                    WHERE s.IdOrganizacion = :org AND s.CodigoTransaccion = 'PRD-ESTADO'
+                      AND s.TipoObjetivo = :tipo AND s.IdObjetivo = :id AND s.Estado = 'Ejecutada'
+                    ORDER BY e.FechaEvento DESC, s.IdSolicitud DESC
+                """),
+                {"org": usuario.id_organizacion, "tipo": tipo, "id": str(id_)},
+            ).mappings()
+        ]
+
+
+@router.get("/{id_producto}/historial", operation_id="PRDProductoHistorialEstado")
+def historial_estado_producto(
+    id_producto: IdPath, usuario: Lector
+) -> list[EntradaHistorialEstado]:
+    return _historial_estado("Producto", id_producto, usuario)
+
+
+@router.get(
+    "/subproductos/{id_sub_producto}/historial",
+    operation_id="PRDSubproductoHistorialEstado",
+)
+def historial_estado_subproducto(
+    id_sub_producto: IdPath, usuario: Lector
+) -> list[EntradaHistorialEstado]:
+    return _historial_estado("SubProducto", id_sub_producto, usuario)
 
 
 def _exportador(

@@ -6,12 +6,12 @@ UQ_Producto_Codigo, UQ_SubProducto_Codigo, Estado A/I, TipoCuenta solo en Cuenta
 
 from collections.abc import Iterator
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any, cast
 from unittest.mock import MagicMock
 
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 from sqlalchemy.exc import DBAPIError
@@ -22,7 +22,8 @@ from app.core.security.auth import ROLES
 from app.core.security.permisos import PERMISOS
 from app.modules.aprobaciones import router as apr
 from app.modules.aprobaciones.identidad import Actor
-from app.modules.productos import activacion
+from app.modules.aprobaciones.registro import Objetivo
+from app.modules.productos import activacion, estado_aprobacion
 from app.modules.productos import repository as repo
 from app.modules.productos.programacion import validar_cupos
 from app.modules.productos.programacion_schemas import CuposNuevos
@@ -30,6 +31,53 @@ from app.modules.productos.router import router
 from tests.sesion import simular_sesion, usuario_con_roles
 
 BASE = "https://testserver/api/v1/productos"
+
+
+@pytest.mark.parametrize(
+    "ruta,tipo", [("/7", "Producto"), ("/subproductos/7", "SubProducto")]
+)
+def test_solicitud_de_estado_entrega_el_objetivo_a_la_cola(admin, asesor, ruta, tipo):
+    url = f"{BASE}{ruta}/estado"
+    assert asesor.post(url, json={"estado": "Suspendido"}).status_code == 403
+    assert admin.post(url, json={"estado": "Borrador"}).status_code == 400
+    respuesta = admin.post(url, json={"estado": "Suspendido"})
+    assert respuesta.status_code == 202
+    assert respuesta.json() == {
+        "idSolicitud": 37,
+        "estado": "Pendiente",
+        "requiereAprobacion": True,
+    }
+    cola = admin.app.dependency_overrides[apr.servicio]()
+    args = cola.solicitar.call_args.args
+    assert args[1:4] == (
+        "PRD-ESTADO",
+        Objetivo(tipo, "7", None),
+        {"estado": "Suspendido"},
+    )
+
+
+@pytest.mark.parametrize(
+    "ruta,tipo", [("/7", "Producto"), ("/subproductos/7", "SubProducto")]
+)
+def test_historial_de_estado_conserva_aprobador_y_fecha(admin, monkeypatch, ruta, tipo):
+    motor = MagicMock()
+    conn = motor.connect.return_value.__enter__.return_value
+    conn.execute.return_value.mappings.return_value = [
+        {
+            "idSolicitud": 37,
+            "antes": "Activo",
+            "despues": "Suspendido",
+            "fechaInicio": "2026-11-23T22:30:00Z",
+            "solicitante": "Gestor de prueba",
+            "aprobador": "Supervisor de prueba",
+        }
+    ]
+    monkeypatch.setattr("app.modules.productos.router.motor", lambda _: motor)
+    respuesta = admin.get(f"{BASE}{ruta}/historial")
+    assert respuesta.status_code == 200
+    assert respuesta.json()[0]["aprobador"] == "Supervisor de prueba"
+    assert respuesta.json()[0]["fechaInicio"] == "2026-11-23T22:30:00Z"
+    assert conn.execute.call_args.args[1]["tipo"] == tipo
 
 
 def _duplicado(restriccion: str) -> DBAPIError:
@@ -304,9 +352,37 @@ def test_activar_exige_subproducto_y_luego_se_activa(bd, admin):
     )
     assert s.status_code == 201 and s.json()["estado"] == "I"
     r = admin.patch(f"{BASE}/{id_}", json={"estado": "A", "descripcion": None})
-    assert r.status_code == 200
-    assert r.json()["estado"] == "A" and r.json()["descripcion"] is None
-    assert len(r.json()["subproductos"]) == 1
+    assert r.status_code == 409 and r.json()["code"] == "APROBACION_REQUERIDA"
+    manejador = estado_aprobacion.EstadoProducto()
+    objetivo = Objetivo("Producto", str(id_), None)
+    plan = manejador.preparar(MagicMock(), objetivo, {"estado": "Activo"}, date.today())
+    assert plan.antes == {"estado": "Borrador"} and plan.despues == {"estado": "Activo"}
+    manejador.aplicar(MagicMock(), objetivo, plan.contenido, "solicitante", 1)
+    assert bd.productos[id_]["estado_catalogo"] == "Activo"
+
+
+def test_aprobar_activacion_revalida_la_lista(bd, admin, monkeypatch):
+    id_ = admin.post(BASE, json=AHORRO).json()["idProducto"]
+    sub_id = admin.post(
+        f"{BASE}/{id_}/subproductos",
+        json={"codigoSubProducto": "AHO002-QA", "nombreSubProducto": "Ahorros QA"},
+    ).json()["idSubProducto"]
+    objetivo = Objetivo("SubProducto", str(sub_id), None)
+    manejador = estado_aprobacion.EstadoProducto()
+    conn = MagicMock()
+    plan = manejador.preparar(conn, objetivo, {"estado": "Activo"}, date.today())
+    monkeypatch.setattr(
+        activacion,
+        "faltantes",
+        lambda *_: [{"descripcion": "Cuentas contables", "detalle": "Falta CAPITAL"}],
+    )
+
+    with pytest.raises(HTTPException) as fallo:
+        manejador.aplicar(conn, objetivo, plan.contenido, "solicitante", 1)
+
+    assert fallo.value.status_code == 409
+    assert "CAPITAL" in str(fallo.value.detail)
+    assert bd.subs[sub_id]["estado_catalogo"] == "Borrador"
 
 
 def test_codigo_solo_se_edita_en_borrador_y_el_tipo_nunca(bd, admin):
@@ -432,10 +508,19 @@ def test_desactivar_subproducto(bd, admin, asesor):
         admin.patch(
             f"{BASE}/subproductos/{sub['idSubProducto']}", json={"estado": "A"}
         ).status_code
-        == 200
+        == 409
     )
+    bd.subs[sub["idSubProducto"]].update(estado="A", estado_catalogo="Activo")
     r = admin.patch(f"{BASE}/subproductos/{sub['idSubProducto']}", json={"estado": "I"})
-    assert r.status_code == 200 and r.json()["estado"] == "I"
+    assert r.status_code == 409 and r.json()["code"] == "APROBACION_REQUERIDA"
+    estado_aprobacion.EstadoProducto().aplicar(
+        MagicMock(),
+        Objetivo("SubProducto", str(sub["idSubProducto"]), None),
+        {"estado": "Suspendido"},
+        "solicitante",
+        1,
+    )
+    assert bd.subs[sub["idSubProducto"]]["estado_catalogo"] == "Suspendido"
 
 
 def test_activar_sin_cuentas_contables_es_422(bd, admin, monkeypatch):
@@ -695,7 +780,7 @@ def test_subproducto_nace_borrador_y_guarda_elegibilidad(bd, admin):
     assert sub["estadoCatalogo"] == "Borrador" and sub["estado"] == "I"
     assert sub["requiereTutor"] and sub["maximoPorCliente"] == 1
     url = f"{BASE}/subproductos/{sub['idSubProducto']}"
-    assert admin.patch(url, json={"estadoCatalogo": "Activo"}).status_code == 200
+    bd.subs[sub["idSubProducto"]].update(estado="A", estado_catalogo="Activo")
     r = admin.patch(url, json={"edadMaxima": 18})
     assert r.status_code == 409 and r.json()["code"] == "PRODUCTO_NO_EDITABLE"
 
