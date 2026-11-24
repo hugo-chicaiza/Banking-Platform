@@ -53,7 +53,7 @@ from app.integrations.workos_client import (
 )
 from app.modules.auth import agencias as multiagencia
 from app.modules.auth import agencias_repository as agencias_repo
-from app.modules.auth import repository
+from app.modules.auth import politica_roles, repository
 from app.modules.auth.schemas import (
     BloqueoVigente,
     EstadoInvitacion,
@@ -131,6 +131,11 @@ def _vincular(
     """
     try:
         with get_engine("seguridad").begin() as conn:
+            if get_settings().e104_recuperar_correo and (
+                not repository.bloquear_cambios_administrativos(conn)
+                or repository.invitacion_en_conciliacion(conn, email.lower())
+            ):
+                return
             vinculado = email_verificado and repository.vincular(
                 conn, id_workos, email.lower()
             )
@@ -493,15 +498,19 @@ def _workos(operacion: str) -> Iterator[None]:
             503, "WORKOS_NO_DISPONIBLE", "El servicio de usuarios no está disponible."
         ) from None
     except BaseRequestException as exc:
-        codigo = exc.code or exc.error
+        recibido = exc.code or exc.error
+        codigo = (
+            recibido
+            if isinstance(recibido, str) and _CODIGO_WORKOS.fullmatch(recibido)
+            else None
+        )
         logger.warning(
-            "usuarios: WorkOS rechazó operacion=%s code=%s request_id=%s",
+            "usuarios: WorkOS rechazó operacion=%s code=%s",
             operacion,
             codigo,
-            exc.request_id,
         )
         mensaje = "WorkOS rechazó la operación solicitada."
-        if isinstance(codigo, str) and _CODIGO_WORKOS.fullmatch(codigo):
+        if codigo:
             mensaje = f"WorkOS rechazó la operación solicitada ({codigo})."
         raise problema(422, "WORKOS_RECHAZO", mensaje) from None
 
@@ -515,6 +524,22 @@ def _deshacer(pasos: Deshacer) -> None:
                 "usuarios: no se pudo deshacer en WorkOS tipo=%s (revisar a mano)",
                 type(exc).__name__,
             )
+
+
+@contextmanager
+def _mutacion_compensable(
+    operacion: str, deshacer: Deshacer, compensar: Callable[[], object]
+) -> Iterator[None]:
+    """Un error transitorio no confirma que el proveedor descartara la escritura."""
+    try:
+        with _workos(operacion):
+            yield
+    except HTTPException as error:
+        if error.status_code == 503:
+            _deshacer([compensar])
+        raise
+    else:
+        deshacer.append(compensar)
 
 
 def _no_encontrado() -> HTTPException:
@@ -593,6 +618,13 @@ def _validar_agencia(conn_coop: Connection, id_agencia: str) -> None:
         )
 
 
+def bloquear_corte_caja(conn_coop: Connection) -> None:
+    if get_settings().e104_corte_asignacion_caja:
+        from app.modules.organizacion.repository import bloquear_corte_asignaciones
+
+        bloquear_corte_asignaciones(conn_coop)
+
+
 # --- WorkOS ------------------------------------------------------------------------
 
 
@@ -619,11 +651,15 @@ def _revocar_invitacion(id_invitacion: str) -> None:
 
 
 def _invitacion_pendiente(email: str) -> Invitation | None:
+    return next(iter(_invitaciones_pendientes(email)), None)
+
+
+def _invitaciones_pendientes(email: str) -> list[Invitation]:
     with _workos("list_invitations"):
         invitaciones = get_workos().user_management.list_invitations(
             email=email, organization_id=get_organizacion_id()
         )
-        return next((i for i in invitaciones if i.state == "pending"), None)
+        return [i for i in invitaciones if i.state == "pending"]
 
 
 def _revocar_invitacion_pendiente(
@@ -697,6 +733,34 @@ def _slugs(membresia: OrganizationMembership) -> set[str]:
     return {rol["slug"] for rol in roles}
 
 
+@contextmanager
+def proteger_apertura_caja(
+    conn: Connection, id_usuario: int, usuario: Usuario
+) -> Iterator[None]:
+    """Mantiene el bloqueo de edición hasta confirmar la apertura en Caja."""
+    with conn.begin():
+        fila = repository.obtener_usuario(conn, id_usuario, bloquear=True)
+        if (
+            fila is None
+            or fila["Estado"] != "Activo"
+            or fila["KeyUsuario"] != usuario.id_usuario
+        ):
+            raise problema(
+                403, "USUARIO_INTERNO_NO_VINCULADO", "Su usuario no está habilitado."
+            )
+        impedir_edicion_durante_recuperacion(conn, id_usuario)
+        membresia = _membresia(usuario.id_usuario)
+        if (
+            membresia is None
+            or membresia.status != "active"
+            or slug_rol("CAJERO") not in _slugs(membresia)
+        ):
+            raise problema(
+                403, "SIN_PERMISO", "Su usuario no tiene el rol de cajero vigente."
+            )
+        yield
+
+
 def _revocar_sesiones(id_workos: str) -> None:
     """Cierra las sesiones activas del usuario en WorkOS y las rechaza desde ya
     (caché de revocadas): un bloqueo o un cambio de rol no espera a que venza el
@@ -716,6 +780,28 @@ def _serializar_cambios_administrativos(conn: Connection) -> None:
             409,
             "USUARIOS_OCUPADOS",
             "Hay otro cambio de acceso en curso. Intente nuevamente.",
+        )
+
+
+def impedir_edicion_durante_recuperacion(conn: Connection, usuario: int) -> None:
+    if get_settings().e104_recuperar_correo and repository.sincronizacion_pendiente(
+        conn, usuario
+    ):
+        raise problema(
+            409,
+            "USUARIO_EN_CONCILIACION",
+            "El usuario tiene una sincronización pendiente.",
+        )
+    if (
+        get_settings().e104_permiso_aprobar_roles.strip()
+        and repository.cambio_roles_en_recuperacion(
+            conn, usuario, get_organizacion_id()
+        )
+    ):
+        raise problema(
+            409,
+            "USUARIO_EN_CONCILIACION",
+            "Hay un cambio de roles aprobado en recuperación.",
         )
 
 
@@ -815,6 +901,10 @@ def crear_usuario(
     asignadas = (
         datos.id_agencias if datos.id_agencias is not None else [datos.id_agencia]
     )
+    bloquear_corte_caja(conn_coop)
+    _validar_cambio_directo_roles(
+        politica_roles.vigente(), usuario.roles, (), (datos.rol,)
+    )
     multiagencia.validar_matriz((datos.rol,), asignadas, datos.id_agencia)
     for id_agencia in asignadas:
         _validar_agencia(conn_coop, id_agencia)
@@ -879,21 +969,22 @@ def _sincronizar_vinculado(
     """Usuario de WorkOS miembro de EnquoCoop: se cambia el usuario y la membresía."""
     gestion = get_workos().user_management
     if nuevo_email or cambios.nombres or cambios.apellidos:
-        with _workos("update_user"):
+        with _mutacion_compensable(
+            "update_user",
+            deshacer,
+            lambda: gestion.update_user(
+                user_id=key,
+                email=fila["Email"] if nuevo_email else None,
+                first_name=fila["Nombres"] if cambios.nombres else None,
+                last_name=fila["Apellidos"] if cambios.apellidos else None,
+            ),
+        ):
             gestion.update_user(
                 user_id=key,
                 email=nuevo_email,
                 first_name=cambios.nombres,
                 last_name=cambios.apellidos,
             )
-        deshacer.append(
-            lambda: gestion.update_user(
-                user_id=key,
-                email=fila["Email"],
-                first_name=fila["Nombres"],
-                last_name=fila["Apellidos"],
-            )
-        )
     if nuevo_estado is None:
         return
     membresia = _membresia(key)
@@ -962,21 +1053,34 @@ def actualizar_usuario(
     id_admin: int,
     ip: str,
 ) -> UsuarioDetalle:
+    from app.modules.auth import recuperacion_correo
+
     campos = ",".join(sorted(cambios.model_dump(exclude_none=True)))
+    autogestion = id_usuario == id_admin and (
+        cambios.estado is not None or cambios.id_agencia is not None
+    )
     with auditar(
-        "ACTUALIZAR",
+        "SEG_AUTOGESTION_INTENTO" if autogestion else "ACTUALIZAR",
         _TABLA_USUARIOS,
         usuario,
         ip,
         f"AUT-08 campos={campos}",
         str(id_usuario),
     ):
+        if autogestion:
+            raise problema(
+                403,
+                "AUTOGESTION_NO_PERMITIDA",
+                "No puede cambiar su propia agencia ni su estado.",
+            )
         deshacer: Deshacer = []
         try:
             with conn.begin():
-                if cambios.estado is not None:
+                bloquear_corte_caja(conn_coop)
+                if cambios.estado is not None or get_settings().e104_recuperar_correo:
                     _serializar_cambios_administrativos(conn)
                 fila = _cargar(conn, id_usuario, bloquear=True)
+                impedir_edicion_durante_recuperacion(conn, id_usuario)
                 nuevo_estado = (
                     cambios.estado if cambios.estado != fila["Estado"] else None
                 )
@@ -991,12 +1095,6 @@ def actualizar_usuario(
                     else None
                 )
 
-                if id_usuario == id_admin and (nuevo_estado or agencia):
-                    raise problema(
-                        403,
-                        "AUTOGESTION_NO_PERMITIDA",
-                        "No puede cambiar su propia agencia ni su estado.",
-                    )
                 if nuevo_estado and nuevo_estado != "Activo":
                     _validar_ultimo_admin(conn, fila)
                 if nuevo_email and repository.existe_duplicado(
@@ -1032,6 +1130,43 @@ def actualizar_usuario(
                 ):
                     key = _resolver_sin_vinculo(conn, fila)
 
+                diario = None
+                if nuevo_email and get_settings().e104_recuperar_correo:
+                    if key and not fila["KeyUsuario"]:
+                        raise problema(
+                            409,
+                            "USUARIO_PENDIENTE_DE_VINCULO",
+                            "Confirme primero el vínculo institucional.",
+                        )
+                    if key:
+                        if (
+                            nuevo_estado
+                            or agencia
+                            or cambios.nombres
+                            or cambios.apellidos
+                        ):
+                            raise problema(
+                                422,
+                                "CORREO_REQUIERE_CAMBIO_SEPARADO",
+                                "Envíe el correo en una solicitud separada.",
+                            )
+                        diario = recuperacion_correo.registrar(
+                            conn.engine, id_usuario, key
+                        )
+                if (
+                    not key
+                    and (nuevo_estado or nuevo_email)
+                    and get_settings().e104_recuperar_correo
+                ):
+                    previa = _invitacion_pendiente(fila["Email"])
+                    diario = recuperacion_correo.registrar(
+                        conn.engine,
+                        id_usuario,
+                        previa.id if previa else "",
+                        "Invitar",
+                        correo_alterno=nuevo_email,
+                    )
+
                 repository.actualizar_usuario(
                     conn,
                     id_usuario,
@@ -1054,14 +1189,32 @@ def actualizar_usuario(
                         )
                 if key:
                     _sincronizar_vinculado(
-                        key, fila, nuevo_estado, nuevo_email, cambios, deshacer
+                        key,
+                        fila,
+                        nuevo_estado,
+                        nuevo_email,
+                        cambios,
+                        [] if diario is not None else deshacer,
                     )
+                    if diario is not None and nuevo_email:
+                        recuperacion_correo.confirmar(key, nuevo_email)
+                        recuperacion_correo.completar(conn, diario)
                 else:
                     _sincronizar_pendiente(
-                        fila, nuevo_estado, nuevo_email, usuario, deshacer
+                        fila,
+                        nuevo_estado,
+                        nuevo_email,
+                        usuario,
+                        [] if diario is not None else deshacer,
                     )
+                    if diario is not None:
+                        recuperacion_correo.completar(conn, diario)
                 # Otra base: va al final para no dejarla cambiada si algo antes falla
-                if agencia and "CAJERO" in _roles(fila):
+                if (
+                    agencia
+                    and "CAJERO" in _roles(fila)
+                    and not get_settings().e104_corte_asignacion_caja
+                ):
                     _mover_cajero(conn_coop, id_usuario, agencia, id_admin)
         except IntegrityError:
             _deshacer(deshacer)
@@ -1092,11 +1245,16 @@ def _aplicar_rol_en_workos(
     roles: tuple[str, ...],
     usuario: Usuario,
     deshacer: Deshacer,
+    politica: politica_roles.PoliticaRoles,
 ) -> None:
     gestion = get_workos().user_management
     seleccion = _parametros_roles_workos([slug_rol(rol) for rol in roles])
     if key:
         membresia = _membresia(key)
+        roles_proveedor = normalizar_roles(
+            sorted(_slugs(membresia)) if membresia else [], None
+        )
+        _validar_cambio_directo_roles(politica, usuario.roles, roles_proveedor, roles)
         if membresia is None:
             with _workos("create_organization_membership"):
                 creada = gestion.create_organization_membership(
@@ -1108,21 +1266,36 @@ def _aplicar_rol_en_workos(
             return
         id_membresia = membresia.id
         restaurar = _parametros_roles_workos(sorted(_slugs(membresia)))
-        with _workos("update_organization_membership"):
+        with _mutacion_compensable(
+            "update_organization_membership",
+            deshacer,
+            lambda: gestion.update_organization_membership(
+                organization_membership_id=id_membresia, **restaurar
+            ),
+        ):
             gestion.update_organization_membership(
                 organization_membership_id=id_membresia, **seleccion
             )
-        deshacer.append(
-            lambda: gestion.update_organization_membership(
-                organization_membership_id=id_membresia, **restaurar
-            )
-        )
     elif fila["Estado"] == "Activo":
         # Sin usuario en WorkOS: la invitación lleva el rol, así que se reemplaza
         _revocar_invitacion_pendiente(fila, usuario, deshacer)
         nueva = _invitar(fila["Email"], roles[0], usuario)
         id_nueva = nueva.id
         deshacer.append(lambda: _revocar_invitacion(id_nueva))
+
+
+def _validar_cambio_directo_roles(
+    politica: politica_roles.PoliticaRoles,
+    actor: tuple[str, ...],
+    actuales: tuple[str, ...],
+    nuevos: tuple[str, ...],
+) -> None:
+    if politica.requiere_aprobacion(actor, actuales, nuevos):
+        raise problema(
+            409,
+            "APROBACION_REQUERIDA",
+            "El cambio requiere aprobación de otra persona.",
+        )
 
 
 def cambiar_rol(
@@ -1135,9 +1308,11 @@ def cambiar_rol(
     ip: str,
 ) -> UsuarioDetalle:
     """Reemplaza los roles y revoca las sesiones emitidas con el conjunto anterior."""
+    from app.modules.auth import recuperacion_correo
+
     nuevos = normalizar_roles(datos.roles, datos.rol)
     with auditar(
-        "CAMBIAR_ROL",
+        "SEG_AUTOGESTION_INTENTO" if id_usuario == id_admin else "CAMBIAR_ROL",
         _TABLA_USUARIOS,
         usuario,
         ip,
@@ -1151,8 +1326,10 @@ def cambiar_rol(
         deshacer: Deshacer = []
         try:
             with conn.begin():
+                bloquear_corte_caja(conn_coop)
                 _serializar_cambios_administrativos(conn)
                 fila = _cargar(conn, id_usuario, bloquear=True)
+                impedir_edicion_durante_recuperacion(conn, id_usuario)
                 actuales = _roles(fila)
                 if len(actuales) > 1 and datos.roles is None:
                     raise problema(
@@ -1184,6 +1361,10 @@ def cambiar_rol(
                         )
                     if "ADMIN" not in nuevos:
                         _validar_ultimo_admin(conn, fila)
+                    politica = politica_roles.vigente()
+                    _validar_cambio_directo_roles(
+                        politica, usuario.roles, actuales, nuevos
+                    )
                     key = fila["KeyUsuario"] or _resolver_sin_vinculo(conn, fila)
                     if len(nuevos) > 1 and not key:
                         raise problema(
@@ -1195,12 +1376,60 @@ def cambiar_rol(
                     multiagencia.validar_matriz(
                         nuevos, ids, codigo_agencia(fila["AgenciaID"])
                     )
+                    diario = None
+                    if key and get_settings().e104_recuperar_correo:
+                        if key != fila["KeyUsuario"] or _membresia(key) is None:
+                            raise problema(
+                                409,
+                                "USUARIO_PENDIENTE_DE_VINCULO",
+                                "Confirme primero la membresía.",
+                            )
+                        if (
+                            "CAJERO" in actuales
+                            and "CAJERO" not in nuevos
+                            and not get_settings().e104_corte_asignacion_caja
+                        ):
+                            raise problema(
+                                409,
+                                "CORTE_CAJA_PENDIENTE",
+                                "El cambio requiere el corte de asignaciones de Caja.",
+                            )
+                        diario = recuperacion_correo.registrar(
+                            conn.engine, id_usuario, key, "Roles"
+                        )
+                    elif (
+                        get_settings().e104_recuperar_correo
+                        and fila["Estado"] == "Activo"
+                    ):
+                        previa = _invitacion_pendiente(fila["Email"])
+                        diario = recuperacion_correo.registrar(
+                            conn.engine,
+                            id_usuario,
+                            previa.id if previa else "",
+                            "Invitar",
+                        )
                     repository.actualizar_rol(conn, id_usuario, ",".join(nuevos))
-                    _aplicar_rol_en_workos(fila, key, nuevos, usuario, deshacer)
+                    _aplicar_rol_en_workos(
+                        fila,
+                        key,
+                        nuevos,
+                        usuario,
+                        [] if diario is not None else deshacer,
+                        politica,
+                    )
                     if key:
                         _revocar_sesiones(key)
+                        if diario is not None:
+                            recuperacion_correo.confirmar_roles(key, nuevos)
+                            recuperacion_correo.completar(conn, diario)
+                    elif diario is not None:
+                        recuperacion_correo.completar(conn, diario)
                     # Deja de ser cajero: se cierra su asignación vigente (otra base)
-                    if "CAJERO" in actuales and "CAJERO" not in nuevos:
+                    if (
+                        "CAJERO" in actuales
+                        and "CAJERO" not in nuevos
+                        and not get_settings().e104_corte_asignacion_caja
+                    ):
                         try:
                             repository.cerrar_asignacion(conn_coop, id_usuario)
                             conn_coop.commit()

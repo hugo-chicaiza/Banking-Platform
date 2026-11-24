@@ -16,14 +16,31 @@ vuelve a /login?error=SESION_ABIERTA y la abierta sigue.
 AUT-05..09 · Usuarios internos (router_usuarios, /usuarios): solo ADMIN.
 """
 
+from datetime import datetime
 from typing import Annotated, Any, Literal
+from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, Cookie, Depends, Path, Query, Request, Response
-from fastapi.responses import RedirectResponse
+from fastapi import (
+    APIRouter,
+    Cookie,
+    Depends,
+    HTTPException,
+    Path,
+    Query,
+    Request,
+    Response,
+)
+from fastapi.responses import JSONResponse, RedirectResponse
 from sqlalchemy import Connection
 
-from app.core.api.errors import RESPUESTAS_ERROR, ProblemDetailsRoute, solo_parametros
+from app.core.api.errors import (
+    RESPUESTAS_ERROR,
+    ProblemDetailsRoute,
+    problema,
+    solo_parametros,
+)
 from app.core.api.middleware import ip_cliente
+from app.core.config.settings import get_settings
 from app.core.database.db import cooperativa, seguridad
 from app.core.security.auth import (
     COOKIE_SESION,
@@ -42,6 +59,7 @@ from app.core.security.auth import (
     verificar_origen,
 )
 from app.core.security.origen import resolver_origen_front
+from app.modules.aprobaciones.contratos import SolicitudAceptada
 from app.modules.auth import agencias as multiagencia
 from app.modules.auth import agencias_repository as agencias_repo
 from app.modules.auth import repository, service
@@ -433,7 +451,10 @@ def trasladar_usuario(
 
 
 @router_usuarios.put(
-    "/{idUsuario}/roles", response_model=UsuarioDetalle, operation_id="AUT09"
+    "/{idUsuario}/roles",
+    response_model=UsuarioDetalle,
+    operation_id="AUT09",
+    responses={202: {"model": SolicitudAceptada}},
 )
 def cambiar_rol(
     request: Request,
@@ -443,10 +464,46 @@ def cambiar_rol(
     datos: RolUpdate,
     conn: ConexionSeguridad,
     conn_coop: ConexionCooperativa,
-) -> UsuarioDetalle:
+) -> UsuarioDetalle | JSONResponse:
     """Reemplaza el conjunto de roles y cierra las sesiones del usuario."""
-    return service.cambiar_rol(
-        conn, conn_coop, id_usuario, datos, admin, id_admin, ip_cliente(request.scope)
+    try:
+        return service.cambiar_rol(
+            conn,
+            conn_coop,
+            id_usuario,
+            datos,
+            admin,
+            id_admin,
+            ip_cliente(request.scope),
+        )
+    except HTTPException as error:
+        detalle: Any = error.detail
+        if not (
+            isinstance(detalle, dict)
+            and detalle.get("code") == "APROBACION_REQUERIDA"
+            and get_settings().e104_permiso_aprobar_roles.strip()
+        ):
+            raise
+    from app.modules.aprobaciones import router as aprobaciones
+    from app.modules.aprobaciones.registro import Objetivo
+    from app.modules.auth.aprobacion_roles import CODIGO, TIPO
+
+    actor = aprobaciones.actual(admin)
+    if not actor.global_admin or actor.id_interno == id_usuario:
+        raise problema(
+            403, "SIN_PERMISO", "El solicitante carece de autorización vigente."
+        )
+    solicitud = aprobaciones.servicio().solicitar(
+        actor,
+        CODIGO,
+        Objetivo(TIPO, str(id_usuario), None),
+        datos.model_dump(mode="json", by_alias=True),
+        datetime.now(ZoneInfo("America/Guayaquil")).date(),
+        aprobaciones.contexto(request, admin),
+    )
+    return JSONResponse(
+        status_code=202,
+        content=SolicitudAceptada(id_solicitud=solicitud).model_dump(by_alias=True),
     )
 
 

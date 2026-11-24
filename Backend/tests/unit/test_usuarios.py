@@ -539,6 +539,12 @@ def conn(base) -> _Conn:
 @pytest.fixture()
 def client(monkeypatch, conn, workos) -> Iterator[TestClient]:
     monkeypatch.setenv("WORKOS_ORGANIZATION_ID", ORG)
+    monkeypatch.setenv(
+        "E104_POLITICA_ROLES",
+        '{"niveles":{"ADMIN":1,"ASESOR":1,"CAJERO":1,"SUPERVISOR":1,'
+        '"APROBADOR_CREDITO":1,"CONTADOR":1,"AUDITOR":1},'
+        '"privilegiados":[],"incompatibles":[]}',
+    )
     get_settings.cache_clear()
     simular_sesion(app, ADMIN)
     app.dependency_overrides[seguridad] = lambda: conn
@@ -546,6 +552,91 @@ def client(monkeypatch, conn, workos) -> Iterator[TestClient]:
     yield TestClient(app, raise_server_exceptions=False)
     app.dependency_overrides.clear()
     get_settings.cache_clear()
+
+
+@pytest.mark.parametrize("configuracion", [None, "json inválido", '{"niveles":{}}'])
+def test_cambio_de_roles_sin_politica_se_deniega(
+    client, monkeypatch, workos, configuracion
+):
+    if configuracion is None:
+        monkeypatch.delenv("E104_POLITICA_ROLES")
+    else:
+        monkeypatch.setenv("E104_POLITICA_ROLES", configuracion)
+    get_settings.cache_clear()
+    r = client.put(f"{BASE}/2/roles", json={"roles": ["ASESOR"]})
+    assert r.status_code == 503
+    assert r.json()["code"] == "POLITICA_ROLES_NO_CONFIGURADA"
+    assert not any(operacion.startswith("update_") for operacion, _ in workos.llamadas)
+
+
+def test_sin_politica_sigue_disponible_la_edicion_de_perfil(
+    client, monkeypatch, workos
+):
+    monkeypatch.delenv("E104_POLITICA_ROLES")
+    get_settings.cache_clear()
+    assert client.get(f"{BASE}/2").status_code == 200
+    assert client.patch(f"{BASE}/2", json={"nombres": "Ana"}).status_code == 200
+    r = client.post(BASE, json=NUEVO)
+    assert r.status_code == 503
+    assert r.json()["code"] == "POLITICA_ROLES_NO_CONFIGURADA"
+    assert "send_invitation" not in workos.nombres()
+
+
+def test_rol_privilegiado_ausente_en_workos_no_se_restaura_directamente(
+    client, base, workos, monkeypatch
+):
+    base.usuarios[2]["RolesWorkOS"] = "CAJERO,AUDITOR"
+    politica = service.politica_roles.vigente().model_copy(
+        update={"privilegiados": {"AUDITOR"}}
+    )
+    monkeypatch.setattr(service.politica_roles, "vigente", lambda: politica)
+    r = client.put(f"{BASE}/2/roles", json={"roles": ["ASESOR", "AUDITOR"]})
+
+    assert r.status_code == 409
+    assert r.json()["code"] == "APROBACION_REQUERIDA"
+    assert base.usuarios[2]["RolesWorkOS"] == "CAJERO,AUDITOR"
+    assert service._slugs(workos.membresias["user_2"]) == {"org-cajero"}
+
+
+def test_cambio_privilegiado_configurado_devuelve_solicitud_202(
+    client, base, workos, monkeypatch
+):
+    from app.modules.aprobaciones import router as aprobaciones
+
+    monkeypatch.setenv("E104_PERMISO_APROBAR_ROLES", "qa:aprobar")
+    get_settings.cache_clear()
+    politica = service.politica_roles.vigente().model_copy(
+        update={"privilegiados": {"AUDITOR"}}
+    )
+    monkeypatch.setattr(service.politica_roles, "vigente", lambda: politica)
+    monkeypatch.setattr(
+        service.repository, "cambio_roles_en_recuperacion", lambda *_: False
+    )
+    monkeypatch.setattr(
+        aprobaciones,
+        "actual",
+        lambda _: SimpleNamespace(global_admin=True, id_interno=1),
+    )
+    llamadas = []
+
+    def solicitar(*args):
+        llamadas.append(args)
+        return 123
+
+    monkeypatch.setattr(
+        aprobaciones, "servicio", lambda: SimpleNamespace(solicitar=solicitar)
+    )
+    r = client.put(f"{BASE}/2/roles", json={"roles": ["CAJERO", "AUDITOR"]})
+
+    assert r.status_code == 202, r.text
+    assert r.json() == {
+        "idSolicitud": 123,
+        "estado": "Pendiente",
+        "requiereAprobacion": True,
+    }
+    assert llamadas[0][1] == "SEG-USUARIO-ROLES"
+    assert base.usuarios[2]["RolesWorkOS"] == "CAJERO"
+    assert service._slugs(workos.membresias["user_2"]) == {"org-cajero"}
 
 
 NUEVO = {
@@ -864,7 +955,30 @@ def test_no_puede_cambiar_su_propio_rol(client, workos, eventos_auditados):
     assert r.status_code == 403
     assert r.json()["code"] == "AUTOGESTION_NO_PERMITIDA"
     assert workos.llamadas == []
-    evento = next(e for e in eventos_auditados if e.accion == "CAMBIAR_ROL")
+    evento = next(e for e in eventos_auditados if e.accion == "SEG_AUTOGESTION_INTENTO")
+    assert evento.resultado == "Fallido"
+    assert "AUTOGESTION_NO_PERMITIDA" in evento.descripcion
+
+
+@pytest.mark.parametrize(
+    ("metodo", "sufijo", "cambios"),
+    [
+        ("PATCH", "", {"estado": "Activo"}),
+        ("PATCH", "", {"idAgencia": "001"}),
+        ("PUT", "/agencia", {"idAgencia": "001"}),
+    ],
+)
+def test_autogestion_denegada_aun_si_repite_el_valor_actual(
+    client, base, workos, eventos_auditados, metodo, sufijo, cambios
+):
+    antes = copy.deepcopy(base.estado())
+    r = client.request(metodo, f"{BASE}/{ID_AUDITORIA}{sufijo}", json=cambios)
+
+    assert r.status_code == 403
+    assert r.json()["code"] == "AUTOGESTION_NO_PERMITIDA"
+    assert base.estado() == antes
+    assert workos.llamadas == []
+    evento = next(e for e in eventos_auditados if e.accion == "SEG_AUTOGESTION_INTENTO")
     assert evento.resultado == "Fallido"
     assert "AUTOGESTION_NO_PERMITIDA" in evento.descripcion
 
@@ -875,6 +989,76 @@ def test_desactivar_pendiente_revoca_la_invitacion(client, workos):
     assert r.status_code == 200
     assert ("revoke_invitation", "inv_3") in workos.llamadas
     assert "send_invitation" not in workos.nombres()
+
+
+@pytest.fixture
+def diario_e104(monkeypatch, client, conn):
+    from unittest.mock import MagicMock
+
+    from app.modules.auth import recuperacion_correo
+
+    monkeypatch.setenv("E104_RECUPERAR_CORREO", "true")
+    get_settings.cache_clear()
+    monkeypatch.setattr(conn, "engine", object(), raising=False)
+    monkeypatch.setattr(
+        service.repository, "sincronizacion_pendiente", lambda *_: False
+    )
+    diario = SimpleNamespace(
+        registrar=MagicMock(return_value=17),
+        completar=MagicMock(),
+        confirmar=MagicMock(),
+        confirmar_roles=MagicMock(),
+    )
+    for nombre, funcion in vars(diario).items():
+        monkeypatch.setattr(recuperacion_correo, nombre, funcion)
+    return diario
+
+
+def test_diario_correo_exige_peticion_separada_y_confirma_antes_de_completar(
+    client, diario_e104, conn, base
+):
+    rechazo = client.patch(
+        f"{BASE}/2", json={"email": "nuevo@example.test", "nombres": "Ana"}
+    )
+    assert rechazo.status_code == 422
+    assert rechazo.json()["code"] == "CORREO_REQUIERE_CAMBIO_SEPARADO"
+    diario_e104.registrar.assert_not_called()
+
+    respuesta = client.patch(f"{BASE}/2", json={"email": "nuevo@example.test"})
+    assert respuesta.status_code == 200, respuesta.text
+    diario_e104.registrar.assert_called_once_with(conn.engine, 2, "user_2")
+    diario_e104.confirmar.assert_called_once_with("user_2", "nuevo@example.test")
+    diario_e104.completar.assert_called_once_with(conn, 17)
+    assert base.usuarios[2]["Email"] == "nuevo@example.test"
+
+
+def test_diario_roles_confirma_membresia_antes_de_completar(
+    client, diario_e104, conn, workos
+):
+    respuesta = client.put(f"{BASE}/2/roles", json={"roles": ["CAJERO", "AUDITOR"]})
+    assert respuesta.status_code == 200, respuesta.text
+    diario_e104.registrar.assert_called_once_with(conn.engine, 2, "user_2", "Roles")
+    diario_e104.confirmar_roles.assert_called_once_with("user_2", ("CAJERO", "AUDITOR"))
+    diario_e104.completar.assert_called_once_with(conn, 17)
+    assert service._slugs(workos.membresias["user_2"]) == {"org-cajero", "org-auditor"}
+
+
+@pytest.mark.parametrize("cambiar_correo", [True, False])
+def test_diario_cubre_reemplazo_de_invitacion(
+    client, diario_e104, conn, cambiar_correo
+):
+    if cambiar_correo:
+        respuesta = client.patch(f"{BASE}/3", json={"email": "nuevo@example.test"})
+        diario_e104.registrar.assert_called_once_with(
+            conn.engine, 3, "inv_3", "Invitar", correo_alterno="nuevo@example.test"
+        )
+    else:
+        respuesta = client.put(f"{BASE}/3/roles", json={"roles": ["AUDITOR"]})
+        diario_e104.registrar.assert_called_once_with(
+            conn.engine, 3, "inv_3", "Invitar"
+        )
+    assert respuesta.status_code == 200, respuesta.text
+    diario_e104.completar.assert_called_once_with(conn, 17)
 
 
 def test_cambiar_email_de_vinculado_actualiza_workos(client, base, workos):
@@ -902,6 +1086,41 @@ def test_cambiar_email_de_pendiente_reenvia_la_invitacion(client, workos):
     assert ("revoke_invitation", "inv_3") in workos.llamadas
     envio = dict(workos.llamadas)["send_invitation"]
     assert (envio["email"], envio["role_slug"]) == ("nuevo@correo.ec", "org-asesor")
+
+
+def test_error_de_commit_compensa_el_correo_del_usuario_vinculado(
+    client, base, workos, conn
+):
+    anterior = base.usuarios[2]["Email"]
+    conn.fallar_commit = True
+
+    r = client.patch(f"{BASE}/2", json={"email": "nuevo@correo.ec"})
+
+    assert r.status_code == 500
+    assert base.usuarios[2]["Email"] == anterior
+    cambios = [
+        datos for operacion, datos in workos.llamadas if operacion == "update_user"
+    ]
+    assert [datos["email"] for datos in cambios] == ["nuevo@correo.ec", anterior]
+
+
+def test_actualizacion_ambigua_de_correo_intenta_compensar(
+    client, base, workos, monkeypatch
+):
+    anterior = base.usuarios[2]["Email"]
+    remoto = anterior
+
+    def actualizar(*, email, **_):
+        nonlocal remoto
+        remoto = email
+        if email != anterior:
+            raise _http_error(ServerException)
+
+    monkeypatch.setattr(workos, "update_user", actualizar)
+    r = client.patch(f"{BASE}/2", json={"email": "nuevo@correo.ec"})
+
+    assert r.status_code == 503
+    assert base.usuarios[2]["Email"] == remoto == anterior
 
 
 def test_error_de_commit_restaura_invitacion_al_correo_anterior(

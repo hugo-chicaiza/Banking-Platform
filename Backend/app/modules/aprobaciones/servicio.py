@@ -2,6 +2,7 @@
 
 import json
 from collections.abc import Callable
+from contextlib import nullcontext
 from dataclasses import replace
 from datetime import date
 from hmac import compare_digest
@@ -93,6 +94,8 @@ class Servicio:
         self.puede_solicitar(actor, operacion, objetivo)
         with self.seguridad.begin() as seg:
             self._catalogo(seg, operacion)
+            if operacion.aplicar_diferido:
+                operacion.manejador.version(seg, objetivo)
             existe = seg.execute(
                 repo.consulta("""SELECT IdSolicitud FROM Seguridad.SolicitudAprobacion WITH(UPDLOCK,HOLDLOCK)
                 WHERE IdOrganizacion=:org AND CodigoTransaccion=:codigo AND TipoObjetivo=:tipo AND IdObjetivo=:objetivo
@@ -199,6 +202,8 @@ class Servicio:
             raise problema(
                 403, "SIN_PERMISO", "Falta el permiso efectivo de aprobacion."
             )
+        if operacion.validar_aprobador is not None:
+            operacion.validar_aprobador(self._objetivo(fila), actor.id_interno)
         try:
             solicitante = self.identidad_vigente(
                 fila["SolicitadoPor"], actor.organizacion
@@ -255,7 +260,7 @@ class Servicio:
                     "idSolicitud": id_,
                 },
             )
-            if operacion.base == "seguridad":
+            if operacion.base == "seguridad" and not operacion.aplicar_diferido:
                 self._aplicar(seg, fila, operacion, actor, contexto)
                 self._terminar(seg, fila, actor, contexto)
                 return {"idSolicitud": id_, "estado": "Ejecutada"}
@@ -300,6 +305,25 @@ class Servicio:
                 )
             return
         objetivo = self._objetivo(fila)
+        if operacion.aplicar_diferido:
+            solicitante = self.identidad_vigente(
+                fila["SolicitadoPor"], fila["IdOrganizacion"]
+            )
+            resolutor = self.identidad_vigente(
+                fila["ResueltoPor"], fila["IdOrganizacion"]
+            )
+            self.puede_solicitar(solicitante, operacion, objetivo)
+            resolutor.alcance(objetivo.agencia)
+            if (
+                resolutor.sujeto == solicitante.sujeto
+                or resolutor.id_interno == solicitante.id_interno
+                or operacion.permiso_aprobacion not in resolutor.permisos
+            ):
+                raise problema(
+                    403, "SIN_PERMISO", "La aprobación ya no está autorizada."
+                )
+            if operacion.validar_aprobador is not None:
+                operacion.validar_aprobador(objetivo, resolutor.id_interno)
         if operacion.manejador.version(conn, objetivo) != fila["VersionObjetivo"]:
             raise problema(
                 409,
@@ -359,7 +383,7 @@ class Servicio:
     ) -> None:
         seg.execute(
             repo.consulta(
-                "UPDATE Seguridad.SolicitudAprobacion SET Estado='Ejecutada',EnCurso=0 WHERE IdSolicitud=:id AND Estado='Aprobada'"
+                "UPDATE Seguridad.SolicitudAprobacion SET Estado='Ejecutada',EnCurso=0,CodigoError=NULL WHERE IdSolicitud=:id AND Estado='Aprobada'"
             ),
             {"id": fila["IdSolicitud"]},
         )
@@ -441,9 +465,25 @@ class Servicio:
         if actor is None and operacion.tabla_auditada:
             actor, contexto = self._evidencia_aprobacion(fila, contexto)
         try:
-            with self._motor(operacion).begin() as conn:
+            contexto_externo = operacion.contexto_aplicacion or nullcontext
+            with contexto_externo(), self._motor(operacion).begin() as conn:
                 self._aplicar(conn, fila, operacion, actor, contexto)
         except HTTPException as error:
+            if operacion.aplicar_diferido:
+                with self.seguridad.begin() as seg:
+                    seg.execute(
+                        repo.consulta("""
+                            UPDATE Seguridad.SolicitudAprobacion
+                            SET Intentos=Intentos+1,CodigoError='APROBACION_PENDIENTE_RECUPERACION'
+                            WHERE IdSolicitud=:id AND IdOrganizacion=:org AND Estado='Aprobada'
+                        """),
+                        {"id": id_, "org": org},
+                    )
+                raise problema(
+                    503,
+                    "APROBACION_PENDIENTE_RECUPERACION",
+                    "La solicitud aprobada requiere conciliación antes de cerrarse.",
+                ) from None
             if error.status_code not in (400, 401, 403, 404, 409, 422):
                 raise
             with self.seguridad.begin() as seg:

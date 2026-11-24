@@ -367,7 +367,18 @@ def _verificar_estado(
         raise problema(
             409, "MATRIZ_NO_DESACTIVABLE", "La agencia Matriz no se puede desactivar."
         )
-    activas = repo.dependencias_activas(conn, id_agencia)
+    if get_settings().e104_corte_asignacion_caja:
+        from app.modules.auth.agencias_repository import tiene_cajeros_vigentes
+
+        repo.bloquear_corte_asignaciones(conn)
+        activas = repo.dependencias_activas(
+            conn, id_agencia, incluir_cajeros_anteriores=False
+        )
+        with get_engine("seguridad").connect() as seg:
+            if tiene_cajeros_vigentes(seg, id_agencia):
+                activas.append("cajeros asignados vigentes")
+    else:
+        activas = repo.dependencias_activas(conn, id_agencia)
     if activas:
         raise problema(
             409,

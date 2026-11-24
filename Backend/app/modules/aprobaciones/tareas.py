@@ -11,6 +11,7 @@ from sqlalchemy import bindparam
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.core.api.errors import problema
+from app.core.config.settings import get_settings
 from app.integrations.workos_client import get_organizacion_id
 from app.modules.aprobaciones.auditoria import ContextoAuditoria
 from app.modules.aprobaciones.manejadores import registro_inicial
@@ -79,6 +80,18 @@ def recuperar(servicio: Servicio, org: str) -> Conteo:
         except HTTPException:
             # Una indisponibilidad de WorkOS nunca se interpreta como revocacion.
             resultado.errores += 1
+    if get_settings().e104_recuperar_correo:
+        from app.modules.auth import recuperacion_correo
+
+        for id_, usuario in recuperacion_correo.pendientes(servicio.seguridad):
+            resultado.procesados += 1
+            try:
+                recuperacion_correo.reconciliar(servicio.seguridad, id_, usuario)
+            except (HTTPException, SQLAlchemyError):
+                recuperacion_correo.registrar_error(servicio.seguridad, id_)
+                resultado.errores += 1
+            else:
+                resultado.modificados += 1
     return resultado
 
 
