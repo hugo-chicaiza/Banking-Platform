@@ -1,4 +1,5 @@
 from datetime import date, datetime
+from typing import Any, cast
 from unittest.mock import MagicMock
 
 import pytest
@@ -94,8 +95,7 @@ def test_apertura_sin_comprobante_de_aprobacion_no_reserva_numero(monkeypatch):
             1,
         )
     assert exc.value.status_code == 409
-    detalle = exc.value.detail
-    assert isinstance(detalle, dict)
+    detalle = cast(dict[str, Any], exc.value.detail)
     assert detalle["code"] == "CLIENTE_NO_HABILITADO"
     assert detalle["bloqueos"][0] == "RIESGO_NO_APROBADO_VIGENTE"
     reservar.assert_not_called()
