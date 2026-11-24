@@ -39,3 +39,20 @@ def test_solo_la_adicion_configurada_requiere_aprobacion():
 def test_rechaza_politica_parcial():
     with pytest.raises(ValidationError, match="cubrir todos"):
         PoliticaRoles(niveles={"ADMIN": 3}, privilegiados=set(), incompatibles=[])
+
+
+@pytest.mark.parametrize(
+    "pares", [[("CAJERO", "CAJERO")], [("CAJERO", "AUDITOR"), ("AUDITOR", "CAJERO")]]
+)
+def test_rechaza_pares_duplicados_o_reflexivos(pares):
+    with pytest.raises(ValidationError, match="roles distintos"):
+        PoliticaRoles(
+            niveles={rol: 1 for rol in ROLES}, privilegiados=set(), incompatibles=pares
+        )
+
+
+def test_rechaza_un_rol_actual_fuera_del_catalogo():
+    with pytest.raises(HTTPException) as exc:
+        politica().requiere_aprobacion(["ADMIN"], ["ANTERIOR"], ["CAJERO"])
+    assert exc.value.status_code == 409
+    assert cast(dict[str, str], exc.value.detail)["code"] == "ROLES_DESINCRONIZADOS"

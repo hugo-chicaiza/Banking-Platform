@@ -991,6 +991,76 @@ def test_desactivar_pendiente_revoca_la_invitacion(client, workos):
     assert "send_invitation" not in workos.nombres()
 
 
+@pytest.fixture
+def diario_e104(monkeypatch, client, conn):
+    from unittest.mock import MagicMock
+
+    from app.modules.auth import recuperacion_correo
+
+    monkeypatch.setenv("E104_RECUPERAR_CORREO", "true")
+    get_settings.cache_clear()
+    monkeypatch.setattr(conn, "engine", object(), raising=False)
+    monkeypatch.setattr(
+        service.repository, "sincronizacion_pendiente", lambda *_: False
+    )
+    diario = SimpleNamespace(
+        registrar=MagicMock(return_value=17),
+        completar=MagicMock(),
+        confirmar=MagicMock(),
+        confirmar_roles=MagicMock(),
+    )
+    for nombre, funcion in vars(diario).items():
+        monkeypatch.setattr(recuperacion_correo, nombre, funcion)
+    return diario
+
+
+def test_diario_correo_exige_peticion_separada_y_confirma_antes_de_completar(
+    client, diario_e104, conn, base
+):
+    rechazo = client.patch(
+        f"{BASE}/2", json={"email": "nuevo@example.test", "nombres": "Ana"}
+    )
+    assert rechazo.status_code == 422
+    assert rechazo.json()["code"] == "CORREO_REQUIERE_CAMBIO_SEPARADO"
+    diario_e104.registrar.assert_not_called()
+
+    respuesta = client.patch(f"{BASE}/2", json={"email": "nuevo@example.test"})
+    assert respuesta.status_code == 200, respuesta.text
+    diario_e104.registrar.assert_called_once_with(conn.engine, 2, "user_2")
+    diario_e104.confirmar.assert_called_once_with("user_2", "nuevo@example.test")
+    diario_e104.completar.assert_called_once_with(conn, 17)
+    assert base.usuarios[2]["Email"] == "nuevo@example.test"
+
+
+def test_diario_roles_confirma_membresia_antes_de_completar(
+    client, diario_e104, conn, workos
+):
+    respuesta = client.put(f"{BASE}/2/roles", json={"roles": ["CAJERO", "AUDITOR"]})
+    assert respuesta.status_code == 200, respuesta.text
+    diario_e104.registrar.assert_called_once_with(conn.engine, 2, "user_2", "Roles")
+    diario_e104.confirmar_roles.assert_called_once_with("user_2", ("CAJERO", "AUDITOR"))
+    diario_e104.completar.assert_called_once_with(conn, 17)
+    assert service._slugs(workos.membresias["user_2"]) == {"org-cajero", "org-auditor"}
+
+
+@pytest.mark.parametrize("cambiar_correo", [True, False])
+def test_diario_cubre_reemplazo_de_invitacion(
+    client, diario_e104, conn, cambiar_correo
+):
+    if cambiar_correo:
+        respuesta = client.patch(f"{BASE}/3", json={"email": "nuevo@example.test"})
+        diario_e104.registrar.assert_called_once_with(
+            conn.engine, 3, "inv_3", "Invitar", correo_alterno="nuevo@example.test"
+        )
+    else:
+        respuesta = client.put(f"{BASE}/3/roles", json={"roles": ["AUDITOR"]})
+        diario_e104.registrar.assert_called_once_with(
+            conn.engine, 3, "inv_3", "Invitar"
+        )
+    assert respuesta.status_code == 200, respuesta.text
+    diario_e104.completar.assert_called_once_with(conn, 17)
+
+
 def test_cambiar_email_de_vinculado_actualiza_workos(client, base, workos):
     r = client.patch(f"{BASE}/2", json={"email": "Nuevo@correo.ec", "nombres": "Ana"})
 
