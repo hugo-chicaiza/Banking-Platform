@@ -4,6 +4,8 @@ import os
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import timedelta
+from decimal import Decimal
+from pathlib import Path
 from threading import Barrier
 from typing import cast
 from uuid import uuid4
@@ -78,6 +80,114 @@ def cuenta_y_techo(motores, caso):
             {"sub": sub, "desde": hoy() - timedelta(days=5)},
         )
     return cuenta
+
+
+def test_e602_activacion_registra_un_evento_y_revierte_con_el_deposito(motores, caso):
+    from app.modules.cuentas.service import activar_si_corresponde
+
+    cuenta = cuenta_y_techo(motores, caso)
+    with motores["cooperativa"].connect() as c, c.begin() as transaccion:
+        parametros = {"cuenta": cuenta}
+        c.execute(
+            text("SELECT IdCuenta FROM Cuentas.Cuenta WHERE IdCuenta=:cuenta"),
+            parametros,
+        ).close()
+        migracion = (
+            Path(__file__).resolve().parents[2]
+            / "migrations/cooperativa/202611232320_cuentas_apertura_eventos.up.sql"
+        )
+        c.exec_driver_sql("""
+            DECLARE @bd sysname = DB_NAME();
+            EXEC sys.sp_set_session_context @key=N'migration_database', @value=@bd;
+            SET QUOTED_IDENTIFIER ON;
+        """)
+        c.exec_driver_sql(migracion.read_text(encoding="utf-8"))
+        c.execute(
+            text("""UPDATE Cuentas.Cuenta
+                SET Estado='PendienteDeposito', Saldo=0, MontoAperturaAplicado=20
+                WHERE IdCuenta=:cuenta"""),
+            parametros,
+        )
+        evento = text("""SELECT COUNT(*) FROM Cuentas.CuentaEvento
+            WHERE IdCuenta=:cuenta AND TipoEvento='Activacion'""")
+        with pytest.raises(HTTPException) as error:
+            activar_si_corresponde(c, cuenta, Decimal("19.99"), MAKER.id_interno)
+        assert codigo_error(error.value) == "MONTO_BAJO_APERTURA"
+        assert c.execute(evento, parametros).scalar_one() == 0
+        deposito = c.begin_nested()
+        assert activar_si_corresponde(c, cuenta, Decimal(20), MAKER.id_interno)
+        assert not activar_si_corresponde(c, cuenta, Decimal(20), MAKER.id_interno)
+        assert c.execute(evento, parametros).scalar_one() == 1
+        deposito.rollback()
+        assert c.execute(evento, parametros).scalar_one() == 0
+        assert (
+            c.execute(
+                text("SELECT Estado FROM Cuentas.Cuenta WHERE IdCuenta=:cuenta"),
+                parametros,
+            ).scalar_one()
+            == "PendienteDeposito"
+        )
+        transaccion.rollback()
+
+
+def test_e602_cupo_efectivo_combina_capas_y_ambito(motores, caso):
+    from app.modules.cuentas.service import cupo_efectivo
+
+    cuenta = cuenta_y_techo(motores, caso)
+    migracion = (
+        Path(__file__).resolve().parents[2]
+        / "tests/sql/e602_limites_operacion.sql"
+    )
+    with (
+        motores["cooperativa"]
+        .connect()
+        .execution_options(isolation_level="AUTOCOMMIT") as c
+    ):
+        c.exec_driver_sql("SET QUOTED_IDENTIFIER ON; BEGIN TRANSACTION;")
+        try:
+            c.exec_driver_sql("""
+                DECLARE @bd sysname = DB_NAME();
+                EXEC sys.sp_set_session_context @key=N'migration_database', @value=@bd;
+            """)
+            c.exec_driver_sql(migracion.read_text(encoding="utf-8"))
+            c.execute(
+                text("""
+                    INSERT Canal.CanalCupoClienteCustom
+                      (IdCuenta,IdCanal,CupoDiario,CupoMensual,MontoMaxTransaccion,
+                       MaxTransaccionesDia,Estado,ModificadoPor)
+                    VALUES (:cuenta,1,800,4000,400,15,'A',:actor);
+                    INSERT Parametros.LimiteOperacion
+                      (CodigoTipoTransaccion,IdCanal,GrupoID,IdAgencia,
+                       MontoMaximoOperacion,MontoMaximoDiario,VigenciaDesde)
+                    VALUES ('Retiro',1,900303,NULL,450,750,:desde),
+                           ('Retiro',1,900303,'001',300,700,:desde);
+                """),
+                {"cuenta": cuenta, "actor": MAKER.id_interno, "desde": hoy()},
+            )
+            local = cupo_efectivo(
+                c, cuenta, 1, hoy(), tipo="Retiro", grupo=900303, agencia="001"
+            )
+            general = cupo_efectivo(
+                c, cuenta, 1, hoy(), tipo="Retiro", grupo=900303, agencia="002"
+            )
+            anterior = cupo_efectivo(
+                c,
+                cuenta,
+                1,
+                hoy() - timedelta(days=1),
+                tipo="Retiro",
+                grupo=900303,
+                agencia="001",
+            )
+            assert local is not None and general is not None and anterior is not None
+            assert (local["MontoMaxTransaccion"], local["CupoDiario"]) == (300, 700)
+            assert (general["MontoMaxTransaccion"], general["CupoDiario"]) == (400, 750)
+            assert (anterior["MontoMaxTransaccion"], anterior["CupoDiario"]) == (
+                400,
+                800,
+            )
+        finally:
+            c.exec_driver_sql("IF XACT_STATE()<>0 ROLLBACK TRANSACTION;")
 
 
 def test_ac5_cuenta_superior_al_techo_rechazada_en_servicio_y_trigger(motores, caso):

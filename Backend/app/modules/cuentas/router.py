@@ -26,6 +26,7 @@ from app.modules.cuentas.schemas import (
     AutorizadoCuenta,
     AutorizadoCuentaCreate,
     Cuenta,
+    CuentaDetalle,
     CuentaEstadoUpdate,
     CuentaPendienteCreate,
     CupoEfectivo,
@@ -234,15 +235,15 @@ def listar_cuentas(
 @_consultas_router.get(
     "/{idCuenta}",
     operation_id="CTA03",
-    response_model=Cuenta,
+    response_model=CuentaDetalle,
     openapi_extra={"x-roles": _ROLES_CONSULTA},
 )
-def obtener_cuenta(idCuenta: int, conn: Db) -> Cuenta:
+def obtener_cuenta(idCuenta: int, conn: Db) -> CuentaDetalle:
     """Detalle de cuenta en cualquier estado (CTA-03 / A-02).
 
     `idMoneda` es siempre 840 porque la cooperativa opera exclusivamente en USD.
     """
-    return service.obtener_cuenta(conn, idCuenta)
+    return service.obtener_detalle(conn, idCuenta)
 
 
 @_consultas_router.get(

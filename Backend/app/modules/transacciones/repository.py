@@ -189,10 +189,14 @@ def restricciones_cuenta(
             text(
                 """
                 SELECT
+                    c.Estado AS EstadoCuenta,
+                    cl.IdCliente,
                     cl.Estado AS EstadoCliente,
+                    cl.TipoCliente,
+                    cl.FechaNacimiento,
                     p.PermiteOperacionesPresenciales
-                FROM Cuentas.Cuenta AS c
-                LEFT JOIN Clientes.Cliente AS cl
+                FROM Cuentas.Cuenta AS c WITH (UPDLOCK, HOLDLOCK)
+                LEFT JOIN Clientes.Cliente AS cl WITH (HOLDLOCK)
                     ON cl.IdCliente = c.IdCliente
                 LEFT JOIN ProductosFinancieros.Producto AS p
                     ON p.IdProducto = c.IdProducto
