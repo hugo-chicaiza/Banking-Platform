@@ -276,6 +276,7 @@ def actualizar_producto(
                     "PRODUCTO_SIN_SUBPRODUCTOS",
                     "Agregue al menos un subproducto antes de activar el producto.",
                 )
+            _exigir_flujo_estado(actual, cambios)
             repo.actualizar_producto(conn, id_producto, cambios)
             despues = repo.obtener_producto(conn, id_producto)
             conn.commit()
@@ -385,6 +386,7 @@ def actualizar_subproducto(
             cambios = {c: getattr(datos, c) for c in campos}
             _sincronizar_estado(actual, cambios)
             _reglas_de_estado(conn, actual, cambios, id_sub=id_sub)
+            _exigir_flujo_estado(actual, cambios)
             if (
                 set(cambios) - {"estado", "estado_catalogo"}
                 and actual.get("estado_catalogo", "Borrador") != "Borrador"
@@ -609,6 +611,14 @@ def _sincronizar_estado(actual: dict[str, Any], cambios: dict[str, Any]) -> None
             422, "ESTADO_INVALIDO", "Los estados enviados son incompatibles."
         )
     cambios.update(estado=legado, estado_catalogo=estado)
+
+
+def _exigir_flujo_estado(actual: dict[str, Any], cambios: dict[str, Any]) -> None:
+    destino = cambios.get("estado_catalogo")
+    if destino is not None and destino != actual.get("estado_catalogo"):
+        raise problema(
+            409, "APROBACION_REQUERIDA", "Solicite el cambio de estado para aprobación."
+        )
 
 
 def _validar_requerido(

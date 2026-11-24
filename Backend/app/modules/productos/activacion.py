@@ -1,7 +1,6 @@
 """E3-06: lista de activación de un subproducto y reglas de retiro.
 
-Un subproducto se activa solo si su lista está completa. La verificación de plantillas
-de asiento queda pendiente hasta que E4-01 defina qué operación usa cada producto.
+La lista consulta las plantillas que tienen un contrato contable confirmado.
 """
 
 from datetime import date
@@ -18,6 +17,10 @@ from app.modules.parametros.service import hoy
 
 # Tipos cuyo dinero entra por canales: necesitan cupos en al menos uno.
 TIPOS_CON_CUPOS = ("CUENTA_AHORRO", "CUENTA_CORRIENTE")
+
+# E4-01 documenta CAJA_DEPOSITO para depósitos en ventanilla en cuentas de ahorro.
+# La matriz exhaustiva de operaciones por producto todavía está pendiente.
+_PLANTILLAS_CONFIRMADAS = {"CUENTA_AHORRO": ("CAJA_DEPOSITO",)}
 
 DESCRIPCION = {
     "PRODUCTO_ACTIVO": "El producto está activo",
@@ -54,6 +57,25 @@ def _sub(conn: Connection, id_sub: int) -> dict[str, Any]:
 
 def _existe(conn: Connection, sql: str, **p: Any) -> bool:
     return conn.execute(text(sql), p).first() is not None
+
+
+def _plantillas(
+    conn: Connection, codigo_tipo: str, fecha: date
+) -> tuple[str, bool | None, str]:
+    from app.modules.contabilidad.repository import obtener_plantilla
+
+    faltantes = [
+        codigo
+        for codigo in _PLANTILLAS_CONFIRMADAS.get(codigo_tipo, ())
+        if obtener_plantilla(conn, codigo, fecha) is None
+    ]
+    if faltantes:
+        return "PLANTILLAS", False, "Sin vigencia: " + ", ".join(faltantes) + "."
+    return (
+        "PLANTILLAS",
+        None,
+        "Pendiente de confirmar todas las operaciones contables de este tipo de producto.",
+    )
 
 
 def lista(conn: Connection, id_sub: int, fecha: date) -> list[dict[str, Any]]:
@@ -125,13 +147,7 @@ def lista(conn: Connection, id_sub: int, fecha: date) -> list[dict[str, Any]]:
     elif s["RequiereTutor"]:
         motivo = "Requiere tutor y la relación con el tutor aún no se puede verificar (módulo de clientes)."
     puntos.append(("ELEGIBILIDAD", motivo is None, motivo))
-    puntos.append(
-        (
-            "PLANTILLAS",
-            None,
-            "Se verifica cuando E4-01 defina las operaciones de cada producto.",
-        )
-    )
+    puntos.append(_plantillas(conn, s["CodigoTipo"], fecha))
     return [
         {"codigo": c, "descripcion": DESCRIPCION[c], "cumple": ok, "detalle": d}
         for c, ok, d in puntos
@@ -139,11 +155,11 @@ def lista(conn: Connection, id_sub: int, fecha: date) -> list[dict[str, Any]]:
 
 
 def faltantes(conn: Connection, id_sub: int, fecha: date) -> list[dict[str, Any]]:
-    return [p for p in lista(conn, id_sub, fecha) if p["cumple"] is False]
+    return [p for p in lista(conn, id_sub, fecha) if p["cumple"] is not True]
 
 
-def exigir_activacion(conn: Connection, id_sub: int) -> None:
-    pendientes = faltantes(conn, id_sub, hoy())
+def exigir_activacion(conn: Connection, id_sub: int, fecha: date | None = None) -> None:
+    pendientes = faltantes(conn, id_sub, fecha or hoy())
     if pendientes:
         raise problema(
             409,
@@ -225,4 +241,4 @@ def consultar_activacion(
 ) -> dict[str, Any]:
     """Lo que falta para activar el subproducto."""
     puntos = lista(conn, id_sub, hoy())
-    return {"completa": all(p["cumple"] is not False for p in puntos), "puntos": puntos}
+    return {"completa": all(p["cumple"] is True for p in puntos), "puntos": puntos}

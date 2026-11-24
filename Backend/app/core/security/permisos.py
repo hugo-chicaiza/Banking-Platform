@@ -29,6 +29,7 @@ PERMISOS: dict[str, tuple[str, ...]] = {
     "prd-editar": ("ADMIN",),
     "prd-condicion": ("ADMIN",),
     "prd-numeracion": ("ADMIN",),
+    "prd-estado": ("ADMIN",),
     "productos:aprobar": ("SUPERVISOR",),
     "prd-exportar": _TODOS,
     "con-plantilla-editar": ("CONTADOR",),
