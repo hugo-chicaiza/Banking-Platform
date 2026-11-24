@@ -257,7 +257,7 @@ def test_sp_abrir_cuenta_tiene_firma_esperada(conn):
         "@IdSubProducto",
         "@IdAgencia",
         "@NumeroCuenta",
-        "@MontoInicial",
+        "@MontoAperturaAplicado",
         "@CreadoPor",
         "@IdCuenta",
     ]
@@ -269,7 +269,9 @@ def test_sp_abrir_cuenta_tiene_firma_esperada(conn):
 
 
 def test_obtener_cliente_inexistente_devuelve_none(conn):
-    result = repository.obtener_cliente(conn, id_cliente=-999)
+    from app.modules.clientes.repository import riesgo_para_habilitacion
+
+    result = riesgo_para_habilitacion(conn, id_cliente=-999)
     assert result is None
 
 
@@ -537,7 +539,14 @@ def test_cta_gestion_restricciones_y_reloj(conn):
     )
     assert all(
         estado in restricciones["CK_Cuenta_Estado"]
-        for estado in ("Activa", "Inactiva", "Bloqueada", "Cerrada")
+        for estado in (
+            "Activa",
+            "Inactiva",
+            "Bloqueada",
+            "Cerrada",
+            "PendienteDeposito",
+            "Anulada",
+        )
     )
     assert "FechaCierre" in restricciones["CK_Cuenta_Cierre"]
     assert all(

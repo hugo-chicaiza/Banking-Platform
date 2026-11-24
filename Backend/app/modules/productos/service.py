@@ -797,6 +797,8 @@ def cliente_elegible(
     id_cliente: int,
     id_subproducto: int,
     fecha_contable: date | None = None,
+    *,
+    apertura_cuenta: bool = False,
 ) -> tuple[bool, list[str]]:
     """Evalúa elegibilidad sin modificar datos; rechaza cuando falta prueba de tutor."""
     if id_cliente <= 0 or id_subproducto <= 0:
@@ -838,13 +840,17 @@ def cliente_elegible(
                 motivos.append("EDAD_INFERIOR_MINIMA")
             if datos["edad_maxima"] is not None and edad > datos["edad_maxima"]:
                 motivos.append("EDAD_SUPERIOR_MAXIMA")
+            if apertura_cuenta and edad < 18:
+                motivos.append("TUTOR_NO_VERIFICABLE")
     elif datos["edad_minima"] is not None or datos["edad_maxima"] is not None:
         motivos.append("EDAD_NO_APLICA_A_PERSONA_JURIDICA")
 
     # No hay una relación cliente-tutor verificable en el esquema recibido.
     # Rechazar antes que asumir que existe un tutor válido.
-    if datos["requiere_tutor"]:
+    if datos["requiere_tutor"] and "TUTOR_NO_VERIFICABLE" not in motivos:
         motivos.append("TUTOR_NO_VERIFICABLE")
+    if apertura_cuenta and tipo == "juridico":
+        motivos.append("REPRESENTANTE_NO_VERIFICABLE")
 
     cuentas = repo.cuentas_cliente_para_elegibilidad(conn, id_cliente)
     tarjetas = repo.tarjetas_cliente_para_elegibilidad(conn, id_cliente)
@@ -874,9 +880,14 @@ def cliente_elegible(
         if limites:
             maximo = min(limites) if maximo is None else min(maximo, min(limites))
     if maximo is not None:
+        cuentas_computables = activas
+        if datos["tipo_producto"] == "Cuenta":
+            cuentas_computables = [
+                c for c in cuentas if c["estado"] not in ("Cerrada", "Anulada")
+            ]
         cantidad = sum(
             item["id_subproducto"] == id_subproducto
-            for item in [*activas, *tarjetas_vigentes]
+            for item in [*cuentas_computables, *tarjetas_vigentes]
         )
         if cantidad >= maximo:
             motivos.append("MAXIMO_POR_CLIENTE_ALCANZADO")

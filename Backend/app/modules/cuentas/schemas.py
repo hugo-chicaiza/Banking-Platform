@@ -14,6 +14,8 @@ EstadoCuenta = Literal[
     "INACTIVA",
     "BLOQUEADA",
     "CERRADA",
+    "PENDIENTE_DEPOSITO",
+    "ANULADA",
 ]
 
 # CTA-01 · Creación de cuenta
@@ -22,10 +24,10 @@ EstadoCuenta = Literal[
 class CuentaCreate(CamelModel):
     """Body de POST /api/v1/cuentas (CTA-01)."""
 
-    id_cliente: int
-    id_sub_producto: int
-    id_agencia: str = Field(min_length=3, max_length=3)
-    monto_inicial: Money = Field(ge=0)
+    model_config = ConfigDict(extra="forbid")
+
+    id_cliente: int = Field(gt=0, le=2147483647)
+    id_sub_producto: int = Field(gt=0, le=2147483647)
     id_moneda: MonedaUsd = ID_MONEDA_USD
 
 
@@ -45,6 +47,8 @@ class Cuenta(CamelModel):
     saldo: Money
     saldo_retenido: Money
     estado: EstadoCuenta
+    monto_apertura_aplicado: Money | None = None
+    fecha_activacion: AwareDatetime | None = None
 
 
 class CuentaResumen(CamelModel):
@@ -100,7 +104,7 @@ class PageMovimientoCuenta(CamelModel):
 class CuentaEstadoUpdate(CamelModel):
     model_config = ConfigDict(extra="forbid", validate_by_name=False)
 
-    estado: EstadoCuenta
+    estado: Literal["ACTIVA", "INACTIVA", "BLOQUEADA", "CERRADA"]
     # Auditoria.Descripcion tiene 500 caracteres; se reserva espacio para estados y traceId.
     motivo: Annotated[
         str,

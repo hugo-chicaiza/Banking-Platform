@@ -7,6 +7,7 @@ from sqlalchemy.exc import DBAPIError
 from app.core.api.errors import problema, traducir_error_bd
 from app.core.security import audit
 from app.modules.clientes import service as clientes_service
+from app.modules.clientes.habilitacion import exigir_cliente_habilitado
 from app.modules.contabilidad.service import ZONA_ECUADOR
 from app.modules.cuentas import repository
 from app.modules.cuentas.schemas import (
@@ -25,7 +26,9 @@ from app.modules.cuentas.schemas import (
     PageMovimientoCuenta,
     SaldoCuenta,
 )
+from app.modules.productos import repository as productos_repo
 from app.modules.productos.numeracion import siguiente_numero_cuenta
+from app.modules.productos.service import cliente_elegible
 
 CAMPOS_ORDEN_CUENTAS = {
     "idCuenta": "IdCuenta",
@@ -221,84 +224,81 @@ def abrir_cuenta(
     conn: Connection,
     payload: CuentaCreate,
     creado_por: int,
+    id_agencia: str,
 ) -> Cuenta:
-    """Ejecuta las validaciones previas y llama al repositorio.
-
-    Raises:
-        HTTPException 409 CLIENTE_NO_ACTIVO
-        HTTPException 409 RIESGO_RECHAZADO
-        HTTPException 422 PRODUCTO_NO_ES_CUENTA
-        HTTPException 409 AGENCIA_INACTIVA
-    """
-    # 1. Cliente existe y está Activo
-    cliente = repository.obtener_cliente(conn, payload.id_cliente)
-    if cliente is None or cliente["estado"] != "Activo":
-        raise problema(409, "CLIENTE_NO_ACTIVO", "El cliente no está Activo.")
-
-    # 2. Riesgo vigente no rechazado
-    riesgo = repository.obtener_riesgo_vigente(conn, payload.id_cliente)
-    if riesgo is not None and riesgo["estado"] == "Rechazado":
-        raise problema(
-            409, "RIESGO_RECHAZADO", "El cliente tiene riesgo vigente rechazado."
-        )
-
-    # 3. Subproducto y producto padre existen, son de Cuenta y están activos.
-    producto = repository.obtener_subproducto(conn, payload.id_sub_producto)
-    if (
-        producto is None
-        or producto["tipo_producto"] != "Cuenta"
-        or producto["estado_producto"] != "A"
-        or producto["estado_subproducto"] != "A"
-    ):
-        raise problema(
-            422,
-            "PRODUCTO_NO_ES_CUENTA",
-            "El subproducto no corresponde a una cuenta activa.",
-        )
-
-    # 4. Monto de apertura cubre el mínimo; el SP repite esta validación.
-    monto_minimo = producto["monto_apertura_minimo"] or Decimal("0.00")
-    if payload.monto_inicial < monto_minimo:
-        raise problema(
-            422,
-            "MONTO_APERTURA_INSUFICIENTE",
-            "El monto inicial no cubre el mínimo de apertura.",
-        )
-
-    # 5. Agencia existe y está activa
-    agencia = repository.obtener_agencia(conn, payload.id_agencia)
-    if agencia is None or agencia["estado"] != "A":
-        raise problema(
-            409, "AGENCIA_INACTIVA", "La agencia no existe o no está activa."
-        )
-
-    # 6. Generar NumeroCuenta
-    # El helper AH/CC se conserva hasta E6-01; aperturas usan la regla aprobada.
-
-    # 7. Ejecutar la firma real del SP y traducir sus THROW sin exponer SQL.
+    """Abre una cuenta sin saldo y conserva el mínimo aplicable al primer depósito."""
     try:
+        hoy = datetime.now(ZONA_ECUADOR).date()
+        exigir_cliente_habilitado(conn, payload.id_cliente, hoy)
+
+        producto = repository.obtener_subproducto(conn, payload.id_sub_producto)
+        if (
+            producto is None
+            or producto["tipo_producto"] != "Cuenta"
+            or producto["estado_producto"] != "A"
+            or producto["estado_subproducto"] != "A"
+        ):
+            raise problema(
+                422,
+                "PRODUCTO_NO_ES_CUENTA",
+                "El subproducto no corresponde a una cuenta activa.",
+            )
+
+        elegible, motivos = cliente_elegible(
+            conn, payload.id_cliente, payload.id_sub_producto, hoy, apertura_cuenta=True
+        )
+        if not elegible:
+            codigo = "SUBPRODUCTO_NO_ELEGIBLE"
+            for motivo, error in (
+                ("TUTOR_NO_VERIFICABLE", "MENOR_SIN_TUTOR"),
+                ("REPRESENTANTE_NO_VERIFICABLE", "JURIDICO_SIN_REPRESENTANTE"),
+                ("MAXIMO_POR_CLIENTE_ALCANZADO", "MAXIMO_POR_CLIENTE"),
+            ):
+                if motivo in motivos:
+                    codigo = error
+                    break
+            raise problema(
+                422,
+                codigo,
+                "El cliente no cumple la elegibilidad del subproducto.",
+                bloqueos=motivos,
+            )
+
+        agencia = repository.obtener_agencia(conn, id_agencia)
+        if agencia is None or agencia["estado"] != "A":
+            raise problema(
+                409, "AGENCIA_INACTIVA", "La agencia no existe o no está activa."
+            )
+
+        condiciones = productos_repo.condiciones_vigentes(
+            conn, payload.id_sub_producto, hoy, "APERTURA"
+        )
+        minimo = (
+            condiciones["monto_apertura_minimo"]
+            if condiciones is not None
+            else producto["monto_apertura_minimo"]
+        )
         numero_cuenta = siguiente_numero_cuenta(
-            conn, payload.id_sub_producto, payload.id_agencia
+            conn, payload.id_sub_producto, id_agencia
         )
         row = repository.abrir_cuenta(
             conn,
             numero_cuenta=numero_cuenta,
             id_cliente=payload.id_cliente,
             id_subproducto=payload.id_sub_producto,
-            id_agencia=payload.id_agencia,
-            monto_inicial=payload.monto_inicial,
+            id_agencia=id_agencia,
+            monto_apertura_aplicado=minimo if minimo is not None else Decimal("0.00"),
             creado_por=creado_por,
         )
+        cuenta = Cuenta(**{**row, "id_moneda": ID_MONEDA_USD})
         conn.commit()
+        return cuenta
     except DBAPIError as exc:
         conn.rollback()
-        raise traducir_error_bd(exc) from exc
+        raise traducir_error_bd(exc) from None
     except Exception:
         conn.rollback()
         raise
-
-    # CTA-01 conserva idMoneda en el contrato aunque la moneda no se persista por cuenta.
-    return Cuenta(**{**row, "id_moneda": ID_MONEDA_USD})
 
 
 _TRANSICIONES_CUENTA = {

@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import UTC, date
 from decimal import Decimal
 from typing import Any
 
@@ -11,16 +11,22 @@ _ESTADOS_CUENTA_BD = {
     "INACTIVA": "Inactiva",
     "BLOQUEADA": "Bloqueada",
     "CERRADA": "Cerrada",
+    "PENDIENTE_DEPOSITO": "PendienteDeposito",
+    "ANULADA": "Anulada",
 }
 _ESTADOS_CUENTA_API = {valor: clave for clave, valor in _ESTADOS_CUENTA_BD.items()}
 
 
 def _cuenta_desde_bd(fila: dict[str, Any]) -> dict[str, Any]:
     """Adapta los estados verificados sin alterar el contrato ni la fila leída."""
-    return {
+    cuenta = {
         **fila,
         "estado": _ESTADOS_CUENTA_API.get(fila["estado"], fila["estado"]),
     }
+    fecha = fila.get("fecha_activacion")
+    if fecha is not None and fecha.tzinfo is None:
+        cuenta["fecha_activacion"] = fecha.replace(tzinfo=UTC)
+    return cuenta
 
 
 def _rows(
@@ -130,7 +136,8 @@ def obtener_cuenta_por_id(conn: Connection, id_cuenta: int) -> dict[str, Any] | 
                c.IdCliente AS id_cliente, c.IdProducto AS id_producto,
                c.IdAgencia AS id_agencia, p.TipoCuenta AS tipo_cuenta,
                c.Saldo AS saldo, c.SaldoRetenido AS saldo_retenido,
-               c.Estado AS estado
+               c.Estado AS estado, c.MontoAperturaAplicado AS monto_apertura_aplicado,
+               c.FechaActivacion AS fecha_activacion
         FROM Cuentas.Cuenta AS c
         INNER JOIN ProductosFinancieros.Producto AS p
           ON p.IdProducto = c.IdProducto
@@ -205,37 +212,6 @@ def consultar_movimientos(
 # Validar cliente, riesgo, producto y agencia.
 
 
-def obtener_cliente(conn: Connection, id_cliente: int) -> dict[str, Any] | None:
-    """Devuelve {estado} del cliente o None si no existe."""
-    return _one(
-        conn,
-        """
-        SELECT Estado AS estado
-        FROM Clientes.Cliente
-        WHERE IdCliente = :id_cliente
-        """,
-        {"id_cliente": id_cliente},
-    )
-
-
-def obtener_riesgo_vigente(conn: Connection, id_cliente: int) -> dict[str, Any] | None:
-    """Devuelve el riesgo vigente más reciente del cliente.
-
-    Columnas: estado ('Aprobado' | 'Rechazado' | ...).
-    """
-    return _one(
-        conn,
-        """
-        SELECT TOP 1 ResultadoEvaluacion AS estado
-        FROM Clientes.RiesgoCliente
-        WHERE IdCliente = :id_cliente
-          AND EsVigente = 1
-        ORDER BY FechaEvaluacion DESC
-        """,
-        {"id_cliente": id_cliente},
-    )
-
-
 def obtener_subproducto(conn: Connection, id_subproducto: int) -> dict[str, Any] | None:
     """Devuelve el subproducto y su producto padre para validar CTA-01."""
     return _one(
@@ -248,8 +224,8 @@ def obtener_subproducto(conn: Connection, id_subproducto: int) -> dict[str, Any]
                p.TipoCuenta AS tipo_cuenta,
                p.Estado AS estado_producto,
                p.MontoAperturaMinimo AS monto_apertura_minimo
-        FROM ProductosFinancieros.SubProducto AS s
-        INNER JOIN ProductosFinancieros.Producto AS p
+        FROM ProductosFinancieros.SubProducto AS s WITH (HOLDLOCK)
+        INNER JOIN ProductosFinancieros.Producto AS p WITH (HOLDLOCK)
           ON p.IdProducto = s.IdProducto
         WHERE s.IdSubProducto = :id_subproducto
         """,
@@ -279,7 +255,7 @@ def abrir_cuenta(
     id_cliente: int,
     id_subproducto: int,
     id_agencia: str,
-    monto_inicial: Decimal,
+    monto_apertura_aplicado: Decimal,
     creado_por: int,
 ) -> dict[str, Any]:
     """Ejecuta la firma real del SP y lee la cuenta por su id de salida."""
@@ -292,7 +268,7 @@ def abrir_cuenta(
             @IdSubProducto   = :id_subproducto,
             @IdAgencia       = :id_agencia,
             @NumeroCuenta    = :numero_cuenta,
-            @MontoInicial    = :monto_inicial,
+            @MontoAperturaAplicado = :monto_apertura_aplicado,
             @CreadoPor       = :creado_por,
             @IdCuenta        = @id_cuenta OUTPUT;
         SELECT @id_cuenta AS id_cuenta;
@@ -302,7 +278,7 @@ def abrir_cuenta(
             "id_subproducto": id_subproducto,
             "id_agencia": id_agencia,
             "numero_cuenta": numero_cuenta,
-            "monto_inicial": monto_inicial,
+            "monto_apertura_aplicado": monto_apertura_aplicado,
             "creado_por": creado_por,
         },
     )
@@ -315,6 +291,22 @@ def abrir_cuenta(
         raise RuntimeError("usp_AbrirCuenta no devolvió la cuenta creada")
 
     return cuenta
+
+
+def activar_por_deposito(
+    conn: Connection, id_cuenta: int, realizado_por: int, id_agencia: str
+) -> None:
+    conn.execute(
+        text("""
+        UPDATE Cuentas.Cuenta SET Estado = 'Activa', FechaActivacion = SYSUTCDATETIME()
+        WHERE IdCuenta = :id_cuenta AND Estado = 'PendienteDeposito';
+        IF @@ROWCOUNT <> 1 THROW 57630, 'No se pudo confirmar la activación.', 1;
+        INSERT INTO Cuentas.CuentaEvento
+            (IdCuenta, TipoEvento, EstadoAnterior, EstadoActual, RealizadoPor, IdAgencia)
+        VALUES (:id_cuenta, 'Activacion', 'PendienteDeposito', 'Activa', :actor, :agencia);
+        """),
+        {"id_cuenta": id_cuenta, "actor": realizado_por, "agencia": id_agencia},
+    )
 
 
 # CTA-05: XLOCK protege estado/saldos y la clave referenciada por los desembolsos.

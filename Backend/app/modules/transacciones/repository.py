@@ -162,7 +162,8 @@ def obtener_cuenta(
                     IdAgencia,
                     Saldo,
                     SaldoRetenido,
-                    Estado
+                    Estado,
+                    MontoAperturaAplicado
                 FROM Cuentas.Cuenta WITH (UPDLOCK, HOLDLOCK)
                 WHERE IdCuenta = :id
                 """

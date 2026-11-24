@@ -9,10 +9,24 @@
               "ACTIVA",
               "INACTIVA",
               "BLOQUEADA",
-              "CERRADA"
+              "CERRADA",
+              "PENDIENTE_DEPOSITO",
+              "ANULADA"
             ],
             "title": "Estado",
             "type": "string"
+          },
+          "fechaActivacion": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fechaactivacion"
           },
           "idAgencia": {
             "title": "Idagencia",
@@ -34,6 +48,17 @@
           "idProducto": {
             "title": "Idproducto",
             "type": "integer"
+          },
+          "montoAperturaAplicado": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Montoaperturaaplicado"
           },
           "numeroCuenta": {
             "title": "Numerocuenta",
@@ -72,15 +97,12 @@
         "type": "object"
       },
       "CuentaCreate": {
+        "additionalProperties": false,
         "description": "Body de POST /api/v1/cuentas (CTA-01).",
         "properties": {
-          "idAgencia": {
-            "maxLength": 3,
-            "minLength": 3,
-            "title": "Idagencia",
-            "type": "string"
-          },
           "idCliente": {
+            "exclusiveMinimum": 0.0,
+            "maximum": 2147483647.0,
             "title": "Idcliente",
             "type": "integer"
           },
@@ -91,27 +113,15 @@
             "type": "integer"
           },
           "idSubProducto": {
+            "exclusiveMinimum": 0.0,
+            "maximum": 2147483647.0,
             "title": "Idsubproducto",
             "type": "integer"
-          },
-          "montoInicial": {
-            "anyOf": [
-              {
-                "minimum": 0.0,
-                "type": "number"
-              },
-              {
-                "type": "string"
-              }
-            ],
-            "title": "Montoinicial"
           }
         },
         "required": [
           "idCliente",
-          "idSubProducto",
-          "idAgencia",
-          "montoInicial"
+          "idSubProducto"
         ],
         "title": "CuentaCreate",
         "type": "object"
@@ -152,7 +162,9 @@
               "ACTIVA",
               "INACTIVA",
               "BLOQUEADA",
-              "CERRADA"
+              "CERRADA",
+              "PENDIENTE_DEPOSITO",
+              "ANULADA"
             ],
             "title": "Estado",
             "type": "string"
@@ -716,7 +728,9 @@
                     "ACTIVA",
                     "INACTIVA",
                     "BLOQUEADA",
-                    "CERRADA"
+                    "CERRADA",
+                    "PENDIENTE_DEPOSITO",
+                    "ANULADA"
                   ],
                   "type": "string"
                 },
@@ -1336,7 +1350,7 @@
         ]
       },
       "post": {
-        "description": "Abre una cuenta Activa mediante la firma real de usp_AbrirCuenta.",
+        "description": "Abre una cuenta sin fondos, pendiente del primer depósito en caja.",
         "operationId": "CTA01",
         "requestBody": {
           "content": {

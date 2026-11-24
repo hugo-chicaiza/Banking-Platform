@@ -137,8 +137,6 @@ _AGENCIA_ACTIVA = {"estado": "A"}
 _PAYLOAD = {
     "idCliente": 125,
     "idSubProducto": 20,
-    "idAgencia": "001",
-    "montoInicial": "50.00",
     "idMoneda": ID_MONEDA_USD,
 }
 
@@ -152,8 +150,41 @@ def _patch_repo(
     agencia: Any = None,
     cuenta: Any = None,
 ) -> None:
-    monkeypatch.setattr(repository, "obtener_cliente", lambda conn, _id: cliente)
-    monkeypatch.setattr(repository, "obtener_riesgo_vigente", lambda conn, _id: riesgo)
+    from app.modules.clientes import habilitacion
+
+    def bloquear(conn, _id):
+        if cliente is None:
+            return None
+        return {
+            **cliente,
+            "fecha_consentimiento": datetime(2020, 1, 1),
+            "consentimiento_datos": True,
+        }
+
+    monkeypatch.setattr(habilitacion.repository, "bloquear_cliente", bloquear)
+    monkeypatch.setattr(
+        habilitacion,
+        "valor",
+        lambda conn, clave, fecha: False if clave == "CLI_EXIGE_ARCHIVOS" else 36,
+    )
+    monkeypatch.setattr(service, "cliente_elegible", lambda *args, **kw: (True, []))
+    monkeypatch.setattr(
+        service.productos_repo, "condiciones_vigentes", lambda *args: None
+    )
+
+    def evaluar(conn, _id):
+        if riesgo is None:
+            return None
+        return {
+            "resultado": riesgo["estado"],
+            "nivel": "Bajo",
+            "fecha": riesgo.get("fecha", date.today()),
+            "es_pep": False,
+            "tiene_antecedentes": False,
+            "impide_vinculacion": False,
+        }
+
+    monkeypatch.setattr(habilitacion.repository, "riesgo_para_habilitacion", evaluar)
     monkeypatch.setattr(
         repository, "obtener_subproducto", lambda conn, _id: subproducto
     )
@@ -163,7 +194,7 @@ def _patch_repo(
 
 def _abrir_cuenta(db: _FakeConn | None = None) -> Cuenta:
     return service.abrir_cuenta(
-        cast(Connection, db or _fake_conn()), CuentaCreate(**_PAYLOAD), 12
+        cast(Connection, db or _fake_conn()), CuentaCreate(**_PAYLOAD), 12, "001"
     )
 
 
@@ -184,7 +215,9 @@ def test_abrir_cuenta_201(monkeypatch: pytest.MonkeyPatch):
     def abrir(*args, **kwargs):
         llamada.update(kwargs)
         # El servicio aplica la regla global aunque una fuente antigua traiga otro dato.
-        return _cuenta_row(id_moneda=978, numero_cuenta="220000000015")
+        return _cuenta_row(
+            id_moneda=978, numero_cuenta="220000000015", estado="PENDIENTE_DEPOSITO"
+        )
 
     monkeypatch.setattr(repository, "abrir_cuenta", abrir)
     monkeypatch.setattr(
@@ -194,12 +227,12 @@ def test_abrir_cuenta_201(monkeypatch: pytest.MonkeyPatch):
     body = _abrir_cuenta(db).model_dump(mode="json", by_alias=True)
     assert body["idCuenta"] == 501
     assert body["numeroCuenta"] == "220000000015"
-    assert body["estado"] == "ACTIVA"
+    assert body["estado"] == "PENDIENTE_DEPOSITO"
     assert body["saldo"] == 0.0
     assert body["saldoRetenido"] == 0.0
     assert body["idMoneda"] == ID_MONEDA_USD
     assert llamada["id_subproducto"] == 20
-    assert llamada["monto_inicial"] == Decimal("50.00")
+    assert llamada["monto_apertura_aplicado"] == Decimal("50.00")
     assert llamada["creado_por"] == 12
     assert "id_moneda" not in llamada
     assert (db.commits, db.rollbacks) == (1, 0)
@@ -228,7 +261,7 @@ def test_repositorio_apertura_usa_firma_real_y_lee_por_id():
         id_cliente=125,
         id_subproducto=20,
         id_agencia="001",
-        monto_inicial=Decimal("50.00"),
+        monto_apertura_aplicado=Decimal("50.00"),
         creado_por=12,
     )
     assert cuenta["id_cuenta"] == 501
@@ -238,7 +271,7 @@ def test_repositorio_apertura_usa_firma_real_y_lee_por_id():
         "@IdSubProducto",
         "@IdAgencia",
         "@NumeroCuenta",
-        "@MontoInicial",
+        "@MontoAperturaAplicado",
         "@CreadoPor",
         "@IdCuenta",
     ):
@@ -250,7 +283,7 @@ def test_repositorio_apertura_usa_firma_real_y_lee_por_id():
         "id_subproducto": 20,
         "id_agencia": "001",
         "numero_cuenta": "AH00000001",
-        "monto_inicial": Decimal("50.00"),
+        "monto_apertura_aplicado": Decimal("50.00"),
         "creado_por": 12,
     }
     assert db.consultas[1][1] == {"id_cuenta": 501}
@@ -260,7 +293,7 @@ def test_cliente_no_existe_409(monkeypatch: pytest.MonkeyPatch):
     _patch_repo(monkeypatch, cliente=None)
     with pytest.raises(HTTPException) as exc:
         _abrir_cuenta()
-    _assert_http_error(exc, 409, "CLIENTE_NO_ACTIVO")
+    _assert_http_error(exc, 409, "CLIENTE_NO_HABILITADO")
 
 
 @pytest.mark.parametrize("estado", ["Pendiente", "Bloqueado", "Inactivo", "Cerrado"])
@@ -268,25 +301,30 @@ def test_cliente_no_activo_409(monkeypatch: pytest.MonkeyPatch, estado):
     _patch_repo(monkeypatch, cliente={"estado": estado})
     with pytest.raises(HTTPException) as exc:
         _abrir_cuenta()
-    _assert_http_error(exc, 409, "CLIENTE_NO_ACTIVO")
+    _assert_http_error(exc, 409, "CLIENTE_NO_HABILITADO")
 
 
-def test_riesgo_rechazado_409(monkeypatch: pytest.MonkeyPatch):
-    _patch_repo(monkeypatch, cliente=_CLIENTE_ACTIVO, riesgo={"estado": "Rechazado"})
+@pytest.mark.parametrize(
+    "riesgo", [None, {"estado": "Observado"}, {"estado": "Rechazado"}]
+)
+def test_riesgo_no_aprobado_409(monkeypatch: pytest.MonkeyPatch, riesgo):
+    _patch_repo(monkeypatch, cliente=_CLIENTE_ACTIVO, riesgo=riesgo)
     with pytest.raises(HTTPException) as exc:
         _abrir_cuenta()
-    _assert_http_error(exc, 409, "RIESGO_RECHAZADO")
+    _assert_http_error(exc, 409, "CLIENTE_NO_HABILITADO")
+    assert exc.value.detail["bloqueos"] == ["RIESGO_NO_APROBADO"]
 
 
-def test_repositorio_riesgo_usa_columnas_reales_y_parametro_ligado():
-    db = _fake_conn([{"estado": "Aprobado"}])
-    resultado = repository.obtener_riesgo_vigente(cast(Connection, db), 125)
-    assert resultado == {"estado": "Aprobado"}
-    sql, params = db.consultas[0]
-    assert "ResultadoEvaluacion AS estado" in sql
-    assert "EsVigente = 1" in sql
-    assert "Estado AS estado" not in sql
-    assert params == {"id_cliente": 125}
+def test_riesgo_aprobado_vencido_409(monkeypatch: pytest.MonkeyPatch):
+    _patch_repo(
+        monkeypatch,
+        cliente=_CLIENTE_ACTIVO,
+        riesgo={"estado": "Aprobado", "fecha": date(2020, 1, 1)},
+    )
+    with pytest.raises(HTTPException) as exc:
+        _abrir_cuenta()
+    _assert_http_error(exc, 409, "CLIENTE_NO_HABILITADO")
+    assert exc.value.detail["bloqueos"] == ["RIESGO_NO_VIGENTE"]
 
 
 @pytest.mark.parametrize(
@@ -311,19 +349,6 @@ def test_producto_invalido_422(monkeypatch: pytest.MonkeyPatch, subproducto):
     _assert_http_error(exc, 422, "PRODUCTO_NO_ES_CUENTA")
 
 
-def test_monto_inicial_inferior_al_minimo_422(monkeypatch: pytest.MonkeyPatch):
-    _patch_repo(
-        monkeypatch,
-        cliente=_CLIENTE_ACTIVO,
-        riesgo=_RIESGO_APROBADO,
-        subproducto=_SUBPRODUCTO_CUENTA,
-    )
-    payload = CuentaCreate(**{**_PAYLOAD, "montoInicial": "49.99"})
-    with pytest.raises(HTTPException) as exc:
-        service.abrir_cuenta(cast(Connection, _fake_conn()), payload, 12)
-    _assert_http_error(exc, 422, "MONTO_APERTURA_INSUFICIENTE")
-
-
 @pytest.mark.parametrize("estado", [None, "I", "C"])
 def test_agencia_invalida_409(monkeypatch: pytest.MonkeyPatch, estado):
     _patch_repo(
@@ -341,8 +366,8 @@ def test_agencia_invalida_409(monkeypatch: pytest.MonkeyPatch, estado):
 @pytest.mark.parametrize(
     "payload",
     [
-        {**_PAYLOAD, "idAgencia": "1"},
-        {**_PAYLOAD, "idAgencia": "TOOLONG"},
+        {**_PAYLOAD, "montoInicial": "50.00"},
+        {**_PAYLOAD, "idAgencia": "001"},
         {},
     ],
 )
@@ -589,7 +614,11 @@ def test_cta03_detalle_completo_en_cualquier_estado(estado):
     )
     db = _fake_conn([fila])
     resultado = service.obtener_cuenta(cast(Connection, db), 501)
-    assert resultado.model_dump() == fila
+    assert resultado.model_dump() == {
+        **fila,
+        "monto_apertura_aplicado": None,
+        "fecha_activacion": None,
+    }
     assert isinstance(resultado.saldo, Decimal)
     assert isinstance(resultado.saldo_retenido, Decimal)
     body = resultado.model_dump(mode="json", by_alias=True)
@@ -793,8 +822,6 @@ def test_consultas_contrato_openapi_sin_sockets():
     assert set(cuerpo["required"]) == {
         "idCliente",
         "idSubProducto",
-        "idAgencia",
-        "montoInicial",
     }
     assert set(cuerpo["properties"]) == {*cuerpo["required"], "idMoneda"}
     assert all(
@@ -848,10 +875,11 @@ def test_router_apertura_conserva_payload_y_creado_por(monkeypatch: pytest.Monke
     payload = CuentaCreate(**_PAYLOAD)
     cuenta = Cuenta(**_cuenta_row())
 
-    def abrir(conn, recibido, creado_por):
+    def abrir(conn, recibido, creado_por, id_agencia):
         assert conn is db
         assert recibido is payload
         assert creado_por == 12
+        assert id_agencia == "001"
         return cuenta
 
     monkeypatch.setattr(service, "abrir_cuenta", abrir)

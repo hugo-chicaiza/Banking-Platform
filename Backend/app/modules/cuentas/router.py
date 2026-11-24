@@ -13,6 +13,7 @@ from app.core.security.auth import (
     require_auth,
     require_roles,
 )
+from app.core.security.operador import exigir_agencia
 from app.modules.cuentas import service
 from app.modules.cuentas.schemas import (
     Cuenta,
@@ -57,8 +58,8 @@ def abrir_cuenta(
     creado_por: UsuarioAuditoria,
     conn: Db,
 ) -> Cuenta:
-    """Abre una cuenta Activa mediante la firma real de usp_AbrirCuenta."""
-    return service.abrir_cuenta(conn, payload, creado_por)
+    """Abre una cuenta sin fondos, pendiente del primer depósito en caja."""
+    return service.abrir_cuenta(conn, payload, creado_por, exigir_agencia(usuario))
 
 
 _ROLES_CONSULTA = ["ASESOR", "CAJERO", "SUPERVISOR", "ADMIN"]
