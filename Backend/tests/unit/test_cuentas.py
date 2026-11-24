@@ -151,7 +151,9 @@ def _assert_solo_lectura(db: _FakeConn) -> None:
 @pytest.mark.parametrize("campo", ["idAgencia", "montoInicial", "idMoneda"])
 def test_cta01_rechaza_campos_de_apertura_anteriores(campo):
     with pytest.raises(ValidationError):
-        CuentaPendienteCreate.model_validate({"idCliente": 125, "idSubProducto": 20, campo: 10})
+        CuentaPendienteCreate.model_validate(
+            {"idCliente": 125, "idSubProducto": 20, campo: 10}
+        )
 
 
 # CTA-02
@@ -568,7 +570,14 @@ def test_consultas_contrato_openapi_sin_sockets():
         Cuenta(**_cuenta_row()).model_dump(by_alias=True)
     )
     consultas = router._consultas_router.routes
-    assert len(consultas) == 5
+    assert {r.path for r in consultas} == {
+        "",
+        "/{idCuenta}",
+        "/{idCuenta}/saldo",
+        "/{idCuenta}/movimientos",
+        "/{idCuenta}/autorizados",
+        "/{idCuenta}/eventos",
+    }
     assert all(isinstance(r, ProblemDetailsRoute) for r in consultas)
     assert any(d.dependency is require_auth for d in router.router.dependencies)
     apertura = contrato["paths"]["/api/v1/cuentas"]["post"]
