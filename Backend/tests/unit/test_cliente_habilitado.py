@@ -88,11 +88,16 @@ def test_apertura_sin_comprobante_de_aprobacion_no_reserva_numero(monkeypatch):
     conn.execute.side_effect = [_cliente(EsPEP=True, IdSolicitud=12), comprobante]
     with pytest.raises(HTTPException) as exc:
         cuentas.abrir_cuenta_pendiente(
-            conn, CuentaPendienteCreate(idCliente=3, idSubProducto=25), "001", 1
+            conn,
+            CuentaPendienteCreate.model_validate({"idCliente": 3, "idSubProducto": 25}),
+            "001",
+            1,
         )
     assert exc.value.status_code == 409
-    assert exc.value.detail["code"] == "CLIENTE_NO_HABILITADO"
-    assert exc.value.detail["bloqueos"][0] == "RIESGO_NO_APROBADO_VIGENTE"
+    detalle = exc.value.detail
+    assert isinstance(detalle, dict)
+    assert detalle["code"] == "CLIENTE_NO_HABILITADO"
+    assert detalle["bloqueos"][0] == "RIESGO_NO_APROBADO_VIGENTE"
     reservar.assert_not_called()
     conn.commit.assert_not_called()
     conn.rollback.assert_called_once()

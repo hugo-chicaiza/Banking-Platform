@@ -28,7 +28,9 @@ def test_alta_rechaza_cuenta_de_otra_agencia(conn):
             conn,
             501,
             "002",
-            AutorizadoCuentaCreate(idClienteAutorizado=9, rol="Firmante"),
+            AutorizadoCuentaCreate.model_validate(
+                {"idClienteAutorizado": 9, "rol": "Firmante"}
+            ),
         )
     assert exc.value.status_code == 404
     assert conn.execute.call_count == 1
@@ -55,7 +57,12 @@ def test_alta_asocia_relacion_vigente(conn, monkeypatch):
         insercion,
     ]
     resultado = autorizados.agregar(
-        conn, 501, "001", AutorizadoCuentaCreate(idClienteAutorizado=9, rol="Tutor")
+        conn,
+        501,
+        "001",
+        AutorizadoCuentaCreate.model_validate(
+            {"idClienteAutorizado": 9, "rol": "Tutor"}
+        ),
     )
     assert resultado.id_cuenta_autorizado == 55
     assert resultado.vigente

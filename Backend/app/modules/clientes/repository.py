@@ -1068,13 +1068,13 @@ def insertar_evaluacion_riesgo(
         INSERT INTO Clientes.RiesgoCliente (
             IdCliente, NivelRiesgoLAFT, EsPEP, ResultadoEvaluacion,
             FechaEvaluacion, Evaluador, TieneAntecedentes, IdTipoAntecedente,
-            Observaciones, EsVigente, VigenteHasta
+            Observaciones, EsVigente
         )
         OUTPUT INSERTED.IdEvaluacion INTO @Evaluacion
         VALUES (
             :id_cliente, :nivel_riesgo_laft, :es_pep, :resultado_evaluacion,
             :fecha_evaluacion, :evaluador, :tiene_antecedentes, :id_tipo_antecedente,
-            :observaciones, 0, DATEADD(month,:meses_vigencia,CONVERT(date,:fecha_evaluacion))
+            :observaciones, 0
         );
         SELECT IdEvaluacion AS id_evaluacion FROM @Evaluacion;
         """,
