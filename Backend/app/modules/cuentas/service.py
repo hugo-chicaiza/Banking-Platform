@@ -318,24 +318,15 @@ def abrir_cuenta_pendiente(
                 409, "AGENCIA_INACTIVA", "La agencia activa no admite aperturas."
             )
         numero = siguiente_numero_cuenta(conn, payload.id_sub_producto, agencia)
-        cuenta_id = conn.execute(
-            text("""
-                SET NOCOUNT ON;
-                DECLARE @Cuenta int;
-                EXEC Cuentas.usp_AbrirCuenta @IdCliente=:cliente, @IdSubProducto=:sub,
-                    @IdAgencia=:agencia, @NumeroCuenta=:numero, @MontoAperturaAplicado=:minimo,
-                    @RealizadoPor=:actor, @IdCuenta=@Cuenta OUTPUT;
-                SELECT @Cuenta;
-            """),
-            {
-                "numero": numero,
-                "cliente": payload.id_cliente,
-                "sub": payload.id_sub_producto,
-                "agencia": agencia,
-                "actor": actor,
-                "minimo": condiciones["monto_apertura_minimo"],
-            },
-        ).scalar_one()
+        cuenta_id = repository.registrar_apertura(
+            conn,
+            numero,
+            payload.id_cliente,
+            payload.id_sub_producto,
+            agencia,
+            condiciones["monto_apertura_minimo"],
+            actor,
+        )
         if relacion is not None:
             conn.execute(
                 text("""

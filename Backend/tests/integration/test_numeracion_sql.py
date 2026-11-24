@@ -170,10 +170,13 @@ def abrir_real(conn, id_sub):
         )
     ).scalar_one()
     numero = n.siguiente_numero_cuenta(conn, id_sub, agencia)
-    fila = cuentas.abrir_cuenta(
+    id_cuenta = cuentas.registrar_apertura(
         conn, numero, cliente, id_sub, agencia, Decimal(100), 12
     )
+    fila = cuentas.obtener_cuenta_por_id(conn, id_cuenta)
+    assert fila is not None
     assert fila["numero_cuenta"] == numero
+    assert fila["estado"] == "PendienteDeposito"
     return numero
 
 

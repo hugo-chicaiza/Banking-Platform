@@ -570,7 +570,7 @@ def test_consultas_contrato_openapi_sin_sockets():
         Cuenta(**_cuenta_row()).model_dump(by_alias=True)
     )
     consultas = router._consultas_router.routes
-    assert {r.path for r in consultas} == {
+    assert {r.path for r in consultas if isinstance(r, APIRoute)} == {
         "",
         "/{idCuenta}",
         "/{idCuenta}/saldo",
@@ -647,7 +647,9 @@ def test_cta02_aliases_query_y_ceros_iniciales():
 
 def test_router_apertura_conserva_payload_y_creado_por(monkeypatch: pytest.MonkeyPatch):
     db = _fake_conn()
-    payload = CuentaPendienteCreate(idCliente=125, idSubProducto=20)
+    payload = CuentaPendienteCreate.model_validate(
+        {"idCliente": 125, "idSubProducto": 20}
+    )
     cuenta = Cuenta(**_cuenta_row())
 
     def abrir(conn, recibido, agencia, creado_por):
@@ -815,7 +817,7 @@ def _cambiar(
     return service.cambiar_estado_cuenta(
         cast(Connection, db),
         501,
-        CuentaEstadoUpdate(estado=estado, motivo=motivo),
+        CuentaEstadoUpdate.model_validate({"estado": estado, "motivo": motivo}),
         12,
         "127.0.0.1",
         "cta05-test",

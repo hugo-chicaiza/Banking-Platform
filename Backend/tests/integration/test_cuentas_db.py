@@ -12,6 +12,7 @@ import pytest
 
 from app.core.config.settings import get_settings
 from app.core.database.db import get_engine
+from app.modules.clientes import repository as clientes
 from app.modules.cuentas import repository
 from app.modules.cuentas.schemas import ID_MONEDA_USD
 
@@ -257,8 +258,8 @@ def test_sp_abrir_cuenta_tiene_firma_esperada(conn):
         "@IdSubProducto",
         "@IdAgencia",
         "@NumeroCuenta",
-        "@MontoInicial",
-        "@CreadoPor",
+        "@MontoAperturaAplicado",
+        "@RealizadoPor",
         "@IdCuenta",
     ]
 
@@ -269,7 +270,7 @@ def test_sp_abrir_cuenta_tiene_firma_esperada(conn):
 
 
 def test_obtener_cliente_inexistente_devuelve_none(conn):
-    result = repository.obtener_cliente(conn, id_cliente=-999)
+    result = clientes.obtener_cliente_por_id(conn, id_cliente=-999)
     assert result is None
 
 

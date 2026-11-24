@@ -1,4 +1,5 @@
 from datetime import date
+from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import Connection, text
@@ -240,6 +241,35 @@ def obtener_agencia(conn: Connection, id_agencia: str) -> dict[str, Any] | None:
         """,
         {"id_agencia": id_agencia},
     )
+
+
+def registrar_apertura(
+    conn: Connection,
+    numero: str,
+    cliente: int,
+    subproducto: int,
+    agencia: str,
+    minimo: Decimal,
+    actor: int,
+) -> int:
+    return conn.execute(
+        text("""
+            SET NOCOUNT ON;
+            DECLARE @Cuenta int;
+            EXEC Cuentas.usp_AbrirCuenta @IdCliente=:cliente, @IdSubProducto=:sub,
+                @IdAgencia=:agencia, @NumeroCuenta=:numero, @MontoAperturaAplicado=:minimo,
+                @RealizadoPor=:actor, @IdCuenta=@Cuenta OUTPUT;
+            SELECT @Cuenta;
+        """),
+        {
+            "numero": numero,
+            "cliente": cliente,
+            "sub": subproducto,
+            "agencia": agencia,
+            "minimo": minimo,
+            "actor": actor,
+        },
+    ).scalar_one()
 
 
 def obtener_titular_cuenta(conn: Connection, id_cuenta: int) -> int | None:
