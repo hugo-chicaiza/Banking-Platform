@@ -1,26 +1,37 @@
 from datetime import date
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Path, Query, Request
+from fastapi import APIRouter, Depends, Path, Query, Request, Response
 from sqlalchemy import Connection
 
-from app.core.api.errors import RESPUESTAS_ERROR, ProblemDetailsRoute, solo_parametros
+from app.core.api.errors import (
+    RESPUESTAS_ERROR,
+    ProblemDetailsRoute,
+    problema,
+    solo_parametros,
+)
 from app.core.api.middleware import ip_cliente, obtener_trace_id
 from app.core.database.db import cooperativa
+from app.core.pdf import respuesta_pdf, respuestas_pdf
 from app.core.security.auth import (
     Usuario,
     UsuarioAuditoria,
     require_auth,
     require_roles,
 )
-from app.modules.cuentas import service
+from app.modules.cuentas import autorizados, service
+from app.modules.cuentas.formulario import formulario_apertura
 from app.modules.cuentas.schemas import (
+    AnularApertura,
+    AutorizadoCuenta,
+    AutorizadoCuentaCreate,
     Cuenta,
-    CuentaCreate,
     CuentaEstadoUpdate,
+    CuentaPendienteCreate,
     CupoEfectivo,
     CupoUpdate,
     EstadoCuenta,
+    EventoCuenta,
     PageCuenta,
     PageCupoHistorial,
     PageMovimientoCuenta,
@@ -52,13 +63,97 @@ _apertura_router = APIRouter(
     openapi_extra={"x-roles": ["ASESOR", "ADMIN"]},
 )
 def abrir_cuenta(
-    payload: CuentaCreate,
+    payload: CuentaPendienteCreate,
     usuario: AperturadorCuenta,
     creado_por: UsuarioAuditoria,
     conn: Db,
 ) -> Cuenta:
-    """Abre una cuenta Activa mediante la firma real de usp_AbrirCuenta."""
-    return service.abrir_cuenta(conn, payload, creado_por)
+    """Abre una cuenta pendiente del primer depósito en la agencia activa."""
+    agencia = usuario.agencia()
+    if agencia is None:
+        raise problema(403, "AGENCIA_REQUERIDA", "Seleccione una agencia activa.")
+    return service.abrir_cuenta_pendiente(conn, payload, agencia, creado_por)
+
+
+@_apertura_router.get(
+    "/{idCuenta}/formulario-apertura",
+    operation_id="CTAFormularioApertura",
+    responses=respuestas_pdf("Formulario de apertura de cuenta"),
+    dependencies=[Depends(solo_parametros())],
+    openapi_extra={"x-roles": ["ASESOR", "ADMIN"]},
+)
+def descargar_formulario_apertura(
+    idCuenta: Annotated[int, Path(gt=0, le=2147483647)],
+    usuario: AperturadorCuenta,
+    conn: Db,
+) -> Response:
+    agencia = usuario.agencia()
+    if agencia is None:
+        raise problema(403, "AGENCIA_REQUERIDA", "Seleccione una agencia activa.")
+    contenido = formulario_apertura(conn, idCuenta, agencia, usuario.nombre)
+    return respuesta_pdf(contenido, f"formulario-apertura-{idCuenta}.pdf")
+
+
+@_apertura_router.post(
+    "/{idCuenta}/anulacion",
+    operation_id="CTAAnularApertura",
+    response_model=Cuenta,
+    dependencies=[Depends(solo_parametros())],
+    openapi_extra={"x-roles": ["ASESOR", "ADMIN"]},
+)
+def anular_apertura(
+    idCuenta: Annotated[int, Path(gt=0, le=2147483647)],
+    datos: AnularApertura,
+    usuario: AperturadorCuenta,
+    actor: UsuarioAuditoria,
+    conn: Db,
+) -> Cuenta:
+    agencia = usuario.agencia()
+    if agencia is None:
+        raise problema(403, "AGENCIA_REQUERIDA", "Seleccione una agencia activa.")
+    return service.anular_apertura(conn, idCuenta, agencia, datos.motivo, actor)
+
+
+@_apertura_router.post(
+    "/{idCuenta}/autorizados",
+    operation_id="CTAAgregarAutorizado",
+    response_model=AutorizadoCuenta,
+    status_code=201,
+    dependencies=[Depends(solo_parametros())],
+    openapi_extra={"x-roles": ["ASESOR", "ADMIN"]},
+)
+def agregar_autorizado(
+    idCuenta: Annotated[int, Path(gt=0, le=2147483647)],
+    datos: AutorizadoCuentaCreate,
+    usuario: AperturadorCuenta,
+    actor: UsuarioAuditoria,
+    conn: Db,
+) -> AutorizadoCuenta:
+    agencia = usuario.agencia()
+    if agencia is None:
+        raise problema(403, "AGENCIA_REQUERIDA", "Seleccione una agencia activa.")
+    return autorizados.agregar(conn, idCuenta, agencia, datos, actor)
+
+
+@_apertura_router.post(
+    "/{idCuenta}/autorizados/{idAut}/fin",
+    operation_id="CTAFinalizarAutorizado",
+    status_code=204,
+    response_class=Response,
+    dependencies=[Depends(solo_parametros())],
+    openapi_extra={"x-roles": ["ASESOR", "ADMIN"]},
+)
+def finalizar_autorizado(
+    idCuenta: Annotated[int, Path(gt=0, le=2147483647)],
+    idAut: Annotated[int, Path(gt=0, le=2147483647)],
+    usuario: AperturadorCuenta,
+    conn: Db,
+) -> Response:
+    agencia = usuario.agencia()
+    if agencia is None:
+        raise problema(403, "AGENCIA_REQUERIDA", "Seleccione una agencia activa.")
+    autorizados.finalizar(conn, idCuenta, idAut, agencia)
+    return Response(status_code=204)
 
 
 _ROLES_CONSULTA = ["ASESOR", "CAJERO", "SUPERVISOR", "ADMIN"]
@@ -67,6 +162,42 @@ _consultas_router = APIRouter(
     responses=RESPUESTAS_ERROR,
     dependencies=[Depends(require_roles(*_ROLES_CONSULTA))],
 )
+
+
+@_consultas_router.get(
+    "/{idCuenta}/autorizados",
+    operation_id="CTAConsultarAutorizados",
+    response_model=list[AutorizadoCuenta],
+    dependencies=[Depends(solo_parametros())],
+    openapi_extra={"x-roles": _ROLES_CONSULTA},
+)
+def listar_autorizados(
+    idCuenta: Annotated[int, Path(gt=0, le=2147483647)],
+    usuario: Annotated[Usuario, Depends(require_auth)],
+    conn: Db,
+) -> list[AutorizadoCuenta]:
+    agencia = usuario.agencia()
+    if agencia is None:
+        raise problema(403, "AGENCIA_REQUERIDA", "Seleccione una agencia activa.")
+    return service.listar_autorizados(conn, idCuenta, agencia)
+
+
+@_consultas_router.get(
+    "/{idCuenta}/eventos",
+    operation_id="CTAConsultarEventos",
+    response_model=list[EventoCuenta],
+    dependencies=[Depends(solo_parametros())],
+    openapi_extra={"x-roles": _ROLES_CONSULTA},
+)
+def listar_eventos(
+    idCuenta: Annotated[int, Path(gt=0, le=2147483647)],
+    usuario: Annotated[Usuario, Depends(require_auth)],
+    conn: Db,
+) -> list[EventoCuenta]:
+    agencia = usuario.agencia()
+    if agencia is None:
+        raise problema(403, "AGENCIA_REQUERIDA", "Seleccione una agencia activa.")
+    return service.listar_eventos(conn, idCuenta, agencia)
 
 
 @_consultas_router.get(

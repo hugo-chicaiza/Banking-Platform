@@ -11,6 +11,8 @@ _ESTADOS_CUENTA_BD = {
     "INACTIVA": "Inactiva",
     "BLOQUEADA": "Bloqueada",
     "CERRADA": "Cerrada",
+    "PendienteDeposito": "PendienteDeposito",
+    "Anulada": "Anulada",
 }
 _ESTADOS_CUENTA_API = {valor: clave for clave, valor in _ESTADOS_CUENTA_BD.items()}
 
@@ -205,51 +207,22 @@ def consultar_movimientos(
 # Validar cliente, riesgo, producto y agencia.
 
 
-def obtener_cliente(conn: Connection, id_cliente: int) -> dict[str, Any] | None:
-    """Devuelve {estado} del cliente o None si no existe."""
-    return _one(
-        conn,
-        """
-        SELECT Estado AS estado
-        FROM Clientes.Cliente
-        WHERE IdCliente = :id_cliente
-        """,
-        {"id_cliente": id_cliente},
-    )
-
-
-def obtener_riesgo_vigente(conn: Connection, id_cliente: int) -> dict[str, Any] | None:
-    """Devuelve el riesgo vigente más reciente del cliente.
-
-    Columnas: estado ('Aprobado' | 'Rechazado' | ...).
-    """
-    return _one(
-        conn,
-        """
-        SELECT TOP 1 ResultadoEvaluacion AS estado
-        FROM Clientes.RiesgoCliente
-        WHERE IdCliente = :id_cliente
-          AND EsVigente = 1
-        ORDER BY FechaEvaluacion DESC
-        """,
-        {"id_cliente": id_cliente},
-    )
-
-
 def obtener_subproducto(conn: Connection, id_subproducto: int) -> dict[str, Any] | None:
-    """Devuelve el subproducto y su producto padre para validar CTA-01."""
+    """Conserva el estado del catálogo hasta que termina la transacción de apertura."""
     return _one(
         conn,
         """
         SELECT s.IdSubProducto AS id_subproducto,
                s.IdProducto AS id_producto,
-               s.Estado AS estado_subproducto,
+               CASE WHEN s.Estado = 'A' AND s.EstadoSubProducto = 'Activo'
+                    THEN 'A' ELSE 'I' END AS estado_subproducto,
                p.TipoProducto AS tipo_producto,
                p.TipoCuenta AS tipo_cuenta,
-               p.Estado AS estado_producto,
+               CASE WHEN p.Estado = 'A' AND p.EstadoProducto = 'Activo'
+                    THEN 'A' ELSE 'I' END AS estado_producto,
                p.MontoAperturaMinimo AS monto_apertura_minimo
-        FROM ProductosFinancieros.SubProducto AS s
-        INNER JOIN ProductosFinancieros.Producto AS p
+        FROM ProductosFinancieros.SubProducto AS s WITH (HOLDLOCK)
+        INNER JOIN ProductosFinancieros.Producto AS p WITH (HOLDLOCK)
           ON p.IdProducto = s.IdProducto
         WHERE s.IdSubProducto = :id_subproducto
         """,
@@ -270,54 +243,35 @@ def obtener_agencia(conn: Connection, id_agencia: str) -> dict[str, Any] | None:
     )
 
 
-# Apertura de la cuenta
-
-
-def abrir_cuenta(
+def registrar_apertura(
     conn: Connection,
-    numero_cuenta: str,
-    id_cliente: int,
-    id_subproducto: int,
-    id_agencia: str,
-    monto_inicial: Decimal,
-    creado_por: int,
-) -> dict[str, Any]:
-    """Ejecuta la firma real del SP y lee la cuenta por su id de salida."""
-    salida = _one(
-        conn,
-        """
-        DECLARE @id_cuenta int;
-        EXEC Cuentas.usp_AbrirCuenta
-            @IdCliente       = :id_cliente,
-            @IdSubProducto   = :id_subproducto,
-            @IdAgencia       = :id_agencia,
-            @NumeroCuenta    = :numero_cuenta,
-            @MontoInicial    = :monto_inicial,
-            @CreadoPor       = :creado_por,
-            @IdCuenta        = @id_cuenta OUTPUT;
-        SELECT @id_cuenta AS id_cuenta;
-        """,
+    numero: str,
+    cliente: int,
+    subproducto: int,
+    agencia: str,
+    minimo: Decimal,
+    actor: int,
+) -> int:
+    return conn.execute(
+        text("""
+            SET NOCOUNT ON;
+            DECLARE @Cuenta int;
+            EXEC Cuentas.usp_AbrirCuenta @IdCliente=:cliente, @IdSubProducto=:sub,
+                @IdAgencia=:agencia, @NumeroCuenta=:numero, @MontoAperturaAplicado=:minimo,
+                @RealizadoPor=:actor, @IdCuenta=@Cuenta OUTPUT;
+            SELECT @Cuenta;
+        """),
         {
-            "id_cliente": id_cliente,
-            "id_subproducto": id_subproducto,
-            "id_agencia": id_agencia,
-            "numero_cuenta": numero_cuenta,
-            "monto_inicial": monto_inicial,
-            "creado_por": creado_por,
+            "numero": numero,
+            "cliente": cliente,
+            "sub": subproducto,
+            "agencia": agencia,
+            "minimo": minimo,
+            "actor": actor,
         },
-    )
-    cuenta = (
-        obtener_cuenta_por_id(conn, int(salida["id_cuenta"]))
-        if salida is not None and salida["id_cuenta"] is not None
-        else None
-    )
-    if cuenta is None:  # pragma: no cover
-        raise RuntimeError("usp_AbrirCuenta no devolvió la cuenta creada")
-
-    return cuenta
+    ).scalar_one()
 
 
-# CTA-05: XLOCK protege estado/saldos y la clave referenciada por los desembolsos.
 def obtener_titular_cuenta(conn: Connection, id_cuenta: int) -> int | None:
     fila = _one(
         conn,

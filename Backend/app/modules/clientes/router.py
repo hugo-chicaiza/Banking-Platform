@@ -13,6 +13,7 @@ from app.core.security.auth import (
     require_roles,
 )
 from app.modules.clientes import service
+from app.modules.clientes.habilitacion import HabilitacionCliente, cliente_habilitado
 from app.modules.clientes.schemas import (
     Cliente,
     ClienteCreate,
@@ -33,6 +34,7 @@ from app.modules.clientes.schemas import (
     ValidacionIdentificacion,
 )
 from app.modules.clientes.visibilidad import aplicar_visibilidad, puede_ver_direcciones
+from app.modules.parametros.service import hoy
 
 router = APIRouter(
     tags=["clientes"],
@@ -329,6 +331,18 @@ def registrar_evaluacion_riesgo(
 def listar_evaluaciones_riesgo(idCliente: int, conn: Db) -> list[Riesgo]:
     """Historial de evaluaciones por fecha e identificador descendentes (CLI-14)."""
     return service.listar_evaluaciones_riesgo(conn, idCliente)
+
+
+@_riesgo_router.get(
+    "/{idCliente}/habilitacion",
+    operation_id="CLIHabilitacionProducto",
+    response_model=HabilitacionCliente,
+    responses=RESPUESTAS_ERROR,
+    dependencies=[Depends(require_roles("ASESOR", "SUPERVISOR", "AUDITOR", "ADMIN"))],
+    openapi_extra={"x-roles": ["ASESOR", "SUPERVISOR", "AUDITOR", "ADMIN"]},
+)
+def consultar_habilitacion(idCliente: int, conn: Db) -> HabilitacionCliente:
+    return cliente_habilitado(conn, idCliente, hoy())
 
 
 _edicion_router = APIRouter(

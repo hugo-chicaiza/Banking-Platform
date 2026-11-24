@@ -19,6 +19,7 @@ async def ciclo() -> None:
     from app.modules.aprobaciones.router import servicio
 
     ultimo_resumen = None
+    ultima_anulacion = None
     while True:
         await asyncio.sleep(60)
         try:
@@ -30,6 +31,9 @@ async def ciclo() -> None:
             if ultimo_resumen != hoy:
                 await asyncio.to_thread(ejecutar, cola, org, "APR_RESUMEN_ANTIGUAS")
                 ultimo_resumen = hoy
+            if ultima_anulacion != hoy:
+                await asyncio.to_thread(ejecutar, cola, org, "CTA_ANULAR_SIN_DEPOSITO")
+                ultima_anulacion = hoy
         except (HTTPException, SQLAlchemyError, RuntimeError, ValueError) as error:
             # Nunca imprimir SQL, parametros, sujetos ni el ID de la organizacion.
             logger.warning(

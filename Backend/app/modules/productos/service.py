@@ -23,6 +23,7 @@ from app.core.security.operador import auditar, exigir_id_interno
 from app.modules.catalogos import repository as catalogos_repo
 from app.modules.catalogos import service as catalogos_service
 from app.modules.catalogos.subproductos import PREFIJO_TIPO_TARJETA, tipo_tarjeta_de
+from app.modules.clientes.relaciones import relacion_vigente
 from app.modules.productos import activacion, vinculos
 from app.modules.productos import repository as repo
 from app.modules.productos.schemas import (
@@ -841,14 +842,16 @@ def cliente_elegible(
     elif datos["edad_minima"] is not None or datos["edad_maxima"] is not None:
         motivos.append("EDAD_NO_APLICA_A_PERSONA_JURIDICA")
 
-    # No hay una relación cliente-tutor verificable en el esquema recibido.
-    # Rechazar antes que asumir que existe un tutor válido.
-    if datos["requiere_tutor"]:
+    if (
+        datos["requiere_tutor"]
+        and relacion_vigente(conn, id_cliente, "Tutor", fecha) is None
+    ):
         motivos.append("TUTOR_NO_VERIFICABLE")
 
     cuentas = repo.cuentas_cliente_para_elegibilidad(conn, id_cliente)
     tarjetas = repo.tarjetas_cliente_para_elegibilidad(conn, id_cliente)
     activas = [c for c in cuentas if c["estado"] == "Activa"]
+    cuentas_abiertas = [c for c in cuentas if c["estado"] not in ("Cerrada", "Anulada")]
     tarjetas_vigentes = [t for t in tarjetas if t["estado"] in ("Aprobada", "Generada")]
     requerido = datos["id_requerido"]
     if requerido is not None and not any(
@@ -876,7 +879,7 @@ def cliente_elegible(
     if maximo is not None:
         cantidad = sum(
             item["id_subproducto"] == id_subproducto
-            for item in [*activas, *tarjetas_vigentes]
+            for item in [*cuentas_abiertas, *tarjetas_vigentes]
         )
         if cantidad >= maximo:
             motivos.append("MAXIMO_POR_CLIENTE_ALCANZADO")

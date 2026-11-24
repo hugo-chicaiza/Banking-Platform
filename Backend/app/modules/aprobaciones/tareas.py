@@ -21,7 +21,12 @@ from app.modules.aprobaciones.repositorio import consulta
 from app.modules.aprobaciones.servicio import Servicio
 from app.modules.parametros import general
 
-CODIGOS = ("APR_RECUPERACION", "APR_RESUMEN_ANTIGUAS", "APR_AUD_RELEVO")
+CODIGOS = (
+    "APR_RECUPERACION",
+    "APR_RESUMEN_ANTIGUAS",
+    "APR_AUD_RELEVO",
+    "CTA_ANULAR_SIN_DEPOSITO",
+)
 
 
 @dataclass
@@ -202,6 +207,13 @@ def ejecutar(
                 resultado = recuperar(servicio, org)
             elif codigo == "APR_RESUMEN_ANTIGUAS":
                 resultado = resumir(servicio, org)
+            elif codigo == "CTA_ANULAR_SIN_DEPOSITO":
+                from app.modules.cuentas.service import anular_pendientes_vencidas
+
+                fecha = datetime.now(ZoneInfo("America/Guayaquil")).date()
+                with servicio.cooperativa.begin() as coop:
+                    n = anular_pendientes_vencidas(coop, fecha)
+                resultado = Conteo(n, n)
             else:
                 n = entregar(servicio.cooperativa, servicio.seguridad) + entregar(
                     servicio.seguridad, servicio.seguridad

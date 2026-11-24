@@ -508,7 +508,8 @@ def bloquear_cliente(conn: Connection, id_cliente: int) -> dict[str, Any] | None
     return _one(
         conn,
         """
-        SELECT IdCliente AS id_cliente, Estado AS estado
+        SELECT IdCliente AS id_cliente, Estado AS estado, TipoCliente AS tipo_cliente,
+               FechaNacimiento AS fecha_nacimiento
         FROM Clientes.Cliente WITH (UPDLOCK, HOLDLOCK)
         WHERE IdCliente = :id_cliente
     """,

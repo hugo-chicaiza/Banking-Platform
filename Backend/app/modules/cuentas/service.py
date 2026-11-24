@@ -1,30 +1,43 @@
 from datetime import UTC, date, datetime
 from decimal import Decimal
 
-from sqlalchemy import Connection
+from sqlalchemy import Connection, text
 from sqlalchemy.exc import DBAPIError
 
 from app.core.api.errors import problema, traducir_error_bd
 from app.core.security import audit
+from app.modules.clientes import repository as clientes_repository
 from app.modules.clientes import service as clientes_service
+from app.modules.clientes.habilitacion import cliente_habilitado
+from app.modules.clientes.relaciones import (
+    RolRelacion,
+    edad_en,
+    edad_mayoria,
+    relacion_vigente,
+)
 from app.modules.contabilidad.service import ZONA_ECUADOR
 from app.modules.cuentas import repository
 from app.modules.cuentas.schemas import (
     ID_MONEDA_USD,
+    AutorizadoCuenta,
     Cuenta,
-    CuentaCreate,
     CuentaEstadoUpdate,
+    CuentaPendienteCreate,
     CuentaResumen,
     CupoEfectivo,
     CupoHistorial,
     CupoUpdate,
     EstadoCuenta,
+    EventoCuenta,
     MovimientoCuenta,
     PageCuenta,
     PageCupoHistorial,
     PageMovimientoCuenta,
     SaldoCuenta,
 )
+from app.modules.parametros import general
+from app.modules.parametros.service import hoy
+from app.modules.productos import service as productos_service
 from app.modules.productos.numeracion import siguiente_numero_cuenta
 
 CAMPOS_ORDEN_CUENTAS = {
@@ -111,6 +124,58 @@ def obtener_saldo(conn: Connection, id_cuenta: int) -> SaldoCuenta:
     )
 
 
+def listar_autorizados(
+    conn: Connection, id_cuenta: int, agencia: str
+) -> list[AutorizadoCuenta]:
+    cuenta = obtener_cuenta(conn, id_cuenta)
+    if cuenta.id_agencia != agencia:
+        raise problema(
+            404, "CUENTA_NO_ENCONTRADA", "La cuenta no existe en la agencia activa."
+        )
+    return [
+        AutorizadoCuenta.model_validate(dict(fila))
+        for fila in conn.execute(
+            text("""
+                SELECT IdCuentaAutorizado AS id_cuenta_autorizado,
+                       IdClienteAutorizado AS id_cliente_autorizado,
+                       Rol AS rol,FechaInicio AS fecha_inicio,FechaFin AS fecha_fin,
+                       CAST(CASE WHEN RevocadoEn IS NULL AND FechaInicio<=:fecha
+                         AND (FechaFin IS NULL OR FechaFin>=:fecha) THEN 1 ELSE 0 END AS bit) AS vigente
+                FROM Cuentas.CuentaAutorizado WHERE IdCuenta=:id
+                ORDER BY FechaInicio DESC,IdCuentaAutorizado DESC;
+            """),
+            {"id": id_cuenta, "fecha": hoy()},
+        ).mappings()
+    ]
+
+
+def listar_eventos(
+    conn: Connection, id_cuenta: int, agencia: str
+) -> list[EventoCuenta]:
+    cuenta = obtener_cuenta(conn, id_cuenta)
+    if cuenta.id_agencia != agencia:
+        raise problema(
+            404, "CUENTA_NO_ENCONTRADA", "La cuenta no existe en la agencia activa."
+        )
+    filas = conn.execute(
+        text("""
+            SELECT IdCuentaEvento AS id_cuenta_evento, TipoEvento AS tipo_evento,
+                   EstadoAnterior AS estado_anterior, EstadoActual AS estado_actual,
+                   Detalle AS detalle, RealizadoPor AS realizado_por,
+                   IdAgencia AS id_agencia, FechaEvento AS fecha_evento
+            FROM Cuentas.CuentaEvento WHERE IdCuenta=:id
+            ORDER BY FechaEvento DESC, IdCuentaEvento DESC
+        """),
+        {"id": id_cuenta},
+    ).mappings()
+    return [
+        EventoCuenta.model_validate(
+            {**fila, "fecha_evento": fila["fecha_evento"].replace(tzinfo=UTC)}
+        )
+        for fila in filas
+    ]
+
+
 def listar_movimientos(
     conn: Connection,
     id_cuenta: int,
@@ -180,125 +245,180 @@ def listar_movimientos(
     )
 
 
-# Generación de NumeroCuenta
-
-# Formato acordado mientras se resuelve G-11 con negocio:
-# prefijo de tipo (AH / CC) + secuencial de 8 dígitos.
-# Ejemplo: AH00000501. Único garantizado por UQ_Cuenta_Numero.
-_PREFIJOS: dict[str, str] = {"Ahorro": "AH", "Corriente": "CC"}
-
-
-def _generar_numero_cuenta(conn: Connection, tipo_cuenta: str) -> str:
-    """Genera el próximo NumeroCuenta libre.
-
-    La lectura toma un bloqueo de rango hasta el commit para serializar aperturas
-    del mismo prefijo. La unicidad final la garantiza UQ_Cuenta_Numero.
-    """
-    prefijo = _PREFIJOS.get(tipo_cuenta, "XX")
-    patron = f"{prefijo}%"
-
-    from sqlalchemy import text
-
-    ultimo = conn.execute(
-        text(
-            """
-            SELECT ISNULL(MAX(TRY_CONVERT(
-                       bigint, SUBSTRING(NumeroCuenta, 3, LEN(NumeroCuenta))
-                   )), 0) AS ultimo
-            FROM Cuentas.Cuenta WITH (UPDLOCK, HOLDLOCK)
-            WHERE NumeroCuenta LIKE :patron
-            """
-        ),
-        {"patron": patron},
-    ).scalar_one()
-    return f"{prefijo}{str(ultimo + 1).zfill(8)}"
-
-
-# CTA-01 · Apertura de cuenta
-
-
-def abrir_cuenta(
-    conn: Connection,
-    payload: CuentaCreate,
-    creado_por: int,
+def abrir_cuenta_pendiente(
+    conn: Connection, payload: CuentaPendienteCreate, agencia: str, actor: int
 ) -> Cuenta:
-    """Ejecuta las validaciones previas y llama al repositorio.
-
-    Raises:
-        HTTPException 409 CLIENTE_NO_ACTIVO
-        HTTPException 409 RIESGO_RECHAZADO
-        HTTPException 422 PRODUCTO_NO_ES_CUENTA
-        HTTPException 409 AGENCIA_INACTIVA
-    """
-    # 1. Cliente existe y está Activo
-    cliente = repository.obtener_cliente(conn, payload.id_cliente)
-    if cliente is None or cliente["estado"] != "Activo":
-        raise problema(409, "CLIENTE_NO_ACTIVO", "El cliente no está Activo.")
-
-    # 2. Riesgo vigente no rechazado
-    riesgo = repository.obtener_riesgo_vigente(conn, payload.id_cliente)
-    if riesgo is not None and riesgo["estado"] == "Rechazado":
-        raise problema(
-            409, "RIESGO_RECHAZADO", "El cliente tiene riesgo vigente rechazado."
-        )
-
-    # 3. Subproducto y producto padre existen, son de Cuenta y están activos.
-    producto = repository.obtener_subproducto(conn, payload.id_sub_producto)
-    if (
-        producto is None
-        or producto["tipo_producto"] != "Cuenta"
-        or producto["estado_producto"] != "A"
-        or producto["estado_subproducto"] != "A"
-    ):
-        raise problema(
-            422,
-            "PRODUCTO_NO_ES_CUENTA",
-            "El subproducto no corresponde a una cuenta activa.",
-        )
-
-    # 4. Monto de apertura cubre el mínimo; el SP repite esta validación.
-    monto_minimo = producto["monto_apertura_minimo"] or Decimal("0.00")
-    if payload.monto_inicial < monto_minimo:
-        raise problema(
-            422,
-            "MONTO_APERTURA_INSUFICIENTE",
-            "El monto inicial no cubre el mínimo de apertura.",
-        )
-
-    # 5. Agencia existe y está activa
-    agencia = repository.obtener_agencia(conn, payload.id_agencia)
-    if agencia is None or agencia["estado"] != "A":
-        raise problema(
-            409, "AGENCIA_INACTIVA", "La agencia no existe o no está activa."
-        )
-
-    # 6. Generar NumeroCuenta
-    # El helper AH/CC se conserva hasta E6-01; aperturas usan la regla aprobada.
-
-    # 7. Ejecutar la firma real del SP y traducir sus THROW sin exponer SQL.
+    """Apertura E6-01, sin contabilización ni depósito inicial."""
+    fecha = hoy()
     try:
-        numero_cuenta = siguiente_numero_cuenta(
-            conn, payload.id_sub_producto, payload.id_agencia
+        # Una apertura por cliente a la vez. El máximo incluye otras pendientes.
+        cliente = clientes_repository.bloquear_cliente(conn, payload.id_cliente)
+        if cliente is None:
+            raise problema(404, "CLIENTE_NO_ENCONTRADO", "El cliente no existe.")
+        habilitacion = cliente_habilitado(conn, payload.id_cliente, fecha)
+        if not habilitacion.habilitado:
+            raise problema(
+                409,
+                "CLIENTE_NO_HABILITADO",
+                "El cliente no está habilitado para abrir una cuenta.",
+                bloqueos=habilitacion.motivos,
+            )
+        producto = repository.obtener_subproducto(conn, payload.id_sub_producto)
+        if producto is None or producto["tipo_producto"] != "Cuenta":
+            raise problema(
+                422, "PRODUCTO_NO_ES_CUENTA", "Seleccione un subproducto de cuenta."
+            )
+        elegible, motivos = productos_service.cliente_elegible(
+            conn, payload.id_cliente, payload.id_sub_producto, fecha
         )
-        row = repository.abrir_cuenta(
+        if not elegible:
+            codigo = (
+                "MAXIMO_POR_CLIENTE"
+                if "MAXIMO_POR_CLIENTE_ALCANZADO" in motivos
+                else "MENOR_SIN_TUTOR"
+                if "TUTOR_NO_VERIFICABLE" in motivos
+                else "SUBPRODUCTO_NO_ELEGIBLE"
+            )
+            raise problema(
+                422,
+                codigo,
+                "El subproducto no es elegible para este cliente.",
+                bloqueos=motivos,
+            )
+        nacimiento = cliente["fecha_nacimiento"]
+        rol: RolRelacion | None = None
+        if cliente["tipo_cliente"] == "Juridico":
+            rol = "RepresentanteLegal"
+        elif nacimiento is not None and edad_en(nacimiento, fecha) < edad_mayoria(
+            conn, fecha
+        ):
+            rol = "Tutor"
+        relacion = (
+            None
+            if rol is None
+            else relacion_vigente(conn, payload.id_cliente, rol, fecha)
+        )
+        if rol is not None and relacion is None:
+            codigo = (
+                "MENOR_SIN_TUTOR" if rol == "Tutor" else "REPRESENTANTE_NO_VERIFICABLE"
+            )
+            raise problema(422, codigo, "El cliente requiere una relación vigente.")
+        condiciones = productos_service.condiciones_vigentes(
+            conn, payload.id_sub_producto, fecha, "FICHA"
+        )
+        if condiciones is None:
+            raise problema(
+                409,
+                "CONDICIONES_NO_VIGENTES",
+                "El subproducto carece de condiciones vigentes.",
+            )
+        agencia_bd = repository.obtener_agencia(conn, agencia)
+        if agencia_bd is None or agencia_bd["estado"] != "A":
+            raise problema(
+                409, "AGENCIA_INACTIVA", "La agencia activa no admite aperturas."
+            )
+        numero = siguiente_numero_cuenta(conn, payload.id_sub_producto, agencia)
+        cuenta_id = repository.registrar_apertura(
             conn,
-            numero_cuenta=numero_cuenta,
-            id_cliente=payload.id_cliente,
-            id_subproducto=payload.id_sub_producto,
-            id_agencia=payload.id_agencia,
-            monto_inicial=payload.monto_inicial,
-            creado_por=creado_por,
+            numero,
+            payload.id_cliente,
+            payload.id_sub_producto,
+            agencia,
+            condiciones["monto_apertura_minimo"],
+            actor,
         )
+        if relacion is not None:
+            conn.execute(
+                text("""
+                    INSERT Cuentas.CuentaAutorizado
+                        (IdCuenta, IdClienteAutorizado, Rol, IdClienteRelacion, FechaInicio, FechaFin, CreadoPor)
+                    VALUES (:cuenta,:cliente,:rol,:relacion,:inicio,:fin,:actor);
+                """),
+                {
+                    "cuenta": cuenta_id,
+                    "cliente": relacion["IdClienteRelacionado"],
+                    "rol": rol,
+                    "relacion": relacion["IdRelacion"],
+                    "inicio": fecha,
+                    "fin": relacion["FechaFin"],
+                    "actor": actor,
+                },
+            )
+        cuenta = obtener_cuenta(conn, cuenta_id)
         conn.commit()
-    except DBAPIError as exc:
-        conn.rollback()
-        raise traducir_error_bd(exc) from exc
+        return cuenta
     except Exception:
         conn.rollback()
         raise
 
-    # CTA-01 conserva idMoneda en el contrato aunque la moneda no se persista por cuenta.
-    return Cuenta(**{**row, "id_moneda": ID_MONEDA_USD})
+
+def anular_apertura(
+    conn: Connection, id_cuenta: int, id_agencia: str, motivo: str, actor: int
+) -> Cuenta:
+    """Anula una pendiente de la agencia activa durante su día de apertura."""
+    try:
+        fila = (
+            conn.execute(
+                text("""
+                SELECT Estado, CONVERT(date,FechaApertura) AS Fecha
+                FROM Cuentas.Cuenta WITH (UPDLOCK,HOLDLOCK)
+                WHERE IdCuenta=:id AND IdAgencia=:agencia
+            """),
+                {"id": id_cuenta, "agencia": id_agencia},
+            )
+            .mappings()
+            .first()
+        )
+        if fila is None:
+            raise problema(
+                404, "CUENTA_NO_ENCONTRADA", "La cuenta no existe en la agencia activa."
+            )
+        if fila["Estado"] != "PendienteDeposito" or fila["Fecha"] != hoy():
+            raise problema(
+                409,
+                "APERTURA_NO_ANULABLE",
+                "Solo se anula una apertura pendiente en su día de creación.",
+            )
+        conn.execute(
+            text("""
+                UPDATE Cuentas.Cuenta SET Estado='Anulada' WHERE IdCuenta=:id;
+                INSERT Cuentas.CuentaEvento
+                    (IdCuenta,TipoEvento,EstadoAnterior,EstadoActual,Detalle,RealizadoPor,IdAgencia)
+                VALUES (:id,'Anulacion','PendienteDeposito','Anulada',:motivo,:actor,:agencia);
+            """),
+            {"id": id_cuenta, "agencia": id_agencia, "motivo": motivo, "actor": actor},
+        )
+        cuenta = obtener_cuenta(conn, id_cuenta)
+        conn.commit()
+        return cuenta
+    except Exception:
+        conn.rollback()
+        raise
+
+
+def anular_pendientes_vencidas(conn: Connection, fecha: date) -> int:
+    """Cancela las pendientes vencidas y deja un evento por cuenta en la misma transacción."""
+    dias = general.valor(conn, "CTA_DIAS_SIN_DEPOSITO", fecha)
+    if type(dias) is not int or dias < 1:
+        raise problema(
+            503, "PARAMETRO_INVALIDO", "No se pudo obtener el plazo de apertura."
+        )
+    return conn.execute(
+        text("""
+            SET NOCOUNT ON;
+            DECLARE @Anuladas TABLE (IdCuenta int, IdAgencia char(3));
+            UPDATE Cuentas.Cuenta SET Estado='Anulada'
+            OUTPUT inserted.IdCuenta, inserted.IdAgencia INTO @Anuladas
+            WHERE Estado='PendienteDeposito'
+              AND FechaApertura < DATEADD(day, -:dias, CAST(:fecha AS date));
+            INSERT Cuentas.CuentaEvento
+                (IdCuenta,TipoEvento,EstadoAnterior,EstadoActual,Detalle,RealizadoPor,IdAgencia)
+            SELECT IdCuenta,'Anulacion','PendienteDeposito','Anulada',N'Sin primer depósito',0,IdAgencia
+            FROM @Anuladas;
+            SELECT COUNT(*) FROM @Anuladas;
+        """),
+        {"dias": dias, "fecha": fecha},
+    ).scalar_one()
 
 
 _TRANSICIONES_CUENTA = {
