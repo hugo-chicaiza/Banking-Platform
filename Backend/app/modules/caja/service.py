@@ -14,6 +14,7 @@ from fastapi import HTTPException
 from sqlalchemy import Connection
 
 from app.core.api.errors import problema
+from app.core.config.settings import get_settings
 from app.core.security.auth import Usuario
 from app.core.security.operador import (
     agencia_de_consulta,
@@ -22,6 +23,8 @@ from app.core.security.operador import (
     exigir_agencia_autorizada,
     exigir_id_interno,
 )
+from app.modules.auth import agencias_repository
+from app.modules.auth.service import proteger_apertura_caja
 from app.modules.caja import repository as repo
 from app.modules.caja.repository import Fila
 from app.modules.caja.schemas import (
@@ -602,6 +605,7 @@ def cancelar_jornada(
 
 def abrir_jornada(
     conn: Connection,
+    conn_seguridad: Connection,
     usuario: Usuario,
     id_interno: int | None,
     datos: JornadaOpen,
@@ -616,7 +620,7 @@ def abrir_jornada(
     ) as registro:
         id_cajero = exigir_id_interno(id_interno)
 
-        with conn.begin():
+        with proteger_apertura_caja(conn_seguridad, id_cajero, usuario), conn.begin():
             caja = repo.obtener_caja_fisica(
                 conn,
                 datos.id_caja_fisica,
@@ -629,7 +633,21 @@ def abrir_jornada(
                     "La caja física no existe.",
                 )
 
-            if not repo.cajero_asignado(
+            settings = get_settings()
+            if (
+                settings.e104_verificar_asignacion_caja
+                or settings.e104_corte_asignacion_caja
+            ) and (
+                agencias_repository.principal_asignada(conn_seguridad, id_cajero)
+                != caja["IdAgencia"].strip()
+            ):
+                raise problema(
+                    409,
+                    "CAJERO_NO_ASIGNADO_A_AGENCIA",
+                    "La agencia de la caja no coincide con la asignación institucional.",
+                )
+
+            if not settings.e104_corte_asignacion_caja and not repo.cajero_asignado(
                 conn,
                 id_cajero,
                 caja["IdAgencia"],

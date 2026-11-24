@@ -1,6 +1,7 @@
 """Manejadores explicitos por operacion; el cliente no puede seleccionar codigo ejecutable."""
 
 from collections.abc import Callable
+from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from datetime import date
 from typing import Any, Literal, Protocol
@@ -56,6 +57,9 @@ class Operacion:
     permiso_ejecucion: str | None = None
     aplicar_con_aprobador: Callable[[Connection, Objetivo, int], None] | None = None
     solicitud_unica: bool = False
+    aplicar_diferido: bool = False
+    validar_aprobador: Callable[[Objetivo, int], None] | None = None
+    contexto_aplicacion: Callable[[], AbstractContextManager[None]] | None = None
 
 
 class Registro:

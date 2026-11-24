@@ -346,6 +346,33 @@
         "title": "RolUpdate",
         "type": "object"
       },
+      "SolicitudAceptada": {
+        "properties": {
+          "estado": {
+            "const": "Pendiente",
+            "default": "Pendiente",
+            "title": "Estado",
+            "type": "string"
+          },
+          "idSolicitud": {
+            "exclusiveMinimum": 0.0,
+            "maximum": 9.223372036854776e+18,
+            "title": "Idsolicitud",
+            "type": "integer"
+          },
+          "requiereAprobacion": {
+            "const": true,
+            "default": true,
+            "title": "Requiereaprobacion",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "idSolicitud"
+        ],
+        "title": "SolicitudAceptada",
+        "type": "object"
+      },
       "TrasladoUsuario": {
         "additionalProperties": false,
         "properties": {
@@ -1289,7 +1316,7 @@
                 }
               }
             },
-            "description": "Unprocessable Entity"
+            "description": "Unprocessable Content"
           },
           "429": {
             "content": {
@@ -3326,7 +3353,7 @@
                 }
               }
             },
-            "description": "Unprocessable Entity"
+            "description": "Unprocessable Content"
           },
           "429": {
             "content": {
@@ -5400,7 +5427,7 @@
                 }
               }
             },
-            "description": "Unprocessable Entity"
+            "description": "Unprocessable Content"
           },
           "429": {
             "content": {
@@ -5569,6 +5596,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SolicitudAceptada"
+                }
+              }
+            },
+            "description": "Accepted"
           },
           "400": {
             "content": {
@@ -5916,7 +5953,7 @@
                 }
               }
             },
-            "description": "Unprocessable Entity"
+            "description": "Unprocessable Content"
           },
           "429": {
             "content": {

@@ -426,6 +426,28 @@ def _id_interno_db(id_workos: str, roles: str | None) -> int | None:
             ).first()
             if fila is None:
                 return None
+            settings = get_settings()
+            if (
+                settings.e104_permiso_aprobar_roles.strip()
+                or settings.e104_recuperar_correo
+            ):
+                from app.modules.auth.repository import (
+                    cambio_roles_en_recuperacion,
+                    sincronizacion_pendiente,
+                )
+
+                if (
+                    settings.e104_permiso_aprobar_roles.strip()
+                    and cambio_roles_en_recuperacion(
+                        conn, fila.UsuarioID, settings.workos_organization_id
+                    )
+                ) or (
+                    settings.e104_recuperar_correo
+                    and sincronizacion_pendiente(conn, fila.UsuarioID, "Roles")
+                ):
+                    roles_sql = set((fila.RolesWorkOS or "").split(","))
+                    roles_sesion = set((roles or "").split(","))
+                    return fila.UsuarioID if roles_sesion == roles_sql else None
             if fila.RolesWorkOS != roles:
                 conn.execute(
                     text(
