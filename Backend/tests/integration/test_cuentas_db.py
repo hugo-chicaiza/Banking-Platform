@@ -651,7 +651,7 @@ def test_cupo_e_historial_original_comparten_transaccion(monkeypatch, fallar_his
     from sqlalchemy import text
 
     from app.modules.cuentas import service
-    from app.modules.cuentas.schemas import CupoUpdate
+    from app.modules.cuentas.schemas import CupoSolicitado
     from tests.sesion import ID_AUDITORIA
 
     # Esta prueba no usa la fixture de solo lectura. Toda escritura queda en una
@@ -673,13 +673,15 @@ def test_cupo_e_historial_original_comparten_transaccion(monkeypatch, fallar_his
                     "Se necesita una cuenta con cupos configurados en su subproducto"
                 )
             cuenta, canal = referencia[0], referencia[1]
-            inicial = CupoUpdate.model_validate(
+            inicial = CupoSolicitado.model_validate(
                 {
                     "cupoDiario": referencia[2],
                     "cupoMensual": referencia[3],
                     "montoMaxTransaccion": referencia[4],
                     "maxTransaccionesDia": 1,
                     "fechaVigencia": date(2030, 1, 1),
+                    "solicitadoPorCliente": True,
+                    "documentoVerificado": "C",
                 }
             )
             anterior = repository.bloquear_cupo_personalizado(conexion, cuenta, canal)
