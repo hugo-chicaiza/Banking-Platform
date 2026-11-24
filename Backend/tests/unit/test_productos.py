@@ -42,7 +42,11 @@ def test_solicitud_de_estado_entrega_el_objetivo_a_la_cola(admin, asesor, ruta, 
     assert admin.post(url, json={"estado": "Borrador"}).status_code == 400
     respuesta = admin.post(url, json={"estado": "Suspendido"})
     assert respuesta.status_code == 202
-    assert respuesta.json() == {"idSolicitud": 37}
+    assert respuesta.json() == {
+        "idSolicitud": 37,
+        "estado": "Pendiente",
+        "requiereAprobacion": True,
+    }
     cola = admin.app.dependency_overrides[apr.servicio]()
     args = cola.solicitar.call_args.args
     assert args[1:4] == (
