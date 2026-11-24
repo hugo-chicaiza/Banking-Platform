@@ -468,6 +468,27 @@ CATALOGOS: dict[str, Catalogo] = {
             """,
         ),
         Catalogo(
+            clave="tipos-direccion",
+            nombre="Tipos de dirección",
+            descripcion="Tipos de ubicación del cliente. Retirar un tipo conserva las direcciones existentes.",
+            tabla="Catalogo.TipoDireccion",
+            id_texto=True,
+            campos=(
+                Campo("codigo", "Código"),
+                Campo("nombre", "Nombre", editable=True, maximo=60),
+            ),
+            listar="""
+                SELECT Codigo AS id, Codigo AS codigo, Nombre AS nombre, Estado AS estado
+                FROM Catalogo.TipoDireccion ORDER BY Nombre
+            """,
+            actualizar="""
+                UPDATE Catalogo.TipoDireccion SET
+                    Nombre = CASE WHEN :c_nombre = 1 THEN :nombre ELSE Nombre END,
+                    Estado = CASE WHEN :c_estado = 1 THEN :estado ELSE Estado END
+                WHERE Codigo = :id
+            """,
+        ),
+        Catalogo(
             clave="paises",
             nombre="Países",
             descripcion="Nacionalidad y país de residencia de los clientes (ISO 3166-1).",

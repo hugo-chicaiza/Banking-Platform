@@ -8,6 +8,9 @@ from fastapi import HTTPException
 from sqlalchemy import Connection
 
 from app.core.api.errors import problema
+from app.modules.catalogos.tipos_direccion import (
+    validar_activo as validar_tipo_direccion,
+)
 from app.modules.clientes import repository
 from app.modules.clientes.schemas import (
     Cliente,
@@ -677,6 +680,7 @@ def registrar_cliente(
             )
 
     direccion = payload.direccion
+    validar_tipo_direccion(conn, direccion.tipo_direccion)
     if not repository.existe_ciudad(conn, direccion.id_ciudad, direccion.codigo_pais):
         raise _problema(
             422,
@@ -804,6 +808,7 @@ def agregar_direccion(
         cliente = _validar_cliente_existe(conn, id_cliente, bloquear=True)
         _validar_cliente_no_eliminado(cliente, id_cliente)
         _validar_ciudad_pais(conn, payload.id_ciudad, payload.codigo_pais)
+        validar_tipo_direccion(conn, payload.tipo_direccion)
         row = repository.insertar_direccion(
             conn,
             id_cliente,
@@ -878,6 +883,8 @@ def editar_direccion(
             resultado = Direccion(**actual)
             conn.rollback()
             return resultado
+        if "tipo_direccion" in cambios:
+            validar_tipo_direccion(conn, cambios["tipo_direccion"])
         row = repository.actualizar_direccion(
             conn,
             id_cliente,

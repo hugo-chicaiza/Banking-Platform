@@ -143,6 +143,7 @@ ROLES_POR_RUTA: dict[tuple[str, str], tuple[str, ...]] = {
             "seguros",
             "actividades-economicas",
             "tipos-antecedente",
+            "tipos-direccion",
             "denominaciones",
             "agencias",
             "productos",

@@ -12,7 +12,13 @@ from app.core.api.errors import (
 from app.core.api.middleware import ip_cliente
 from app.core.database.db import cooperativa
 from app.core.security.auth import Usuario, require_auth, require_roles
-from app.modules.catalogos import administracion, confirmacion, repository, service
+from app.modules.catalogos import (
+    administracion,
+    confirmacion,
+    repository,
+    service,
+    tipos_direccion,
+)
 from app.modules.catalogos.schemas import (
     ActividadEconomica,
     Agencia,
@@ -97,6 +103,12 @@ def listar_tasas_interes(
 def listar_comisiones(conn: Db) -> Any:
     """Comisiones y recargos activos, para vincularlos a productos y subproductos."""
     return repository.listar_comisiones(conn)
+
+
+@router.get("/tipos-direccion", response_model=list[tipos_direccion.TipoDireccion])
+def listar_tipos_direccion(conn: Db) -> list[tipos_direccion.TipoDireccion]:
+    """Tipos actuales e históricos; solo los activos pueden asignarse de nuevo."""
+    return tipos_direccion.listar(conn)
 
 
 @router.get("/seguros", response_model=list[Seguro])
