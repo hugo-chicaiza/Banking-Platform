@@ -17,6 +17,24 @@ def test_exportar_requiere_permiso_explicito_aun_para_admin():
     assert error.value.status_code == 403
 
 
+@pytest.mark.parametrize("documento", [None, "", "  ", "1", "1234"])
+def test_documento_corto_se_enmascara_por_completo(documento):
+    assert exportacion.enmascarar_documento(documento) == "*" * len(
+        (documento or "").strip()
+    )
+
+
+@pytest.mark.parametrize(
+    "valor", ["\tDato", "\nDato", "\rDato", "\ufeff+123", " -123", "@dato"]
+)
+def test_csv_neutraliza_prefijos_de_formula(valor):
+    assert exportacion.celda_csv(valor) == "'" + valor
+
+
+def test_csv_conserva_numeros_como_numeros():
+    assert exportacion.celda_csv(123) == 123
+
+
 def test_csv_neutraliza_enmascara_y_audita_antes_de_entregar(monkeypatch):
     eventos = []
     monkeypatch.setattr(
