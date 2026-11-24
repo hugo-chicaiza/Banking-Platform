@@ -734,7 +734,7 @@
   "paths": {
     "/api/v1/usuarios": {
       "get": {
-        "description": "Usuarios internos con búsqueda (username, nombres, apellidos, email), filtros y\npaginación. Orden: username, nombres, apellidos, email, estado o fechaCreacion\ncon ,asc o ,desc (por defecto fechaCreacion,desc).",
+        "description": "Usuarios internos con búsqueda (username, nombres, apellidos, email), filtros y\npaginación. Orden: idUsuario, username, nombres, apellidos, email, roles,\nidAgencia, estado o fechaCreacion,\ncon ,asc o ,desc (por defecto fechaCreacion,desc).",
         "operationId": "AUT05",
         "parameters": [
           {
@@ -752,6 +752,41 @@
                 }
               ],
               "title": "Q"
+            }
+          },
+          {
+            "in": "query",
+            "name": "idUsuario",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 2147483647,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idusuario"
+            }
+          },
+          {
+            "in": "query",
+            "name": "nombre",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 100,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Nombre"
             }
           },
           {
@@ -873,6 +908,23 @@
               ],
               "title": "Sort"
             }
+          },
+          {
+            "in": "query",
+            "name": "formato",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "const": "csv",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Formato"
+            }
           }
         ],
         "responses": {
@@ -881,6 +933,11 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/PageUsuario"
+                }
+              },
+              "text/csv": {
+                "schema": {
+                  "type": "string"
                 }
               }
             },
@@ -1232,7 +1289,7 @@
                 }
               }
             },
-            "description": "Unprocessable Content"
+            "description": "Unprocessable Entity"
           },
           "429": {
             "content": {

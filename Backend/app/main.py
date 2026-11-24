@@ -15,8 +15,8 @@ from app.core.config.settings import get_settings
 from app.core.security.audit import AccesoDenegadoMiddleware
 from app.modules.aprobaciones.router import router as aprobaciones_router
 from app.modules.atm.router import router as atm_router
+from app.modules.auth.router import directorio_router, router_usuarios
 from app.modules.auth.router import router as auth_router
-from app.modules.auth.router import router_usuarios
 from app.modules.boveda.router import router as boveda_router
 from app.modules.caja.router import router as caja_router
 from app.modules.catalogos.router import router as catalogos_router
@@ -26,6 +26,7 @@ from app.modules.creditos.router import router as creditos_router
 from app.modules.cuentas.router import router as cuentas_router
 from app.modules.organizacion.router import router as organizacion_router
 from app.modules.organizacion.router import router_publico as institucion_router
+from app.modules.parametros.mantenimiento import historial_auditoria_router
 from app.modules.parametros.router import router as parametros_router
 from app.modules.productos.router import router as productos_router
 from app.modules.seguridad.router import router as seguridad_router
@@ -70,6 +71,7 @@ API_V1 = "/api/v1"
 app.include_router(auth_router, prefix=API_V1)
 app.include_router(aprobaciones_router, prefix=API_V1)
 app.include_router(router_usuarios, prefix=API_V1)
+app.include_router(directorio_router, prefix=API_V1)
 app.include_router(catalogos_router, prefix=API_V1)
 app.include_router(clientes_router, prefix=API_V1)
 app.include_router(contabilidad_router, prefix=API_V1)
@@ -78,6 +80,7 @@ app.include_router(cuentas_router, prefix=API_V1)
 app.include_router(organizacion_router, prefix=API_V1)
 app.include_router(institucion_router, prefix=API_V1)
 app.include_router(parametros_router, prefix=API_V1)
+app.include_router(historial_auditoria_router, prefix=API_V1)
 app.include_router(productos_router, prefix=API_V1)
 app.include_router(seguridad_router, prefix=API_V1)
 app.include_router(tarjetas_router, prefix=API_V1)

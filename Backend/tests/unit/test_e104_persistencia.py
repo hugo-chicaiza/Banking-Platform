@@ -69,6 +69,8 @@ def test_listado_de_usuarios_parametriza_filtros_y_pagina():
         orden="username,asc",
         page=2,
         page_size=10,
+        id_usuario=2,
+        nombre="Ana_%",
     ) == ([fila], 21)
     contar, listar = conn.execute.call_args_list
     filtros = {
@@ -77,6 +79,8 @@ def test_listado_de_usuarios_parametriza_filtros_y_pagina():
         "agencia": 2,
         "rol": "AUDITOR",
         "vinculado": 1,
+        "id_usuario": 2,
+        "nombre": r"%Ana\_\%%",
     }
     assert contar.args[1] == filtros
     assert listar.args[1] == {

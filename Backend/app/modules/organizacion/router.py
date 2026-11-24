@@ -6,10 +6,10 @@ vínculo que usan todos los módulos (require_auth / UsuarioAuditoria).
 """
 
 from datetime import datetime
-from typing import Annotated, Any, TypeVar
+from typing import Annotated, Any, Literal, TypeVar
 from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, Depends, Path, Request, Response
+from fastapi import APIRouter, Depends, Path, Query, Request, Response
 from fastapi.responses import JSONResponse
 from sqlalchemy import Connection
 
@@ -18,6 +18,7 @@ from app.core.api.middleware import ip_cliente, obtener_trace_id
 from app.core.database.db import cooperativa
 from app.core.security.auth import (
     Usuario,
+    UsuarioActual,
     UsuarioAuditoria,
     require_auth,
     require_roles,
@@ -26,7 +27,7 @@ from app.core.security.operador import auditar
 from app.modules.aprobaciones import router as aprobaciones
 from app.modules.aprobaciones.contratos import SolicitudAceptada
 from app.modules.aprobaciones.registro import Objetivo
-from app.modules.organizacion import service
+from app.modules.organizacion import exportacion, service
 from app.modules.organizacion.aprobacion import CODIGO_BAJA, TIPO_OBJETIVO
 from app.modules.organizacion.schemas import (
     Agencia,
@@ -93,16 +94,62 @@ Db = Annotated[Connection, Depends(cooperativa)]
 IdAgenciaPath = Annotated[str, Path(pattern=r"^[0-9A-Z]{3}$")]
 
 
+def autorizar_listado_agencias(
+    request: Request, usuario: UsuarioActual, formato: Literal["csv"] | None = None
+) -> Usuario:
+    directorio = request.url.path.endswith("/directorio-agencias")
+    if formato == "csv" or (
+        directorio and exportacion.PERMISO_EXPORTAR in usuario.permisos
+    ):
+        exportacion.autorizar(usuario)
+    else:
+        roles = ("ADMIN", "AUDITOR") if directorio else _ROLES
+        require_roles(*roles)(usuario, request)
+    return usuario
+
+
 @router.get(
     "/organizacion/agencias",
     tags=["organizacion"],
     operation_id="AgenciaListar",
     response_model=list[Agencia],
-    dependencies=[Depends(require_roles(*_ROLES)), Depends(solo_parametros("estado"))],
+    responses=exportacion.RESPUESTA_CSV,
+    dependencies=[Depends(solo_parametros("estado", "formato", "q"))],
     openapi_extra={"x-roles": _ROLES},
 )
-def listar_agencias(conn: Db, estado: EstadoAgencia | None = None) -> list[Agencia]:
-    return service.listar_agencias(conn, estado)
+@router.get(
+    "/seguridad/directorio-agencias",
+    operation_id="OrganizacionDirectorioAgencias",
+    response_model=list[Agencia],
+    responses=exportacion.RESPUESTA_CSV,
+    dependencies=[Depends(solo_parametros("estado", "formato", "q"))],
+)
+def listar_agencias(
+    request: Request,
+    usuario: Annotated[Usuario, Depends(autorizar_listado_agencias)],
+    conn: Db,
+    estado: EstadoAgencia | None = None,
+    formato: Literal["csv"] | None = None,
+    q: Annotated[str | None, Query(max_length=100)] = None,
+) -> list[Agencia] | Response:
+    agencias = service.listar_agencias(conn, estado)
+    if q:
+        busqueda = q.strip().upper()
+        agencias = [
+            a
+            for a in agencias
+            if busqueda in a.codigo.upper() or busqueda in a.id_agencia
+        ]
+    if formato is None:
+        return agencias
+    return exportacion.responder_csv(
+        usuario,
+        ip_cliente(request.scope),
+        "agencias",
+        "Organizacion.Agencia",
+        ("idAgencia", "codigo", "tipoAgencia", "estado"),
+        ((a.id_agencia, a.codigo, a.tipo_agencia, a.estado) for a in agencias),
+    )
 
 
 @router.post(

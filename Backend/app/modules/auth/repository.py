@@ -102,6 +102,8 @@ _CONTAR = text(
            OR Apellidos LIKE :q ESCAPE '\\'
            OR Email LIKE :q ESCAPE '\\')
       AND (:estado IS NULL OR Estado = :estado)
+      AND (:id_usuario IS NULL OR UsuarioID = :id_usuario)
+      AND (:nombre IS NULL OR CONCAT(Nombres, ' ', Apellidos) LIKE :nombre ESCAPE '\\')
       AND (:agencia IS NULL OR AgenciaID = :agencia)
       AND (:rol IS NULL OR ',' + RolesWorkOS + ',' LIKE '%,' + :rol + ',%')
       AND (:vinculado IS NULL
@@ -121,16 +123,24 @@ _LISTAR = text(
            OR Apellidos LIKE :q ESCAPE '\\'
            OR Email LIKE :q ESCAPE '\\')
       AND (:estado IS NULL OR Estado = :estado)
+      AND (:id_usuario IS NULL OR UsuarioID = :id_usuario)
+      AND (:nombre IS NULL OR CONCAT(Nombres, ' ', Apellidos) LIKE :nombre ESCAPE '\\')
       AND (:agencia IS NULL OR AgenciaID = :agencia)
       AND (:rol IS NULL OR ',' + RolesWorkOS + ',' LIKE '%,' + :rol + ',%')
       AND (:vinculado IS NULL
            OR (:vinculado = 1 AND KeyUsuario IS NOT NULL)
            OR (:vinculado = 0 AND KeyUsuario IS NULL))
     ORDER BY
+        CASE WHEN :orden = 'idUsuario,asc' THEN UsuarioID END ASC,
+        CASE WHEN :orden = 'idUsuario,desc' THEN UsuarioID END DESC,
+        CASE WHEN :orden = 'idAgencia,asc' THEN AgenciaID END ASC,
+        CASE WHEN :orden = 'idAgencia,desc' THEN AgenciaID END DESC,
+        CASE WHEN :orden = 'roles,asc' THEN RolesWorkOS END ASC,
+        CASE WHEN :orden = 'roles,desc' THEN RolesWorkOS END DESC,
         CASE WHEN :orden = 'username,asc' THEN NombreUsuario END ASC,
         CASE WHEN :orden = 'username,desc' THEN NombreUsuario END DESC,
-        CASE WHEN :orden = 'nombres,asc' THEN Nombres END ASC,
-        CASE WHEN :orden = 'nombres,desc' THEN Nombres END DESC,
+        CASE WHEN :orden = 'nombres,asc' THEN CONCAT(Nombres, ' ', Apellidos) END ASC,
+        CASE WHEN :orden = 'nombres,desc' THEN CONCAT(Nombres, ' ', Apellidos) END DESC,
         CASE WHEN :orden = 'apellidos,asc' THEN Apellidos END ASC,
         CASE WHEN :orden = 'apellidos,desc' THEN Apellidos END DESC,
         CASE WHEN :orden = 'email,asc' THEN Email END ASC,
@@ -166,9 +176,13 @@ def listar_usuarios(
     orden: str,
     page: int,
     page_size: int,
+    id_usuario: int | None = None,
+    nombre: str | None = None,
 ) -> tuple[list[Fila], int]:
     filtros: dict[str, Any] = {
         "q": _patron(q),
+        "id_usuario": id_usuario,
+        "nombre": _patron(nombre),
         "estado": estado,
         "agencia": agencia_id,
         "rol": rol,
