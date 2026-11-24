@@ -3,6 +3,13 @@ SET XACT_ABORT ON;
 IF COALESCE(CONVERT(nvarchar(128),SESSION_CONTEXT(N'migration_database')),N'')<>DB_NAME()
     THROW 57503, 'Falta confirmar la base destino.', 1;
 BEGIN TRANSACTION;
+IF NOT EXISTS (SELECT 1 FROM sys.extended_properties WHERE class=0 AND name=N'E601_AutorizadosPrevios')
+BEGIN
+    DECLARE @previos bit=CASE WHEN OBJECT_ID('Cuentas.CuentaAutorizado','U') IS NOT NULL
+        OR OBJECT_ID('Clientes.ClienteRelacion','U') IS NOT NULL
+        OR OBJECT_ID('Catalogo.TipoRelacionCliente','U') IS NOT NULL THEN 1 ELSE 0 END;
+    EXEC sys.sp_addextendedproperty @name=N'E601_AutorizadosPrevios', @value=@previos;
+END;
 IF OBJECT_ID('Catalogo.TipoRelacionCliente','U') IS NULL
     CREATE TABLE Catalogo.TipoRelacionCliente (
         Codigo varchar(20) NOT NULL CONSTRAINT PK_TipoRelacionCliente PRIMARY KEY,
@@ -41,12 +48,14 @@ BEGIN
         IdClienteAutorizado int NOT NULL CONSTRAINT FK_CuentaAutorizado_Cliente REFERENCES Clientes.Cliente(IdCliente),
         Rol varchar(20) NOT NULL CONSTRAINT CK_CuentaAutorizado_Rol CHECK (Rol IN ('Tutor','RepresentanteLegal','Firmante')),
         IdClienteRelacion int NULL CONSTRAINT FK_CuentaAutorizado_Relacion REFERENCES Clientes.ClienteRelacion(IdRelacion),
-        FechaInicio date NOT NULL, FechaFin date NULL,
+        FechaInicio date NOT NULL, FechaFin date NULL, CreadoPor int NOT NULL,
         CONSTRAINT CK_CuentaAutorizado_Fechas CHECK (FechaFin IS NULL OR FechaFin>=FechaInicio)
     );
     CREATE UNIQUE INDEX UX_CuentaAutorizado_Vigente
         ON Cuentas.CuentaAutorizado(IdCuenta,IdClienteAutorizado,Rol) WHERE FechaFin IS NULL;
 END
+IF COL_LENGTH('Cuentas.CuentaAutorizado','CreadoPor') IS NULL
+    ALTER TABLE Cuentas.CuentaAutorizado ADD CreadoPor int NULL;
 INSERT Parametros.Parametro(Clave,Modulo,Descripcion,TipoDato,Unidad,ValorMinimo,EsSensible)
 SELECT 'CLI_EDAD_MAYORIA','Clientes',N'Edad de mayoría','Entero','años',1,1
 WHERE NOT EXISTS(SELECT 1 FROM Parametros.Parametro WITH (UPDLOCK,HOLDLOCK) WHERE Clave='CLI_EDAD_MAYORIA');

@@ -30,7 +30,11 @@ def _titular(conn: Connection, cuenta: int, agencia: str) -> int:
 
 
 def agregar(
-    conn: Connection, cuenta: int, agencia: str, datos: AutorizadoCuentaCreate
+    conn: Connection,
+    cuenta: int,
+    agencia: str,
+    datos: AutorizadoCuentaCreate,
+    actor: int,
 ) -> AutorizadoCuenta:
     fecha = hoy()
     with conn.begin():
@@ -86,15 +90,16 @@ def agregar(
                 SET NOCOUNT ON;
                 DECLARE @nueva TABLE (Id int);
                 INSERT Cuentas.CuentaAutorizado
-                    (IdCuenta,IdClienteAutorizado,Rol,IdClienteRelacion,FechaInicio,FechaFin)
+                    (IdCuenta,IdClienteAutorizado,Rol,IdClienteRelacion,FechaInicio,FechaFin,CreadoPor)
                 OUTPUT inserted.IdCuentaAutorizado INTO @nueva
-                VALUES (:cuenta,:cliente,:rol,:relacion,:fecha,:fin);
+                VALUES (:cuenta,:cliente,:rol,:relacion,:fecha,:fin,:actor);
                 SELECT Id FROM @nueva;
             """),
             {
                 **parametros,
                 "relacion": relacion["IdRelacion"] if relacion else None,
                 "fin": fin,
+                "actor": actor,
             },
         ).scalar_one()
         return AutorizadoCuenta(

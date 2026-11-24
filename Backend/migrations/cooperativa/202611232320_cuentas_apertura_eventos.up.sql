@@ -4,6 +4,14 @@ IF COALESCE(CONVERT(nvarchar(128), SESSION_CONTEXT(N'migration_database')), N'')
     THROW 57611, 'Falta confirmar la base destino de E6-01.', 1;
 
 BEGIN TRANSACTION;
+IF NOT EXISTS (SELECT 1 FROM sys.extended_properties WHERE class=0 AND name=N'E601_AperturaPrevia')
+BEGIN
+    DECLARE @previa bit=CASE WHEN OBJECT_ID('Cuentas.CuentaEvento','U') IS NOT NULL
+        OR COL_LENGTH('Cuentas.Cuenta','FechaActivacion') IS NOT NULL
+        OR COL_LENGTH('Cuentas.Cuenta','MontoAperturaAplicado') IS NOT NULL
+        OR COL_LENGTH('Cuentas.Cuenta','Estado')=18 THEN 1 ELSE 0 END;
+    EXEC sys.sp_addextendedproperty @name=N'E601_AperturaPrevia', @value=@previa;
+END;
 IF COL_LENGTH('Cuentas.Cuenta', 'Estado') = 10
 BEGIN
     ALTER TABLE Cuentas.Cuenta DROP CONSTRAINT CK_Cuenta_Estado, CK_Cuenta_Cierre;

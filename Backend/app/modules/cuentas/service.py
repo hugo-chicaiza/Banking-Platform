@@ -331,8 +331,8 @@ def abrir_cuenta_pendiente(
             conn.execute(
                 text("""
                     INSERT Cuentas.CuentaAutorizado
-                        (IdCuenta, IdClienteAutorizado, Rol, IdClienteRelacion, FechaInicio, FechaFin)
-                    VALUES (:cuenta,:cliente,:rol,:relacion,:inicio,:fin);
+                        (IdCuenta, IdClienteAutorizado, Rol, IdClienteRelacion, FechaInicio, FechaFin, CreadoPor)
+                    VALUES (:cuenta,:cliente,:rol,:relacion,:inicio,:fin,:actor);
                 """),
                 {
                     "cuenta": cuenta_id,
@@ -341,6 +341,7 @@ def abrir_cuenta_pendiente(
                     "relacion": relacion["IdRelacion"],
                     "inicio": fecha,
                     "fin": relacion["FechaFin"],
+                    "actor": actor,
                 },
             )
         cuenta = obtener_cuenta(conn, cuenta_id)

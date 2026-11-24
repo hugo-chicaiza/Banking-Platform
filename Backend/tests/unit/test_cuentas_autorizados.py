@@ -31,6 +31,7 @@ def test_alta_rechaza_cuenta_de_otra_agencia(conn):
             AutorizadoCuentaCreate.model_validate(
                 {"idClienteAutorizado": 9, "rol": "Firmante"}
             ),
+            12,
         )
     assert exc.value.status_code == 404
     assert conn.execute.call_count == 1
@@ -63,11 +64,13 @@ def test_alta_asocia_relacion_vigente(conn, monkeypatch):
         AutorizadoCuentaCreate.model_validate(
             {"idClienteAutorizado": 9, "rol": "Tutor"}
         ),
+        12,
     )
     assert resultado.id_cuenta_autorizado == 55
     assert resultado.vigente
     assert resultado.fecha_fin == date(2027, 1, 1)
     assert conn.execute.call_args.args[1]["relacion"] == 11
+    assert conn.execute.call_args.args[1]["actor"] == 12
 
 
 @pytest.mark.parametrize("revocado", [None, datetime(2026, 11, 24, 14)])

@@ -126,12 +126,13 @@ def agregar_autorizado(
     idCuenta: Annotated[int, Path(gt=0, le=2147483647)],
     datos: AutorizadoCuentaCreate,
     usuario: AperturadorCuenta,
+    actor: UsuarioAuditoria,
     conn: Db,
 ) -> AutorizadoCuenta:
     agencia = usuario.agencia()
     if agencia is None:
         raise problema(403, "AGENCIA_REQUERIDA", "Seleccione una agencia activa.")
-    return autorizados.agregar(conn, idCuenta, agencia, datos)
+    return autorizados.agregar(conn, idCuenta, agencia, datos, actor)
 
 
 @_apertura_router.post(

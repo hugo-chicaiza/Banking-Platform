@@ -4,6 +4,9 @@ IF COALESCE(CONVERT(nvarchar(128), SESSION_CONTEXT(N'migration_database')), N'')
     THROW 57611, 'Falta confirmar la base destino de E6-01.', 1;
 
 BEGIN TRANSACTION;
+IF NOT EXISTS (SELECT 1 FROM sys.extended_properties WHERE class=0 AND name=N'E601_AperturaPrevia'
+    AND CONVERT(bit,value)=0)
+    THROW 57611, 'No se puede retirar la estructura previa de apertura. Usar respaldo.', 1;
 IF EXISTS(SELECT 1 FROM Cuentas.Cuenta WITH (TABLOCKX,HOLDLOCK) WHERE Estado IN ('PendienteDeposito','Anulada'))
     THROW 57611, 'Existen cuentas en los estados nuevos.', 1;
 IF OBJECT_ID('Cuentas.CuentaEvento','U') IS NOT NULL
@@ -24,4 +27,5 @@ BEGIN
     ALTER TABLE Cuentas.Cuenta WITH CHECK ADD CONSTRAINT CK_Cuenta_Cierre
         CHECK (Estado <> 'Cerrada' OR (Saldo=0 AND SaldoRetenido=0 AND FechaCierre IS NOT NULL));
 END
+EXEC sys.sp_dropextendedproperty @name=N'E601_AperturaPrevia';
 COMMIT TRANSACTION;
