@@ -14,6 +14,40 @@ from sqlalchemy import Connection, RowMapping, bindparam, text
 Fila = RowMapping
 
 
+def sincronizacion_pendiente(
+    conn: Connection, usuario: int, operacion: str | None = None
+) -> bool:
+    return (
+        conn.scalar(
+            text("""
+            SELECT TOP (1) 1 FROM Seguridad.SincronizacionProveedor
+            WHERE UsuarioID=:id AND Estado='Pendiente'
+              AND (:op IS NULL OR Operacion=:op)
+        """),
+            {"id": usuario, "op": operacion},
+        )
+        == 1
+    )
+
+
+def cambio_roles_en_recuperacion(
+    conn: Connection, usuario: int, organizacion: str
+) -> bool:
+    return (
+        conn.scalar(
+            text("""
+            SELECT TOP (1) 1
+            FROM Seguridad.SolicitudAprobacion
+            WHERE IdOrganizacion = :org AND CodigoTransaccion = 'SEG-USUARIO-ROLES'
+              AND TipoObjetivo = 'UsuarioRoles' AND IdObjetivo = :id
+              AND Estado = 'Aprobada'
+        """),
+            {"org": organizacion, "id": str(usuario)},
+        )
+        == 1
+    )
+
+
 def bloquear_cambios_administrativos(conn: Connection) -> bool:
     resultado = conn.scalar(
         text("""
@@ -51,6 +85,22 @@ def vincular(conn: Connection, id_workos: str, email: str) -> bool:
         {"id_workos": id_workos, "email": email},
     )
     return resultado.rowcount == 1
+
+
+def invitacion_en_conciliacion(conn: Connection, email: str) -> bool:
+    return (
+        conn.scalar(
+            text("""
+            SELECT TOP (1) 1
+            FROM Seguridad.SincronizacionProveedor s
+            JOIN Organizacion.Usuarios u WITH (UPDLOCK, HOLDLOCK) ON u.UsuarioID=s.UsuarioID
+            WHERE s.Operacion='Invitar' AND s.Estado='Pendiente'
+              AND (u.Email=:correo OR s.CorreoAlterno=:correo)
+        """),
+            {"correo": email},
+        )
+        == 1
+    )
 
 
 def vinculado_a_otro(conn: Connection, id_workos: str, id_usuario: int) -> bool:

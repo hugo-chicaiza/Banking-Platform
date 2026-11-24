@@ -5,6 +5,37 @@ from typing import Any
 from sqlalchemy import Connection, text
 
 
+def principal_asignada(conn: Connection, usuario: int) -> str | None:
+    """Agencia principal explícita y activa, sin recurrir a datos anteriores."""
+    return conn.scalar(
+        text("""
+            SELECT RTRIM(a.IdAgencia)
+            FROM Organizacion.UsuarioAgencia a
+            JOIN Organizacion.Usuarios u ON u.UsuarioID = a.UsuarioID
+            WHERE a.UsuarioID = :id AND a.Activo = 1
+              AND TRY_CONVERT(int, a.IdAgencia) = u.AgenciaID
+        """),
+        {"id": usuario},
+    )
+
+
+def tiene_cajeros_vigentes(conn: Connection, agencia: str) -> bool:
+    return (
+        conn.scalar(
+            text("""
+            SELECT TOP (1) 1
+            FROM Organizacion.UsuarioAgencia a
+            JOIN Organizacion.Usuarios u ON u.UsuarioID = a.UsuarioID
+            WHERE a.IdAgencia = :agencia AND a.Activo = 1 AND u.Estado = 'Activo'
+              AND TRY_CONVERT(int, a.IdAgencia) = u.AgenciaID
+              AND ',' + COALESCE(u.RolesWorkOS, '') + ',' LIKE '%,CAJERO,%'
+        """),
+            {"agencia": agencia},
+        )
+        == 1
+    )
+
+
 def asignaciones(conn: Connection, usuario: int) -> list[str]:
     return list(
         conn.scalars(

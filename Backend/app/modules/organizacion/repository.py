@@ -8,6 +8,25 @@ from typing import Any
 
 from sqlalchemy import Connection, column, insert, select, table, text, update
 
+from app.core.api.errors import problema
+
+
+def bloquear_corte_asignaciones(conn: Connection) -> None:
+    """Serializa las asignaciones y bajas durante el corte, sin esperar con otros locks."""
+    resultado = conn.scalar(
+        text("""
+        DECLARE @r int;
+        EXEC @r=sys.sp_getapplock @Resource='E104_CORTE_ASIGNACIONES',
+             @LockMode='Exclusive', @LockOwner='Transaction', @LockTimeout=0;
+        SELECT @r;
+    """)
+    )
+    if resultado is None or resultado < 0:
+        raise problema(
+            409, "ASIGNACIONES_CAJA_OCUPADAS", "Hay un cambio concurrente de agencias."
+        )
+
+
 _COLUMNAS_ENTIDAD = {
     "id_entidad": "IdEntidad",
     "ruc": "RUC",
@@ -265,12 +284,15 @@ DEPENDENCIAS_ACTIVAS: dict[str, str] = {
 }
 
 
-def dependencias_activas(conn: Connection, id_agencia: str) -> list[str]:
+def dependencias_activas(
+    conn: Connection, id_agencia: str, *, incluir_cajeros_anteriores: bool = True
+) -> list[str]:
     """Nombres (en el orden de DEPENDENCIAS_ACTIVAS) de lo que sigue activo."""
     return [
         nombre
         for nombre, sql in DEPENDENCIAS_ACTIVAS.items()
-        if conn.execute(text(sql), {"id": id_agencia}).first() is not None
+        if (incluir_cajeros_anteriores or nombre != "cajeros asignados vigentes")
+        and conn.execute(text(sql), {"id": id_agencia}).first() is not None
     ]
 
 

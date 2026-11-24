@@ -14,7 +14,7 @@ from sqlalchemy import Connection
 
 from app.core.api.errors import RESPUESTAS_ERROR, ProblemDetailsRoute, solo_parametros
 from app.core.api.middleware import ip_cliente
-from app.core.database.db import cooperativa
+from app.core.database.db import cooperativa, seguridad
 from app.core.security.auth import Usuario, UsuarioActual, require_auth, require_roles
 from app.core.security.operador import IdInterno
 from app.modules.caja import service
@@ -337,10 +337,12 @@ def abrir_jornada(
     id_interno: IdInterno,
     datos: JornadaOpen,
     conn: Conexion,
+    conn_seguridad: Annotated[Connection, Depends(seguridad)],
 ) -> Jornada:
     """Abre una jornada para el cajero autenticado."""
     return service.abrir_jornada(
         conn,
+        conn_seguridad,
         usuario,
         id_interno,
         datos,
