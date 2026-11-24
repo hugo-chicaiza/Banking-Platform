@@ -879,8 +879,9 @@ class _RiesgoConn(_FakeConn):
     ],
 )
 def test_cli13_lee_vigencia_y_estado_posteriores_al_trigger(
-    estado_inicial: str, resultado: str, estado_final: str
+    estado_inicial: str, resultado: str, estado_final: str, monkeypatch
 ):
+    monkeypatch.setattr(service, "_vigencia_riesgo", lambda *_: 36)
     fila = _riesgo_row(resultado_evaluacion=resultado, estado_cliente=estado_final)
     db = _RiesgoConn(
         [
@@ -909,6 +910,7 @@ def test_cli13_lee_vigencia_y_estado_posteriores_al_trigger(
     assert ":observaciones, 0" in insert_sql
     assert insert_params["evaluador"] == 1
     assert insert_params["id_cliente"] == 10
+    assert insert_params["meses_vigencia"] == 36
     assert db.consultas[2][1]["id_evaluacion"] == 20
     audit_sql, audit_params = db.consultas[3]
     assert "INSERT INTO Clientes.ClientesHis" in audit_sql
@@ -917,7 +919,8 @@ def test_cli13_lee_vigencia_y_estado_posteriores_al_trigger(
     assert audit_params["modificado_por"] == 1
 
 
-def test_cli13_antecedente_activo_y_parametros_ligados():
+def test_cli13_antecedente_activo_y_parametros_ligados(monkeypatch):
+    monkeypatch.setattr(service, "_vigencia_riesgo", lambda *_: 12)
     observaciones = "Revisión 'PEP'; -- texto sin interpolar"
     payload = _payload_riesgo_create(
         nivel_riesgo_laft="Alto",
@@ -1012,7 +1015,9 @@ def test_cli13_cliente_invalido(cliente, status, code):
 
 
 @pytest.mark.parametrize("etapa", ["insertar", "leer", "auditar", "commit"])
-def test_cli13_revierte_transaccion_ante_fallos(etapa):
+def test_cli13_revierte_transaccion_ante_fallos(etapa, monkeypatch):
+    monkeypatch.setattr(service, "_vigencia_riesgo", lambda *_: 36)
+
     class _FallaConn(_RiesgoConn):
         def execute(self, statement: Any, params: dict[str, Any]) -> MagicMock:
             if len(self.consultas) == {"insertar": 1, "leer": 2, "auditar": 3}.get(
@@ -1042,7 +1047,8 @@ def test_cli13_revierte_transaccion_ante_fallos(etapa):
 
 
 @pytest.mark.parametrize("respuestas", [[[]], [[{"id_evaluacion": 20}], []]])
-def test_cli13_no_confirma_si_no_se_recupera_la_evaluacion(respuestas):
+def test_cli13_no_confirma_si_no_se_recupera_la_evaluacion(respuestas, monkeypatch):
+    monkeypatch.setattr(service, "_vigencia_riesgo", lambda *_: 36)
     db = _RiesgoConn([[{"id_cliente": 10, "estado": "Pendiente"}], *respuestas])
     with pytest.raises(RuntimeError, match="evaluación"):
         service.registrar_evaluacion_riesgo(

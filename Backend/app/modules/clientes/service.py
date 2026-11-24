@@ -950,6 +950,18 @@ def eliminar_direccion(
         raise
 
 
+def _vigencia_riesgo(conn: Connection, nivel: str) -> int:
+    from app.modules.parametros import general
+    from app.modules.parametros.service import hoy
+
+    meses = general.valor(conn, f"CLI_RIESGO_VIGENCIA_{nivel.upper()}_MESES", hoy())
+    if type(meses) is not int or meses < 1:
+        raise _problema(
+            503, "PARAMETRO_INVALIDO", "La vigencia de riesgo no está configurada."
+        )
+    return meses
+
+
 def registrar_evaluacion_riesgo(
     conn: Connection,
     id_cliente: int,
@@ -981,7 +993,10 @@ def registrar_evaluacion_riesgo(
         row = repository.insertar_evaluacion_riesgo(
             conn,
             id_cliente,
-            payload.model_dump(),
+            {
+                **payload.model_dump(),
+                "meses_vigencia": _vigencia_riesgo(conn, payload.nivel_riesgo_laft),
+            },
             evaluador=evaluador,
             direccion_ip=direccion_ip,
         )

@@ -508,7 +508,8 @@ def bloquear_cliente(conn: Connection, id_cliente: int) -> dict[str, Any] | None
     return _one(
         conn,
         """
-        SELECT IdCliente AS id_cliente, Estado AS estado
+        SELECT IdCliente AS id_cliente, Estado AS estado, TipoCliente AS tipo_cliente,
+               FechaNacimiento AS fecha_nacimiento
         FROM Clientes.Cliente WITH (UPDLOCK, HOLDLOCK)
         WHERE IdCliente = :id_cliente
     """,
@@ -1067,13 +1068,13 @@ def insertar_evaluacion_riesgo(
         INSERT INTO Clientes.RiesgoCliente (
             IdCliente, NivelRiesgoLAFT, EsPEP, ResultadoEvaluacion,
             FechaEvaluacion, Evaluador, TieneAntecedentes, IdTipoAntecedente,
-            Observaciones, EsVigente
+            Observaciones, EsVigente, VigenteHasta
         )
         OUTPUT INSERTED.IdEvaluacion INTO @Evaluacion
         VALUES (
             :id_cliente, :nivel_riesgo_laft, :es_pep, :resultado_evaluacion,
             :fecha_evaluacion, :evaluador, :tiene_antecedentes, :id_tipo_antecedente,
-            :observaciones, 0
+            :observaciones, 0, DATEADD(month,:meses_vigencia,CONVERT(date,:fecha_evaluacion))
         );
         SELECT IdEvaluacion AS id_evaluacion FROM @Evaluacion;
         """,

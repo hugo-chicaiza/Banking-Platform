@@ -134,7 +134,10 @@ FUNCIONES = (
         "Consultar evaluaciones de riesgo",
         "Clientes",
         AUDITORIA + ("ASESOR",),
-        (("GET", C + "/{idCliente}/evaluaciones-riesgo"),),
+        (
+            ("GET", C + "/{idCliente}/evaluaciones-riesgo"),
+            ("GET", C + "/{idCliente}/habilitacion"),
+        ),
         "/clientes-busqueda",
     ),
     _f(
@@ -154,7 +157,13 @@ FUNCIONES = (
         "Abrir cuenta",
         "Cuentas",
         REGISTRO,
-        (("POST", Q),),
+        (
+            ("POST", Q),
+            ("GET", Q + "/{idCuenta}/formulario-apertura"),
+            ("POST", Q + "/{idCuenta}/anulacion"),
+            ("POST", Q + "/{idCuenta}/autorizados"),
+            ("POST", Q + "/{idCuenta}/autorizados/{idAut}/fin"),
+        ),
         "/cuentas/abrir",
     ),
     _f(
@@ -162,7 +171,12 @@ FUNCIONES = (
         "Consultar cuentas",
         "Cuentas",
         ATENCION,
-        (("GET", Q), ("GET", Q + "/{idCuenta}")),
+        (
+            ("GET", Q),
+            ("GET", Q + "/{idCuenta}"),
+            ("GET", Q + "/{idCuenta}/autorizados"),
+            ("GET", Q + "/{idCuenta}/eventos"),
+        ),
         "/cuentas",
     ),
     _f(

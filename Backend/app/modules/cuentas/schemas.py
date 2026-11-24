@@ -14,20 +14,9 @@ EstadoCuenta = Literal[
     "INACTIVA",
     "BLOQUEADA",
     "CERRADA",
+    "PendienteDeposito",
+    "Anulada",
 ]
-
-# CTA-01 · Creación de cuenta
-
-
-class CuentaCreate(CamelModel):
-    """Body de POST /api/v1/cuentas (CTA-01)."""
-
-    id_cliente: int
-    id_sub_producto: int
-    id_agencia: str = Field(min_length=3, max_length=3)
-    monto_inicial: Money = Field(ge=0)
-    id_moneda: MonedaUsd = ID_MONEDA_USD
-
 
 # Respuesta de cuenta
 
@@ -45,6 +34,46 @@ class Cuenta(CamelModel):
     saldo: Money
     saldo_retenido: Money
     estado: EstadoCuenta
+
+
+class CuentaPendienteCreate(CamelModel):
+    model_config = ConfigDict(extra="forbid", validate_by_name=False)
+    id_cliente: int = Field(gt=0, le=2147483647)
+    id_sub_producto: int = Field(gt=0, le=2147483647)
+
+
+class AnularApertura(CamelModel):
+    model_config = ConfigDict(extra="forbid")
+    motivo: Annotated[
+        str,
+        StringConstraints(strip_whitespace=True, min_length=1, max_length=300),
+    ]
+
+
+class AutorizadoCuenta(CamelModel):
+    id_cuenta_autorizado: int
+    id_cliente_autorizado: int
+    rol: Literal["Tutor", "RepresentanteLegal", "Firmante"]
+    fecha_inicio: date
+    fecha_fin: date | None
+    vigente: bool
+
+
+class AutorizadoCuentaCreate(CamelModel):
+    model_config = ConfigDict(extra="forbid")
+    id_cliente_autorizado: int = Field(gt=0, le=2147483647)
+    rol: Literal["Tutor", "RepresentanteLegal", "Firmante"]
+
+
+class EventoCuenta(CamelModel):
+    id_cuenta_evento: int
+    tipo_evento: str
+    estado_anterior: str | None
+    estado_actual: str
+    detalle: str
+    realizado_por: int
+    id_agencia: str
+    fecha_evento: AwareDatetime
 
 
 class CuentaResumen(CamelModel):
@@ -100,7 +129,7 @@ class PageMovimientoCuenta(CamelModel):
 class CuentaEstadoUpdate(CamelModel):
     model_config = ConfigDict(extra="forbid", validate_by_name=False)
 
-    estado: EstadoCuenta
+    estado: Literal["ACTIVA", "INACTIVA", "BLOQUEADA", "CERRADA"]
     # Auditoria.Descripcion tiene 500 caracteres; se reserva espacio para estados y traceId.
     motivo: Annotated[
         str,
