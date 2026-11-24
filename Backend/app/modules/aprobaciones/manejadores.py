@@ -12,6 +12,7 @@ from app.modules.contabilidad.cuentas_producto import operacion as operacion_map
 from app.modules.organizacion.aprobacion import OPERACION_BAJA
 from app.modules.parametros import general
 from app.modules.parametros.aprobacion_comision import OPERACION_TARIFA
+from app.modules.productos.estado_aprobacion import operaciones as operaciones_estado
 from app.modules.productos.numeracion_aprobacion import (
     operacion as operacion_numeracion,
 )
@@ -130,4 +131,6 @@ def registro_inicial() -> Registro:
     registro.agregar(operacion_numeracion())
     registro.agregar(OPERACION_PLANTILLA)
     registro.agregar(operacion_mapeo())
+    for operacion in operaciones_estado():
+        registro.agregar(operacion)
     return registro

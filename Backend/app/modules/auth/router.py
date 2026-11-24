@@ -16,7 +16,7 @@ vuelve a /login?error=SESION_ABIERTA y la abierta sigue.
 AUT-05..09 · Usuarios internos (router_usuarios, /usuarios): solo ADMIN.
 """
 
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Cookie, Depends, Path, Query, Request, Response
 from fastapi.responses import RedirectResponse
@@ -29,11 +29,14 @@ from app.core.security.auth import (
     COOKIE_SESION,
     Rol,
     Usuario,
+    UsuarioActual,
     UsuarioAuditoria,
     borrar_cookie_sesion,
+    codigo_agencia,
     guardar_cookie_sesion,
     motivo_rechazo,
     no_autenticado,
+    normalizar_roles,
     require_auth,
     require_roles,
     verificar_origen,
@@ -41,7 +44,7 @@ from app.core.security.auth import (
 from app.core.security.origen import resolver_origen_front
 from app.modules.auth import agencias as multiagencia
 from app.modules.auth import agencias_repository as agencias_repo
-from app.modules.auth import service
+from app.modules.auth import repository, service
 from app.modules.auth.agencias_schemas import (
     AsignacionesEntrada,
     AsignacionesUsuario,
@@ -61,6 +64,7 @@ from app.modules.auth.schemas import (
     UsuarioSesion,
     UsuarioUpdate,
 )
+from app.modules.organizacion import exportacion
 
 COOKIE_STATE = "__Host-oauth_state"
 _DURACION_STATE = 10 * 60  # tiempo para completar el login en el Hosted UI
@@ -210,9 +214,44 @@ router_usuarios = APIRouter(
 )
 
 
-@router_usuarios.get("", response_model=PageUsuario, operation_id="AUT05")
+directorio_router = APIRouter(
+    prefix="/seguridad",
+    tags=["seguridad"],
+    route_class=ProblemDetailsRoute,
+    responses=RESPUESTAS_ERROR,
+    dependencies=[Depends(require_auth), Depends(_sin_cache)],
+)
+
+
+def autorizar_listado_usuarios(
+    request: Request, usuario: UsuarioActual, formato: Literal["csv"] | None = None
+) -> Usuario:
+    directorio = request.url.path.endswith("/directorio-usuarios")
+    if formato == "csv" or (
+        directorio and exportacion.PERMISO_EXPORTAR in usuario.permisos
+    ):
+        exportacion.autorizar(usuario)
+    else:
+        roles = ("ADMIN", "AUDITOR") if directorio else ("ADMIN",)
+        require_roles(*roles)(usuario, request)
+    return usuario
+
+
+@directorio_router.get(
+    "/directorio-usuarios",
+    response_model=PageUsuario,
+    operation_id="OrganizacionDirectorioUsuarios",
+    responses=exportacion.RESPUESTA_CSV,
+)
+@router_usuarios.get(
+    "",
+    response_model=PageUsuario,
+    operation_id="AUT05",
+    responses=exportacion.RESPUESTA_CSV,
+)
 def listar_usuarios(
-    _admin: Admin,
+    request: Request,
+    usuario: Annotated[Usuario, Depends(autorizar_listado_usuarios)],
     _parametros: Annotated[
         None,
         Depends(
@@ -220,16 +259,23 @@ def listar_usuarios(
                 "q",
                 "estado",
                 "idAgencia",
+                "idUsuario",
+                "nombre",
                 "rol",
                 "vinculado",
                 "page",
                 "pageSize",
                 "sort",
+                "formato",
             )
         ),
     ],
     conn: ConexionSeguridad,
     q: Annotated[str | None, Query(max_length=100)] = None,
+    filtro_id_usuario: Annotated[
+        int | None, Query(alias="idUsuario", ge=1, le=2147483647)
+    ] = None,
+    nombre: Annotated[str | None, Query(max_length=100)] = None,
     estado: EstadoUsuario | None = None,
     id_agencia: Annotated[
         str | None, Query(alias="idAgencia", pattern=r"^\d{3}$")
@@ -239,11 +285,58 @@ def listar_usuarios(
     page: Annotated[int, Query(ge=1, le=1_000_000)] = 1,
     page_size: Annotated[int, Query(alias="pageSize", ge=1, le=100)] = 20,
     sort: Annotated[str | None, Query(max_length=40)] = None,
-) -> PageUsuario:
+    formato: Literal["csv"] | None = None,
+) -> PageUsuario | Response:
     """Usuarios internos con búsqueda (username, nombres, apellidos, email), filtros y
-    paginación. Orden: username, nombres, apellidos, email, estado o fechaCreacion
+    paginación. Orden: idUsuario, username, nombres, apellidos, email, roles,
+    idAgencia, estado o fechaCreacion,
     con ,asc o ,desc (por defecto fechaCreacion,desc).
     """
+    if formato == "csv":
+        filas, _ = repository.listar_usuarios(
+            conn,
+            q=q.strip() if q else None,
+            estado=estado,
+            agencia_id=int(id_agencia) if id_agencia else None,
+            rol=rol,
+            vinculado=vinculado,
+            orden=service.orden_listado(sort),
+            page=page,
+            page_size=page_size,
+            id_usuario=filtro_id_usuario,
+            nombre=nombre.strip() if nombre else None,
+        )
+        return exportacion.responder_csv(
+            usuario,
+            ip_cliente(request.scope),
+            "usuarios",
+            "Organizacion.Usuarios",
+            (
+                "idUsuario",
+                "usuario",
+                "nombres",
+                "apellidos",
+                "documento",
+                "estado",
+                "roles",
+                "idAgencia",
+            ),
+            (
+                (
+                    f["UsuarioID"],
+                    f["NombreUsuario"],
+                    f["Nombres"],
+                    f["Apellidos"],
+                    exportacion.enmascarar_documento(f["Cedula"]),
+                    f["Estado"],
+                    ",".join(
+                        normalizar_roles((f["RolesWorkOS"] or "").split(","), None)
+                    ),
+                    codigo_agencia(f["AgenciaID"]),
+                )
+                for f in filas
+            ),
+        )
     return service.listar_usuarios(
         conn,
         q=q,
@@ -254,6 +347,8 @@ def listar_usuarios(
         page=page,
         page_size=page_size,
         sort=sort,
+        id_usuario=filtro_id_usuario,
+        nombre=nombre,
     )
 
 

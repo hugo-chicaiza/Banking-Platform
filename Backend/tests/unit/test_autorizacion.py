@@ -347,6 +347,10 @@ ROLES_POR_RUTA: dict[tuple[str, str], tuple[str, ...]] = {
     # Agencias
     ("POST", "/api/v1/agencias"): ("ADMIN",),
     ("GET", "/api/v1/organizacion/agencias"): ("ADMIN",),
+    ("GET", "/api/v1/seguridad/directorio-agencias"): ("ADMIN", "AUDITOR"),
+    ("GET", "/api/v1/seguridad/directorio-usuarios"): ("ADMIN", "AUDITOR"),
+    ("GET", "/api/v1/seguridad/historial-parametros"): AUTH,
+    ("GET", "/api/v1/seguridad/historial-parametros/{clave}"): AUTH,
     ("POST", "/api/v1/organizacion/agencias"): ("ADMIN",),
     ("GET", "/api/v1/organizacion/agencias/{id_agencia}"): ("ADMIN",),
     ("PATCH", "/api/v1/organizacion/agencias/{id_agencia}"): ("ADMIN",),
@@ -371,6 +375,13 @@ ROLES_POR_RUTA: dict[tuple[str, str], tuple[str, ...]] = {
     ("POST", "/api/v1/productos/subproductos/{id_sub}/numeracion/ejemplo"): ("ADMIN",),
     ("GET", "/api/v1/productos/subproductos/{id_sub}/vigencias"): CONSULTA_PRODUCTOS,
     ("GET", "/api/v1/productos/subproductos/{id_sub}/activacion"): CONSULTA_PRODUCTOS,
+    ("GET", "/api/v1/productos/{id_producto}/historial"): CONSULTA_PRODUCTOS,
+    (
+        "GET",
+        "/api/v1/productos/subproductos/{id_sub_producto}/historial",
+    ): CONSULTA_PRODUCTOS,
+    ("POST", "/api/v1/productos/{id_producto}/estado"): ("ADMIN",),
+    ("POST", "/api/v1/productos/subproductos/{id_sub_producto}/estado"): ("ADMIN",),
     ("GET", "/api/v1/productos/subproductos/{id_sub}/condiciones"): CONSULTA_PRODUCTOS,
     ("POST", "/api/v1/productos/subproductos/{id_sub}/condiciones"): ("ADMIN",),
     ("DELETE", "/api/v1/productos/subproductos/{id_sub}/condiciones/{id_registro}"): (
@@ -650,6 +661,7 @@ def test_roles_de_la_tarea_pasan_el_control(client, ruta, monkeypatch):
             "/api/v1/aprobaciones",
             "/api/v1/productos",
             "/api/v1/contabilidad/cuentas-producto",
+            "/api/v1/seguridad/historial-parametros",
         )
     ) or ruta[1] in {
         "/api/v1/parametros",

@@ -807,6 +807,40 @@
               ],
               "title": "Estado"
             }
+          },
+          {
+            "in": "query",
+            "name": "formato",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "const": "csv",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Formato"
+            }
+          },
+          {
+            "in": "query",
+            "name": "q",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 100,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Q"
+            }
           }
         ],
         "responses": {
@@ -819,6 +853,11 @@
                   },
                   "title": "Response Agencialistar",
                   "type": "array"
+                }
+              },
+              "text/csv": {
+                "schema": {
+                  "type": "string"
                 }
               }
             },
@@ -1170,7 +1209,7 @@
                 }
               }
             },
-            "description": "Unprocessable Content"
+            "description": "Unprocessable Entity"
           },
           "429": {
             "content": {

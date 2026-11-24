@@ -464,6 +464,9 @@ _ORDENES = frozenset(
         "email",
         "estado",
         "fechaCreacion",
+        "idUsuario",
+        "idAgencia",
+        "roles",
     )
     for direccion in ("asc", "desc")
 )
@@ -755,6 +758,13 @@ def _estado_invitacion(email: str) -> EstadoInvitacion | None:
 # --- AUT-05 ------------------------------------------------------------------------
 
 
+def orden_listado(sort: str | None) -> str:
+    orden = sort or _ORDEN_POR_DEFECTO
+    if orden not in _ORDENES:
+        raise problema(400, "SORT_INVALIDO", "El ordenamiento solicitado no es válido.")
+    return orden
+
+
 def listar_usuarios(
     conn: Connection,
     *,
@@ -766,10 +776,9 @@ def listar_usuarios(
     page: int,
     page_size: int,
     sort: str | None,
+    id_usuario: int | None = None,
+    nombre: str | None = None,
 ) -> PageUsuario:
-    orden = sort or _ORDEN_POR_DEFECTO
-    if orden not in _ORDENES:
-        raise problema(400, "SORT_INVALIDO", "El ordenamiento solicitado no es válido.")
     filas, total = repository.listar_usuarios(
         conn,
         q=q.strip() if q else None,
@@ -777,9 +786,11 @@ def listar_usuarios(
         agencia_id=int(id_agencia) if id_agencia else None,
         rol=rol,
         vinculado=vinculado,
-        orden=orden,
+        orden=orden_listado(sort),
         page=page,
         page_size=page_size,
+        id_usuario=id_usuario,
+        nombre=nombre.strip() if nombre else None,
     )
     return PageUsuario(
         items=[_resumen(f) for f in filas], page=page, page_size=page_size, total=total

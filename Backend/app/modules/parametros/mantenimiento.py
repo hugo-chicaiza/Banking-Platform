@@ -2,7 +2,7 @@
 
 import json
 from datetime import UTC, date, timedelta
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, Path, Query, Request, Response
 from pydantic import ConfigDict, Field, field_validator
@@ -14,6 +14,7 @@ from app.core.api.errors import (
     problema,
     solo_parametros,
 )
+from app.core.api.middleware import ip_cliente
 from app.core.api.schemas import CamelModel
 from app.core.database.db import cooperativa
 from app.core.security.auth import UsuarioActual, require_auth
@@ -24,6 +25,7 @@ from app.modules.aprobaciones.contratos import SolicitudAceptada
 from app.modules.aprobaciones.identidad import Actor
 from app.modules.aprobaciones.motores import motor
 from app.modules.aprobaciones.registro import Objetivo
+from app.modules.organizacion import exportacion
 from app.modules.parametros import general
 from app.modules.parametros.service import hoy
 
@@ -33,6 +35,13 @@ router = APIRouter(
     dependencies=[Depends(require_auth)],
 )
 Coop = Annotated[Connection, Depends(cooperativa)]
+historial_auditoria_router = APIRouter(
+    prefix="/seguridad/historial-parametros",
+    tags=["seguridad"],
+    route_class=ProblemDetailsRoute,
+    responses=RESPUESTAS_ERROR,
+    dependencies=[Depends(require_auth)],
+)
 Actual = aprobaciones.Actual
 Cola = aprobaciones.Cola
 LECTURA = []
@@ -55,7 +64,7 @@ class ValorNuevo(CamelModel):
 
 
 def lectura(actor: Actor) -> None:
-    if not set(actor.roles).intersection({"ADMIN", "SUPERVISOR", "ASESOR"}):
+    if not set(actor.roles).intersection({"ADMIN", "SUPERVISOR", "ASESOR", "AUDITOR"}):
         raise problema(
             403, "SIN_PERMISO", "No tiene acceso al mantenimiento de parametros."
         )
@@ -219,6 +228,7 @@ def presentar(
     }
 
 
+@historial_auditoria_router.get("", operation_id="OrganizacionParametrosAuditoria")
 @router.get(
     "",
     dependencies=LECTURA
@@ -231,6 +241,7 @@ def presentar(
     ],
 )
 def listar(
+    request: Request,
     conn: Coop,
     usuario: UsuarioActual,
     actor: Actual,
@@ -241,7 +252,11 @@ def listar(
     page: int = Query(1, ge=1),
     page_size: int = Query(25, alias="pageSize", ge=1, le=100),
 ) -> dict[str, Any]:
-    lectura(actor)
+    if not (
+        request.url.path.startswith("/api/v1/seguridad/historial-parametros")
+        and exportacion.PERMISO_EXPORTAR in actor.permisos
+    ):
+        lectura(actor)
     agencia = alcance(actor, usuario, id_agencia)
     # Parametros son pocos; no se interpolan filtros del usuario en SQL.
     filas = (
@@ -289,16 +304,67 @@ def listar(
     }
 
 
-@router.get("/{clave}", dependencies=LECTURA + [Depends(solo_parametros("idAgencia"))])
+@historial_auditoria_router.get(
+    "/{clave}",
+    operation_id="OrganizacionHistorialParametro",
+    response_model=dict[str, Any],
+    responses=exportacion.RESPUESTA_CSV,
+    dependencies=[Depends(solo_parametros("idAgencia", "formato"))],
+)
+@router.get(
+    "/{clave}",
+    response_model=dict[str, Any],
+    responses=exportacion.RESPUESTA_CSV,
+    dependencies=LECTURA + [Depends(solo_parametros("idAgencia", "formato"))],
+)
 def consultar(
+    request: Request,
     clave: str,
     conn: Coop,
     usuario: UsuarioActual,
     actor: Actual,
     id_agencia: str | None = Query(None, alias="idAgencia", pattern=r"^\d{3}$"),
-) -> dict[str, Any]:
-    lectura(actor)
-    return detalle(conn, clave, alcance(actor, usuario, id_agencia), hoy(), actor)
+    formato: Literal["csv"] | None = None,
+) -> dict[str, Any] | Response:
+    if not (
+        request.url.path.startswith("/api/v1/seguridad/historial-parametros/")
+        and exportacion.PERMISO_EXPORTAR in actor.permisos
+    ):
+        lectura(actor)
+    if formato == "csv":
+        exportacion.autorizar(usuario)
+    resultado = detalle(conn, clave, alcance(actor, usuario, id_agencia), hoy(), actor)
+    if formato is None:
+        return resultado
+    return exportacion.responder_csv(
+        usuario,
+        ip_cliente(request.scope),
+        "parametros-historial",
+        "Parametros.ParametroValor",
+        (
+            "clave",
+            "agencia",
+            "estado",
+            "valor",
+            "desde",
+            "hasta",
+            "fechaCreacion",
+            "responsable",
+        ),
+        (
+            (
+                clave,
+                v["idAgencia"],
+                v["estado"],
+                v["valor"],
+                v["vigenciaDesde"],
+                v["vigenciaHasta"],
+                v["fechaCreacion"],
+                v["responsable"],
+            )
+            for v in resultado["historial"]
+        ),
+    )
 
 
 def cancelar_futuro(

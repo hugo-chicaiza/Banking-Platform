@@ -5512,6 +5512,23 @@
               ],
               "title": "Idagencia"
             }
+          },
+          {
+            "in": "query",
+            "name": "formato",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "const": "csv",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Formato"
+            }
           }
         ],
         "responses": {
@@ -5522,6 +5539,11 @@
                   "additionalProperties": true,
                   "title": "Response Consultar Api V1 Parametros  Clave  Get",
                   "type": "object"
+                }
+              },
+              "text/csv": {
+                "schema": {
+                  "type": "string"
                 }
               }
             },
@@ -5873,7 +5895,7 @@
                 }
               }
             },
-            "description": "Unprocessable Content"
+            "description": "Unprocessable Entity"
           },
           "429": {
             "content": {
