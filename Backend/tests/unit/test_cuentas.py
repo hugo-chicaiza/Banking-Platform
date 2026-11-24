@@ -92,10 +92,12 @@ def _cuenta_bd_row(**overrides: Any) -> dict[str, Any]:
 
 def _assert_http_error(
     exc: pytest.ExceptionInfo[HTTPException], status: int, code: str
-) -> None:
+) -> dict[str, Any]:
     assert exc.value.status_code == status
-    assert isinstance(exc.value.detail, dict)
-    assert exc.value.detail.get("code") == code
+    detalle = exc.value.detail
+    assert isinstance(detalle, dict)
+    assert detalle.get("code") == code
+    return detalle
 
 
 def _assert_solo_lectura(db: _FakeConn) -> None:
@@ -194,7 +196,10 @@ def _patch_repo(
 
 def _abrir_cuenta(db: _FakeConn | None = None) -> Cuenta:
     return service.abrir_cuenta(
-        cast(Connection, db or _fake_conn()), CuentaCreate(**_PAYLOAD), 12, "001"
+        cast(Connection, db or _fake_conn()),
+        CuentaCreate.model_validate(_PAYLOAD),
+        12,
+        "001",
     )
 
 
@@ -311,8 +316,8 @@ def test_riesgo_no_aprobado_409(monkeypatch: pytest.MonkeyPatch, riesgo):
     _patch_repo(monkeypatch, cliente=_CLIENTE_ACTIVO, riesgo=riesgo)
     with pytest.raises(HTTPException) as exc:
         _abrir_cuenta()
-    _assert_http_error(exc, 409, "CLIENTE_NO_HABILITADO")
-    assert exc.value.detail["bloqueos"] == ["RIESGO_NO_APROBADO"]
+    detalle = _assert_http_error(exc, 409, "CLIENTE_NO_HABILITADO")
+    assert detalle["bloqueos"] == ["RIESGO_NO_APROBADO"]
 
 
 def test_riesgo_aprobado_vencido_409(monkeypatch: pytest.MonkeyPatch):
@@ -323,8 +328,8 @@ def test_riesgo_aprobado_vencido_409(monkeypatch: pytest.MonkeyPatch):
     )
     with pytest.raises(HTTPException) as exc:
         _abrir_cuenta()
-    _assert_http_error(exc, 409, "CLIENTE_NO_HABILITADO")
-    assert exc.value.detail["bloqueos"] == ["RIESGO_NO_VIGENTE"]
+    detalle = _assert_http_error(exc, 409, "CLIENTE_NO_HABILITADO")
+    assert detalle["bloqueos"] == ["RIESGO_NO_VIGENTE"]
 
 
 @pytest.mark.parametrize(
@@ -872,7 +877,7 @@ def test_cta02_aliases_query_y_ceros_iniciales():
 
 def test_router_apertura_conserva_payload_y_creado_por(monkeypatch: pytest.MonkeyPatch):
     db = _fake_conn()
-    payload = CuentaCreate(**_PAYLOAD)
+    payload = CuentaCreate.model_validate(_PAYLOAD)
     cuenta = Cuenta(**_cuenta_row())
 
     def abrir(conn, recibido, creado_por, id_agencia):
@@ -1040,7 +1045,7 @@ def _cambiar(
     return service.cambiar_estado_cuenta(
         cast(Connection, db),
         501,
-        CuentaEstadoUpdate(estado=estado, motivo=motivo),
+        CuentaEstadoUpdate.model_validate({"estado": estado, "motivo": motivo}),
         12,
         "127.0.0.1",
         "cta05-test",
