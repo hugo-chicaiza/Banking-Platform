@@ -2,12 +2,18 @@
 
 from collections.abc import Iterator
 from decimal import Decimal
+from types import SimpleNamespace
 from typing import Any
+from unittest.mock import MagicMock
 
 import pytest
 from pydantic import ValidationError
+from sqlalchemy import Connection
 
+from app.core.database.db import seguridad
 from app.core.security import auth as auth_mod
+from app.modules.auth import service as auth_service
+from app.modules.caja import service as caja_service
 from app.modules.caja.router import router
 from app.modules.caja.schemas import JornadaOpen
 from tests.caja_contexto import (
@@ -24,7 +30,26 @@ from tests.caja_contexto import (
 
 @pytest.fixture
 def ctx(monkeypatch: pytest.MonkeyPatch) -> Iterator[Contexto]:
-    yield crear_contexto(monkeypatch, router)
+    contexto = crear_contexto(monkeypatch, router)
+    contexto.app.dependency_overrides[seguridad] = lambda: MagicMock(spec=Connection)
+    monkeypatch.setattr(
+        auth_service.repository,
+        "obtener_usuario",
+        lambda _conn, _id, *, bloquear: (
+            {
+                "KeyUsuario": contexto.usuario.id_usuario,
+                "Estado": "Activo",
+            }
+            if bloquear
+            else None
+        ),
+    )
+    monkeypatch.setattr(
+        auth_service,
+        "_membresia",
+        lambda _key: SimpleNamespace(status="active", roles=[{"slug": "org-cajero"}]),
+    )
+    yield contexto
 
 
 def preparar_apertura(ctx: Contexto) -> None:
@@ -98,6 +123,71 @@ def test_caj03_sin_vinculo_interno_falla_cerrado(ctx: Contexto) -> None:
     assert code(r) == "USUARIO_INTERNO_NO_VINCULADO"
     assert not ctx.llamadas["insertar_jornada"]
     assert ctx.resultado_auditoria() == "Fallido"
+
+
+def test_caj03_revalida_rol_despues_de_bloquear_usuario(
+    ctx: Contexto, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    preparar_apertura(ctx)
+    monkeypatch.setattr(
+        auth_service,
+        "_membresia",
+        lambda _key: SimpleNamespace(status="active", roles=[{"slug": "org-asesor"}]),
+    )
+    r = ctx.cliente.post(
+        f"{BASE}/jornadas", json={"idCajaFisica": 3, "dineroInicial": 100}
+    )
+    assert r.status_code == 403
+    assert code(r) == "SIN_PERMISO"
+    assert not ctx.llamadas["insertar_jornada"]
+    ctx.conn.begin.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("principal", "status"), [("001", 201), ("002", 409), (None, 409)]
+)
+def test_caj03_verifica_asignacion_institucional_durante_transicion(
+    ctx: Contexto, monkeypatch: pytest.MonkeyPatch, principal: str | None, status: int
+) -> None:
+    preparar_apertura(ctx)
+    monkeypatch.setattr(
+        caja_service,
+        "get_settings",
+        lambda: SimpleNamespace(
+            e104_verificar_asignacion_caja=True, e104_corte_asignacion_caja=False
+        ),
+    )
+    monkeypatch.setattr(
+        caja_service.agencias_repository, "principal_asignada", lambda *_: principal
+    )
+    r = ctx.cliente.post(
+        f"{BASE}/jornadas", json={"idCajaFisica": 3, "dineroInicial": 100}
+    )
+    assert r.status_code == status
+    if status == 409:
+        assert code(r) == "CAJERO_NO_ASIGNADO_A_AGENCIA"
+        assert not ctx.llamadas["insertar_jornada"]
+
+
+def test_caj03_corte_usa_asignacion_institucional_sin_leer_legado(
+    ctx: Contexto, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    preparar_apertura(ctx)
+    monkeypatch.setattr(
+        caja_service,
+        "get_settings",
+        lambda: SimpleNamespace(
+            e104_verificar_asignacion_caja=False, e104_corte_asignacion_caja=True
+        ),
+    )
+    monkeypatch.setattr(
+        caja_service.agencias_repository, "principal_asignada", lambda *_: "001"
+    )
+    r = ctx.cliente.post(
+        f"{BASE}/jornadas", json={"idCajaFisica": 3, "dineroInicial": 100}
+    )
+    assert r.status_code == 201, r.text
+    assert not ctx.llamadas["cajero_asignado"]
 
 
 @pytest.mark.parametrize(

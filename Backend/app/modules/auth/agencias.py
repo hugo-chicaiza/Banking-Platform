@@ -152,7 +152,7 @@ def guardar(
     actor_id = exigir_id_interno(actor.interno())
     agencia_actor = actor.agencia()
     with auditar(
-        "ASIGNAR_AGENCIAS",
+        "SEG_AUTOGESTION_INTENTO" if actor_id == id_ else "ASIGNAR_AGENCIAS",
         "Organizacion.UsuarioAgencia",
         actor,
         ip,
@@ -166,7 +166,15 @@ def guardar(
                 "No puede cambiar sus propias asignaciones de agencia.",
             )
         try:
+            from app.modules.auth.service import (
+                bloquear_corte_caja,
+                impedir_edicion_durante_recuperacion,
+            )
+
+            bloquear_corte_caja(coop)
             fila = _usuario(conn, id_, True)
+
+            impedir_edicion_durante_recuperacion(conn, id_)
             roles = normalizar_roles((fila["RolesWorkOS"] or "").split(","), None)
             validar_seleccion(datos.id_agencias, datos.id_agencia_principal, roles)
             if repo.version(conn, id_) != datos.version:

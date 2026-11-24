@@ -8,10 +8,15 @@ from sqlalchemy.exc import SQLAlchemyError
 from workos.exceptions import BaseRequestException, NotFoundException
 
 from app.core.api.errors import problema
+from app.core.config.settings import get_settings
 from app.core.security.auth import normalizar_roles
 from app.integrations.workos_client import get_organizacion_id, get_workos
 from app.modules.aprobaciones.motores import motor
 from app.modules.auth.agencias_repository import asignaciones
+from app.modules.auth.repository import (
+    cambio_roles_en_recuperacion,
+    sincronizacion_pendiente,
+)
 
 
 @dataclass(frozen=True)
@@ -72,7 +77,7 @@ def vigente(sujeto: str, organizacion: str) -> Actor:
         with motor("seguridad").connect() as conn:
             filas = (
                 conn.execute(
-                    text("""SELECT TOP(2) UsuarioID,Estado,Nombres,Apellidos
+                    text("""SELECT TOP(2) UsuarioID,Estado,Nombres,Apellidos,RolesWorkOS
                 FROM Organizacion.Usuarios WHERE KeyUsuario COLLATE Latin1_General_100_BIN2=:sujeto"""),
                     {"sujeto": sujeto},
                 )
@@ -86,6 +91,22 @@ def vigente(sujeto: str, organizacion: str) -> Actor:
                     "El vinculo institucional no esta activo o no es unico.",
                 )
             fila = filas[0]
+            settings = get_settings()
+            en_conciliacion = (
+                settings.e104_permiso_aprobar_roles.strip()
+                and cambio_roles_en_recuperacion(conn, fila["UsuarioID"], organizacion)
+            ) or (
+                settings.e104_recuperar_correo
+                and sincronizacion_pendiente(conn, fila["UsuarioID"], "Roles")
+            )
+            if en_conciliacion and set(roles) != set(
+                (fila["RolesWorkOS"] or "").split(",")
+            ):
+                raise problema(
+                    503,
+                    "USUARIO_EN_CONCILIACION",
+                    "Los roles efectivos de la identidad siguen en conciliación.",
+                )
             agencias = tuple(asignaciones(conn, fila["UsuarioID"]))
         nombre = (
             " ".join(
