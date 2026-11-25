@@ -130,6 +130,7 @@ class CuentaEstadoUpdate(CamelModel):
     model_config = ConfigDict(extra="forbid", validate_by_name=False)
 
     estado: Literal["ACTIVA", "INACTIVA", "BLOQUEADA", "CERRADA"]
+    documento_verificado: Literal["C", "R", "P"] | None = None
     # Auditoria.Descripcion tiene 500 caracteres; se reserva espacio para estados y traceId.
     motivo: Annotated[
         str,

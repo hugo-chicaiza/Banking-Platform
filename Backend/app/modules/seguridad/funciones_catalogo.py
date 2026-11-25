@@ -201,8 +201,11 @@ FUNCIONES = (
         "cuentas.cambiarEstado",
         "Cambiar estado de cuenta",
         "Cuentas",
-        GESTORES,
-        (("PATCH", Q + "/{idCuenta}/estado"),),
+        ("ASESOR", "SUPERVISOR"),
+        (
+            ("PATCH", Q + "/{idCuenta}/estado"),
+            ("GET", Q + "/catalogos/motivos-bloqueo"),
+        ),
         "/cuentas",
         ("cuentas.consultar",),
     ),
