@@ -248,13 +248,25 @@ def autorizar_operacion(
             @CodigoRespuesta char(2),
             @Mensaje nvarchar(400),
             @Comision decimal(18, 2),
-            @Ahora datetime2 = ?;
+            @Ahora datetime2 = ?,
+            @Cuenta int = ?, @Canal int = ?, @Tipo varchar(30) = ?, @Importe decimal(18,2) = ?;
 
-        EXEC Transacciones.usp_AutorizarOperacion
-            @IdCuenta = ?,
-            @IdCanal = ?,
-            @TipoTransaccion = ?,
-            @Monto = ?,
+        IF EXISTS (
+            SELECT 1 FROM Cuentas.Cuenta c WITH (UPDLOCK, HOLDLOCK)
+            JOIN Clientes.Cliente cl WITH (HOLDLOCK) ON cl.IdCliente=c.IdCliente
+            JOIN Transacciones.TipoTransaccion t ON t.CodigoTipo=@Tipo AND t.Naturaleza='D'
+            WHERE c.IdCuenta=@Cuenta AND cl.Estado='Bloqueado'
+        )
+        BEGIN
+            SET @CodigoRespuesta='05';
+            SET @Mensaje=N'El cliente está bloqueado.';
+            SET @Comision=0;
+        END
+        ELSE EXEC Transacciones.usp_AutorizarOperacion
+            @IdCuenta = @Cuenta,
+            @IdCanal = @Canal,
+            @TipoTransaccion = @Tipo,
+            @Monto = @Importe,
             @FechaHora = @Ahora,
             @CodigoRespuesta = @CodigoRespuesta OUTPUT,
             @Mensaje = @Mensaje OUTPUT,

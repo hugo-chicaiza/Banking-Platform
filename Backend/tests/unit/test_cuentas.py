@@ -517,7 +517,13 @@ def test_consultas_contrato_openapi_sin_sockets():
     ]:
         ruta = contrato["paths"][f"/api/v1/cuentas{sufijo}"]["get"]
         assert ruta["operationId"] == operacion
-        assert ruta["x-roles"] == ["ASESOR", "CAJERO", "SUPERVISOR", "ADMIN"]
+        assert ruta["x-roles"] == [
+            "ASESOR",
+            "CAJERO",
+            "SUPERVISOR",
+            "ADMIN",
+            "CUMPLIMIENTO",
+        ]
         assert ruta["responses"]["200"]["content"]["application/json"]["schema"][
             "$ref"
         ].endswith(f"/{modelo}")
@@ -1416,7 +1422,7 @@ _RUTAS_NUEVAS = [
         "PATCH",
         "/api/v1/cuentas/501/estado",
         {"estado": "BLOQUEADA", "motivo": "PREVENTIVO"},
-        {"ASESOR", "SUPERVISOR"},
+        {"ASESOR", "SUPERVISOR", "CUMPLIMIENTO"},
     ),
     ("GET", "/api/v1/cuentas/501/cupos", None, {"ASESOR", "SUPERVISOR", "ADMIN"}),
     (
@@ -1442,6 +1448,7 @@ _RUTAS_NUEVAS = [
         "SUPERVISOR",
         "ADMIN",
         "AUDITOR",
+        "CUMPLIMIENTO",
         "CAJERO",
         "CONTADOR",
         "APROBADOR_CREDITO",
@@ -1867,7 +1874,13 @@ def test_cta06_http_propaga_aliases_y_rango_inclusivo(sesion_cuentas, monkeypatc
 def test_cta06_openapi_publica_fechas_obligatorias_y_respuesta():
     ruta = app.openapi()["paths"]["/api/v1/cuentas/{idCuenta}/movimientos"]["get"]
     assert ruta["operationId"] == "CTA06"
-    assert ruta["x-roles"] == ["ASESOR", "CAJERO", "SUPERVISOR", "ADMIN"]
+    assert ruta["x-roles"] == [
+        "ASESOR",
+        "CAJERO",
+        "SUPERVISOR",
+        "ADMIN",
+        "CUMPLIMIENTO",
+    ]
     parametros = {p["name"]: p for p in ruta["parameters"]}
     assert parametros["desde"]["required"] and parametros["hasta"]["required"]
     assert ruta["responses"]["200"]["content"]["application/json"]["schema"][

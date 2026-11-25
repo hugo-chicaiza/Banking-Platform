@@ -162,7 +162,7 @@ def finalizar_autorizado(
     return Response(status_code=204)
 
 
-_ROLES_CONSULTA = ["ASESOR", "CAJERO", "SUPERVISOR", "ADMIN"]
+_ROLES_CONSULTA = ["ASESOR", "CAJERO", "SUPERVISOR", "ADMIN", "CUMPLIMIENTO"]
 _consultas_router = APIRouter(
     route_class=ProblemDetailsRoute,
     responses=RESPUESTAS_ERROR,
@@ -311,7 +311,8 @@ _ROLES_ESTADO_CUPOS = ["ASESOR", "SUPERVISOR", "ADMIN"]
 _ROLES_MODIFICAR_CUPO = ["ASESOR", "SUPERVISOR", "ADMIN"]
 _ROLES_HISTORIAL_CUPO = ["SUPERVISOR", "AUDITOR", "ADMIN"]
 LectorCupos = Annotated[Usuario, Depends(require_roles(*_ROLES_ESTADO_CUPOS))]
-GestorEstado = Annotated[Usuario, Depends(require_roles("ASESOR", "SUPERVISOR"))]
+_ROLES_ESTADO = ["ASESOR", "SUPERVISOR", "CUMPLIMIENTO"]
+GestorEstado = Annotated[Usuario, Depends(require_roles(*_ROLES_ESTADO))]
 GestorCupo = Annotated[Usuario, Depends(require_roles(*_ROLES_MODIFICAR_CUPO))]
 AuditorCupo = Annotated[Usuario, Depends(require_roles(*_ROLES_HISTORIAL_CUPO))]
 IdRecurso = Annotated[int, Path(gt=0, le=2147483647)]
@@ -330,7 +331,7 @@ _gestion_router = APIRouter(
     response_model=Cuenta,
     dependencies=[Depends(solo_parametros())],
     responses={202: {"model": SolicitudAceptada}},
-    openapi_extra={"x-roles": ["ASESOR", "SUPERVISOR"]},
+    openapi_extra={"x-roles": _ROLES_ESTADO},
 )
 def cambiar_estado_cuenta(
     idCuenta: IdRecurso,
@@ -352,7 +353,9 @@ def cambiar_estado_cuenta(
         raise problema(
             404, "CUENTA_NO_ENCONTRADA", "La cuenta no existe en la agencia."
         )
-    if payload.estado == "BLOQUEADA" and "SUPERVISOR" in usuario.roles:
+    if payload.estado == "BLOQUEADA" and {"SUPERVISOR", "CUMPLIMIENTO"}.intersection(
+        usuario.roles
+    ):
         estado_operativo.bloquear(
             conn, idCuenta, agencia, payload.motivo, modificado_por
         )
