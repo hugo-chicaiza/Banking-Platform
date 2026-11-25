@@ -1,6 +1,6 @@
 """E5-04: cambios sensibles del cliente con aprobación de otra persona (CLI-EDITAR)."""
 
-from datetime import date
+from datetime import UTC, date, datetime
 from typing import Any, cast
 from unittest.mock import MagicMock
 
@@ -55,8 +55,8 @@ def _cliente(**cambios: Any) -> Cliente:
         telefono_convencional=None,
         telefono_celular="0991234567",
         consentimiento_datos=True,
-        fecha_consentimiento="2026-11-03T15:00:00Z",
-        fecha_registro="2026-11-03T15:00:00Z",
+        fecha_consentimiento=datetime(2026, 11, 3, 15, tzinfo=UTC),
+        fecha_registro=datetime(2026, 11, 3, 15, tzinfo=UTC),
         creado_por=1,
         direcciones=[],
     )

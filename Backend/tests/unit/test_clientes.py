@@ -1874,6 +1874,7 @@ def test_cli05_edicion_valida_audita_solo_cambios_efectivos(juridico):
     resultado = service.editar_cliente(
         cast(Connection, db), 10, payload, 12, "192.0.2.10"
     )
+    assert isinstance(resultado, service.Cliente)
     assert resultado.telefono_celular == cambios["telefono_celular"]
     assert resultado.direcciones[0].estado == "Activo"
     assert (db.commits, db.rollbacks) == (1, 0)
@@ -1927,6 +1928,7 @@ def test_cli05_permite_borrar_actividad_economica_sin_consultar_catalogo():
         12,
         "192.0.2.10",
     )
+    assert isinstance(resultado, service.Cliente)
     assert resultado.id_actividad_economica is None
     assert not any("Catalogo.ActividadEconomica" in sql for sql, _ in db.consultas)
     assert json.loads(_auditorias(db)[0]["observaciones"])["valorNuevo"] is None
@@ -1945,6 +1947,7 @@ def test_cli05_sin_cambios_libera_bloqueo_y_no_escribe(enviados):
         12,
         "192.0.2.10",
     )
+    assert isinstance(resultado, service.Cliente)
     assert resultado.email == actual["email"]
     _assert_sin_escrituras(db)
     assert db.rollbacks == 1
@@ -2016,6 +2019,7 @@ def test_cli05_valida_actividad_economica(existe):
         resultado = service.editar_cliente(
             cast(Connection, db), 10, payload, 12, "192.0.2.10"
         )
+        assert isinstance(resultado, service.Cliente)
         assert resultado.id_actividad_economica == 23
         assert json.loads(_auditorias(db)[0]["observaciones"])["valorNuevo"] == 23
     else:
