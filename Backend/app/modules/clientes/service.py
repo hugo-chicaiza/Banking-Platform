@@ -1,5 +1,6 @@
 import json
 import re
+from collections.abc import Callable, Iterable
 from datetime import UTC, date, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any
@@ -8,17 +9,23 @@ from fastapi import HTTPException
 from sqlalchemy import Connection
 
 from app.core.api.errors import problema
+from app.core.security import audit
+from app.modules.aprobaciones.contratos import SolicitudAceptada
 from app.modules.catalogos.tipos_direccion import (
     validar_activo as validar_tipo_direccion,
 )
 from app.modules.clientes import repository
 from app.modules.clientes.schemas import (
+    CAMPOS_CON_RESPALDO,
+    CAMPOS_SENSIBLES,
+    CambiosSensibles,
     Cliente,
     ClienteCreate,
     ClienteEstadoUpdate,
     ClienteHistorial,
     ClientePerfil,
     ClienteUpdate,
+    ContenidoEdicion,
     CreditoPerfil,
     CuentaPerfil,
     Direccion,
@@ -36,6 +43,7 @@ from app.modules.clientes.schemas import (
     ValidacionIdentificacion,
 )
 from app.modules.cuentas.schemas import ID_MONEDA_USD
+from app.modules.parametros import general
 
 _COEFICIENTES_MOD10 = [2, 1, 2, 1, 2, 1, 2, 1, 2]
 
@@ -112,7 +120,15 @@ def listar_historial_cliente(
 
 
 def _historial_desde_fila(fila: dict[str, Any]) -> ClienteHistorial:
+    columna = fila.get("valor_anterior_columna")
     datos = {**fila, "valor_anterior": None}
+    if columna is not None:
+        # E5-04: antes/después en columnas propias; el JSON queda para el legado.
+        datos["valor_anterior"] = columna
+        fecha_columna: datetime = datos["fecha_modificacion"]
+        if fecha_columna.tzinfo is None:
+            datos["fecha_modificacion"] = fecha_columna.replace(tzinfo=UTC)
+        return ClienteHistorial(**datos)
     try:
         observaciones = json.loads(fila["observaciones"])
     except (ValueError, TypeError):
@@ -173,6 +189,8 @@ def _guardar_cambios_cliente(
         (
             repository.CAMPOS_EDICION_CLIENTE.get(campo, "Estado"),
             repository.observaciones_cambio(anteriores[campo], valor, motivo),
+            texto_historial(anteriores[campo]),
+            texto_historial(valor),
         )
         for campo, valor in cambios.items()
     ]
@@ -180,7 +198,7 @@ def _guardar_cambios_cliente(
         repository.actualizar_estado_cliente(conn, actual.id_cliente, cambios["estado"])
     else:
         repository.actualizar_cliente(conn, actual.id_cliente, cambios)
-    for campo, observaciones in auditorias:
+    for campo, observaciones, anterior, nuevo in auditorias:
         repository.insertar_historial_cliente(
             conn,
             id_cliente=actual.id_cliente,
@@ -189,10 +207,120 @@ def _guardar_cambios_cliente(
             modificado_por=modificado_por,
             direccion_ip=direccion_ip,
             observaciones=observaciones,
+            valor_anterior=anterior,
+            valor_nuevo=nuevo,
         )
     resultado = obtener_cliente(conn, actual.id_cliente)
     conn.commit()
     return resultado
+
+
+def texto_historial(valor: Any) -> str | None:
+    """Valor de ClientesHis.ValorAnterior/ValorNuevo: texto, fechas en ISO."""
+    if valor is None:
+        return None
+    if isinstance(valor, date):
+        return valor.isoformat()
+    return str(valor)
+
+
+def validar_estado_editable(estado: str) -> None:
+    """E5-04: nada se edita con el cliente bloqueado o eliminado."""
+    if estado == "Eliminado":
+        raise problema(
+            409, "CLIENTE_NO_EDITABLE", "El cliente eliminado no se puede editar."
+        )
+    if estado == "Bloqueado":
+        raise problema(
+            423, "CLIENTE_BLOQUEADO", "El cliente bloqueado no se puede editar."
+        )
+
+
+def cambios_sensibles_efectivos(
+    actual: dict[str, Any], enviados: dict[str, Any]
+) -> dict[str, Any]:
+    """Solo lo que difiere del valor guardado; el correo se compara en minúsculas."""
+    cambios: dict[str, Any] = {}
+    for campo, valor in enviados.items():
+        if campo == "email" and isinstance(valor, str):
+            valor = valor.lower()
+        if valor != actual[campo]:
+            cambios[campo] = valor
+    return cambios
+
+
+def validar_cambios_sensibles(
+    conn: Connection, actual: dict[str, Any], cambios: dict[str, Any], hoy: date
+) -> None:
+    """Reglas de E5-04 sobre los datos finales; se repiten al aplicar la aprobación."""
+    validar_estado_editable(actual["estado"])
+    finales = actual | cambios
+    _validar_tipo_persona(finales)
+    if "fecha_nacimiento" in cambios and cambios["fecha_nacimiento"] >= hoy:
+        raise problema(
+            422,
+            "FECHA_NACIMIENTO_INVALIDA",
+            "La fecha de nacimiento o constitución debe ser anterior a la fecha actual.",
+        )
+    if {"identificacion", "tipo_documento"} & cambios.keys():
+        valido, motivo = validar_formato_documento(
+            finales["tipo_documento"], finales["identificacion"]
+        )
+        if not valido:
+            raise problema(
+                422,
+                "DOCUMENTO_INVALIDO",
+                f"El documento de identificación no cumple el formato requerido: {motivo}",
+            )
+        if repository.otro_cliente_con_identificacion(
+            conn, finales["identificacion"], actual["id_cliente"]
+        ):
+            raise problema(
+                409,
+                "CLIENTE_DUPLICADO",
+                "Ya existe un cliente registrado con esa identificación.",
+            )
+
+
+def verificar_respaldo(
+    conn: Connection,
+    id_cliente: int,
+    cambios: dict[str, Any],
+    id_archivo: int | None,
+    hoy: date,
+) -> None:
+    """Respaldo de un cambio de nombre o documento (E5-04 con archivos de E5-08)."""
+    if id_archivo is None:
+        if not CAMPOS_CON_RESPALDO & cambios.keys():
+            return
+        exige = general.valor(conn, "CLI_EXIGE_ARCHIVOS", hoy)
+        if type(exige) is not bool:
+            raise problema(
+                503, "PARAMETRO_INVALIDO", "No se pudo verificar la regla de archivos."
+            )
+        if exige:
+            raise problema(
+                422,
+                "RESPALDO_REQUERIDO",
+                "Adjunte el documento que respalda el cambio de nombre o documento.",
+            )
+        return
+    valido = repository.archivo_respaldo_valido(conn, id_cliente, id_archivo)
+    if valido is None:
+        raise problema(
+            503,
+            "EVIDENCIA_NO_DISPONIBLE",
+            "El almacenamiento de archivos del cliente no está disponible.",
+        )
+    if not valido:
+        raise problema(
+            422,
+            "RESPALDO_NO_VALIDO",
+            "El archivo de respaldo no existe, no es del cliente o no está aprobado.",
+        )
+
+
+SolicitarCambio = Callable[[dict[str, Any]], SolicitudAceptada]
 
 
 def editar_cliente(
@@ -201,22 +329,47 @@ def editar_cliente(
     payload: ClienteUpdate,
     modificado_por: int,
     direccion_ip: str,
-) -> Cliente:
-    """CLI-05: snapshot, modificación, auditoría y lectura en una transacción."""
+    solicitar: SolicitarCambio | None = None,
+) -> Cliente | SolicitudAceptada:
+    """CLI-05 / E5-04: ordinarios al instante (200), sensibles a la cola (202)."""
     try:
         actual = _cliente_bloqueado(conn, id_cliente)
-        if actual.estado == "Eliminado":
-            raise problema(
-                409, "CLIENTE_NO_EDITABLE", "El cliente eliminado no se puede editar."
-            )
+        validar_estado_editable(actual.estado)
         enviados = payload.model_dump(exclude_unset=True)
-        finales = actual.model_dump() | enviados
-        _validar_tipo_persona(finales)
+        id_archivo = enviados.pop("id_archivo_respaldo", None)
+        if "email" in enviados:
+            enviados["email"] = enviados["email"].lower()
         cambios = {
             campo: valor
             for campo, valor in enviados.items()
             if valor != getattr(actual, campo)
         }
+        sensibles = {c: v for c, v in cambios.items() if c in CAMPOS_SENSIBLES}
+        if sensibles and len(sensibles) != len(cambios):
+            raise problema(
+                422,
+                "CAMBIO_MIXTO",
+                "Guarde por separado los datos que requieren aprobación.",
+            )
+        if id_archivo is not None and not sensibles:
+            raise problema(
+                422,
+                "RESPALDO_NO_APLICA",
+                "El respaldo solo acompaña cambios que requieren aprobación.",
+            )
+        if sensibles:
+            conn.rollback()  # La cola vuelve a bloquear y validar en su propia transacción.
+            if solicitar is None:
+                raise RuntimeError("Falta el servicio de aprobación de E0-08.")
+            contenido = ContenidoEdicion(
+                cambios=CambiosSensibles(**sensibles),
+                id_archivo_respaldo=id_archivo,
+                modificado_por=modificado_por,
+                direccion_ip=direccion_ip,
+            )
+            return solicitar(congelar_contenido(contenido))
+        finales = actual.model_dump() | enviados
+        _validar_tipo_persona(finales)
         actividad = cambios.get("id_actividad_economica")
         if actividad is not None and not repository.existe_actividad_economica(
             conn, actividad
@@ -227,7 +380,7 @@ def editar_cliente(
         if not cambios:
             conn.rollback()  # Libera el bloqueo de la lectura sin escrituras ni auditorías.
             return actual
-        return _guardar_cambios_cliente(
+        resultado = _guardar_cambios_cliente(
             conn,
             actual,
             cambios,
@@ -238,6 +391,34 @@ def editar_cliente(
     except Exception:
         conn.rollback()
         raise
+    _auditar_edicion(id_cliente, modificado_por, direccion_ip, cambios.keys())
+    return resultado
+
+
+def congelar_contenido(contenido: ContenidoEdicion) -> dict[str, Any]:
+    """Forma JSON del contenido: solo los cambios enviados, en camelCase."""
+    datos = contenido.model_dump(mode="json", by_alias=True, exclude={"cambios"})
+    datos["cambios"] = contenido.cambios.model_dump(
+        mode="json", by_alias=True, exclude_unset=True
+    )
+    return datos
+
+
+def _auditar_edicion(
+    id_cliente: int, usuario: int, ip: str, campos: Iterable[str]
+) -> None:
+    # Solo los nombres de los campos: los valores son datos personales (ASVS 16.2.5).
+    audit.registrar(
+        audit.EventoAuditoria(
+            accion="CLI_EDITADO",
+            tabla="Clientes.Cliente",
+            id_registro=str(id_cliente),
+            resultado="Exitoso",
+            usuario=usuario,
+            ip=ip,
+            descripcion="Campos: " + ", ".join(sorted(campos)),
+        )
+    )
 
 
 _TRANSICIONES_CLIENTE = {

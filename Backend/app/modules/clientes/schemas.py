@@ -128,6 +128,61 @@ class Cliente(CamelModel):
     fecha_registro: datetime
     creado_por: int
     direcciones: list[Direccion]
+    # E5-04: marca manual "verificado por el personal" del correo principal.
+    email_verificado: bool = False
+    fecha_email_verificado: datetime | None = None
+
+
+Identificacion = Annotated[
+    str, StringConstraints(strip_whitespace=True, min_length=1, max_length=13)
+]
+IdEntero = Annotated[int, Field(gt=0, le=2147483647)]
+
+# E5-04: los ordinarios se aplican al instante; los sensibles los aprueba otra persona.
+CAMPOS_ORDINARIOS = frozenset(
+    {
+        "nombre_comercial",
+        "id_actividad_economica",
+        "estado_civil",
+        "telefono_convencional",
+        "telefono_celular",
+    }
+)
+CAMPOS_SENSIBLES = frozenset(
+    {
+        "nombres",
+        "apellidos",
+        "razon_social",
+        "fecha_nacimiento",
+        "tipo_documento",
+        "identificacion",
+        "email",
+    }
+)
+# Un cambio de nombre o documento exige respaldo cuando CLI_EXIGE_ARCHIVOS está activo.
+CAMPOS_CON_RESPALDO = frozenset(
+    {"nombres", "apellidos", "razon_social", "tipo_documento", "identificacion"}
+)
+_NO_ANULABLES = (
+    "nombres",
+    "telefono_celular",
+    "email",
+    "fecha_nacimiento",
+    "tipo_documento",
+    "identificacion",
+)
+
+
+def _no_nulo(valor: Any) -> Any:
+    if valor is None:
+        raise ValueError("El campo no admite null.")
+    return valor
+
+
+def _texto_no_vacio(valor: str | None) -> str | None:
+    if valor is not None and not valor.strip():
+        raise ValueError("El campo no puede contener solo espacios.")
+    return valor
 
 
 class ClienteUpdate(CamelModel):
@@ -146,19 +201,64 @@ class ClienteUpdate(CamelModel):
         default=None, min_length=7, max_length=15
     )
     email: EmailCliente | SkipJsonSchema[None] = None
+    fecha_nacimiento: date | SkipJsonSchema[None] = None
+    tipo_documento: TipoDocumento | SkipJsonSchema[None] = None
+    identificacion: Identificacion | SkipJsonSchema[None] = None
+    # Archivo de E5-08 que respalda un cambio de nombre o documento.
+    id_archivo_respaldo: IdEntero | None = None
 
-    @field_validator("nombres", "telefono_celular", "email", mode="before")
+    @field_validator(*_NO_ANULABLES, mode="before")
     @classmethod
-    def no_anulable(cls, valor: str | None) -> str:
-        if valor is None:
-            raise ValueError("El campo no admite null.")
-        return valor
+    def no_anulable(cls, valor: Any) -> Any:
+        return _no_nulo(valor)
 
     @field_validator("nombres", "apellidos", "razon_social", "nombre_comercial")
     @classmethod
     def texto_no_vacio(cls, valor: str | None) -> str | None:
-        if valor is not None and not valor.strip():
-            raise ValueError("El campo no puede contener solo espacios.")
+        return _texto_no_vacio(valor)
+
+
+class CambiosSensibles(CamelModel):
+    """Campos sensibles congelados en la solicitud de E0-08 (E5-04)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    nombres: TextoCliente | None = None
+    apellidos: TextoCliente | None = None
+    razon_social: TextoCliente | None = None
+    fecha_nacimiento: date | None = None
+    tipo_documento: TipoDocumento | None = None
+    identificacion: Identificacion | None = None
+    email: EmailCliente | None = None
+
+    @field_validator(
+        *(c for c in _NO_ANULABLES if c != "telefono_celular"), mode="before"
+    )
+    @classmethod
+    def no_anulable(cls, valor: Any) -> Any:
+        return _no_nulo(valor)
+
+    @field_validator("nombres", "apellidos", "razon_social")
+    @classmethod
+    def texto_no_vacio(cls, valor: str | None) -> str | None:
+        return _texto_no_vacio(valor)
+
+
+class ContenidoEdicion(CamelModel):
+    """Contenido de CLI-EDITAR; el autor y su IP se fijan en el servidor."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    cambios: CambiosSensibles
+    id_archivo_respaldo: IdEntero | None = None
+    modificado_por: IdEntero
+    direccion_ip: str = Field(min_length=1, max_length=45)
+
+    @field_validator("cambios")
+    @classmethod
+    def con_cambios(cls, valor: CambiosSensibles) -> CambiosSensibles:
+        if not valor.model_fields_set:
+            raise ValueError("La solicitud no contiene cambios.")
         return valor
 
 
@@ -279,10 +379,13 @@ class ClienteHistorial(CamelModel):
     tipo_operacion: str
     campo_modificado: str
     valor_anterior: str | None = None
+    valor_nuevo: str | None = None
     modificado_por: int
     direccion_ip: str = Field(alias="direccionIP")
     fecha_modificacion: datetime
     observaciones: str
+    # Solicitud E0-08 que aprobó el cambio sensible (E5-04).
+    id_solicitud: int | None = None
 
 
 class PageClienteHistorial(CamelModel):
@@ -334,3 +437,49 @@ class ClientePerfil(CamelModel):
     cuentas: list[CuentaPerfil] = Field(default_factory=list)
     tarjetas: list[TarjetaPerfil] = Field(default_factory=list)
     creditos: list[CreditoPerfil] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# E5-04 · Correos del cliente
+# ---------------------------------------------------------------------------
+
+
+class ClienteEmailNuevo(CamelModel):
+    """Body de POST /api/v1/clientes/{idCliente}/emails."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    email: EmailCliente
+    etiqueta: Annotated[
+        str, Field(min_length=1, max_length=30, pattern=r"^[^\x00-\x1f\x7f]+$")
+    ]
+
+    @field_validator("email")
+    @classmethod
+    def email_minusculas(cls, valor: str) -> str:
+        return valor.lower()
+
+    @field_validator("etiqueta")
+    @classmethod
+    def etiqueta_con_texto(cls, valor: str) -> str:
+        if not valor.strip():
+            raise ValueError("La etiqueta no puede quedar vacía.")
+        return valor
+
+
+class ClienteEmail(CamelModel):
+    """Correo secundario activo; quién lo creó o verificó queda solo en la base."""
+
+    id_cliente_email: int
+    email: str
+    etiqueta: str
+    verificado: bool
+    fecha_verificacion: datetime | None = None
+    fecha_creacion: datetime
+
+
+class VerificacionEmail(CamelModel):
+    """Marca manual del personal sobre el correo principal (no se envía correo)."""
+
+    email_verificado: bool
+    fecha_email_verificado: datetime
