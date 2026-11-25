@@ -3,10 +3,19 @@ IF COALESCE(CONVERT(nvarchar(128), SESSION_CONTEXT(N'migration_database')), N'')
     THROW 57640, 'Falta confirmar la base destino de E6-04.', 1;
 
 BEGIN TRANSACTION;
+IF EXISTS (
+    SELECT 1 FROM Seguridad.TransaccionesInterfaz WITH (UPDLOCK, HOLDLOCK)
+    WHERE CodigoTransaccion='CTA-ESTADO'
+      AND (BaseObjetivo<>'cooperativa' OR RolesEjecucion<>N'["SUPERVISOR"]'
+           OR PermisoAprobacion<>'cuentas:aprobar' OR EsSensible<>1)
+)
+    THROW 57640, 'La operación CTA-ESTADO existente es incompatible.', 1;
+
 INSERT Seguridad.TransaccionesInterfaz
     (CodigoTransaccion, NombreTransaccion, Modulo, BaseObjetivo, RolesEjecucion, PermisoAprobacion, EsSensible, Estado)
 SELECT 'CTA-ESTADO', N'Desbloquear cuenta', 'Cuentas', 'cooperativa', N'["SUPERVISOR"]', 'cuentas:aprobar', 1, 'A'
 WHERE NOT EXISTS (SELECT 1 FROM Seguridad.TransaccionesInterfaz WITH (UPDLOCK, HOLDLOCK) WHERE CodigoTransaccion='CTA-ESTADO');
+UPDATE Seguridad.TransaccionesInterfaz SET Estado='A' WHERE CodigoTransaccion='CTA-ESTADO' AND Estado='I';
 
 INSERT Auditoria.TipoEvento (CodigoEvento, Modulo, Severidad, EnTransaccion)
 SELECT v.CodigoEvento, v.Modulo, v.Severidad, v.EnTransaccion

@@ -1699,7 +1699,8 @@
           "ASESOR",
           "CAJERO",
           "SUPERVISOR",
-          "ADMIN"
+          "ADMIN",
+          "CUMPLIMIENTO"
         ]
       },
       "post": {
@@ -3379,7 +3380,8 @@
           "ASESOR",
           "CAJERO",
           "SUPERVISOR",
-          "ADMIN"
+          "ADMIN",
+          "CUMPLIMIENTO"
         ]
       }
     },
@@ -4525,7 +4527,8 @@
           "ASESOR",
           "CAJERO",
           "SUPERVISOR",
-          "ADMIN"
+          "ADMIN",
+          "CUMPLIMIENTO"
         ]
       },
       "post": {
@@ -8030,7 +8033,8 @@
         ],
         "x-roles": [
           "ASESOR",
-          "SUPERVISOR"
+          "SUPERVISOR",
+          "CUMPLIMIENTO"
         ]
       }
     },
@@ -8601,7 +8605,8 @@
           "ASESOR",
           "CAJERO",
           "SUPERVISOR",
-          "ADMIN"
+          "ADMIN",
+          "CUMPLIMIENTO"
         ]
       }
     },
@@ -9811,7 +9816,8 @@
           "ASESOR",
           "CAJERO",
           "SUPERVISOR",
-          "ADMIN"
+          "ADMIN",
+          "CUMPLIMIENTO"
         ]
       }
     },
@@ -10377,7 +10383,8 @@
           "ASESOR",
           "CAJERO",
           "SUPERVISOR",
-          "ADMIN"
+          "ADMIN",
+          "CUMPLIMIENTO"
         ]
       }
     }
