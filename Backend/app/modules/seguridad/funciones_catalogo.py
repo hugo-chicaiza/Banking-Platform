@@ -645,6 +645,7 @@ FUNCIONES = (
         (
             ("GET", B + "/plantillas"),
             ("GET", B + "/plantillas/catalogos"),
+            ("GET", B + "/reglas-contables"),
             ("GET", B + "/plantillas/{id_plantilla}/solicitudes"),
             ("GET", B + "/tipos-asiento/{id_tipo}/plantillas"),
             ("GET", B + "/plantillas/{id_plantilla}"),

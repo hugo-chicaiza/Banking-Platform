@@ -14,12 +14,19 @@ from sqlalchemy import Connection, text
 from app.core.api.errors import RESPUESTAS_ERROR, ProblemDetailsRoute, problema
 from app.core.database.db import cooperativa
 from app.core.security.auth import UsuarioActual, require_permiso
-from app.core.security.operador import IdInterno, exigir_id_interno
+from app.core.security.operador import (
+    IdInterno,
+    agencia_de_consulta,
+    exigir_agencia_autorizada,
+    exigir_id_interno,
+)
 from app.modules.aprobaciones.contratos import SolicitudResumen
 from app.modules.aprobaciones.identidad import Actor
 from app.modules.aprobaciones.registro import Objetivo, Operacion, Plan
 from app.modules.contabilidad import repository
 from app.modules.contabilidad.asientos import ErrorContable, resolver_lineas
+from app.modules.contabilidad.boveda_versionada import ambito_boveda
+from app.modules.contabilidad.reglas import CatalogoReglas, listar_reglas
 from app.modules.contabilidad.schemas import INT32_MAX
 
 router = APIRouter(
@@ -31,6 +38,23 @@ router = APIRouter(
 Db = Annotated[Connection, Depends(cooperativa)]
 IdContable = Annotated[int, Path(ge=1, le=INT32_MAX)]
 IdCuenta = Annotated[int, Field(gt=0, le=INT32_MAX)]
+_ORIGEN_NUEVA_FAMILIA = {
+    "RET_EFECTIVO_CAJA": "CAJA",
+    "RET_EFECTIVO_ATM": "ATM",
+    "DEV_ATM": "ATM",
+    "CAJA_FALTANTE": "CAJA",
+    "CAJA_SOBRANTE": "CAJA",
+    "ATM_FALTANTE": "ATM",
+    "ATM_SOBRANTE": "ATM",
+    "CUENTAS_TRANSFERENCIA_INTERNA": "CUENTAS",
+    "CUENTAS_COMISION": "CUENTAS",
+    "CREDITO_DESEMBOLSO_CUENTA": "CREDITO",
+    "CREDITO_PAGO_CUENTA": "CREDITO",
+    "CUENTAS_INTERES_DEVENGO": "CUENTAS",
+    "CUENTAS_INTERES_CAPITALIZACION": "CUENTAS",
+    "CREDITO_INTERES_DEVENGO": "CREDITO",
+    "CREDITO_SEGURO_COBRO_CUENTA": "CREDITO",
+}
 
 
 class Linea(BaseModel):
@@ -56,6 +80,8 @@ class Version(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     codigoPlantilla: str | None = Field(default=None, min_length=1, max_length=50)
+    idConceptoContable: Annotated[int | None, Field(gt=0, le=INT32_MAX)] = None
+    soloPrimeraVersion: bool = False
     vigenciaDesde: date
     nombre: str = Field(min_length=1, max_length=100)
     lineas: list[Linea] = Field(min_length=2, max_length=100)
@@ -133,6 +159,37 @@ def validar_lineas(conn: Connection, lineas: list[Linea]) -> list[dict[str, Any]
     return resultado
 
 
+def _validar_lineas_boveda(
+    ambito: tuple[str, str, str], lineas: list[dict[str, Any]]
+) -> None:
+    _, tipo, naturaleza = ambito
+    cuentas = {l["TipoMovimiento"]: l.get("CodigoCuenta") for l in lineas}
+    base = "DIFERENCIA" if tipo.startswith("AJUSTE") else "PRINCIPAL"
+    efectivo = "DEBITO" if naturaleza == "I" else "CREDITO"
+    contraparte = "CREDITO" if naturaleza == "I" else "DEBITO"
+    permitidas = {
+        "TRASLADO": {"19080505"},
+        "AJUSTEFALTANTE": {"19902505"},
+        "AJUSTESOBRANTE": {"299005"},
+        "PROVISIONEXTERNA": {"110305", "110310", "110315", "110320"},
+        "ENVIOEXCEDENTE": {"110305", "110310", "110315", "110320"},
+    }
+    if (
+        len(lineas) != 2
+        or any(
+            l["OrigenCuenta"] != "FIJA" or l["ComponenteImporte"] != base
+            for l in lineas
+        )
+        or cuentas.get(efectivo) != "11010505"
+        or cuentas.get(contraparte) not in permitidas[tipo]
+    ):
+        raise problema(
+            422,
+            "MATRIZ_BOVEDA_INVALIDA",
+            "Revise efectivo, contrapartida y base de la operación.",
+        )
+
+
 def _listar(
     conn: Connection,
     id_tipo: int | None = None,
@@ -168,6 +225,7 @@ def _listar(
 )
 def listar_global(
     conn: Db,
+    usuario: UsuarioActual,
     q: Annotated[str | None, Query(min_length=1, max_length=100)] = None,
     codigo: Annotated[str | None, Query(min_length=1, max_length=50)] = None,
     estado: Annotated[int | None, Query(ge=0, le=1)] = None,
@@ -176,12 +234,48 @@ def listar_global(
         int | None, Query(alias="idTipoAsiento", ge=1, le=INT32_MAX)
     ] = None,
 ) -> list[dict[str, Any]]:
-    return _listar(conn, id_tipo, q, codigo, estado, origen)
+    return _filtrar_ambito(_listar(conn, id_tipo, q, codigo, estado, origen), usuario)
+
+
+@router.get(
+    "/reglas-contables",
+    response_model=CatalogoReglas,
+    responses={
+        400: RESPUESTAS_ERROR[400],
+        401: RESPUESTAS_ERROR[401],
+        403: RESPUESTAS_ERROR[403],
+        "4XX": {**RESPUESTAS_ERROR[400], "description": "Error de cliente"},
+    },
+)
+def catalogo_reglas(
+    conn: Db,
+    usuario: UsuarioActual,
+    fecha: Annotated[date | None, Query()] = None,
+    agencia: Annotated[str | None, Query(pattern=r"^[0-9]{3}$")] = None,
+) -> dict[str, Any]:
+    return listar_reglas(conn, agencia_de_consulta(usuario, agencia), fecha)
 
 
 @router.get("/tipos-asiento/{id_tipo}/plantillas")
-def listar(conn: Db, id_tipo: IdContable) -> list[dict[str, Any]]:
-    return _listar(conn, id_tipo)
+def listar(
+    conn: Db, id_tipo: IdContable, usuario: UsuarioActual
+) -> list[dict[str, Any]]:
+    return _filtrar_ambito(_listar(conn, id_tipo), usuario)
+
+
+def _filtrar_ambito(
+    filas: list[dict[str, Any]], usuario: UsuarioActual
+) -> list[dict[str, Any]]:
+    global_admin = "ADMIN" in usuario.roles and not (
+        {"CAJERO", "ASESOR"} & set(usuario.roles)
+    )
+    return [
+        fila
+        for fila in filas
+        if global_admin
+        or (ambito := ambito_boveda(fila.get("CodigoPlantilla", ""))) is None
+        or ambito[0] in usuario.agencias_permitidas()
+    ]
 
 
 @router.get("/plantillas/catalogos")
@@ -213,7 +307,9 @@ def catalogos(conn: Db) -> dict[str, list[dict[str, Any]]]:
 
 
 @router.get("/plantillas/{id_plantilla}")
-def detalle(conn: Db, id_plantilla: IdContable) -> dict[str, Any]:
+def detalle(
+    conn: Db, id_plantilla: IdContable, usuario: UsuarioActual
+) -> dict[str, Any]:
     fila = (
         conn.execute(
             text("""
@@ -231,6 +327,9 @@ def detalle(conn: Db, id_plantilla: IdContable) -> dict[str, Any]:
     )
     if fila is None:
         raise problema(404, "PLANTILLA_NO_DEFINIDA", "La plantilla no existe.")
+    ambito = ambito_boveda(fila.get("CodigoPlantilla", ""))
+    if ambito:
+        exigir_agencia_autorizada(usuario, ambito[0])
     return {
         **fila,
         "lineas": repository.obtener_lineas_plantilla(
@@ -243,16 +342,24 @@ def detalle(conn: Db, id_plantilla: IdContable) -> dict[str, Any]:
     "/plantillas/{id_plantilla}/solicitudes", response_model=SolicitudResumen | None
 )
 def solicitud_version(
-    id_plantilla: IdContable, usuario: UsuarioActual
+    conn: Db, id_plantilla: IdContable, usuario: UsuarioActual
 ) -> SolicitudResumen | None:
     from app.modules.aprobaciones import lecturas
     from app.modules.aprobaciones import router as aprobaciones
 
+    codigo = conn.scalar(
+        text("""
+        SELECT CodigoPlantilla FROM Contabilidad.PlantillaAsiento WHERE IdPlantillaAsiento=:id
+    """),
+        {"id": id_plantilla},
+    )
+    ambito = ambito_boveda(codigo or "")
     return lecturas.solicitud_global_por_objetivo(
         aprobaciones.servicio(),
         aprobaciones.actual(usuario),
         OPERACION_PLANTILLA,
         str(id_plantilla),
+        ambito[0] if ambito else None,
     )
 
 
@@ -260,8 +367,29 @@ def crear(
     conn: Db, id_tipo: int, datos: Version, id_interno: IdInterno
 ) -> dict[str, int]:
     actor = exigir_id_interno(id_interno)
+    if datos.soloPrimeraVersion and (
+        datos.codigoPlantilla is None or datos.idConceptoContable is None
+    ):
+        raise problema(
+            422, "FAMILIA_REQUERIDA", "Indique código y concepto para el alta inicial."
+        )
     with conn.begin():
         lineas = validar_lineas(conn, datos.lineas)
+        ambito = ambito_boveda(datos.codigoPlantilla or "")
+        if ambito:
+            _validar_lineas_boveda(ambito, lineas)
+            if (
+                conn.scalar(
+                    text("""
+                SELECT 1 FROM Organizacion.Agencia WHERE IdAgencia=:id AND Estado='A'
+            """),
+                    {"id": ambito[0]},
+                )
+                is None
+            ):
+                raise problema(
+                    422, "AGENCIA_NO_ACTIVA", "La familia requiere una agencia activa."
+                )
         tipo = (
             conn.execute(
                 text("""
@@ -275,6 +403,59 @@ def crear(
             .mappings()
             .one_or_none()
         )
+        if datos.soloPrimeraVersion and tipo is not None:
+            raise problema(409, "FAMILIA_EXISTENTE", "La familia ya tiene una versión.")
+        if tipo is None and datos.idConceptoContable is not None:
+            origen = (
+                "BOVEDA"
+                if ambito
+                else _ORIGEN_NUEVA_FAMILIA.get(datos.codigoPlantilla or "")
+            )
+            if origen is None:
+                raise problema(
+                    422,
+                    "FAMILIA_NO_HABILITADA",
+                    "La familia inicial no está habilitada.",
+                )
+            tipo = (
+                conn.execute(
+                    text("""
+                SELECT :codigo AS CodigoPlantilla, 0 AS Version, :origen AS Origen,
+                       c.IdConceptoContable
+                FROM Contabilidad.TiposAsiento t
+                CROSS JOIN Contabilidad.ConceptoContable c
+                WHERE t.IdTipoAsiento=:tipo AND t.Estado='A' AND t.EsManual=0
+                  AND c.IdConceptoContable=:concepto AND c.Estado='Activo'
+                  AND NOT EXISTS (
+                      SELECT 1 FROM Contabilidad.PlantillaAsiento p WITH (UPDLOCK,HOLDLOCK)
+                      WHERE p.CodigoPlantilla=:codigo)
+                """),
+                    {
+                        "codigo": datos.codigoPlantilla,
+                        "origen": origen,
+                        "tipo": id_tipo,
+                        "concepto": datos.idConceptoContable,
+                    },
+                )
+                .mappings()
+                .one_or_none()
+            )
+            if tipo is None:
+                raise problema(
+                    409,
+                    "FAMILIA_NO_DISPONIBLE",
+                    "Revise el tipo, concepto o familia existente.",
+                )
+        elif (
+            tipo is not None
+            and datos.idConceptoContable is not None
+            and (tipo["IdConceptoContable"] != datos.idConceptoContable)
+        ):
+            raise problema(
+                409,
+                "CONCEPTO_INCOMPATIBLE",
+                "La familia conserva su concepto contable.",
+            )
         if tipo is None:
             raise problema(
                 404, "PLANTILLA_NO_DEFINIDA", "Falta la plantilla base del tipo."
@@ -286,7 +467,11 @@ def crear(
         """),
             {"tipo": id_tipo, "codigo": datos.codigoPlantilla},
         ).scalar_one()
-        if familias != 1:
+        if ambito_boveda(tipo["CodigoPlantilla"]) and not ambito:
+            raise problema(
+                422, "FAMILIA_REQUERIDA", "Indique el código de la familia de bóveda."
+            )
+        if tipo["Version"] != 0 and familias != 1:
             raise problema(
                 409,
                 "TIPO_AMBIGUO",
@@ -390,7 +575,7 @@ def confirmar_aprobacion(
             "Ya existe una versión programada para esa fecha o después.",
         )
     lineas = repository.obtener_lineas_plantilla(conn, id_plantilla)
-    validar_lineas(
+    validadas = validar_lineas(
         conn,
         [
             Linea(
@@ -403,6 +588,9 @@ def confirmar_aprobacion(
             for f in lineas
         ],
     )
+    ambito = ambito_boveda(fila["CodigoPlantilla"])
+    if ambito:
+        _validar_lineas_boveda(ambito, validadas)
     conn.execute(
         text("""
         UPDATE Contabilidad.PlantillaAsiento SET VigenciaHasta=DATEADD(day,-1,:desde)
@@ -421,7 +609,7 @@ def confirmar_aprobacion(
 
 
 def _id_objetivo(objetivo: Objetivo) -> int:
-    if objetivo.agencia is None and objetivo.id.isascii() and objetivo.id.isdecimal():
+    if objetivo.id.isascii() and objetivo.id.isdecimal():
         id_ = int(objetivo.id)
         if 0 < id_ <= 2147483647:
             return id_
@@ -443,6 +631,11 @@ def _pendiente(conn: Connection, objetivo: Objetivo) -> dict[str, Any]:
     )
     if fila is None:
         raise problema(404, "PLANTILLA_NO_DEFINIDA", "La plantilla no existe.")
+    ambito = ambito_boveda(fila["CodigoPlantilla"])
+    if objetivo.agencia != (ambito[0] if ambito else None):
+        raise problema(
+            422, "OBJETIVO_INVALIDO", "La agencia debe coincidir con la familia."
+        )
     if fila["Estado"] or fila["CreadoPor"] is None:
         raise problema(409, "PLANTILLA_NO_PENDIENTE", "La version no esta pendiente.")
     return {**fila, "lineas": repository.obtener_lineas_plantilla(conn, id_)}
@@ -543,6 +736,8 @@ def crear_y_solicitar(
     from app.modules.contabilidad.service import obtener_fecha_contable_actual
 
     actor = aprobaciones.actual(usuario)
+    ambito = ambito_boveda(datos.codigoPlantilla or "")
+    actor.alcance(ambito[0] if ambito else None)
     aprobaciones.servicio().puede_solicitar(
         actor, OPERACION_PLANTILLA, Objetivo("PlantillaAsiento", "", None)
     )
@@ -556,19 +751,37 @@ def crear_y_solicitar(
                 "La vigencia debe iniciar despues del dia contable actual.",
             )
     creada = crear(conn, id_tipo, datos, id_interno)
-    return _enviar(creada["idPlantillaAsiento"], usuario, request, actor)
+    return _enviar(conn, creada["idPlantillaAsiento"], usuario, request, actor)
 
 
 def _enviar(
-    id_plantilla: int, usuario: UsuarioActual, request: Request, actor: Actor
+    conn: Connection,
+    id_plantilla: int,
+    usuario: UsuarioActual,
+    request: Request,
+    actor: Actor,
 ) -> dict[str, int]:
     from app.modules.aprobaciones import router as aprobaciones
     from app.modules.contabilidad.service import ahora_ecuador
 
+    with conn.begin():
+        codigo = conn.scalar(
+            text("""
+            SELECT CodigoPlantilla FROM Contabilidad.PlantillaAsiento WHERE IdPlantillaAsiento=:id
+        """),
+            {"id": id_plantilla},
+        )
+    if codigo is None:
+        raise problema(404, "PLANTILLA_NO_DEFINIDA", "La plantilla no existe.")
+    ambito = ambito_boveda(codigo)
     id_solicitud = aprobaciones.servicio().solicitar(
         actor,
         OPERACION_PLANTILLA.codigo,
-        Objetivo(OPERACION_PLANTILLA.tipo_objetivo, str(id_plantilla), None),
+        Objetivo(
+            OPERACION_PLANTILLA.tipo_objetivo,
+            str(id_plantilla),
+            ambito[0] if ambito else None,
+        ),
         {"creador": actor.id_interno},
         ahora_ecuador().date(),
         aprobaciones.contexto(request, usuario),
@@ -582,8 +795,8 @@ def _enviar(
     response_model=VersionSolicitada,
 )
 def enviar_pendiente(
-    id_plantilla: IdContable, usuario: UsuarioActual, request: Request
+    conn: Db, id_plantilla: IdContable, usuario: UsuarioActual, request: Request
 ) -> dict[str, int]:
     from app.modules.aprobaciones import router as aprobaciones
 
-    return _enviar(id_plantilla, usuario, request, aprobaciones.actual(usuario))
+    return _enviar(conn, id_plantilla, usuario, request, aprobaciones.actual(usuario))

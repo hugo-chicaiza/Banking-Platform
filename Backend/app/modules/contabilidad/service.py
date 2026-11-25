@@ -477,6 +477,7 @@ def contabilizar_boveda(
     actor: int,
     movimiento: int,
     ahora: datetime,
+    usar_version: bool | None = None,
 ) -> int:
     """Asiento real de BOV-04/06 en la misma transacción que el efectivo.
 
@@ -486,10 +487,32 @@ def contabilizar_boveda(
     if not conn.in_transaction():
         raise RuntimeError("La contabilización de bóveda requiere una transacción")
     repository.bloquear_contabilizacion(conn)
+    from .asientos import OperacionContable, generar_asiento
+    from .boveda_versionada import codigo_boveda
+
     periodo = repository.periodo_boveda(conn, fecha_contable)
     if periodo is None or periodo["estado"] != "ABIERTO":
         raise problema(
             409, "PERIODO_CONTABLE_NO_ABIERTO", "El período contable no está abierto."
+        )
+    codigo = codigo_boveda(agencia, tipo, naturaleza)
+    if usar_version is True or (
+        usar_version is None
+        and tipo != "Traslado"
+        and repository.obtener_plantilla(conn, codigo, periodo["fecha"]) is not None
+    ):
+        base = "DIFERENCIA" if tipo.startswith("Ajuste") else "PRINCIPAL"
+        return generar_asiento(
+            conn,
+            OperacionContable(
+                codigo_plantilla=codigo,
+                clave_evento=f"BOVEDA:MOVIMIENTO:{movimiento}",
+                id_agencia=agencia,
+                id_fecha_contable=fecha_contable,
+                id_usuario=actor,
+                fecha_hora=ahora,
+                importes={base: monto},
+            ),
         )
     plantilla = repository.plantilla_boveda(conn, agencia, tipo, naturaleza)
     if plantilla is None or plantilla["estado_tipo"] != "A":
