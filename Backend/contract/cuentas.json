@@ -1,6 +1,64 @@
 {
   "components": {
     "schemas": {
+      "Alta": {
+        "additionalProperties": false,
+        "properties": {
+          "documentoReferencia": {
+            "maxLength": 60,
+            "minLength": 1,
+            "title": "Documentoreferencia",
+            "type": "string"
+          },
+          "fechaFin": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fechafin"
+          },
+          "monto": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "title": "Monto"
+          },
+          "motivo": {
+            "maxLength": 250,
+            "minLength": 1,
+            "title": "Motivo",
+            "type": "string"
+          },
+          "tipoRetencion": {
+            "enum": [
+              "OrdenJudicial",
+              "GarantiaCredito",
+              "Administrativa"
+            ],
+            "title": "Tiporetencion",
+            "type": "string"
+          }
+        },
+        "required": [
+          "tipoRetencion",
+          "monto",
+          "motivo",
+          "documentoReferencia"
+        ],
+        "title": "Alta",
+        "type": "object"
+      },
       "AnularApertura": {
         "additionalProperties": false,
         "properties": {
@@ -750,6 +808,35 @@
         "title": "EventoCuenta",
         "type": "object"
       },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "title": "Detail",
+            "type": "array"
+          }
+        },
+        "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "Liberacion": {
+        "additionalProperties": false,
+        "properties": {
+          "motivo": {
+            "maxLength": 250,
+            "minLength": 1,
+            "title": "Motivo",
+            "type": "string"
+          }
+        },
+        "required": [
+          "motivo"
+        ],
+        "title": "Liberacion",
+        "type": "object"
+      },
       "MovimientoCuenta": {
         "properties": {
           "fechaContable": {
@@ -942,6 +1029,125 @@
         "title": "PageMovimientoCuenta",
         "type": "object"
       },
+      "Retencion": {
+        "properties": {
+          "documentoReferencia": {
+            "title": "Documentoreferencia",
+            "type": "string"
+          },
+          "estado": {
+            "title": "Estado",
+            "type": "string"
+          },
+          "fechaFin": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fechafin"
+          },
+          "fechaInicio": {
+            "format": "date",
+            "title": "Fechainicio",
+            "type": "string"
+          },
+          "idAsiento": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Idasiento"
+          },
+          "idAsientoLiberacion": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Idasientoliberacion"
+          },
+          "idRetencion": {
+            "title": "Idretencion",
+            "type": "integer"
+          },
+          "idSolicitud": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Idsolicitud"
+          },
+          "monto": {
+            "title": "Monto",
+            "type": "string"
+          },
+          "motivo": {
+            "title": "Motivo",
+            "type": "string"
+          },
+          "motivoLiberacion": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Motivoliberacion"
+          },
+          "origen": {
+            "enum": [
+              "Manual",
+              "Modulo"
+            ],
+            "title": "Origen",
+            "type": "string"
+          },
+          "tipoRetencion": {
+            "enum": [
+              "OrdenJudicial",
+              "GarantiaCredito",
+              "Administrativa"
+            ],
+            "title": "Tiporetencion",
+            "type": "string"
+          }
+        },
+        "required": [
+          "idRetencion",
+          "tipoRetencion",
+          "monto",
+          "motivo",
+          "documentoReferencia",
+          "origen",
+          "fechaInicio",
+          "fechaFin",
+          "estado",
+          "idSolicitud",
+          "idAsiento",
+          "idAsientoLiberacion",
+          "motivoLiberacion"
+        ],
+        "title": "Retencion",
+        "type": "object"
+      },
       "SaldoCuenta": {
         "properties": {
           "fechaConsulta": {
@@ -980,6 +1186,73 @@
           "fechaConsulta"
         ],
         "title": "SaldoCuenta",
+        "type": "object"
+      },
+      "SolicitudAceptada": {
+        "properties": {
+          "estado": {
+            "const": "Pendiente",
+            "default": "Pendiente",
+            "title": "Estado",
+            "type": "string"
+          },
+          "idSolicitud": {
+            "exclusiveMinimum": 0.0,
+            "maximum": 9.223372036854776e+18,
+            "title": "Idsolicitud",
+            "type": "integer"
+          },
+          "requiereAprobacion": {
+            "const": true,
+            "default": true,
+            "title": "Requiereaprobacion",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "idSolicitud"
+        ],
+        "title": "SolicitudAceptada",
+        "type": "object"
+      },
+      "ValidationError": {
+        "properties": {
+          "ctx": {
+            "title": "Context",
+            "type": "object"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "title": "Location",
+            "type": "array"
+          },
+          "msg": {
+            "title": "Message",
+            "type": "string"
+          },
+          "type": {
+            "title": "Error Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError",
         "type": "object"
       }
     }
@@ -1656,7 +1929,8 @@
           "ASESOR",
           "CAJERO",
           "SUPERVISOR",
-          "ADMIN"
+          "ADMIN",
+          "CUMPLIMIENTO"
         ]
       },
       "post": {
@@ -2783,7 +3057,8 @@
           "ASESOR",
           "CAJERO",
           "SUPERVISOR",
-          "ADMIN"
+          "ADMIN",
+          "CUMPLIMIENTO"
         ]
       }
     },
@@ -3929,7 +4204,8 @@
           "ASESOR",
           "CAJERO",
           "SUPERVISOR",
-          "ADMIN"
+          "ADMIN",
+          "CUMPLIMIENTO"
         ]
       },
       "post": {
@@ -7997,7 +8273,8 @@
           "ASESOR",
           "CAJERO",
           "SUPERVISOR",
-          "ADMIN"
+          "ADMIN",
+          "CUMPLIMIENTO"
         ]
       }
     },
@@ -9207,7 +9484,188 @@
           "ASESOR",
           "CAJERO",
           "SUPERVISOR",
-          "ADMIN"
+          "ADMIN",
+          "CUMPLIMIENTO"
+        ]
+      }
+    },
+    "/api/v1/cuentas/{idCuenta}/retenciones": {
+      "get": {
+        "operationId": "CTAConsultarRetenciones",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "idCuenta",
+            "required": true,
+            "schema": {
+              "exclusiveMinimum": 0,
+              "maximum": 2147483647,
+              "title": "Idcuenta",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/Retencion"
+                  },
+                  "title": "Response Ctaconsultarretenciones",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "APIKeyCookie": []
+          }
+        ],
+        "summary": "Listar",
+        "tags": [
+          "cuentas"
+        ]
+      },
+      "post": {
+        "operationId": "CTASolicitarRetencion",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "idCuenta",
+            "required": true,
+            "schema": {
+              "exclusiveMinimum": 0,
+              "maximum": 2147483647,
+              "title": "Idcuenta",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Alta"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SolicitudAceptada"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "APIKeyCookie": []
+          }
+        ],
+        "summary": "Solicitar",
+        "tags": [
+          "cuentas"
+        ]
+      }
+    },
+    "/api/v1/cuentas/{idCuenta}/retenciones/{idRet}/liberacion": {
+      "post": {
+        "operationId": "CTASolicitarLiberacion",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "idCuenta",
+            "required": true,
+            "schema": {
+              "exclusiveMinimum": 0,
+              "maximum": 2147483647,
+              "title": "Idcuenta",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "idRet",
+            "required": true,
+            "schema": {
+              "exclusiveMinimum": 0,
+              "maximum": 9223372036854775807,
+              "title": "Idret",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Liberacion"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SolicitudAceptada"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "APIKeyCookie": []
+          }
+        ],
+        "summary": "Liberar",
+        "tags": [
+          "cuentas"
         ]
       }
     },
@@ -9773,7 +10231,8 @@
           "ASESOR",
           "CAJERO",
           "SUPERVISOR",
-          "ADMIN"
+          "ADMIN",
+          "CUMPLIMIENTO"
         ]
       }
     }

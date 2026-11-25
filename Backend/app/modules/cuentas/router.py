@@ -157,7 +157,7 @@ def finalizar_autorizado(
     return Response(status_code=204)
 
 
-_ROLES_CONSULTA = ["ASESOR", "CAJERO", "SUPERVISOR", "ADMIN"]
+_ROLES_CONSULTA = ["ASESOR", "CAJERO", "SUPERVISOR", "ADMIN", "CUMPLIMIENTO"]
 _consultas_router = APIRouter(
     route_class=ProblemDetailsRoute,
     responses=RESPUESTAS_ERROR,
