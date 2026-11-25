@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 from typing import cast
 from unittest.mock import Mock
@@ -78,6 +78,166 @@ def test_liberar_la_retencion_habilita_una_solicitud_nueva(monkeypatch):
         date(2026, 11, 25),
     )
     assert plan.version == "4"
+
+
+@pytest.mark.parametrize("falla_contable", [False, True])
+def test_cambio_tras_liberacion_reclasifica_el_saldo_completo_o_falla_sin_cambiar_cuenta(
+    monkeypatch, falla_contable
+):
+    conn = Mock(spec=Connection)
+    conn.exec_driver_sql.return_value.scalar.return_value = 4
+    cuenta = {
+        "IdCuenta": 8,
+        "IdCliente": 22,
+        "IdSubProducto": 4,
+        "IdTipoProducto": 1,
+        "IdAgencia": "001",
+        "Estado": "Activa",
+        "Saldo": Decimal(125),
+        "SaldoRetenido": Decimal(0),
+        "FechaNacimiento": date(2008, 1, 1),
+    }
+    fila = Mock()
+    fila.mappings.return_value.one_or_none.return_value = cuenta
+    retencion = Mock()
+    retencion.scalar.return_value = None
+    destino = Mock()
+    destino.mappings.return_value.one_or_none.return_value = {
+        "IdProducto": 6,
+        "IdTipoProducto": 1,
+    }
+    conn.execute.side_effect = [fila, retencion, destino, None, None]
+    monkeypatch.setattr(cambio, "obtener_titular_cuenta", Mock(return_value=22))
+    monkeypatch.setattr(
+        cambio.clientes, "bloquear_cliente", Mock(return_value={"estado": "Activo"})
+    )
+    bloquear = Mock()
+    monkeypatch.setattr(cambio, "bloquear_cuenta", bloquear)
+    monkeypatch.setattr(
+        cambio, "ahora_ecuador", Mock(return_value=datetime(2026, 11, 25, 10))
+    )
+    monkeypatch.setattr(cambio, "edad_mayoria", Mock(return_value=18))
+    monkeypatch.setattr(cambio, "cliente_elegible", Mock(return_value=(True, [])))
+    monkeypatch.setattr(cambio, "cuenta_contable", Mock(side_effect=[2001, 2002]))
+    monkeypatch.setattr(
+        cambio, "resolver_id_fecha_contable", Mock(return_value=20261125)
+    )
+    asiento = Mock(
+        return_value=45,
+        side_effect=cambio.ErrorContable("Período cerrado") if falla_contable else None,
+    )
+    monkeypatch.setattr(cambio, "generar_asiento", asiento)
+
+    objetivo = Objetivo("Cuenta", "8", "001")
+    datos = {"idSubProducto": 5, "realizadoPor": 1}
+    manejador = cambio.CambioSubproducto()
+    if falla_contable:
+        with pytest.raises(HTTPException) as error:
+            manejador.aplicar(conn, objetivo, datos, "solicitante", 3)
+        assert error.value.status_code == 503
+    else:
+        manejador.aplicar(conn, objetivo, datos, "solicitante", 3)
+
+    bloquear.assert_called_once_with(conn, 8)
+    operacion = asiento.call_args.args[1]
+    assert operacion.codigo_plantilla == "CUENTAS_RECLASIFICACION"
+    assert operacion.clave_evento == "CTA-SUBPRODUCTO:3"
+    assert operacion.importes == {"PRINCIPAL": Decimal(125), "RETENIDO": Decimal(0)}
+    assert operacion.cuentas_por_rol == {
+        ("PRODUCTO", "CAPITAL"): 2001,
+        ("CONTRAPRODUCTO", "CAPITAL"): 2002,
+    }
+    consultas = [str(llamada.args[0]) for llamada in conn.execute.call_args_list]
+    assert "UPDATE Cuentas.CuentaAutorizado" in consultas[3]
+    if falla_contable:
+        assert len(consultas) == 4
+    else:
+        assert "INSERT Cuentas.CuentaEvento" in consultas[4]
+        parametros = conn.execute.call_args.args[1]
+        assert (
+            parametros["producto"],
+            parametros["destino"],
+            parametros["cuenta"],
+        ) == (6, 5, 8)
+        assert "Asiento 45." in parametros["detalle"]
+    conn.commit.assert_not_called()
+
+
+def test_liberacion_cta_reintenta_sin_duplicar_asiento_y_respeta_modulo(monkeypatch):
+    conn = Mock(spec=Connection)
+    cuenta = {"IdCuenta": 8, "SaldoRetenido": Decimal(60)}
+    retencion = {
+        "Origen": "Modulo",
+        "ModuloOrigen": "Creditos",
+        "Estado": "Activa",
+        "ClaveLiberacion": None,
+        "IdAsiento": 10,
+        "IdRetencion": 9,
+        "IdSubProductoOrigen": 4,
+        "Monto": Decimal(60),
+    }
+    contabilizar = Mock(return_value=11)
+    monkeypatch.setattr(r, "_contabilizar", contabilizar)
+    with pytest.raises(HTTPException) as error:
+        r.liberar_retencion(
+            conn, cuenta, retencion, 1, "Garantía resuelta", clave="QA-9"
+        )
+    assert error.value.status_code == 409
+    conn.execute.assert_not_called()
+
+    assert (
+        r.liberar_retencion(
+            conn,
+            cuenta,
+            retencion,
+            1,
+            "Garantía resuelta",
+            clave="QA-9",
+            modulo="Creditos",
+            solicitud=3,
+        )
+        == 11
+    )
+    contabilizar.assert_called_once_with(
+        conn,
+        cuenta,
+        1,
+        "QA-9",
+        Decimal(60),
+        alta=False,
+        asiento_original=10,
+        subproducto_origen=4,
+    )
+    sql, parametros = conn.execute.call_args.args
+    assert "SaldoRetenido=SaldoRetenido-:monto" in str(sql)
+    assert (parametros["estado"], parametros["asiento"], parametros["monto"]) == (
+        "Liberada",
+        11,
+        Decimal(60),
+    )
+
+    liberada = {
+        **retencion,
+        "Estado": "Liberada",
+        "ClaveLiberacion": "QA-9",
+        "IdSolicitudLiberacion": 3,
+        "MotivoLiberacion": "Garantía resuelta",
+        "IdAsientoLiberacion": 11,
+    }
+    assert (
+        r.liberar_retencion(
+            conn,
+            {**cuenta, "SaldoRetenido": Decimal(0)},
+            liberada,
+            1,
+            "Garantía resuelta",
+            clave="QA-9",
+            modulo="Creditos",
+            solicitud=3,
+        )
+        == 11
+    )
+    assert contabilizar.call_count == conn.execute.call_count == 1
 
 
 @pytest.mark.parametrize(
