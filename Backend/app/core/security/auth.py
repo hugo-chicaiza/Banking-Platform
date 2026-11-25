@@ -171,7 +171,7 @@ class Usuario:
         return ",".join(self.roles) or None
 
     def agencia(self) -> str | None:
-        """IdAgencia del usuario (Organizacion.Usuarios.AgenciaID)."""
+        """Agencia operativa validada de la sesión."""
         if self.cargar_agencia is None:
             return self.id_agencia
         if "agencia" not in self._leidos:
@@ -618,7 +618,7 @@ def _contexto_pagina_vigente(usuario: Usuario, valor: str) -> bool:
     if valor == "global":
         from app.modules.auth.agencias import contexto_usuario
 
-        return contexto_usuario(usuario).alcance_global
+        return usuario.agencia() is None and contexto_usuario(usuario).alcance_global
     return (
         len(valor) == 3
         and valor.isascii()
