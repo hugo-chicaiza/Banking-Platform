@@ -53,7 +53,8 @@
               "SUPERVISOR",
               "APROBADOR_CREDITO",
               "CONTADOR",
-              "AUDITOR"
+              "AUDITOR",
+              "CUMPLIMIENTO"
             ],
             "title": "Rol",
             "type": "string"
@@ -525,7 +526,8 @@
                 "SUPERVISOR",
                 "APROBADOR_CREDITO",
                 "CONTADOR",
-                "AUDITOR"
+                "AUDITOR",
+                "CUMPLIMIENTO"
               ],
               "type": "string"
             },
@@ -617,7 +619,8 @@
               "SUPERVISOR",
               "APROBADOR_CREDITO",
               "CONTADOR",
-              "AUDITOR"
+              "AUDITOR",
+              "CUMPLIMIENTO"
             ],
             "title": "Rol",
             "type": "string"
@@ -2662,7 +2665,8 @@
                     "SUPERVISOR",
                     "APROBADOR_CREDITO",
                     "CONTADOR",
-                    "AUDITOR"
+                    "AUDITOR",
+                    "CUMPLIMIENTO"
                   ],
                   "type": "string"
                 },
@@ -9580,7 +9584,8 @@
                 "SUPERVISOR",
                 "APROBADOR_CREDITO",
                 "CONTADOR",
-                "AUDITOR"
+                "AUDITOR",
+                "CUMPLIMIENTO"
               ],
               "title": "Rol",
               "type": "string"
@@ -10160,7 +10165,8 @@
                 "SUPERVISOR",
                 "APROBADOR_CREDITO",
                 "CONTADOR",
-                "AUDITOR"
+                "AUDITOR",
+                "CUMPLIMIENTO"
               ],
               "title": "Rol",
               "type": "string"
@@ -10742,7 +10748,8 @@
                 "SUPERVISOR",
                 "APROBADOR_CREDITO",
                 "CONTADOR",
-                "AUDITOR"
+                "AUDITOR",
+                "CUMPLIMIENTO"
               ],
               "title": "Rol",
               "type": "string"

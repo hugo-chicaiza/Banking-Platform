@@ -517,7 +517,13 @@ def test_consultas_contrato_openapi_sin_sockets():
     ]:
         ruta = contrato["paths"][f"/api/v1/cuentas{sufijo}"]["get"]
         assert ruta["operationId"] == operacion
-        assert ruta["x-roles"] == ["ASESOR", "CAJERO", "SUPERVISOR", "ADMIN"]
+        assert ruta["x-roles"] == [
+            "ASESOR",
+            "CAJERO",
+            "SUPERVISOR",
+            "ADMIN",
+            "CUMPLIMIENTO",
+        ]
         assert ruta["responses"]["200"]["content"]["application/json"]["schema"][
             "$ref"
         ].endswith(f"/{modelo}")
@@ -1373,8 +1379,11 @@ async def _http_cuentas(method, path, body=None):
 
 @pytest.fixture
 def sesion_cuentas(monkeypatch):
+    from unittest.mock import Mock
+
     from app.core.database.db import cooperativa
     from app.core.security.auth import usuario_actual
+    from app.modules.cuentas import estado_operativo
 
     usuario = Usuario(
         id_usuario="user_cta",
@@ -1387,11 +1396,9 @@ def sesion_cuentas(monkeypatch):
         id_agencia="001",
         id_interno=12,
     )
-    monkeypatch.setattr(
-        service,
-        "cambiar_estado_cuenta",
-        lambda *a: Cuenta(**_cuenta_row(estado="BLOQUEADA")),
-    )
+    monkeypatch.setattr(service, "obtener_cuenta", lambda *a: Cuenta(**_cuenta_row()))
+    monkeypatch.setattr(estado_operativo, "bloquear", lambda *a: None)
+    monkeypatch.setattr(service.audit, "registrar", lambda *a: None)
     monkeypatch.setattr(
         service, "obtener_cupos", lambda *a: [service.CupoEfectivo(**_cupo_row())]
     )
@@ -1405,7 +1412,7 @@ def sesion_cuentas(monkeypatch):
             items=[], page=1, page_size=20, total=0
         ),
     )
-    app.dependency_overrides[cooperativa] = lambda: None
+    app.dependency_overrides[cooperativa] = lambda: Mock()
     yield usuario, usuario_actual
     app.dependency_overrides.clear()
 
@@ -1414,8 +1421,8 @@ _RUTAS_NUEVAS = [
     (
         "PATCH",
         "/api/v1/cuentas/501/estado",
-        {"estado": "BLOQUEADA", "motivo": "Solicitud"},
-        {"ASESOR", "SUPERVISOR", "ADMIN"},
+        {"estado": "BLOQUEADA", "motivo": "PREVENTIVO"},
+        {"ASESOR", "SUPERVISOR", "CUMPLIMIENTO"},
     ),
     ("GET", "/api/v1/cuentas/501/cupos", None, {"ASESOR", "SUPERVISOR", "ADMIN"}),
     (
@@ -1441,6 +1448,7 @@ _RUTAS_NUEVAS = [
         "SUPERVISOR",
         "ADMIN",
         "AUDITOR",
+        "CUMPLIMIENTO",
         "CAJERO",
         "CONTADOR",
         "APROBADOR_CREDITO",
@@ -1456,8 +1464,9 @@ def test_cta_roles_efectivos_http(
         usuario, roles=(rol,), permisos=permisos_de((rol,))
     )
     respuesta = asyncio.run(_http_cuentas(method, path, body))
-    assert respuesta.status_code == (200 if rol in permitidos else 403)
-    if rol not in permitidos:
+    permitido = rol in permitidos and not (path.endswith("/estado") and rol == "ASESOR")
+    assert respuesta.status_code == (200 if permitido else 403)
+    if not permitido:
         assert respuesta.json()["code"] == "SIN_PERMISO"
         assert respuesta.headers["content-type"].startswith("application/problem+json")
 
@@ -1488,23 +1497,27 @@ def test_cta_escrituras_exigen_usuario_auditoria_real(
 
 
 def test_cta05_router_propaga_identidad_ip_y_traza(sesion_cuentas, monkeypatch):
+    from dataclasses import replace
+
+    from app.modules.cuentas import estado_operativo
 
     usuario, dependencia = sesion_cuentas
-    app.dependency_overrides[dependencia] = lambda: usuario
+    app.dependency_overrides[dependencia] = lambda: replace(
+        usuario, roles=("SUPERVISOR",)
+    )
     llamadas = []
 
     def cambiar(*args):
         llamadas.append(args)
-        return Cuenta(**_cuenta_row(estado="BLOQUEADA"))
 
-    monkeypatch.setattr(service, "cambiar_estado_cuenta", cambiar)
+    monkeypatch.setattr(estado_operativo, "bloquear", cambiar)
+    eventos = []
+    monkeypatch.setattr(service.audit, "registrar", eventos.append)
     respuesta = asyncio.run(_http_cuentas(*_RUTAS_NUEVAS[0][:3]))
     assert respuesta.status_code == 200
-    assert llamadas[0][1] == 501 and llamadas[0][3:] == (
-        12,
-        "127.0.0.1",
-        "cuentas-http",
-    )
+    assert llamadas[0][1:] == (501, "001", "PREVENTIVO", 12)
+    assert eventos[0].ip == "127.0.0.1"
+    assert eventos[0].accion == "CTA_BLOQUEO"
 
 
 def test_cta_nuevos_contratos_openapi():
@@ -1522,7 +1535,11 @@ def test_cta_nuevos_contratos_openapi():
         for status in ("400", "401", "403", "404", "409", "422", "500"):
             assert "application/problem+json" in op["responses"][status]["content"]
     esquemas = contrato["components"]["schemas"]
-    assert set(esquemas["CuentaEstadoUpdate"]["properties"]) == {"estado", "motivo"}
+    assert set(esquemas["CuentaEstadoUpdate"]["properties"]) == {
+        "estado",
+        "motivo",
+        "documentoVerificado",
+    }
     assert esquemas["CuentaEstadoUpdate"]["properties"]["estado"]["enum"] == list(
         _ESTADO_BD
     )
@@ -1556,9 +1573,12 @@ def test_cta_nuevos_contratos_openapi():
 
 @pytest.mark.parametrize("index", [0, 2])
 def test_cta_escrituras_rechazan_body_extra_http(sesion_cuentas, monkeypatch, index):
+    from dataclasses import replace
 
     usuario, dependencia = sesion_cuentas
-    app.dependency_overrides[dependencia] = lambda: usuario
+    app.dependency_overrides[dependencia] = lambda: (
+        replace(usuario, roles=("SUPERVISOR",)) if index == 0 else usuario
+    )
     method, path, body, _ = _RUTAS_NUEVAS[index]
     respuesta = asyncio.run(_http_cuentas(method, path, body | {"modificadoPor": 999}))
     assert respuesta.status_code == 400
@@ -1857,7 +1877,13 @@ def test_cta06_http_propaga_aliases_y_rango_inclusivo(sesion_cuentas, monkeypatc
 def test_cta06_openapi_publica_fechas_obligatorias_y_respuesta():
     ruta = app.openapi()["paths"]["/api/v1/cuentas/{idCuenta}/movimientos"]["get"]
     assert ruta["operationId"] == "CTA06"
-    assert ruta["x-roles"] == ["ASESOR", "CAJERO", "SUPERVISOR", "ADMIN"]
+    assert ruta["x-roles"] == [
+        "ASESOR",
+        "CAJERO",
+        "SUPERVISOR",
+        "ADMIN",
+        "CUMPLIMIENTO",
+    ]
     parametros = {p["name"]: p for p in ruta["parameters"]}
     assert parametros["desde"]["required"] and parametros["hasta"]["required"]
     assert ruta["responses"]["200"]["content"]["application/json"]["schema"][

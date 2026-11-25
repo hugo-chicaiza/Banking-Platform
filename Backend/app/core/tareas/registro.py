@@ -22,9 +22,16 @@ def _vigilante() -> Conteo:
     return vigilar()
 
 
+def _inactividad_cuentas() -> Conteo:
+    from app.modules.cuentas.inactividad import ejecutar
+
+    return ejecutar()
+
+
 TAREAS: dict[str, Tarea] = {
     "ATM06_RECUPERACION": Tarea("ATM06_RECUPERACION", _atm06_recuperacion),
     "SIS_VIGILANTE": Tarea("SIS_VIGILANTE", _vigilante),
+    "CTA_INACTIVIDAD": Tarea("CTA_INACTIVIDAD", _inactividad_cuentas),
 }
 
 
