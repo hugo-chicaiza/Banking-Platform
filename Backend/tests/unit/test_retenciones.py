@@ -45,6 +45,7 @@ def test_retencion_administrativa_rechaza_monto_mayor_al_disponible():
             alta,
         )
     assert error.value.status_code == 409
+    assert isinstance(error.value.detail, dict)
     assert error.value.detail["code"] == "SALDO_INSUFICIENTE"
 
 

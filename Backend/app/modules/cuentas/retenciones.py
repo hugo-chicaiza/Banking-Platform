@@ -154,7 +154,10 @@ def _contabilizar(
             conn, fila["IdSubProducto"], "RESTRINGIDO", calendario["fecha"]
         )
     )
-    roles = {("PRODUCTO", "CAPITAL"): capital, ("PRODUCTO", "RESTRINGIDO"): restringido}
+    roles: dict[tuple[str, str | None], int] = {
+        ("PRODUCTO", "CAPITAL"): capital,
+        ("PRODUCTO", "RESTRINGIDO"): restringido,
+    }
     if len(set(roles.values())) != 2:
         raise problema(
             409,
