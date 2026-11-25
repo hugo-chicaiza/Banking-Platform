@@ -143,6 +143,32 @@ def obtener_cuenta_por_id(conn: Connection, id_cuenta: int) -> dict[str, Any] | 
     return _cuenta_desde_bd(fila) if fila is not None else None
 
 
+def obtener_titular_y_motivo(
+    conn: Connection, id_cuenta: int, estado: str
+) -> dict[str, Any]:
+    return (
+        _one(
+            conn,
+            """
+        SELECT NULLIF(TRIM(COALESCE(NULLIF(TRIM(cl.RazonSocial), ''),
+                                    CONCAT_WS(' ', cl.Nombres, cl.Apellidos))), '') AS nombre_titular,
+               evento.Detalle AS motivo_estado
+        FROM Cuentas.Cuenta AS c
+        LEFT JOIN Clientes.Cliente AS cl ON cl.IdCliente=c.IdCliente
+        OUTER APPLY (
+            SELECT TOP (1) e.Detalle FROM Cuentas.CuentaEvento AS e
+            WHERE e.IdCuenta=c.IdCuenta AND e.EstadoActual=:estado
+              AND e.TipoEvento IN ('Anulacion','Bloqueo','Desbloqueo','Inactivacion','Reactivacion','Cierre')
+            ORDER BY e.FechaEvento DESC,e.IdCuentaEvento DESC
+        ) AS evento
+        WHERE c.IdCuenta=:id
+        """,
+            {"id": id_cuenta, "estado": _ESTADOS_CUENTA_BD[estado]},
+        )
+        or {}
+    )
+
+
 def consultar_movimientos(
     conn: Connection,
     id_cuenta: int,

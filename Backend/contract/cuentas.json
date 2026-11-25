@@ -44,6 +44,17 @@
             "title": "Idcuentaautorizado",
             "type": "integer"
           },
+          "nombreAutorizado": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nombreautorizado"
+          },
           "rol": {
             "enum": [
               "Tutor",
@@ -165,6 +176,99 @@
           "estado"
         ],
         "title": "Cuenta",
+        "type": "object"
+      },
+      "CuentaDetalle": {
+        "properties": {
+          "estado": {
+            "enum": [
+              "ACTIVA",
+              "INACTIVA",
+              "BLOQUEADA",
+              "CERRADA",
+              "PendienteDeposito",
+              "Anulada"
+            ],
+            "title": "Estado",
+            "type": "string"
+          },
+          "idAgencia": {
+            "title": "Idagencia",
+            "type": "string"
+          },
+          "idCliente": {
+            "title": "Idcliente",
+            "type": "integer"
+          },
+          "idCuenta": {
+            "title": "Idcuenta",
+            "type": "integer"
+          },
+          "idMoneda": {
+            "const": 840,
+            "title": "Idmoneda",
+            "type": "integer"
+          },
+          "idProducto": {
+            "title": "Idproducto",
+            "type": "integer"
+          },
+          "motivoEstado": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Motivoestado"
+          },
+          "nombreTitular": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nombretitular"
+          },
+          "numeroCuenta": {
+            "title": "Numerocuenta",
+            "type": "string"
+          },
+          "saldo": {
+            "title": "Saldo",
+            "type": "number"
+          },
+          "saldoRetenido": {
+            "title": "Saldoretenido",
+            "type": "number"
+          },
+          "tipoCuenta": {
+            "enum": [
+              "Ahorro",
+              "Corriente"
+            ],
+            "title": "Tipocuenta",
+            "type": "string"
+          }
+        },
+        "required": [
+          "idCuenta",
+          "numeroCuenta",
+          "idCliente",
+          "idProducto",
+          "idAgencia",
+          "tipoCuenta",
+          "idMoneda",
+          "saldo",
+          "saldoRetenido",
+          "estado"
+        ],
+        "title": "CuentaDetalle",
         "type": "object"
       },
       "CuentaEstadoUpdate": {
@@ -2137,7 +2241,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Cuenta"
+                  "$ref": "#/components/schemas/CuentaDetalle"
                 }
               }
             },

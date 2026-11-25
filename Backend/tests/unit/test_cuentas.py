@@ -512,7 +512,7 @@ def test_consultas_contrato_openapi_sin_sockets():
     contrato = app.openapi()
     for sufijo, operacion, modelo in [
         ("", "CTA02", "PageCuenta"),
-        ("/{idCuenta}", "CTA03", "Cuenta"),
+        ("/{idCuenta}", "CTA03", "CuentaDetalle"),
         ("/{idCuenta}/saldo", "CTA04", "SaldoCuenta"),
     ]:
         ruta = contrato["paths"][f"/api/v1/cuentas{sufijo}"]["get"]
@@ -707,10 +707,21 @@ def test_router_listado_propaga_parametros(filtros):
 
 @pytest.mark.parametrize("consulta", [router.obtener_cuenta, router.obtener_saldo])
 def test_router_detalle_y_saldo_propagan_id(consulta):
-    db = _fake_conn([_cuenta_row(id_cuenta=712)])
+    filas = [[_cuenta_row(id_cuenta=712)]]
+    if consulta is router.obtener_cuenta:
+        filas.append(
+            [{"nombre_titular": "Titular de prueba", "motivo_estado": "Orden judicial"}]
+        )
+    db = _fake_conn(*filas)
     resultado = consulta(712, cast(Connection, db))
     assert resultado.id_cuenta == 712
     assert db.consultas[0][1] == {"id_cuenta": 712}
+    if consulta is router.obtener_cuenta:
+        assert resultado.model_dump()["nombre_titular"] == "Titular de prueba"
+        assert resultado.model_dump()["motivo_estado"] == "Orden judicial"
+        sql, parametros = db.consultas.pop()
+        assert "WHERE c.IdCuenta=:id" in sql
+        assert parametros == {"id": 712, "estado": "Activa"}
     _assert_solo_lectura(db)
 
 

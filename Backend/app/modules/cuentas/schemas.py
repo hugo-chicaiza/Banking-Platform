@@ -42,6 +42,11 @@ class Cuenta(CamelModel):
     estado: EstadoCuenta
 
 
+class CuentaDetalle(Cuenta):
+    nombre_titular: str | None = None
+    motivo_estado: str | None = None
+
+
 class CuentaPendienteCreate(CamelModel):
     model_config = ConfigDict(extra="forbid", validate_by_name=False)
     id_cliente: int = Field(gt=0, le=2147483647)
@@ -59,6 +64,7 @@ class AnularApertura(CamelModel):
 class AutorizadoCuenta(CamelModel):
     id_cuenta_autorizado: int
     id_cliente_autorizado: int
+    nombre_autorizado: str | None = None
     rol: Literal["Tutor", "RepresentanteLegal", "Firmante"]
     fecha_inicio: date
     fecha_fin: date | None
