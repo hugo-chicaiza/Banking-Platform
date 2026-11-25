@@ -304,7 +304,7 @@ FUNCIONES = (
         "Cambiar estado de tarjeta",
         "Tarjetas",
         GESTORES,
-        (("POST", T + "/{idTarjeta}/estado"),),
+        (("POST", T + "/{idTarjeta}/estado"), ("PATCH", T + "/{idTarjeta}/envio")),
         "/tarjetas",
         ("tarjetas.consultar",),
     ),

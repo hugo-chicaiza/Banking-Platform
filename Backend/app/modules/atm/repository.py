@@ -94,6 +94,7 @@ def obtener_tarjeta(
             t.FechaEmision AS fecha_emision,
             t.FechaExpiracion AS fecha_expiracion,
             t.Estado AS estado_tarjeta,
+            t.RequiereEntregaVerificada AS requiere_entrega_verificada,
             t.HashNumeroTarjeta AS hash_numero_tarjeta
         FROM Tarjeta.Tarjeta AS t
         WHERE t.IdTarjeta = :id_tarjeta

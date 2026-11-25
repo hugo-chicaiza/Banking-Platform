@@ -117,6 +117,23 @@ class TarjetaEstadoUpdate(_Entrada):
         ),
         Field(examples=["Solicitud del cliente aprobada"]),
     ]
+    codigo_motivo: (
+        Annotated[str, StringConstraints(pattern=r"^[A-Z_]{1,30}$")] | None
+    ) = None
+    documento_verificado: StrictBool = False
+
+
+class EnvioTarjetaUpdate(_Entrada):
+    codigo_seguimiento: Annotated[
+        str, StringConstraints(strip_whitespace=True, pattern=r"^[A-Za-z0-9_-]{1,64}$")
+    ]
+
+
+class EnvioTarjeta(CamelModel):
+    id_tarjeta: int
+    estado_envio: Literal["Pendiente", "Despachado", "Entregado", "Cancelado"]
+    codigo_seguimiento: str | None
+    despachado_en: datetime | None
 
 
 class PinBlockPruebaEntrada(_Entrada):
@@ -159,6 +176,10 @@ class Tarjeta(TarjetaResumen):
     # Aprobación o rechazo (TAR-04); null mientras la tarjeta está Solicitada
     fecha_resolucion: datetime | None = None
     fecha_expiracion: date
+    motivo_estado: str | None = None
+    entrega_verificada_en: datetime | None = None
+    sobre_descargado_en: datetime | None = None
+    envio: EnvioTarjeta | None = None
 
 
 class PageTarjeta(CamelModel):

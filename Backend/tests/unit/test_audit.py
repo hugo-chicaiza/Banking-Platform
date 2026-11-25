@@ -9,7 +9,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from app.core.database.db import cooperativa
 from app.core.security import audit
 from app.main import app
-from app.modules.tarjetas import repository, router
+from app.modules.tarjetas import repository, router, sobre_pin
 from tests.pin_version import DriverLimitesSQL
 from tests.sesion import ID_AUDITORIA, simular_sesion
 from tests.tarjetas_hsm import instalar
@@ -51,6 +51,9 @@ def _cliente(monkeypatch, conn: _Conn | None = None) -> TestClient:
     app.dependency_overrides[router.seguridad] = lambda: conn
     simular_sesion(app)
     monkeypatch.setattr(repository, "insertar_historial", lambda *a: None)
+    monkeypatch.setattr(repository, "obtener_envio", lambda *_a: None)
+    servicio_sobre = SimpleNamespace(preparar=lambda *_a: "sobre-prueba")
+    monkeypatch.setattr(sobre_pin, "obtener_servicio", lambda: servicio_sobre)
     # HSM simulado y SeguridadDB en memoria, con el PAN de la tarjeta 301 custodiado
     instalar(monkeypatch).custodiar()
     return TestClient(app)
@@ -110,7 +113,7 @@ def test_escritura_exitosa_se_audita(monkeypatch, eventos_auditados):
     )
     # ip_cliente: "testclient" no es una IP válida y no va a la auditoría (ASVS 4.1.3)
     assert evento.usuario == ID_AUDITORIA and evento.ip == "desconocida"
-    assert "Regeneración de PIN" in evento.descripcion
+    assert evento.descripcion == "TAR_PIN_REGENERADO"
     assert conn.connection.driver_connection.timeout == 0
     assert conn.connection.driver_connection.lock_timeout == -1
     assert conn.invalidated is False

@@ -1,9 +1,9 @@
 import logging
 import secrets
-from collections.abc import Iterator
+from collections.abc import Collection, Iterator
 from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
-from datetime import date, timedelta, timezone
+from datetime import UTC, date, timedelta, timezone
 from typing import Any
 
 from fastapi import HTTPException
@@ -23,6 +23,7 @@ from app.core.security.hsm import (
 )
 from app.core.security.pin_version import PinVersionNoDisponible
 from app.modules.catalogos.subproductos import tipo_tarjeta_de
+from app.modules.productos.service import cliente_elegible
 from app.modules.tarjetas import repository, sobre_pin
 from app.modules.tarjetas.identificacion import hash_pan
 from app.modules.tarjetas.pin_sql import (
@@ -36,6 +37,7 @@ from app.modules.tarjetas.schemas import (
     DESCRIPCION_PIN_GENERADO,
     DESCRIPCION_PIN_REGENERADO,
     ORIGEN_PIN,
+    EnvioTarjeta,
     PageTarjeta,
     PageTarjetaHistorial,
     PinBlockPrueba,
@@ -279,6 +281,10 @@ def crear_tarjeta(
     nunca queda una tarjeta sin PAN recuperable. Si falla la confirmación de
     CooperativaDB, _compensar_pan borra el PAN ya guardado.
     """
+    if payload.tipo_tarjeta != "Debito":
+        raise problema(
+            422, "SOLO_DEBITO", "Solo se pueden solicitar tarjetas de débito."
+        )
     hsm = _hsm("PAN_NO_DISPONIBLE")
     custodiado: list[int] = []
     try:
@@ -314,7 +320,7 @@ def _emitir(
 ) -> Tarjeta:
     with (
         _auditado(
-            "INSERT", "Tarjeta.Tarjeta", "TAR-01 Emisión de tarjeta", None, usuario, ip
+            "INSERT", "Tarjeta.Tarjeta", "TAR_SOLICITADA", None, usuario, ip
         ) as operacion,
         _transaccion(conn_seguridad, conn),
     ):
@@ -325,6 +331,10 @@ def _emitir(
             raise problema(422, "CUENTA_NO_ENCONTRADA", "La cuenta no existe.")
         if cuenta["estado"] != "Activa":
             raise problema(409, "CUENTA_NO_ACTIVA", "La cuenta no está Activa.")
+        if cuenta.get("tipo_cuenta") == "CERTIFICADO_APORTACION":
+            raise problema(
+                422, "CUENTA_NO_ADMITE_TARJETA", "Los certificados no admiten tarjetas."
+            )
 
         producto = repository.obtener_producto(conn, payload.id_producto)
         if producto is None:
@@ -358,6 +368,24 @@ def _emitir(
                 "El tipo de tarjeta no corresponde al subproducto elegido.",
             )
 
+        elegible, bloqueos = cliente_elegible(
+            conn, cuenta["id_cliente"], payload.id_sub_producto
+        )
+        if not elegible:
+            raise problema(
+                422,
+                "CLIENTE_NO_ELEGIBLE",
+                "El cliente no es elegible.",
+                bloqueos=bloqueos,
+            )
+        if not payload.es_extension and repository.principal_viva(
+            conn, payload.id_cuenta
+        ):
+            raise problema(
+                409,
+                "TARJETA_PRINCIPAL_VIGENTE",
+                "La cuenta ya tiene una tarjeta principal vigente.",
+            )
         _validar_extension(conn, payload)
         _validar_envio(conn, payload)
 
@@ -467,9 +495,72 @@ def _tarjeta_no_encontrada() -> HTTPException:
 def obtener_tarjeta(conn: Connection, id_tarjeta: int) -> Tarjeta:
     with _transaccion(conn):
         fila = repository.obtener_tarjeta(conn, id_tarjeta)
+        if fila is None:
+            raise _tarjeta_no_encontrada()
+        return Tarjeta(**fila, envio=_envio(conn, id_tarjeta, fila))
+
+
+def _envio(
+    conn: Connection, id_tarjeta: int, tarjeta: dict[str, Any]
+) -> EnvioTarjeta | None:
+    fila = repository.obtener_envio(conn, id_tarjeta)
     if fila is None:
-        raise _tarjeta_no_encontrada()
-    return Tarjeta(**fila)
+        return None
+    estado = "Pendiente"
+    if tarjeta.get("entrega_verificada_en"):
+        estado = "Entregado"
+    elif tarjeta["estado_actual"] in _ESTADOS_TERMINALES:
+        estado = "Cancelado"
+    elif fila["despachado_en"] is not None:
+        estado = "Despachado"
+    fecha = fila["despachado_en"]
+    return EnvioTarjeta.model_validate(
+        {
+            "id_tarjeta": id_tarjeta,
+            "estado_envio": estado,
+            "codigo_seguimiento": fila["codigo_seguimiento"],
+            "despachado_en": fecha.replace(tzinfo=UTC) if fecha else None,
+        }
+    )
+
+
+def registrar_envio(
+    conn: Connection,
+    id_tarjeta: int,
+    codigo: str,
+    agencia: str | None,
+    usuario: int,
+    ip: str | None,
+) -> EnvioTarjeta:
+    if not agencia:
+        raise problema(403, "AGENCIA_REQUERIDA", "Seleccione una agencia activa.")
+    with (
+        _auditado(
+            "UPDATE", "Tarjeta.EnviosTarjeta", "TAR_ENVIO", id_tarjeta, usuario, ip
+        ),
+        _transaccion(conn),
+    ):
+        tarjeta = repository.obtener_tarjeta(conn, id_tarjeta, bloquear=True)
+        if tarjeta is None or tarjeta["id_agencia"] != agencia:
+            raise _tarjeta_no_encontrada()
+        actual = _envio(conn, id_tarjeta, tarjeta)
+        if (
+            tarjeta["estado_actual"] != "Generada"
+            or tarjeta["tipo_tarjeta"] != "Debito"
+            or actual is None
+        ):
+            raise problema(
+                409, "ENVIO_NO_DISPONIBLE", "La tarjeta no admite un despacho."
+            )
+        if actual.codigo_seguimiento == codigo and actual.despachado_en:
+            return actual
+        repository.registrar_despacho(conn, id_tarjeta, codigo)
+        resultado = _envio(conn, id_tarjeta, tarjeta)
+        if resultado is None:
+            raise problema(
+                409, "ENVIO_NO_DISPONIBLE", "No hay un envío para la tarjeta."
+            )
+        return resultado
 
 
 # TAR-04
@@ -501,13 +592,7 @@ def _generar_offset_y_sobre(
     """
     servicio = sobre_pin.obtener_servicio()
     if servicio is None:
-        logger.warning(
-            "tarjetas: sobre de PIN no disponible (sin almacén o sin clave) "
-            "id_tarjeta=%s",
-            id_tarjeta,
-        )
-        offset, referencia_pvk = hsm.generar_pin(pan)
-        return offset, referencia_pvk, None
+        raise _sobre_no_guardado()
     offset, referencia_pvk, pin = hsm.generar_pin_para_sobre(pan)
     try:
         id_sobre = servicio.preparar(id_tarjeta, pin, origen)
@@ -581,6 +666,8 @@ def cambiar_estado(
     payload: TarjetaEstadoUpdate,
     usuario: int,
     ip: str | None,
+    *,
+    permisos: Collection[str],
 ) -> Tarjeta:
     """Cambia el estado según Tarjeta.TransicionEstado (A-05).
 
@@ -589,40 +676,36 @@ def cambiar_estado(
     y repetir la aprobación genera un PIN nuevo que reemplaza al anterior.
     """
     destino = payload.estado
+    aprobar = destino == "Aprobada"
+    evento = "TAR_APROBADA" if aprobar else "TAR_ESTADO"
     with (
         _auditado(
             "UPDATE",
             "Tarjeta.Tarjeta",
-            f"TAR-04 Cambio de estado a {destino}",
+            f"{evento}: cambio de estado a {destino}",
             id_tarjeta,
             usuario,
             ip,
         ),
-        limitar_sql_pin(conn) if destino == "Aprobada" else nullcontext(),
-        _transaccion(conn, asignacion_pin=destino == "Aprobada"),
+        limitar_sql_pin(conn) if aprobar else nullcontext(),
+        _transaccion(conn, asignacion_pin=aprobar),
     ):
         actual = repository.obtener_tarjeta(conn, id_tarjeta, bloquear=True)
         if actual is None:
             raise _tarjeta_no_encontrada()
         anterior = actual["estado_actual"]
-        if anterior == "Generada" and destino == "Activa":
-            raise problema(
-                409,
-                "ACTIVACION_AUTOMATICA",
-                "La tarjeta se activa con el primer cambio de PIN (débito) "
-                "o a los 3 días laborables (crédito).",
-            )
         if not repository.existe_transicion(conn, anterior, destino):
             raise problema(
                 409,
                 "TRANSICION_INVALIDA",
                 "El cambio de estado no está permitido.",
             )
+        entregar = anterior == "Generada" and destino == "Activa"
+        _validar_estado(conn, id_tarjeta, actual, payload, usuario, permisos)
         if destino == "Activa" and not actual["pin_asignado"]:
             raise problema(
                 409, "PIN_NO_ASIGNADO", "Asigne un PIN antes de activar la tarjeta."
             )
-        aprobar = destino == "Aprobada"
         if aprobar:
             _generar_pin(
                 conn_seguridad,
@@ -631,13 +714,19 @@ def cambiar_estado(
                 _hsm("HSM_NO_DISPONIBLE"),
                 "Aprobacion",
             )
+            # Conserva las dos transiciones de la base dentro del mismo commit.
+            repository.actualizar_estado(
+                conn, id_tarjeta, "Aprobada", resolucion=True, pin_asignado=True
+            )
+            destino = "Generada"
         repository.actualizar_estado(
             conn,
             id_tarjeta,
             destino,
-            resolucion=anterior == "Solicitada",
+            resolucion=anterior == "Solicitada" and not aprobar,
             emision=destino == "Generada",
-            pin_asignado=aprobar,
+            motivo=payload.codigo_motivo,
+            entrega=entregar,
         )
         repository.insertar_historial(
             conn,
@@ -663,6 +752,7 @@ def cambiar_estado(
         fila = repository.obtener_tarjeta(conn, id_tarjeta)
         if fila is None:  # pragma: no cover
             raise RuntimeError("La tarjeta actualizada no se encontró")
+        resultado = Tarjeta(**fila, envio=_envio(conn, id_tarjeta, fila))
 
     logger.info(
         "tarjetas: estado id_tarjeta=%s destino=%s usuario=%s",
@@ -670,7 +760,82 @@ def cambiar_estado(
         destino,
         usuario,
     )
-    return Tarjeta(**fila)
+    return resultado
+
+
+def _exigir_aprobacion(
+    permisos: Collection[str], permiso: str, usuario: int, solicitante: int | None
+) -> None:
+    if permiso not in permisos:
+        raise problema(403, "SIN_PERMISO_APROBACION", "Falta el acceso de aprobación.")
+    if solicitante is None or usuario == solicitante:
+        raise problema(
+            403, "AUTOAPROBACION_NO_PERMITIDA", "Debe resolver otra persona."
+        )
+
+
+def _validar_estado(
+    conn: Connection,
+    id_tarjeta: int,
+    actual: dict[str, Any],
+    datos: TarjetaEstadoUpdate,
+    usuario: int,
+    permisos: Collection[str],
+) -> None:
+    origen, destino = actual["estado_actual"], datos.estado
+    if destino in {"Aprobada", "Anulada"}:
+        _exigir_aprobacion(
+            permisos, "tar-solicitar:aprobar", usuario, actual["creado_por"]
+        )
+    if destino == "Aprobada" and (
+        origen != "Solicitada"
+        or actual["tipo_tarjeta"] != "Debito"
+        or not repository.existe_transicion(conn, "Aprobada", "Generada")
+    ):
+        raise problema(409, "TRANSICION_INVALIDA", "La tarjeta no admite aprobación.")
+    if destino == "Bloqueada" and datos.codigo_motivo is None:
+        raise problema(422, "MOTIVO_REQUERIDO", "Seleccione un motivo de bloqueo.")
+    if (
+        datos.codigo_motivo is not None
+        and repository.motivo_estado(conn, datos.codigo_motivo) is None
+    ):
+        raise problema(422, "MOTIVO_INVALIDO", "El motivo de estado no es válido.")
+
+    if origen == "Bloqueada" and destino == "Activa":
+        motivo = actual.get("motivo_estado")
+        regla = repository.motivo_estado(conn, motivo) if motivo else None
+        ultimo = repository.ultimo_bloqueo(conn, id_tarjeta)
+        bloqueo_pin = motivo is None and ultimo is not None and ultimo["bloqueo_pin"]
+        if motivo in {"PERDIDA", "ROBO"}:
+            raise problema(
+                409, "REPOSICION_REQUERIDA", "Solicite la reposición de la tarjeta."
+            )
+        if not bloqueo_pin and (regla is None or not regla["permite_desbloqueo"]):
+            raise problema(
+                409, "DESBLOQUEO_NO_PERMITIDO", "El motivo impide el desbloqueo."
+            )
+        _exigir_aprobacion(
+            permisos,
+            "tar-estado:aprobar",
+            usuario,
+            ultimo["realizado_por"] if ultimo else None,
+        )
+    if origen == "Generada" and destino == "Activa":
+        if actual["tipo_tarjeta"] != "Debito":
+            raise problema(
+                409, "TRANSICION_INVALIDA", "La tarjeta no admite la entrega."
+            )
+        if not datos.documento_verificado:
+            raise problema(
+                422, "DOCUMENTO_REQUERIDO", "Confirme la identidad del titular."
+            )
+        if not actual.get("sobre_descargado_en"):
+            raise problema(
+                409, "SOBRE_PIN_PENDIENTE", "Descargue primero el sobre de PIN."
+            )
+        envio = _envio(conn, id_tarjeta, actual)
+        if envio is not None and envio.despachado_en is None:
+            raise problema(409, "ENVIO_NO_DESPACHADO", "Registre primero el despacho.")
 
 
 # TAR-05
@@ -693,7 +858,7 @@ def regenerar_pin(
         _auditado(
             "UPDATE",
             "Tarjeta.Tarjeta",
-            "TAR-05 Regeneración de PIN",
+            "TAR_PIN_REGENERADO",
             id_tarjeta,
             usuario,
             ip,
@@ -762,16 +927,23 @@ def entregar_sobre_pin(
     conn: Connection, id_tarjeta: int, usuario: int, ip: str | None
 ) -> bytes:
     """Entrega el sobre de PIN una sola vez: queda Entregado y sin contenido."""
-    with _auditado(
-        "SELECT",
-        "Tarjeta.Tarjeta",
-        "TAR-07 Entrega de sobre de PIN",
-        id_tarjeta,
-        usuario,
-        ip,
+    with (
+        _auditado(
+            "SELECT", "Tarjeta.Tarjeta", "TAR_SOBRE_DESCARGADO", id_tarjeta, usuario, ip
+        ),
+        _transaccion(conn),
     ):
-        if not repository.existe_tarjeta(conn, id_tarjeta):
+        tarjeta = repository.obtener_tarjeta(conn, id_tarjeta, bloquear=True)
+        if tarjeta is None:
             raise _tarjeta_no_encontrada()
+        if (
+            tarjeta["tipo_tarjeta"] != "Debito"
+            or tarjeta["estado_actual"] not in _ESTADOS_CON_PIN
+            or not tarjeta["pin_asignado"]
+        ):
+            raise problema(
+                404, "SOBRE_PIN_NO_DISPONIBLE", "La tarjeta no tiene un sobre vigente."
+            )
         servicio = sobre_pin.obtener_servicio()
         if servicio is None:
             raise problema(
@@ -804,6 +976,7 @@ def entregar_sobre_pin(
                 "SOBRE_PIN_ALMACEN_NO_DISPONIBLE",
                 "El almacén de sobres de PIN no está disponible.",
             ) from None
+        repository.marcar_sobre_descargado(conn, id_tarjeta)
     logger.info(
         "tarjetas: sobre de PIN entregado id_tarjeta=%s usuario=%s",
         id_tarjeta,
