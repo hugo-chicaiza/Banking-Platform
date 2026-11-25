@@ -427,6 +427,50 @@
             ],
             "title": "Origen",
             "type": "string"
+          },
+          "topeDiarioProducto": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Topediarioproducto"
+          },
+          "topeFrecuenciaProducto": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Topefrecuenciaproducto"
+          },
+          "topeMensualProducto": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Topemensualproducto"
+          },
+          "topeTransaccionProducto": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Topetransaccionproducto"
           }
         },
         "required": [
@@ -489,6 +533,22 @@
             ],
             "title": "Cupomensualnuevo"
           },
+          "documentoVerificado": {
+            "anyOf": [
+              {
+                "enum": [
+                  "C",
+                  "R",
+                  "P"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Documentoverificado"
+          },
           "fechaModificacion": {
             "format": "date-time",
             "title": "Fechamodificacion",
@@ -523,6 +583,17 @@
               }
             ],
             "title": "Montomaxtxnuevo"
+          },
+          "solicitadoPorCliente": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Solicitadoporcliente"
           }
         },
         "required": [
@@ -539,9 +610,8 @@
         "title": "CupoHistorial",
         "type": "object"
       },
-      "CupoUpdate": {
+      "CupoSolicitado": {
         "additionalProperties": false,
-        "description": "Límites positivos según CK_CanalCupoClienteCustom_Cupos de la base actual.",
         "properties": {
           "cupoDiario": {
             "anyOf": [
@@ -566,6 +636,15 @@
               }
             ],
             "title": "Cupomensual"
+          },
+          "documentoVerificado": {
+            "enum": [
+              "C",
+              "R",
+              "P"
+            ],
+            "title": "Documentoverificado",
+            "type": "string"
           },
           "fechaVigencia": {
             "anyOf": [
@@ -597,15 +676,22 @@
               }
             ],
             "title": "Montomaxtransaccion"
+          },
+          "solicitadoPorCliente": {
+            "const": true,
+            "title": "Solicitadoporcliente",
+            "type": "boolean"
           }
         },
         "required": [
           "cupoDiario",
           "cupoMensual",
           "montoMaxTransaccion",
-          "maxTransaccionesDia"
+          "maxTransaccionesDia",
+          "solicitadoPorCliente",
+          "documentoVerificado"
         ],
-        "title": "CupoUpdate",
+        "title": "CupoSolicitado",
         "type": "object"
       },
       "EventoCuenta": {
@@ -5592,7 +5678,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/CupoUpdate"
+                "$ref": "#/components/schemas/CupoSolicitado"
               }
             }
           },
@@ -6142,6 +6228,7 @@
           "cuentas"
         ],
         "x-roles": [
+          "ASESOR",
           "SUPERVISOR",
           "ADMIN"
         ]

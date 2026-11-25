@@ -3,7 +3,7 @@
 import os
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
-from datetime import timedelta
+from datetime import datetime, time, timedelta
 from decimal import Decimal
 from pathlib import Path
 from threading import Barrier
@@ -17,6 +17,7 @@ from sqlalchemy.exc import DBAPIError
 
 from app.modules.parametros.service import hoy
 from app.modules.productos import programacion as p
+from app.modules.transacciones import repository as transacciones
 from tests.integration import test_productos_programacion_sql as base_sql
 from tests.integration.test_productos_programacion_sql import (
     CHECKER,
@@ -189,25 +190,48 @@ def test_e602_cupo_efectivo_combina_capas_y_ambito(motores, caso):
             c.exec_driver_sql("IF XACT_STATE()<>0 ROLLBACK TRANSACTION;")
 
 
-def test_ac5_cuenta_superior_al_techo_rechazada_en_servicio_y_trigger(motores, caso):
+def test_e603_ajuste_inmediato_persiste_pedido_y_documento(motores, caso):
     from app.modules.cuentas import service as cuentas
-    from app.modules.cuentas.schemas import CupoUpdate
+    from app.modules.cuentas.schemas import CupoSolicitado
 
     cuenta = cuenta_y_techo(motores, caso)
-    payload = CupoUpdate.model_validate(
+    payload = CupoSolicitado.model_validate(
+        {
+            "cupoDiario": "600",
+            "cupoMensual": "4000",
+            "montoMaxTransaccion": "400",
+            "maxTransaccionesDia": 10,
+            "solicitadoPorCliente": True,
+            "documentoVerificado": "P",
+        }
+    )
+    with motores["cooperativa"].connect() as conn:
+        vigente = cuentas.actualizar_cupo(conn, cuenta, 1, payload, MAKER.id_interno)
+        assert vigente.cupo_diario == 600
+        historial = cuentas.obtener_historial_cupo(conn, cuenta, 1).items
+        assert len(historial) == 1
+        assert historial[0].solicitado_por_cliente is True
+        assert historial[0].documento_verificado == "P"
+
+
+def test_ac5_cuenta_superior_al_techo_rechazada_en_servicio_y_trigger(motores, caso):
+    from app.modules.cuentas import service as cuentas
+    from app.modules.cuentas.schemas import CupoSolicitado
+
+    cuenta = cuenta_y_techo(motores, caso)
+    payload = CupoSolicitado.model_validate(
         {
             "cupoDiario": "1001",
             "cupoMensual": "5000",
             "montoMaxTransaccion": "500",
             "maxTransaccionesDia": 20,
+            "solicitadoPorCliente": True,
+            "documentoVerificado": "C",
         }
     )
     with motores["cooperativa"].connect() as c, pytest.raises(HTTPException) as e:
         cuentas.actualizar_cupo(c, cuenta, 1, payload, MAKER.id_interno)
-    assert (
-        e.value.status_code == 422
-        and codigo_error(e.value) == "CUPO_SUPERA_MAXIMO_PRODUCTO"
-    )
+    assert e.value.status_code == 422 and codigo_error(e.value) == "CUPO_SOBRE_TOPE"
     with pytest.raises(DBAPIError, match="52003"), motores["cooperativa"].begin() as c:
         c.execute(
             text(
@@ -265,6 +289,19 @@ def test_p7_techo_futuro_aplica_menor_sin_alterar_personalizado(motores, caso):
             and futuro["CupoDiario"] == 100
             and futuro["MontoMaxTransaccion"] == 50
         )
+        autorizacion_actual = transacciones.autorizar_operacion(
+            c, cuenta, 1, "Retiro", 100, fecha_hora=datetime.combine(hoy(), time(12))
+        )
+        autorizacion_futura = transacciones.autorizar_operacion(
+            c,
+            cuenta,
+            1,
+            "Retiro",
+            100,
+            fecha_hora=datetime.combine(hoy() + timedelta(days=2), time(12)),
+        )
+        assert autorizacion_actual["CodigoRespuesta"].strip() == "00"
+        assert autorizacion_futura["CodigoRespuesta"].strip() == "61"
         assert (
             c.execute(
                 text(

@@ -27,7 +27,7 @@ from app.modules.cuentas.schemas import (
     CuentaResumen,
     CupoEfectivo,
     CupoHistorial,
-    CupoUpdate,
+    CupoSolicitado,
     EstadoCuenta,
     EventoCuenta,
     MovimientoCuenta,
@@ -698,11 +698,14 @@ def actualizar_cupo(
     conn: Connection,
     id_cuenta: int,
     id_canal: int,
-    payload: CupoUpdate,
+    payload: CupoSolicitado,
     modificado_por: int,
+    *,
+    agencia: str | None = None,
 ) -> CupoEfectivo:
     try:
-        if repository.bloquear_cuenta(conn, id_cuenta) is None:
+        cuenta = repository.bloquear_cuenta(conn, id_cuenta)
+        if cuenta is None or (agencia is not None and cuenta["id_agencia"] != agencia):
             raise problema(404, "CUENTA_NO_ENCONTRADA", "La cuenta no existe.")
         _validar_canal(conn, id_canal)
         producto = repository.bloquear_cupo_producto(conn, id_cuenta, id_canal)
@@ -733,7 +736,7 @@ def actualizar_cupo(
         ):
             raise problema(
                 422,
-                "CUPO_SUPERA_MAXIMO_PRODUCTO",
+                "CUPO_SOBRE_TOPE",
                 "El cupo supera el máximo del subproducto en ese canal.",
             )
         anterior = repository.bloquear_cupo_personalizado(conn, id_cuenta, id_canal)
@@ -764,13 +767,26 @@ def actualizar_cupo(
             0
         ]  # Puede ser Producto si se guardó una fecha ya vencida.
         conn.commit()
-        return resultado
     except DBAPIError as exc:
         conn.rollback()
         raise traducir_error_bd(exc, operacion="CTA08") from None
     except Exception:
         conn.rollback()
         raise
+
+    audit.registrar(
+        audit.EventoAuditoria(
+            accion="CTA_CUPO_CAMBIADO",
+            tabla="Canal.CanalCupoClienteCustom",
+            id_registro=str(id_cuenta),
+            resultado="Exitoso",
+            usuario=modificado_por,
+            ip=None,
+            agencia=cuenta["id_agencia"],
+            descripcion=f"Cupo del canal {id_canal} ajustado a pedido del cliente.",
+        )
+    )
+    return resultado
 
 
 def obtener_historial_cupo(
