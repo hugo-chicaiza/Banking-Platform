@@ -4,6 +4,8 @@ Las rutas están bajo `/api/v1/usuarios`. Un `200` de edición, traslado o susti
 
 ## Roles
 
+Por defecto, la política configurable y la aprobación adicional están suspendidas. La sustitución directa devuelve `200` si cumple los permisos y precondiciones vigentes. El flujo `202` se usa cuando la política institucional haya sido activada explícitamente.
+
 `PUT /usuarios/{idUsuario}/roles` acepta `{"roles":["CAJERO"]}`. El campo anterior `rol` sigue disponible para perfiles de un solo rol. Un `202` devuelve `{"idSolicitud":123,"estado":"Pendiente","requiereAprobacion":true}`. Muestre la solicitud pendiente y consulte su estado en Aprobaciones. Actualice el detalle del usuario cuando la solicitud llegue a `Ejecutada`. Si la aprobación devuelve `503 APROBACION_PENDIENTE_RECUPERACION`, conserve el ID y consulte la misma solicitud. Los estados `Rechazada` y `Cancelada` cierran la solicitud sin aplicar el cambio.
 
 ## Correo
@@ -21,7 +23,7 @@ Envíe `PATCH /usuarios/{idUsuario}` con solo `{"email":"nuevo@example.test"}` c
 | 409 | `APROBACION_REQUERIDA`, `CORTE_CAJA_PENDIENTE`, `USUARIO_PENDIENTE_DE_VINCULO` | Explique qué precondición falta. |
 | 422 | `NIVEL_INSUFICIENTE`, `ROLES_INCOMPATIBLES` | Mantenga el borrador y muestre la restricción. |
 | 422 | `CORREO_REQUIERE_CAMBIO_SEPARADO` | Envíe el cambio de correo por separado. |
-| 503 | `POLITICA_ROLES_NO_CONFIGURADA`, `OPERACION_NO_CONFIGURADA` | Muestre indisponibilidad de configuración. |
+| 503 | `POLITICA_ROLES_NO_CONFIGURADA`, `OPERACION_NO_CONFIGURADA` | Con la política activada, muestre la indisponibilidad de configuración. Una aprobación institucional suspendida también devuelve indisponibilidad. |
 | 503 | `CORREO_EN_CONCILIACION`, `ROLES_PENDIENTES_CONFIRMACION`, `WORKOS_NO_DISPONIBLE` | Consulte el estado confirmado antes de reintentar. |
 
 La conciliación de invitaciones bloquea su vínculo mientras haya evidencia ambigua. El SDK no expone el rol de una invitación ni una clave de idempotencia para su envío. El backend conserva el incidente cuando no puede verificar la invitación anterior como única y vigente. La resolución requiere revisión operativa.

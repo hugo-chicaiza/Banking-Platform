@@ -67,3 +67,8 @@ def vigente() -> PoliticaRoles:
             "POLITICA_ROLES_NO_CONFIGURADA",
             "La política de roles no está disponible.",
         ) from None
+
+
+def para_operaciones() -> PoliticaRoles | None:
+    """La configuración puede prepararse antes de la activación institucional."""
+    return vigente() if get_settings().e104_politica_roles_activa else None
