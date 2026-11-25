@@ -248,8 +248,8 @@ def autorizar_operacion(
             @CodigoRespuesta char(2),
             @Mensaje nvarchar(400),
             @Comision decimal(18, 2),
-            @Ahora datetime2 = ?,
-            @Cuenta int = ?, @Canal int = ?, @Tipo varchar(30) = ?, @Importe decimal(18,2) = ?;
+            @Ahora datetime2 = ?;
+        DECLARE @Cuenta int = ?, @Canal int = ?, @Tipo varchar(30) = ?, @Importe decimal(18,2) = ?;
 
         IF EXISTS (
             SELECT 1 FROM Cuentas.Cuenta c WITH (UPDLOCK, HOLDLOCK)

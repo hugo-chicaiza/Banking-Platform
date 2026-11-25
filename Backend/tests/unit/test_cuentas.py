@@ -1573,9 +1573,12 @@ def test_cta_nuevos_contratos_openapi():
 
 @pytest.mark.parametrize("index", [0, 2])
 def test_cta_escrituras_rechazan_body_extra_http(sesion_cuentas, monkeypatch, index):
+    from dataclasses import replace
 
     usuario, dependencia = sesion_cuentas
-    app.dependency_overrides[dependencia] = lambda: usuario
+    app.dependency_overrides[dependencia] = lambda: (
+        replace(usuario, roles=("SUPERVISOR",)) if index == 0 else usuario
+    )
     method, path, body, _ = _RUTAS_NUEVAS[index]
     respuesta = asyncio.run(_http_cuentas(method, path, body | {"modificadoPor": 999}))
     assert respuesta.status_code == 400

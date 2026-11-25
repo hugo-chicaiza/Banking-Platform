@@ -8,7 +8,7 @@ BEGIN
     CREATE TABLE Catalogo.MotivoBloqueoCuenta (
         Codigo varchar(30) NOT NULL PRIMARY KEY,
         Nombre nvarchar(100) NOT NULL,
-        Estado char(1) NOT NULL CHECK (Estado IN ('A','I'))
+        Estado varchar(1) NOT NULL CHECK (Estado IN ('A','I'))
     );
 END;
 INSERT Catalogo.MotivoBloqueoCuenta (Codigo, Nombre, Estado)
