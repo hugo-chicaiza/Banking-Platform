@@ -47,7 +47,9 @@ def _actual(conn: Connection, objetivo: Objetivo, *, bloquear: bool = False):
     if bloquear:
         titular = obtener_titular_cuenta(conn, id_cuenta)
         if titular is None or clientes.bloquear_cliente(conn, titular) is None:
-            raise problema(404, "CUENTA_NO_ENCONTRADA", "La cuenta no existe en la agencia activa.")
+            raise problema(
+                404, "CUENTA_NO_ENCONTRADA", "La cuenta no existe en la agencia activa."
+            )
         bloquear_cuenta(conn, id_cuenta)
     fila = (
         conn.execute(
