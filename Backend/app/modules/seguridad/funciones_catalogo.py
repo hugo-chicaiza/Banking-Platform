@@ -272,6 +272,18 @@ FUNCIONES = (
         "/cuentas",
     ),
     _f(
+        "cuentas.subproducto",
+        "Solicitar cambio de subproducto",
+        "Cuentas",
+        ("ASESOR",),
+        (
+            ("GET", Q + "/{idCuenta}/subproductos-destino"),
+            ("POST", Q + "/{idCuenta}/subproducto"),
+        ),
+        "/cuentas",
+        ("cuentas.consultar",),
+    ),
+    _f(
         "tarjetas.emitir",
         "Emitir tarjeta",
         "Tarjetas",

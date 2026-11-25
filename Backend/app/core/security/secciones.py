@@ -87,6 +87,8 @@ RUTAS_POR_SECCION: dict[str, tuple[tuple[str, str], ...]] = {
         ("GET", "/api/v1/cuentas/{idCuenta}/retenciones"),
         ("POST", "/api/v1/cuentas/{idCuenta}/retenciones"),
         ("POST", "/api/v1/cuentas/{idCuenta}/retenciones/{idRet}/liberacion"),
+        ("GET", "/api/v1/cuentas/{idCuenta}/subproductos-destino"),
+        ("POST", "/api/v1/cuentas/{idCuenta}/subproducto"),
     ),
     "tarjetas.emitir": (("POST", "/api/v1/tarjetas"),),
     "tarjetas.consultar": (
