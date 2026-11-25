@@ -461,19 +461,27 @@ def actualizar_cupo(
     idCuenta: IdRecurso,
     idCanal: IdRecurso,
     payload: CupoSolicitado,
+    request: Request,
     usuario: GestorCupo,
     modificado_por: UsuarioAuditoria,
     conn: Db,
 ) -> CupoEfectivo:
     """Guarda cupo e historial en una transacción y devuelve el cupo vigente."""
+    agencia = None
     if not {"SUPERVISOR", "ADMIN"}.intersection(usuario.roles):
         agencia = usuario.agencia()
         if agencia is None:
             raise problema(403, "AGENCIA_REQUERIDA", "Seleccione una agencia activa.")
-        return service.actualizar_cupo(
-            conn, idCuenta, idCanal, payload, modificado_por, agencia=agencia
-        )
-    return service.actualizar_cupo(conn, idCuenta, idCanal, payload, modificado_por)
+    return service.actualizar_cupo(
+        conn,
+        idCuenta,
+        idCanal,
+        payload,
+        modificado_por,
+        agencia=agencia,
+        usuario=usuario,
+        ip=ip_cliente(request.scope),
+    )
 
 
 @_gestion_router.get(

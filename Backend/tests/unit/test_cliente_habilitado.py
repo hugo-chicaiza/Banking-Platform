@@ -1,4 +1,5 @@
 from datetime import date, datetime
+from decimal import Decimal
 from typing import Any, cast
 from unittest.mock import MagicMock
 
@@ -23,9 +24,48 @@ def _cliente(**cambios):
         "EsPEP": False,
         "NivelRiesgoLAFT": "Bajo",
         "IdSolicitud": None,
+        "AntecedenteImpeditivo": False,
         **cambios,
     }
     return consulta
+
+
+def test_antecedente_impeditivo_bloquea_una_evaluacion_aprobada(monkeypatch):
+    monkeypatch.setattr(habilitacion.general, "valor", lambda *_: False)
+    conn = MagicMock()
+    conn.execute.return_value = _cliente(AntecedenteImpeditivo=True)
+
+    resultado = habilitacion.cliente_habilitado(conn, 3, FECHA)
+
+    assert not resultado.habilitado
+    assert "ANTECEDENTE_IMPIDE_VINCULACION" in resultado.motivos
+
+
+def test_activacion_revalida_riesgo_y_no_cambia_la_cuenta_si_vencio(monkeypatch):
+    monkeypatch.setattr(habilitacion.general, "valor", lambda *_: False)
+    monkeypatch.setattr(cuentas, "hoy", lambda: FECHA)
+    monkeypatch.setattr(
+        cuentas.repository,
+        "obtener_subproducto",
+        lambda *_: {"estado_producto": "A", "estado_subproducto": "A"},
+    )
+    conn, cuenta = MagicMock(), MagicMock()
+    cuenta.mappings.return_value.first.return_value = {
+        "Estado": "PendienteDeposito",
+        "IdCliente": 3,
+        "IdSubProducto": 25,
+        "MontoAperturaAplicado": Decimal(20),
+    }
+    conn.execute.side_effect = [cuenta, _cliente(ResultadoEvaluacion=None)]
+
+    with pytest.raises(HTTPException) as error:
+        cuentas.activar_si_corresponde(conn, 5, Decimal(20), 12)
+
+    assert error.value.status_code == 409
+    detalle = cast(dict[str, Any], error.value.detail)
+    assert detalle["code"] == "CLIENTE_NO_HABILITADO"
+    assert "RIESGO_NO_APROBADO_VIGENTE" in detalle["bloqueos"]
+    assert conn.execute.call_count == 2
 
 
 def test_requiere_estado_consentimiento_y_evaluacion(monkeypatch):

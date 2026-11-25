@@ -1,8 +1,11 @@
+from datetime import date
 from decimal import Decimal
 from typing import cast
+from unittest.mock import Mock
 
 import pytest
 from fastapi import HTTPException
+from sqlalchemy import Connection
 
 from app.core.security.auth import normalizar_roles, require_permiso
 from app.main import app
@@ -10,8 +13,71 @@ from app.modules.aprobaciones.identidad import Actor
 from app.modules.aprobaciones.manejadores import registro_inicial
 from app.modules.aprobaciones.registro import Objetivo
 from app.modules.aprobaciones.servicio import Servicio
+from app.modules.cuentas import cambio_subproducto as cambio
 from app.modules.cuentas import retenciones as r
 from tests.sesion import usuario_con_roles
+
+
+@pytest.mark.parametrize("fase", ["preparar", "aplicar"])
+@pytest.mark.parametrize("saldo_retenido", [0, 60])
+def test_cambio_subproducto_bloquea_una_retencion_activa(
+    monkeypatch, fase, saldo_retenido
+):
+    objetivo = Objetivo("Cuenta", "8", "001")
+    datos = {"idSubProducto": 5, "realizadoPor": 1}
+    conn = Mock(spec=Connection)
+    conn.exec_driver_sql.return_value.scalar.return_value = 4
+    conn.execute.return_value.scalar.return_value = 1
+    actual = Mock(
+        return_value={"IdCuenta": 8, "SaldoRetenido": Decimal(saldo_retenido)}
+    )
+    validar_destino = Mock()
+    monkeypatch.setattr(cambio, "_actual", actual)
+    monkeypatch.setattr(cambio, "_validar", validar_destino)
+    manejador = cambio.CambioSubproducto()
+
+    with pytest.raises(HTTPException) as error:
+        if fase == "preparar":
+            manejador.preparar(conn, objetivo, datos, date(2026, 11, 25))
+        else:
+            manejador.aplicar(conn, objetivo, datos, "solicitante", 3)
+
+    assert error.value.status_code == 409
+    assert isinstance(error.value.detail, dict)
+    assert cast(dict[str, object], error.value.detail)["code"] == (
+        "CUENTA_CON_RETENCIONES_ACTIVAS"
+    )
+    actual.assert_called_once_with(conn, objetivo, bloquear=True)
+    validar_destino.assert_not_called()
+    if saldo_retenido == 0:
+        assert "Estado='Activa'" in str(conn.execute.call_args.args[0])
+    else:
+        conn.execute.assert_not_called()
+
+
+def test_liberar_la_retencion_habilita_una_solicitud_nueva(monkeypatch):
+    conn = Mock(spec=Connection)
+    conn.exec_driver_sql.return_value.scalar.return_value = 4
+    conn.execute.return_value.scalar.return_value = None
+    monkeypatch.setattr(
+        cambio,
+        "_actual",
+        Mock(
+            return_value={
+                "IdCuenta": 8,
+                "SaldoRetenido": Decimal(0),
+                "IdSubProducto": 4,
+            }
+        ),
+    )
+    monkeypatch.setattr(cambio, "_validar", Mock(return_value=1))
+    plan = cambio.CambioSubproducto().preparar(
+        conn,
+        Objetivo("Cuenta", "8", "001"),
+        {"idSubProducto": 5, "realizadoPor": 1},
+        date(2026, 11, 25),
+    )
+    assert plan.version == "4"
 
 
 @pytest.mark.parametrize(

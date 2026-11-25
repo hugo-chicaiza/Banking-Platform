@@ -6,6 +6,8 @@ from sqlalchemy.exc import DBAPIError
 
 from app.core.api.errors import problema, traducir_error_bd
 from app.core.security import audit
+from app.core.security.auth import Usuario
+from app.core.security.operador import encolar_evento
 from app.modules.clientes import repository as clientes_repository
 from app.modules.clientes import service as clientes_service
 from app.modules.clientes.habilitacion import cliente_habilitado
@@ -151,38 +153,32 @@ def cupo_efectivo(
     fila = (
         conn.execute(
             text("""
-            SELECT v.CupoMensual, v.MaxTransaccionesDia,
-                   CASE WHEN l.MontoMaximoOperacion < v.MontoMaxTransaccion
-                        THEN l.MontoMaximoOperacion ELSE v.MontoMaxTransaccion END AS MontoMaxTransaccion,
-                   CASE WHEN l.MontoMaximoDiario < v.CupoDiario
-                        THEN l.MontoMaximoDiario ELSE v.CupoDiario END AS CupoDiario,
-                   l.MontoRequiereAprobacion
-            FROM Canal.fn_CupoVigenteFecha(:cuenta, :canal, :fecha) AS v
-            OUTER APPLY (
-                SELECT TOP (1) MontoMaximoOperacion, MontoMaximoDiario, MontoRequiereAprobacion
-                FROM Parametros.LimiteOperacion WITH (HOLDLOCK)
-                WHERE CodigoTipoTransaccion=:tipo AND IdCanal=:canal AND Estado='A'
-                    AND (GrupoID IS NULL OR GrupoID=:grupo)
-                    AND (IdAgencia IS NULL OR IdAgencia=:agencia)
-                    AND VigenciaDesde<=:fecha AND (VigenciaHasta IS NULL OR VigenciaHasta>=:fecha)
-                ORDER BY CASE WHEN IdAgencia IS NULL THEN 0 ELSE 2 END
-                       + CASE WHEN GrupoID IS NULL THEN 0 ELSE 1 END DESC,
-                         VigenciaDesde DESC, IdLimiteOperacion DESC
-            ) AS l
-        """),
-            {
-                "cuenta": id_cuenta,
-                "canal": id_canal,
-                "fecha": fecha,
-                "tipo": tipo,
-                "grupo": grupo,
-                "agencia": agencia,
-            },
+                SELECT CupoMensual, MaxTransaccionesDia, MontoMaxTransaccion, CupoDiario
+                FROM Canal.fn_CupoVigenteFecha(:cuenta, :canal, :fecha)
+            """),
+            {"cuenta": id_cuenta, "canal": id_canal, "fecha": fecha},
         )
         .mappings()
         .one_or_none()
     )
-    return dict(fila) if fila is not None else None
+    if fila is None:
+        return None
+    limite = (
+        repository.limite_institucional(
+            conn, id_canal, fecha, tipo=tipo, grupo=grupo, agencia=agencia
+        )
+        or {}
+    )
+    cupo = dict(fila)
+    for campo, institucional in (
+        ("MontoMaxTransaccion", "MontoMaximoOperacion"),
+        ("CupoDiario", "MontoMaximoDiario"),
+    ):
+        maximo = limite.get(institucional)
+        if maximo is not None:
+            cupo[campo] = min(cupo[campo], maximo)
+    cupo["MontoRequiereAprobacion"] = limite.get("MontoRequiereAprobacion")
+    return cupo
 
 
 def cuenta_operable(
@@ -366,7 +362,7 @@ def activar_si_corresponde(
     cuenta = (
         conn.execute(
             text("""
-            SELECT Estado, IdSubProducto, MontoAperturaAplicado
+            SELECT Estado, IdCliente, IdSubProducto, MontoAperturaAplicado
             FROM Cuentas.Cuenta WITH (UPDLOCK, HOLDLOCK)
             WHERE IdCuenta = :id
         """),
@@ -393,6 +389,14 @@ def activar_si_corresponde(
     if monto <= 0 or monto < cuenta["MontoAperturaAplicado"]:
         raise problema(
             422, "MONTO_BAJO_APERTURA", "El depósito no alcanza el mínimo de apertura."
+        )
+    habilitacion = cliente_habilitado(conn, cuenta["IdCliente"], hoy())
+    if not habilitacion.habilitado:
+        raise problema(
+            409,
+            "CLIENTE_NO_HABILITADO",
+            "El titular perdió la habilitación para activar la cuenta.",
+            bloqueos=habilitacion.motivos,
         )
     conn.execute(
         text("""
@@ -702,6 +706,8 @@ def actualizar_cupo(
     modificado_por: int,
     *,
     agencia: str | None = None,
+    usuario: Usuario | None = None,
+    ip: str = "",
 ) -> CupoEfectivo:
     try:
         cuenta = repository.bloquear_cuenta(conn, id_cuenta)
@@ -766,6 +772,25 @@ def actualizar_cupo(
         resultado = efectivos[
             0
         ]  # Puede ser Producto si se guardó una fecha ya vencida.
+        encolar_evento(
+            conn,
+            codigo="CTA_CUPO_CAMBIADO",
+            sujeto=usuario.id_usuario if usuario else str(modificado_por),
+            organizacion=usuario.id_organizacion if usuario else None,
+            roles=list(usuario.roles) if usuario else [],
+            agencia=cuenta["id_agencia"],
+            sesion=usuario.id_sesion if usuario else "",
+            origen=ip,
+            canal="API",
+            tabla="Canal.CanalCupoClienteCustom",
+            id_objetivo=str(id_cuenta),
+            descripcion=f"Cupo del canal {id_canal} ajustado a pedido del cliente.",
+            cambios={
+                "idCanal": id_canal,
+                "modificadoPor": modificado_por,
+                "cupoNuevo": payload.model_dump(mode="json", by_alias=True),
+            },
+        )
         conn.commit()
     except DBAPIError as exc:
         conn.rollback()
@@ -774,18 +799,6 @@ def actualizar_cupo(
         conn.rollback()
         raise
 
-    audit.registrar(
-        audit.EventoAuditoria(
-            accion="CTA_CUPO_CAMBIADO",
-            tabla="Canal.CanalCupoClienteCustom",
-            id_registro=str(id_cuenta),
-            resultado="Exitoso",
-            usuario=modificado_por,
-            ip=None,
-            agencia=cuenta["id_agencia"],
-            descripcion=f"Cupo del canal {id_canal} ajustado a pedido del cliente.",
-        )
-    )
     return resultado
 
 

@@ -1,6 +1,7 @@
 """SQL de Transacciones. Solo consultas parametrizadas con fragmentos fijos."""
 
-from datetime import datetime
+from datetime import date, datetime, timedelta
+from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import Connection, text
@@ -227,6 +228,27 @@ def saldo_disponible(
             """
         ),
         {"id": id_cuenta},
+    ).scalar_one()
+
+
+def monto_diario_operaciones(
+    conn: Connection, id_cuenta: int, id_canal: int, tipo: str, fecha: date
+) -> Decimal:
+    return conn.execute(
+        text("""
+            SELECT COALESCE(SUM(Monto), 0)
+            FROM Transacciones.Transaccion
+            WHERE IdCuenta=:cuenta AND IdCanal=:canal AND TipoTransaccion=:tipo
+              AND Estado='Completada' AND TipoOperacion='Normal'
+              AND FechaHoraSistema>=:desde AND FechaHoraSistema<:hasta
+        """),
+        {
+            "cuenta": id_cuenta,
+            "canal": id_canal,
+            "tipo": tipo,
+            "desde": fecha,
+            "hasta": fecha + timedelta(days=1),
+        },
     ).scalar_one()
 
 

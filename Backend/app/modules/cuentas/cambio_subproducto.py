@@ -141,40 +141,31 @@ def destinos(conn: Connection, objetivo: Objetivo, fecha: date) -> Comparacion:
     )
 
 
-def _capital_a_reclasificar(conn: Connection, actual):
-    retenido = actual["SaldoRetenido"]
-    if not retenido:
-        return actual["Saldo"]
-    existe = conn.exec_driver_sql(
-        "SELECT OBJECT_ID(N'Cuentas.Retencion', N'U')"
-    ).scalar()
-    respaldado = (
-        conn.execute(
-            text("""
-                SELECT COALESCE(SUM(r.Monto),0)
-                FROM Cuentas.Retencion r WITH (HOLDLOCK)
-                JOIN Contabilidad.AsientoContable a WITH (HOLDLOCK) ON a.IdAsientoContable=r.IdAsiento
-                WHERE r.IdCuenta=:cuenta AND r.Estado='Activa' AND a.Estado='CONTABILIZADO'
-                  AND EXISTS (
-                    SELECT 1 FROM Contabilidad.MovimientosContables m WITH (HOLDLOCK)
-                    WHERE m.IdAsientoContable=a.IdAsientoContable
-                      AND m.TipoMovimiento='CREDITO' AND m.Monto=r.Monto
-                  )
+def _validar_sin_retenciones(conn: Connection, actual) -> None:
+    # La cuenta ya está bloqueada. Una orden puede seguir activa con monto cero.
+    activa = actual["SaldoRetenido"] != 0
+    if (
+        not activa
+        and conn.exec_driver_sql(
+            "SELECT OBJECT_ID(N'Cuentas.Retencion', N'U')"
+        ).scalar()
+    ):
+        activa = (
+            conn.execute(
+                text("""
+                SELECT TOP (1) 1 FROM Cuentas.Retencion WITH (HOLDLOCK)
+                WHERE IdCuenta=:cuenta AND Estado='Activa'
             """),
-            {"cuenta": actual["IdCuenta"]},
-        ).scalar_one()
-        if existe
-        else None
-    )
-    if respaldado != retenido:
+                {"cuenta": actual["IdCuenta"]},
+            ).scalar()
+            is not None
+        )
+    if activa:
         raise problema(
             409,
-            "RETENCION_SIN_RESPALDO_CONTABLE",
-            "El saldo retenido requiere conciliación antes de reclasificar la cuenta.",
+            "CUENTA_CON_RETENCIONES_ACTIVAS",
+            "Resuelva las retenciones de la cuenta antes de cambiar su subproducto.",
         )
-    # Los fondos retenidos siguen en el auxiliar que recibió el crédito de la
-    # retención. E6-05 recupera esa línea para liberar al CAPITAL que rija entonces.
-    return actual["Saldo"] - retenido
 
 
 class CambioSubproducto:
@@ -183,8 +174,8 @@ class CambioSubproducto:
     ) -> Plan:
         cambio = CambioAprobable.model_validate(contenido)
         actual = _actual(conn, objetivo, bloquear=True)
+        _validar_sin_retenciones(conn, actual)
         _validar(conn, actual, cambio.id_sub_producto, hoy)
-        _capital_a_reclasificar(conn, actual)
         anterior = actual["IdSubProducto"]
         return Plan(
             cambio.model_dump(mode="json"),
@@ -207,10 +198,11 @@ class CambioSubproducto:
     ) -> None:
         cambio = CambioAprobable.model_validate(contenido)
         actual = _actual(conn, objetivo, bloquear=True)
+        _validar_sin_retenciones(conn, actual)
         ahora = ahora_ecuador()
         fecha = ahora.date()
         nuevo_producto = _validar(conn, actual, cambio.id_sub_producto, fecha)
-        saldo_capital = _capital_a_reclasificar(conn, actual)
+        saldo_capital = actual["Saldo"]
         anterior = actual["IdSubProducto"]
         destino = cambio.id_sub_producto
         nacimiento = actual["FechaNacimiento"]

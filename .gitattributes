@@ -1,1 +1,1 @@
-Backend/App_Data/jobs/triggered/atm06-recovery/run.sh text eol=lf
+Backend/App_Data/jobs/triggered/*/run.sh text eol=lf

@@ -3,6 +3,8 @@
 from decimal import Decimal
 from typing import Any
 
+from app.modules.clientes import repository as clientes_repo
+from app.modules.cuentas import repository as cuentas_repo
 from app.modules.transacciones import repository as trx_repo
 from app.modules.transacciones.dependencias import (
     DatosAsiento,
@@ -93,6 +95,9 @@ def preparar_ventanilla(ctx: Contexto, tipo: str = "Deposito") -> DependenciasFa
     )
     ctx.fake("obtener_cuadre_de_jornada", None)
     ctx.fake("valores_denominaciones", {1: Decimal("50.00")})
+    ctx.fake("obtener_titular_cuenta", 125, cuentas_repo)
+    ctx.fake("limite_institucional", None, cuentas_repo)
+    ctx.fake("bloquear_cliente", {"estado": "Activo"}, clientes_repo)
     ctx.fake(
         "obtener_cuenta",
         {
