@@ -1,7 +1,13 @@
 from datetime import date
 from typing import Annotated, Literal
 
-from pydantic import AwareDatetime, ConfigDict, Field, StringConstraints
+from pydantic import (
+    AwareDatetime,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    field_validator,
+)
 
 from app.core.api.schemas import CamelModel, Money
 
@@ -157,6 +163,18 @@ class CupoUpdate(CamelModel):
     )
 
 
+class CupoSolicitado(CupoUpdate):
+    solicitado_por_cliente: Literal[True]
+    documento_verificado: Literal["C", "R", "P"]
+
+    @field_validator("solicitado_por_cliente", mode="before")
+    @classmethod
+    def confirmar_pedido(cls, valor: object) -> object:
+        if valor is not True:
+            raise ValueError("Debe confirmar el pedido del cliente.")
+        return valor
+
+
 class CupoEfectivo(CamelModel):
     id_canal: int
     origen: Literal["Personalizado", "Producto"]
@@ -167,6 +185,10 @@ class CupoEfectivo(CamelModel):
     fecha_vigencia: date | None
     consumido_hoy: Money
     consumido_mes: Money
+    tope_diario_producto: Money | None = None
+    tope_mensual_producto: Money | None = None
+    tope_transaccion_producto: Money | None = None
+    tope_frecuencia_producto: int | None = None
 
 
 class CupoHistorial(CamelModel):
@@ -179,6 +201,8 @@ class CupoHistorial(CamelModel):
     monto_max_tx_nuevo: Money | None
     modificado_por: int
     fecha_modificacion: AwareDatetime
+    solicitado_por_cliente: bool | None = None
+    documento_verificado: Literal["C", "R", "P"] | None = None
 
 
 class PageCupoHistorial(CamelModel):

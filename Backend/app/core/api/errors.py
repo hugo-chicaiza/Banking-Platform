@@ -177,7 +177,7 @@ def traducir_error_bd(
     if operacion == "CTA08" and 52003 in numeros:
         return problema(
             422,
-            "CUPO_SUPERA_MAXIMO_PRODUCTO",
+            "CUPO_SOBRE_TOPE",
             "El cupo supera el máximo del subproducto en ese canal.",
         )
 

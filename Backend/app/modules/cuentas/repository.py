@@ -4,7 +4,7 @@ from typing import Any
 
 from sqlalchemy import Connection, text
 
-from app.modules.cuentas.schemas import CupoUpdate
+from app.modules.cuentas.schemas import CupoSolicitado, CupoUpdate
 
 _ESTADOS_CUENTA_BD = {
     "ACTIVA": "Activa",
@@ -285,7 +285,7 @@ def bloquear_cuenta(conn: Connection, id_cuenta: int) -> dict[str, Any] | None:
     fila = _one(
         conn,
         """
-        SELECT IdCuenta AS id_cuenta, Estado AS estado,
+        SELECT IdCuenta AS id_cuenta, Estado AS estado, RTRIM(IdAgencia) AS id_agencia,
                Saldo AS saldo, SaldoRetenido AS saldo_retenido
         FROM Cuentas.Cuenta WITH (XLOCK, HOLDLOCK)
         WHERE IdCuenta = :id_cuenta
@@ -357,11 +357,27 @@ def consultar_cupos_efectivos(
                v.CupoDiario AS cupo_diario, v.CupoMensual AS cupo_mensual,
                v.MontoMaxTransaccion AS monto_max_transaccion,
                v.MaxTransaccionesDia AS max_transacciones_dia,
+               p.CupoDiarioMaximo AS tope_diario_producto,
+               p.CupoMensualMaximo AS tope_mensual_producto,
+               p.MontoMaxTransaccion AS tope_transaccion_producto,
+               p.MaxTransaccionesDia AS tope_frecuencia_producto,
                CASE WHEN v.Origen = 'CUENTA' THEN cc.FechaVigencia END AS fecha_vigencia,
                COALESCE(cons.consumido_hoy, 0) AS consumido_hoy,
                COALESCE(cons.consumido_mes, 0) AS consumido_mes
         FROM Canal.Canal AS canal
         CROSS APPLY Canal.fn_CupoVigente(:id_cuenta, canal.IdCanal) AS v
+        CROSS JOIN Reloj AS reloj
+        OUTER APPLY (
+            SELECT TOP (1) pc.CupoDiarioMaximo, pc.CupoMensualMaximo,
+                   pc.MontoMaxTransaccion, pc.MaxTransaccionesDia
+            FROM Cuentas.Cuenta AS cuenta
+            JOIN ProductosFinancieros.ProductoCanalCupo AS pc
+              ON pc.IdSubProducto = cuenta.IdSubProducto AND pc.IdCanal = canal.IdCanal
+            WHERE cuenta.IdCuenta = :id_cuenta AND pc.EstadoCupo = 'A'
+              AND pc.VigenciaDesde <= reloj.hoy
+              AND (pc.VigenciaHasta IS NULL OR pc.VigenciaHasta >= reloj.hoy)
+            ORDER BY pc.VigenciaDesde DESC, pc.IdProductoCanalCupo DESC
+        ) AS p
         LEFT JOIN Canal.CanalCupoClienteCustom AS cc
           ON cc.IdCuenta = :id_cuenta AND cc.IdCanal = canal.IdCanal
         LEFT JOIN Consumo AS cons ON cons.IdCanal = canal.IdCanal
@@ -386,7 +402,7 @@ def bloquear_cupo_producto(
     return _one(
         conn,
         """
-        SELECT p.CupoDiarioMaximo AS cupo_diario, p.CupoMensualMaximo AS cupo_mensual,
+        SELECT TOP (1) p.CupoDiarioMaximo AS cupo_diario, p.CupoMensualMaximo AS cupo_mensual,
                p.MontoMaxTransaccion AS monto_max_transaccion,
                p.MaxTransaccionesDia AS max_transacciones_dia
         FROM Cuentas.Cuenta AS c
@@ -395,6 +411,7 @@ def bloquear_cupo_producto(
         WHERE c.IdCuenta = :id_cuenta AND p.EstadoCupo = 'A'
           AND p.VigenciaDesde <= CONVERT(date,SYSDATETIMEOFFSET() AT TIME ZONE 'SA Pacific Standard Time')
           AND (p.VigenciaHasta IS NULL OR p.VigenciaHasta >= CONVERT(date,SYSDATETIMEOFFSET() AT TIME ZONE 'SA Pacific Standard Time'))
+        ORDER BY p.VigenciaDesde DESC, p.IdProductoCanalCupo DESC
         """,
         {"id_cuenta": id_cuenta, "id_canal": id_canal},
     )
@@ -457,7 +474,7 @@ def insertar_historial_cupo(
     id_cuenta: int,
     id_canal: int,
     anterior: dict[str, Any] | None,
-    payload: CupoUpdate,
+    payload: CupoSolicitado,
     modificado_por: int,
 ) -> None:
     # El único trigger de Custom valida topes; NO inserta CuposModHis.
@@ -467,11 +484,12 @@ def insertar_historial_cupo(
         INSERT INTO Canal.CuposModHis (
             IdCanalCupoCliente, CupoDiarioAnterior, CupoDiarioNuevo,
             CupoMensualAnterior, CupoMensualNuevo, MontoMaxTxAnterior,
-            MontoMaxTxNuevo, ModificadoPor
+            MontoMaxTxNuevo, ModificadoPor, SolicitadoPorCliente, DocumentoVerificado
         )
         SELECT IdCanalCupo, :diario_anterior, :cupo_diario,
                :mensual_anterior, :cupo_mensual, :max_anterior,
-               :monto_max_transaccion, :modificado_por
+               :monto_max_transaccion, :modificado_por,
+               :solicitado_por_cliente, :documento_verificado
         FROM Canal.CanalCupoClienteCustom
         WHERE IdCuenta = :id_cuenta AND IdCanal = :id_canal
         """),
@@ -509,6 +527,8 @@ def consultar_historial_cupo(
                    h.MontoMaxTxAnterior AS monto_max_tx_anterior,
                    h.MontoMaxTxNuevo AS monto_max_tx_nuevo,
                    h.ModificadoPor AS modificado_por,
+                   h.SolicitadoPorCliente AS solicitado_por_cliente,
+                   h.DocumentoVerificado AS documento_verificado,
                    h.FechaModificacion AS fecha_modificacion,
                    ROW_NUMBER() OVER (ORDER BY
                      CASE WHEN :campo = 'FechaModificacion' AND :direccion = 'asc'
