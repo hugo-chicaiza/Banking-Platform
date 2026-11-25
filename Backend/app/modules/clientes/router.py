@@ -1,9 +1,10 @@
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, Query, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
+from fastapi.responses import JSONResponse
 from sqlalchemy import Connection
 
-from app.core.api.errors import RESPUESTAS_ERROR, ProblemDetailsRoute
+from app.core.api.errors import RESPUESTAS_ERROR, ProblemDetailsRoute, problema
 from app.core.api.middleware import ip_cliente
 from app.core.database.db import cooperativa
 from app.core.security.auth import (
@@ -12,7 +13,10 @@ from app.core.security.auth import (
     require_auth,
     require_roles,
 )
-from app.modules.clientes import service
+from app.modules.aprobaciones import router as aprobaciones
+from app.modules.aprobaciones.contratos import SolicitudAceptada
+from app.modules.clientes import correos, service
+from app.modules.clientes.aprobacion import CODIGO_EDICION, objetivo
 from app.modules.clientes.habilitacion import HabilitacionCliente, cliente_habilitado
 from app.modules.clientes.schemas import (
     Cliente,
@@ -361,29 +365,77 @@ LectorHistorial = Annotated[
 ]
 
 
+def _solicitar_cambio(
+    request: Request, usuario: Usuario, id_cliente: int
+) -> service.SolicitarCambio:
+    def solicitar(contenido: dict[str, Any]) -> SolicitudAceptada:
+        actor = aprobaciones.actual(usuario)
+        try:
+            id_solicitud = aprobaciones.servicio().solicitar(
+                actor,
+                CODIGO_EDICION,
+                objetivo(id_cliente),
+                contenido,
+                hoy(),
+                aprobaciones.contexto(request, usuario),
+            )
+        except HTTPException as error:
+            detalle: Any = error.detail
+            if (
+                isinstance(detalle, dict)
+                and detalle.get("code") == "SOLICITUD_YA_PENDIENTE"
+            ):
+                raise problema(
+                    409,
+                    "CAMBIO_PENDIENTE",
+                    "El cliente ya tiene un cambio sensible pendiente de aprobación.",
+                ) from None
+            raise
+        return SolicitudAceptada(id_solicitud=id_solicitud)
+
+    return solicitar
+
+
 @_edicion_router.patch(
     "/{idCliente}",
     operation_id="CLI05",
     response_model=Cliente,
+    responses={
+        202: {
+            "model": SolicitudAceptada,
+            "description": "Cambio sensible enviado a aprobación de otra persona.",
+        },
+        423: {**RESPUESTAS_ERROR[500], "description": "Cliente bloqueado"},
+    },
     openapi_extra={"x-roles": ["ASESOR", "ADMIN"]},
 )
 def editar_cliente(
     idCliente: int,
     payload: ClienteUpdate,
     request: Request,
+    response: Response,
     usuario: EditorCliente,
     modificado_por: UsuarioAuditoria,
     conn: Db,
-) -> Cliente:
-    """Edita datos y audita cada cambio con la identidad vinculada en el servidor."""
+) -> Cliente | Response:
+    """Datos ordinarios al instante (200); nombres, documento, fecha de nacimiento y
+    correo principal quedan pendientes de la aprobación de otra persona (202)."""
     visibles = puede_ver_direcciones(usuario)
-    return aplicar_visibilidad(
-        service.editar_cliente(
-            conn, idCliente, payload, modificado_por, ip_cliente(request.scope)
-        ),
-        usuario,
-        permitido=visibles,
+    resultado = service.editar_cliente(
+        conn,
+        idCliente,
+        payload,
+        modificado_por,
+        ip_cliente(request.scope),
+        _solicitar_cambio(request, usuario, idCliente),
     )
+    if isinstance(resultado, SolicitudAceptada):
+        return JSONResponse(
+            resultado.model_dump(mode="json", by_alias=True),
+            status_code=202,
+            headers=dict(response.headers),
+        )
+    return aplicar_visibilidad(resultado, usuario, permitido=visibles)
 
 
 @_edicion_router.patch(
@@ -445,3 +497,4 @@ router.include_router(_gestion_router, prefix="/clientes")
 router.include_router(_edicion_router, prefix="/clientes")
 router.include_router(_riesgo_router, prefix="/clientes")
 router.include_router(_consultas_router, prefix="/clientes")
+router.include_router(correos.router, prefix="/clientes")

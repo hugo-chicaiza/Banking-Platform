@@ -299,17 +299,22 @@ def insertar_historial_cliente(
     modificado_por: int,
     direccion_ip: str,
     observaciones: str,
+    valor_anterior: str | None = None,
+    valor_nuevo: str | None = None,
+    id_solicitud: int | None = None,
 ) -> None:
-    """Inserta solo columnas existentes; misma transacción que el cliente."""
+    """Misma transacción que el cliente; antes/después y solicitud desde E5-04."""
     conn.execute(
         text("""
             INSERT INTO Clientes.ClientesHis (
                 IdCliente, TipoOperacion, CampoModificado,
-                ModificadoPor, DireccionIP, FechaModificacion, Observaciones
+                ModificadoPor, DireccionIP, FechaModificacion, Observaciones,
+                ValorAnterior, ValorNuevo, IdSolicitud
             )
             VALUES (
                 :id_cliente, :tipo_operacion, :campo,
-                :modificado_por, :direccion_ip, :fecha_modificacion, :observaciones
+                :modificado_por, :direccion_ip, :fecha_modificacion, :observaciones,
+                :valor_anterior, :valor_nuevo, :id_solicitud
             );
         """),
         {
@@ -320,6 +325,9 @@ def insertar_historial_cliente(
             "direccion_ip": direccion_ip,
             "fecha_modificacion": datetime.now(UTC),
             "observaciones": observaciones,
+            "valor_anterior": valor_anterior,
+            "valor_nuevo": valor_nuevo,
+            "id_solicitud": id_solicitud,
         },
     )
 
@@ -419,6 +427,9 @@ def consultar_clientes(
                    FechaConsentimiento AS fecha_consentimiento,
                    Estado AS estado, FechaRegistro AS fecha_registro,
                    CreadoPor AS creado_por,
+                   CAST(CASE WHEN EmailVerificadoPor IS NULL THEN 0 ELSE 1 END AS bit)
+                       AS email_verificado,
+                   FechaEmailVerificado AS fecha_email_verificado,
                    ROW_NUMBER() OVER (ORDER BY
                        CASE WHEN :campo = 'IdCliente' AND :direccion = 'asc'
                             THEN IdCliente END ASC,
@@ -542,6 +553,109 @@ def actualizar_cliente(
     )
 
 
+CAMPOS_SENSIBLES_CLIENTE = {
+    "nombres": "Nombres",
+    "apellidos": "Apellidos",
+    "razon_social": "RazonSocial",
+    "fecha_nacimiento": "FechaNacimiento",
+    "tipo_documento": "TipoDocumento",
+    "identificacion": "Identificacion",
+    "email": "Email",
+}
+
+
+def bloquear_datos_sensibles(
+    conn: Connection, id_cliente: int
+) -> dict[str, Any] | None:
+    """E5-04: datos que decide la aprobación, bloqueados hasta commit/rollback."""
+    return _one(
+        conn,
+        """
+        SELECT IdCliente AS id_cliente, Estado AS estado, TipoCliente AS tipo_cliente,
+               Identificacion AS identificacion, TipoDocumento AS tipo_documento,
+               Nombres AS nombres, Apellidos AS apellidos, RazonSocial AS razon_social,
+               FechaNacimiento AS fecha_nacimiento, Genero AS genero,
+               EstadoCivil AS estado_civil, Email AS email
+        FROM Clientes.Cliente WITH (UPDLOCK, HOLDLOCK)
+        WHERE IdCliente = :id_cliente
+    """,
+        {"id_cliente": id_cliente},
+    )
+
+
+def otro_cliente_con_identificacion(
+    conn: Connection, identificacion: str, id_cliente: int
+) -> bool:
+    """Incluye eliminados: el documento queda reservado (C-4)."""
+    return (
+        _one(
+            conn,
+            """
+            SELECT TOP (1) 1 AS existe FROM Clientes.Cliente WITH (UPDLOCK, HOLDLOCK)
+            WHERE Identificacion = :identificacion AND IdCliente <> :id_cliente
+            """,
+            {"identificacion": identificacion, "id_cliente": id_cliente},
+        )
+        is not None
+    )
+
+
+def actualizar_cliente_sensible(
+    conn: Connection, id_cliente: int, cambios: dict[str, Any]
+) -> None:
+    """Aplica una solicitud aprobada; cambiar el correo borra su marca de verificado."""
+    params: dict[str, Any] = {"id_cliente": id_cliente}
+    for campo in CAMPOS_SENSIBLES_CLIENTE:
+        params[campo] = cambios.get(campo)
+        params["enviado_" + campo] = campo in cambios
+    resultado = conn.execute(
+        text("""
+        UPDATE Clientes.Cliente
+        SET Nombres = CASE WHEN :enviado_nombres = 1 THEN :nombres ELSE Nombres END,
+            Apellidos = CASE WHEN :enviado_apellidos = 1 THEN :apellidos ELSE Apellidos END,
+            RazonSocial = CASE WHEN :enviado_razon_social = 1 THEN :razon_social ELSE RazonSocial END,
+            FechaNacimiento = CASE WHEN :enviado_fecha_nacimiento = 1 THEN :fecha_nacimiento ELSE FechaNacimiento END,
+            TipoDocumento = CASE WHEN :enviado_tipo_documento = 1 THEN :tipo_documento ELSE TipoDocumento END,
+            Identificacion = CASE WHEN :enviado_identificacion = 1 THEN :identificacion ELSE Identificacion END,
+            Email = CASE WHEN :enviado_email = 1 THEN :email ELSE Email END,
+            EmailVerificadoPor = CASE WHEN :enviado_email = 1 THEN NULL ELSE EmailVerificadoPor END,
+            FechaEmailVerificado = CASE WHEN :enviado_email = 1 THEN NULL ELSE FechaEmailVerificado END
+        WHERE IdCliente = :id_cliente
+    """),
+        params,
+    )
+    if resultado.rowcount != 1:
+        raise RuntimeError("La actualización del cliente no afectó una sola fila.")
+
+
+def archivo_respaldo_valido(
+    conn: Connection, id_cliente: int, id_archivo: int
+) -> bool | None:
+    """Respaldo de E5-08 vigente y limpio del mismo cliente; None si E5-08 no está instalado.
+
+    Punto único de integración con E5-08 (Clientes.ClienteArchivo): ajustar aquí
+    nombres de columnas si esa historia los define distinto.
+    """
+    instalado = conn.execute(
+        text(
+            "SELECT CASE WHEN OBJECT_ID('Clientes.ClienteArchivo','U') IS NULL THEN 0 ELSE 1 END"
+        )
+    ).scalar_one()
+    if not instalado:
+        return None
+    return (
+        conn.execute(
+            text("""
+            SELECT TOP (1) 1 FROM Clientes.ClienteArchivo WITH (HOLDLOCK)
+            WHERE IdArchivo = :id_archivo AND IdCliente = :id_cliente
+              AND Reemplazado = 0 AND EstadoAnalisis = 'Limpio'
+        """),
+            {"id_archivo": id_archivo, "id_cliente": id_cliente},
+        ).first()
+        is not None
+    )
+
+
 def actualizar_estado_cliente(conn: Connection, id_cliente: int, estado: str) -> None:
     conn.execute(
         text("""
@@ -650,6 +764,8 @@ def listar_historial_cliente(
                    CampoModificado AS campo_modificado,
                    ModificadoPor AS modificado_por, DireccionIP AS direccion_ip,
                    FechaModificacion AS fecha_modificacion, Observaciones AS observaciones,
+                   ValorAnterior AS valor_anterior_columna, ValorNuevo AS valor_nuevo,
+                   IdSolicitud AS id_solicitud,
                    ROW_NUMBER() OVER (ORDER BY
                        CASE WHEN :campo = 'IdHistorial' AND :direccion = 'asc'
                             THEN IdHistorial END ASC,
