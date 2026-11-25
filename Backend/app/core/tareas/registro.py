@@ -28,10 +28,17 @@ def _liberar_retenciones() -> Conteo:
     return liberar_vencidas()
 
 
+def _inactividad_cuentas() -> Conteo:
+    from app.modules.cuentas.inactividad import ejecutar
+
+    return ejecutar()
+
+
 TAREAS: dict[str, Tarea] = {
     "ATM06_RECUPERACION": Tarea("ATM06_RECUPERACION", _atm06_recuperacion),
     "SIS_VIGILANTE": Tarea("SIS_VIGILANTE", _vigilante),
     "CTA_LIBERAR_RETENCIONES": Tarea("CTA_LIBERAR_RETENCIONES", _liberar_retenciones),
+    "CTA_INACTIVIDAD": Tarea("CTA_INACTIVIDAD", _inactividad_cuentas),
 }
 
 

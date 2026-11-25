@@ -185,6 +185,7 @@ def test_cli_en_curso_sale_0_y_rechazo_sale_1(monkeypatch, capsys):
     [
         ("atm06-recovery", "ATM06_RECUPERACION", "0 * * * * *"),
         ("sis-vigilante", "SIS_VIGILANTE", "0 */5 * * * *"),
+        ("cuentas-inactividad", "CTA_INACTIVIDAD", "0 5 0 * * *"),
     ],
 )
 def test_web_jobs_usan_el_ejecutor(job, codigo, programa):

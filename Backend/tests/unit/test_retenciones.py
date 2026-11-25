@@ -1,4 +1,5 @@
 from decimal import Decimal
+from typing import cast
 
 import pytest
 from fastapi import HTTPException
@@ -46,7 +47,7 @@ def test_retencion_administrativa_rechaza_monto_mayor_al_disponible():
         )
     assert error.value.status_code == 409
     assert isinstance(error.value.detail, dict)
-    assert error.value.detail["code"] == "SALDO_INSUFICIENTE"
+    assert cast(dict[str, object], error.value.detail)["code"] == "SALDO_INSUFICIENTE"
 
 
 def test_alta_y_liberacion_requieren_permiso_y_cola():
