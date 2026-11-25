@@ -23,6 +23,7 @@ from app.core.security.operador import auditar, exigir_id_interno
 from app.modules.catalogos import repository as catalogos_repo
 from app.modules.catalogos import service as catalogos_service
 from app.modules.catalogos.subproductos import PREFIJO_TIPO_TARJETA, tipo_tarjeta_de
+from app.modules.clientes.relaciones import relacion_vigente
 from app.modules.productos import activacion, vinculos
 from app.modules.productos import repository as repo
 from app.modules.productos.schemas import (
@@ -797,8 +798,6 @@ def cliente_elegible(
     id_cliente: int,
     id_subproducto: int,
     fecha_contable: date | None = None,
-    *,
-    apertura_cuenta: bool = False,
 ) -> tuple[bool, list[str]]:
     """Evalúa elegibilidad sin modificar datos; rechaza cuando falta prueba de tutor."""
     if id_cliente <= 0 or id_subproducto <= 0:
@@ -840,21 +839,19 @@ def cliente_elegible(
                 motivos.append("EDAD_INFERIOR_MINIMA")
             if datos["edad_maxima"] is not None and edad > datos["edad_maxima"]:
                 motivos.append("EDAD_SUPERIOR_MAXIMA")
-            if apertura_cuenta and edad < 18:
-                motivos.append("TUTOR_NO_VERIFICABLE")
     elif datos["edad_minima"] is not None or datos["edad_maxima"] is not None:
         motivos.append("EDAD_NO_APLICA_A_PERSONA_JURIDICA")
 
-    # No hay una relación cliente-tutor verificable en el esquema recibido.
-    # Rechazar antes que asumir que existe un tutor válido.
-    if datos["requiere_tutor"] and "TUTOR_NO_VERIFICABLE" not in motivos:
+    if (
+        datos["requiere_tutor"]
+        and relacion_vigente(conn, id_cliente, "Tutor", fecha) is None
+    ):
         motivos.append("TUTOR_NO_VERIFICABLE")
-    if apertura_cuenta and tipo == "juridico":
-        motivos.append("REPRESENTANTE_NO_VERIFICABLE")
 
     cuentas = repo.cuentas_cliente_para_elegibilidad(conn, id_cliente)
     tarjetas = repo.tarjetas_cliente_para_elegibilidad(conn, id_cliente)
     activas = [c for c in cuentas if c["estado"] == "Activa"]
+    cuentas_abiertas = [c for c in cuentas if c["estado"] not in ("Cerrada", "Anulada")]
     tarjetas_vigentes = [t for t in tarjetas if t["estado"] in ("Aprobada", "Generada")]
     requerido = datos["id_requerido"]
     if requerido is not None and not any(
@@ -880,14 +877,9 @@ def cliente_elegible(
         if limites:
             maximo = min(limites) if maximo is None else min(maximo, min(limites))
     if maximo is not None:
-        cuentas_computables = activas
-        if datos["tipo_producto"] == "Cuenta":
-            cuentas_computables = [
-                c for c in cuentas if c["estado"] not in ("Cerrada", "Anulada")
-            ]
         cantidad = sum(
             item["id_subproducto"] == id_subproducto
-            for item in [*cuentas_computables, *tarjetas_vigentes]
+            for item in [*cuentas_abiertas, *tarjetas_vigentes]
         )
         if cantidad >= maximo:
             motivos.append("MAXIMO_POR_CLIENTE_ALCANZADO")

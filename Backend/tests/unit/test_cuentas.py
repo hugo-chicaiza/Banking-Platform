@@ -23,8 +23,9 @@ from app.modules.cuentas import repository, router, service
 from app.modules.cuentas.schemas import (
     ID_MONEDA_USD,
     Cuenta,
-    CuentaCreate,
     CuentaEstadoUpdate,
+    CuentaPendienteCreate,
+    CupoSolicitado,
     CupoUpdate,
     EstadoCuenta,
     SaldoCuenta,
@@ -90,14 +91,38 @@ def _cuenta_bd_row(**overrides: Any) -> dict[str, Any]:
     return fila
 
 
+def test_e602_eventos_de_la_agencia_activa(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(service, "obtener_cuenta", lambda *_: Cuenta(**_cuenta_row()))
+    conn = _fake_conn(
+        [
+            {
+                "id_cuenta_evento": 1,
+                "tipo_evento": "Apertura",
+                "estado_anterior": None,
+                "estado_actual": "PendienteDeposito",
+                "detalle": "Apertura sin depósito",
+                "realizado_por": 2,
+                "id_agencia": "001",
+                "fecha_evento": datetime(2026, 11, 24, 12),
+            }
+        ]
+    )
+    with pytest.raises(HTTPException) as exc:
+        service.listar_eventos(cast(Connection, conn), 501, "002")
+    assert exc.value.status_code == 404
+    assert not conn.consultas
+    [evento] = service.listar_eventos(cast(Connection, conn), 501, "001")
+    assert evento.estado_actual == "PendienteDeposito"
+    assert evento.fecha_evento.tzinfo is UTC
+    assert conn.consultas[0][1] == {"id": 501}
+
+
 def _assert_http_error(
     exc: pytest.ExceptionInfo[HTTPException], status: int, code: str
-) -> dict[str, Any]:
+) -> None:
     assert exc.value.status_code == status
-    detalle = exc.value.detail
-    assert isinstance(detalle, dict)
-    assert detalle.get("code") == code
-    return detalle
+    assert isinstance(exc.value.detail, dict)
+    assert exc.value.detail.get("code") == code
 
 
 def _assert_solo_lectura(db: _FakeConn) -> None:
@@ -124,268 +149,12 @@ def _assert_solo_lectura(db: _FakeConn) -> None:
     )
 
 
-_CLIENTE_ACTIVO = {"estado": "Activo"}
-_RIESGO_APROBADO = {"estado": "Aprobado"}
-_SUBPRODUCTO_CUENTA = {
-    "id_subproducto": 20,
-    "id_producto": 2,
-    "tipo_producto": "Cuenta",
-    "tipo_cuenta": "Ahorro",
-    "estado_producto": "A",
-    "estado_subproducto": "A",
-    "monto_apertura_minimo": Decimal("50.00"),
-}
-_AGENCIA_ACTIVA = {"estado": "A"}
-_PAYLOAD = {
-    "idCliente": 125,
-    "idSubProducto": 20,
-    "idMoneda": ID_MONEDA_USD,
-}
-
-
-def _patch_repo(
-    monkeypatch: pytest.MonkeyPatch,
-    *,
-    cliente: Any = None,
-    riesgo: Any = None,
-    subproducto: Any = None,
-    agencia: Any = None,
-    cuenta: Any = None,
-) -> None:
-    from app.modules.clientes import habilitacion
-
-    def bloquear(conn, _id):
-        if cliente is None:
-            return None
-        return {
-            **cliente,
-            "fecha_consentimiento": datetime(2020, 1, 1),
-            "consentimiento_datos": True,
-        }
-
-    monkeypatch.setattr(habilitacion.repository, "bloquear_cliente", bloquear)
-    monkeypatch.setattr(
-        habilitacion,
-        "valor",
-        lambda conn, clave, fecha: False if clave == "CLI_EXIGE_ARCHIVOS" else 36,
-    )
-    monkeypatch.setattr(service, "cliente_elegible", lambda *args, **kw: (True, []))
-    monkeypatch.setattr(
-        service.productos_repo, "condiciones_vigentes", lambda *args: None
-    )
-
-    def evaluar(conn, _id):
-        if riesgo is None:
-            return None
-        return {
-            "resultado": riesgo["estado"],
-            "nivel": "Bajo",
-            "fecha": riesgo.get("fecha", date.today()),
-            "es_pep": False,
-            "tiene_antecedentes": False,
-            "impide_vinculacion": False,
-        }
-
-    monkeypatch.setattr(habilitacion.repository, "riesgo_para_habilitacion", evaluar)
-    monkeypatch.setattr(
-        repository, "obtener_subproducto", lambda conn, _id: subproducto
-    )
-    monkeypatch.setattr(repository, "obtener_agencia", lambda conn, _id: agencia)
-    monkeypatch.setattr(repository, "abrir_cuenta", lambda *args, **kw: cuenta)
-
-
-def _abrir_cuenta(db: _FakeConn | None = None) -> Cuenta:
-    return service.abrir_cuenta(
-        cast(Connection, db or _fake_conn()),
-        CuentaCreate.model_validate(_PAYLOAD),
-        12,
-        "001",
-    )
-
-
-# CTA-01: se conservan los casos existentes invocando directamente el servicio.
-
-
-def test_abrir_cuenta_201(monkeypatch: pytest.MonkeyPatch):
-    llamada: dict[str, Any] = {}
-    _patch_repo(
-        monkeypatch,
-        cliente=_CLIENTE_ACTIVO,
-        riesgo=_RIESGO_APROBADO,
-        subproducto=_SUBPRODUCTO_CUENTA,
-        agencia=_AGENCIA_ACTIVA,
-        cuenta=_cuenta_row(),
-    )
-
-    def abrir(*args, **kwargs):
-        llamada.update(kwargs)
-        # El servicio aplica la regla global aunque una fuente antigua traiga otro dato.
-        return _cuenta_row(
-            id_moneda=978, numero_cuenta="220000000015", estado="PENDIENTE_DEPOSITO"
+@pytest.mark.parametrize("campo", ["idAgencia", "montoInicial", "idMoneda"])
+def test_cta01_rechaza_campos_de_apertura_anteriores(campo):
+    with pytest.raises(ValidationError):
+        CuentaPendienteCreate.model_validate(
+            {"idCliente": 125, "idSubProducto": 20, campo: 10}
         )
-
-    monkeypatch.setattr(repository, "abrir_cuenta", abrir)
-    monkeypatch.setattr(
-        service, "siguiente_numero_cuenta", lambda conn, sub, agencia: "220000000015"
-    )
-    db = _fake_conn()
-    body = _abrir_cuenta(db).model_dump(mode="json", by_alias=True)
-    assert body["idCuenta"] == 501
-    assert body["numeroCuenta"] == "220000000015"
-    assert body["estado"] == "PENDIENTE_DEPOSITO"
-    assert body["saldo"] == 0.0
-    assert body["saldoRetenido"] == 0.0
-    assert body["idMoneda"] == ID_MONEDA_USD
-    assert llamada["id_subproducto"] == 20
-    assert llamada["monto_apertura_aplicado"] == Decimal("50.00")
-    assert llamada["creado_por"] == 12
-    assert "id_moneda" not in llamada
-    assert (db.commits, db.rollbacks) == (1, 0)
-
-
-@pytest.mark.parametrize(
-    ("tipo_cuenta", "ultimo", "esperado"),
-    [("Ahorro", 9, "AH00000010"), ("Corriente", 0, "CC00000001")],
-)
-def test_generar_numero_cuenta_bloquea_rango_y_omite_sufijos_no_numericos(
-    tipo_cuenta, ultimo, esperado
-):
-    db = _fake_conn([{"ultimo": ultimo}])
-    assert service._generar_numero_cuenta(cast(Connection, db), tipo_cuenta) == esperado
-    sql, params = db.consultas[0]
-    assert "WITH (UPDLOCK, HOLDLOCK)" in sql
-    assert "TRY_CONVERT" in sql
-    assert params == {"patron": esperado[:2] + "%"}
-
-
-def test_repositorio_apertura_usa_firma_real_y_lee_por_id():
-    db = _fake_conn([{"id_cuenta": 501}], [_cuenta_bd_row()])
-    cuenta = repository.abrir_cuenta(
-        cast(Connection, db),
-        numero_cuenta="AH00000001",
-        id_cliente=125,
-        id_subproducto=20,
-        id_agencia="001",
-        monto_apertura_aplicado=Decimal("50.00"),
-        creado_por=12,
-    )
-    assert cuenta["id_cuenta"] == 501
-    sql, params = db.consultas[0]
-    for parametro in (
-        "@IdCliente",
-        "@IdSubProducto",
-        "@IdAgencia",
-        "@NumeroCuenta",
-        "@MontoAperturaAplicado",
-        "@CreadoPor",
-        "@IdCuenta",
-    ):
-        assert parametro in sql
-    for obsoleto in ("@IdProducto", "@TipoCuenta", "@IdMoneda"):
-        assert obsoleto not in sql
-    assert params == {
-        "id_cliente": 125,
-        "id_subproducto": 20,
-        "id_agencia": "001",
-        "numero_cuenta": "AH00000001",
-        "monto_apertura_aplicado": Decimal("50.00"),
-        "creado_por": 12,
-    }
-    assert db.consultas[1][1] == {"id_cuenta": 501}
-
-
-def test_cliente_no_existe_409(monkeypatch: pytest.MonkeyPatch):
-    _patch_repo(monkeypatch, cliente=None)
-    with pytest.raises(HTTPException) as exc:
-        _abrir_cuenta()
-    _assert_http_error(exc, 409, "CLIENTE_NO_HABILITADO")
-
-
-@pytest.mark.parametrize("estado", ["Pendiente", "Bloqueado", "Inactivo", "Cerrado"])
-def test_cliente_no_activo_409(monkeypatch: pytest.MonkeyPatch, estado):
-    _patch_repo(monkeypatch, cliente={"estado": estado})
-    with pytest.raises(HTTPException) as exc:
-        _abrir_cuenta()
-    _assert_http_error(exc, 409, "CLIENTE_NO_HABILITADO")
-
-
-@pytest.mark.parametrize(
-    "riesgo", [None, {"estado": "Observado"}, {"estado": "Rechazado"}]
-)
-def test_riesgo_no_aprobado_409(monkeypatch: pytest.MonkeyPatch, riesgo):
-    _patch_repo(monkeypatch, cliente=_CLIENTE_ACTIVO, riesgo=riesgo)
-    with pytest.raises(HTTPException) as exc:
-        _abrir_cuenta()
-    detalle = _assert_http_error(exc, 409, "CLIENTE_NO_HABILITADO")
-    assert detalle["bloqueos"] == ["RIESGO_NO_APROBADO"]
-
-
-def test_riesgo_aprobado_vencido_409(monkeypatch: pytest.MonkeyPatch):
-    _patch_repo(
-        monkeypatch,
-        cliente=_CLIENTE_ACTIVO,
-        riesgo={"estado": "Aprobado", "fecha": date(2020, 1, 1)},
-    )
-    with pytest.raises(HTTPException) as exc:
-        _abrir_cuenta()
-    detalle = _assert_http_error(exc, 409, "CLIENTE_NO_HABILITADO")
-    assert detalle["bloqueos"] == ["RIESGO_NO_VIGENTE"]
-
-
-@pytest.mark.parametrize(
-    "subproducto",
-    [
-        None,
-        {**_SUBPRODUCTO_CUENTA, "tipo_producto": "Tarjeta"},
-        {**_SUBPRODUCTO_CUENTA, "estado_producto": "I"},
-        {**_SUBPRODUCTO_CUENTA, "estado_subproducto": "I"},
-    ],
-    ids=["inexistente", "tipo_incorrecto", "producto_inactivo", "subproducto_inactivo"],
-)
-def test_producto_invalido_422(monkeypatch: pytest.MonkeyPatch, subproducto):
-    _patch_repo(
-        monkeypatch,
-        cliente=_CLIENTE_ACTIVO,
-        riesgo=_RIESGO_APROBADO,
-        subproducto=subproducto,
-    )
-    with pytest.raises(HTTPException) as exc:
-        _abrir_cuenta()
-    _assert_http_error(exc, 422, "PRODUCTO_NO_ES_CUENTA")
-
-
-@pytest.mark.parametrize("estado", [None, "I", "C"])
-def test_agencia_invalida_409(monkeypatch: pytest.MonkeyPatch, estado):
-    _patch_repo(
-        monkeypatch,
-        cliente=_CLIENTE_ACTIVO,
-        riesgo=_RIESGO_APROBADO,
-        subproducto=_SUBPRODUCTO_CUENTA,
-        agencia=None if estado is None else {"estado": estado},
-    )
-    with pytest.raises(HTTPException) as exc:
-        _abrir_cuenta()
-    _assert_http_error(exc, 409, "AGENCIA_INACTIVA")
-
-
-@pytest.mark.parametrize(
-    "payload",
-    [
-        {**_PAYLOAD, "montoInicial": "50.00"},
-        {**_PAYLOAD, "idAgencia": "001"},
-        {},
-    ],
-)
-def test_payload_invalido_cta01(payload):
-    with pytest.raises(ValidationError):
-        CuentaCreate.model_validate(payload)
-
-
-def test_cta01_moneda_usd_por_defecto_y_rechaza_otras():
-    payload_sin_moneda = {k: v for k, v in _PAYLOAD.items() if k != "idMoneda"}
-    assert CuentaCreate.model_validate(payload_sin_moneda).id_moneda == ID_MONEDA_USD
-    with pytest.raises(ValidationError):
-        CuentaCreate.model_validate({**_PAYLOAD, "idMoneda": 978})
 
 
 # CTA-02
@@ -619,11 +388,7 @@ def test_cta03_detalle_completo_en_cualquier_estado(estado):
     )
     db = _fake_conn([fila])
     resultado = service.obtener_cuenta(cast(Connection, db), 501)
-    assert resultado.model_dump() == {
-        **fila,
-        "monto_apertura_aplicado": None,
-        "fecha_activacion": None,
-    }
+    assert resultado.model_dump() == fila
     assert isinstance(resultado.saldo, Decimal)
     assert isinstance(resultado.saldo_retenido, Decimal)
     body = resultado.model_dump(mode="json", by_alias=True)
@@ -747,7 +512,7 @@ def test_consultas_contrato_openapi_sin_sockets():
     contrato = app.openapi()
     for sufijo, operacion, modelo in [
         ("", "CTA02", "PageCuenta"),
-        ("/{idCuenta}", "CTA03", "Cuenta"),
+        ("/{idCuenta}", "CTA03", "CuentaDetalle"),
         ("/{idCuenta}/saldo", "CTA04", "SaldoCuenta"),
     ]:
         ruta = contrato["paths"][f"/api/v1/cuentas{sufijo}"]["get"]
@@ -799,12 +564,6 @@ def test_consultas_contrato_openapi_sin_sockets():
     assert esquemas["SaldoCuenta"]["properties"]["saldoDisponible"]["type"] == "number"
     assert esquemas["Cuenta"]["properties"]["idMoneda"]["const"] == ID_MONEDA_USD
     assert esquemas["SaldoCuenta"]["properties"]["idMoneda"]["const"] == ID_MONEDA_USD
-    assert esquemas["CuentaCreate"]["properties"]["idMoneda"] == {
-        "type": "integer",
-        "const": ID_MONEDA_USD,
-        "default": ID_MONEDA_USD,
-        "title": "Idmoneda",
-    }
     assert (
         esquemas["SaldoCuenta"]["properties"]["fechaConsulta"]["format"] == "date-time"
     )
@@ -812,7 +571,14 @@ def test_consultas_contrato_openapi_sin_sockets():
         Cuenta(**_cuenta_row()).model_dump(by_alias=True)
     )
     consultas = router._consultas_router.routes
-    assert len(consultas) == 4
+    assert {r.path for r in consultas if isinstance(r, APIRoute)} == {
+        "",
+        "/{idCuenta}",
+        "/{idCuenta}/saldo",
+        "/{idCuenta}/movimientos",
+        "/{idCuenta}/autorizados",
+        "/{idCuenta}/eventos",
+    }
     assert all(isinstance(r, ProblemDetailsRoute) for r in consultas)
     assert any(d.dependency is require_auth for d in router.router.dependencies)
     apertura = contrato["paths"]["/api/v1/cuentas"]["post"]
@@ -823,12 +589,9 @@ def test_consultas_contrato_openapi_sin_sockets():
     ].endswith("/Cuenta")
     for status in ("400", "401", "403", "409", "422"):
         assert "application/problem+json" in apertura["responses"][status]["content"]
-    cuerpo = esquemas["CuentaCreate"]
-    assert set(cuerpo["required"]) == {
-        "idCliente",
-        "idSubProducto",
-    }
-    assert set(cuerpo["properties"]) == {*cuerpo["required"], "idMoneda"}
+    cuerpo = esquemas["CuentaPendienteCreate"]
+    assert set(cuerpo["required"]) == {"idCliente", "idSubProducto"}
+    assert set(cuerpo["properties"]) == set(cuerpo["required"])
     assert all(
         isinstance(r, ProblemDetailsRoute) for r in router._apertura_router.routes
     )
@@ -850,13 +613,21 @@ def test_consultas_contrato_openapi_sin_sockets():
     ],
 )
 def test_cta02_validacion_real_de_query_sin_sockets(query):
-    ruta = next(r for r in router._consultas_router.routes if isinstance(r, APIRoute))
+    ruta = next(
+        r
+        for r in router._consultas_router.routes
+        if isinstance(r, APIRoute) and r.endpoint is router.listar_cuentas
+    )
     _, errores = request_params_to_args(ruta.dependant.query_params, QueryParams(query))
     assert errores
 
 
 def test_cta02_aliases_query_y_ceros_iniciales():
-    ruta = next(r for r in router._consultas_router.routes if isinstance(r, APIRoute))
+    ruta = next(
+        r
+        for r in router._consultas_router.routes
+        if isinstance(r, APIRoute) and r.endpoint is router.listar_cuentas
+    )
     valores, errores = request_params_to_args(
         ruta.dependant.query_params,
         QueryParams(
@@ -877,17 +648,19 @@ def test_cta02_aliases_query_y_ceros_iniciales():
 
 def test_router_apertura_conserva_payload_y_creado_por(monkeypatch: pytest.MonkeyPatch):
     db = _fake_conn()
-    payload = CuentaCreate.model_validate(_PAYLOAD)
+    payload = CuentaPendienteCreate.model_validate(
+        {"idCliente": 125, "idSubProducto": 20}
+    )
     cuenta = Cuenta(**_cuenta_row())
 
-    def abrir(conn, recibido, creado_por, id_agencia):
+    def abrir(conn, recibido, agencia, creado_por):
         assert conn is db
         assert recibido is payload
+        assert agencia == "001"
         assert creado_por == 12
-        assert id_agencia == "001"
         return cuenta
 
-    monkeypatch.setattr(service, "abrir_cuenta", abrir)
+    monkeypatch.setattr(service, "abrir_cuenta_pendiente", abrir)
     usuario = Usuario(
         id_usuario="user_prueba",
         id_sesion="session_prueba",
@@ -934,10 +707,21 @@ def test_router_listado_propaga_parametros(filtros):
 
 @pytest.mark.parametrize("consulta", [router.obtener_cuenta, router.obtener_saldo])
 def test_router_detalle_y_saldo_propagan_id(consulta):
-    db = _fake_conn([_cuenta_row(id_cuenta=712)])
+    filas = [[_cuenta_row(id_cuenta=712)]]
+    if consulta is router.obtener_cuenta:
+        filas.append(
+            [{"nombre_titular": "Titular de prueba", "motivo_estado": "Orden judicial"}]
+        )
+    db = _fake_conn(*filas)
     resultado = consulta(712, cast(Connection, db))
     assert resultado.id_cuenta == 712
     assert db.consultas[0][1] == {"id_cuenta": 712}
+    if consulta is router.obtener_cuenta:
+        assert resultado.model_dump()["nombre_titular"] == "Titular de prueba"
+        assert resultado.model_dump()["motivo_estado"] == "Orden judicial"
+        sql, parametros = db.consultas.pop()
+        assert "WHERE c.IdCuenta=:id" in sql
+        assert parametros == {"id": 712, "estado": "Activa"}
     _assert_solo_lectura(db)
 
 
@@ -1001,6 +785,10 @@ _CUPO_BODY = {
     "cupoMensual": "5000.00",
     "montoMaxTransaccion": "200.00",
     "maxTransaccionesDia": 10,
+}
+_CUPO_SOLICITADO = _CUPO_BODY | {
+    "solicitadoPorCliente": True,
+    "documentoVerificado": "C",
 }
 
 
@@ -1261,20 +1049,27 @@ def _actualizar(db, **cambios):
         cast(Connection, db),
         501,
         1,
-        CupoUpdate.model_validate(_CUPO_BODY | cambios),
+        CupoSolicitado.model_validate(_CUPO_SOLICITADO | cambios),
         12,
     )
 
 
 @pytest.mark.parametrize("existe", [False, True])
 @pytest.mark.parametrize("vencido", [False, True])
-def test_cta08_crea_actualiza_historial_una_vez_y_respuesta_efectiva(existe, vencido):
+def test_cta08_crea_actualiza_historial_una_vez_y_respuesta_efectiva(
+    existe, vencido, monkeypatch
+):
+    eventos = []
+    monkeypatch.setattr(service.audit, "registrar", eventos.append)
     anterior = _cupo_row(cupo_diario=Decimal(300)) if existe else None
     efectivo = _cupo_row(origen="Producto") if vencido else _cupo_row()
     db = _db_actualizar_cupo(anterior, efectivo)
     resultado = _actualizar(db, fechaVigencia="2020-01-01" if vencido else None)
     assert resultado.origen == ("Producto" if vencido else "Personalizado")
     assert db.commits == 1 and db.rollbacks == 0 and not db.respuestas
+    assert len(eventos) == 1
+    assert eventos[0].accion == "CTA_CUPO_CAMBIADO"
+    assert eventos[0].usuario == 12
     assert (
         len([s for s, _ in db.consultas if "INSERT INTO Canal.CuposModHis" in s]) == 1
     )
@@ -1317,8 +1112,24 @@ def test_cta08_cada_tope_maximo(campo, valor):
     db = _db_actualizar_cupo()
     with pytest.raises(HTTPException) as exc:
         _actualizar(db, **body)
-    _assert_http_error(exc, 422, "CUPO_SUPERA_MAXIMO_PRODUCTO")
+    _assert_http_error(exc, 422, "CUPO_SOBRE_TOPE")
     assert db.rollbacks == 1 and db.commits == 0 and len(db.consultas) == 3
+
+
+def test_cta08_asesor_no_modifica_cuenta_de_otra_agencia():
+    db = _fake_conn([{"id_cuenta": 501, "estado": "Activa", "id_agencia": "002"}])
+    with pytest.raises(HTTPException) as exc:
+        service.actualizar_cupo(
+            cast(Connection, db),
+            501,
+            1,
+            CupoSolicitado.model_validate(_CUPO_SOLICITADO),
+            12,
+            agencia="001",
+        )
+    _assert_http_error(exc, 404, "CUENTA_NO_ENCONTRADA")
+    assert db.rollbacks == 1 and db.commits == 0
+    assert len(db.consultas) == 1
 
 
 @pytest.mark.parametrize(
@@ -1417,7 +1228,7 @@ def test_cta08_error_de_tope_conserva_compatibilidad_global():
     especifico = traducir_error_bd(error, operacion="CTA08")
     assert especifico.status_code == 422
     assert isinstance(especifico.detail, dict)
-    assert especifico.detail.get("code") == "CUPO_SUPERA_MAXIMO_PRODUCTO"
+    assert especifico.detail.get("code") == "CUPO_SOBRE_TOPE"
 
 
 @pytest.mark.parametrize("campo", ["cupoDiario", "cupoMensual", "montoMaxTransaccion"])
@@ -1434,7 +1245,9 @@ def test_cta08_rechaza_cupos_no_positivos_antes_del_servicio(
 
     monkeypatch.setattr(service, "actualizar_cupo", no_ejecutar)
     respuesta = asyncio.run(
-        _http_cuentas("PUT", "/api/v1/cuentas/501/cupos/1", _CUPO_BODY | {campo: valor})
+        _http_cuentas(
+            "PUT", "/api/v1/cuentas/501/cupos/1", _CUPO_SOLICITADO | {campo: valor}
+        )
     )
     assert respuesta.status_code == 400
     assert respuesta.headers["content-type"].startswith("application/problem+json")
@@ -1467,7 +1280,7 @@ def test_cta08_admite_el_minimo_positivo_representable_en_la_base():
 
 
 def test_cta08_openapi_publica_importes_estrictamente_positivos():
-    propiedades = app.openapi()["components"]["schemas"]["CupoUpdate"]["properties"]
+    propiedades = app.openapi()["components"]["schemas"]["CupoSolicitado"]["properties"]
     for campo in ("cupoDiario", "cupoMensual", "montoMaxTransaccion"):
         numerico = next(p for p in propiedades[campo]["anyOf"] if p["type"] == "number")
         assert numerico["exclusiveMinimum"] == 0
@@ -1583,7 +1396,7 @@ def sesion_cuentas(monkeypatch):
         service, "obtener_cupos", lambda *a: [service.CupoEfectivo(**_cupo_row())]
     )
     monkeypatch.setattr(
-        service, "actualizar_cupo", lambda *a: service.CupoEfectivo(**_cupo_row())
+        service, "actualizar_cupo", lambda *a, **k: service.CupoEfectivo(**_cupo_row())
     )
     monkeypatch.setattr(
         service,
@@ -1605,7 +1418,12 @@ _RUTAS_NUEVAS = [
         {"ASESOR", "SUPERVISOR", "ADMIN"},
     ),
     ("GET", "/api/v1/cuentas/501/cupos", None, {"ASESOR", "SUPERVISOR", "ADMIN"}),
-    ("PUT", "/api/v1/cuentas/501/cupos/1", _CUPO_BODY, {"SUPERVISOR", "ADMIN"}),
+    (
+        "PUT",
+        "/api/v1/cuentas/501/cupos/1",
+        _CUPO_SOLICITADO,
+        {"ASESOR", "SUPERVISOR", "ADMIN"},
+    ),
     (
         "GET",
         "/api/v1/cuentas/501/cupos/1/historial",
@@ -1720,6 +1538,10 @@ def test_cta_nuevos_contratos_openapi():
         "fechaVigencia",
         "consumidoHoy",
         "consumidoMes",
+        "topeDiarioProducto",
+        "topeMensualProducto",
+        "topeTransaccionProducto",
+        "topeFrecuenciaProducto",
     }
     for campo in (
         "cupoDiario",
@@ -1800,10 +1622,10 @@ def test_cta08_trigger_rollback_y_error_http_sanitizado(
 
     app.dependency_overrides[cooperativa] = lambda: db
     respuesta = asyncio.run(
-        _http_cuentas("PUT", "/api/v1/cuentas/501/cupos/1", _CUPO_BODY)
+        _http_cuentas("PUT", "/api/v1/cuentas/501/cupos/1", _CUPO_SOLICITADO)
     )
     assert respuesta.status_code == 422
-    assert respuesta.json()["code"] == "CUPO_SUPERA_MAXIMO_PRODUCTO"
+    assert respuesta.json()["code"] == "CUPO_SOBRE_TOPE"
     assert all(
         secreto not in respuesta.text
         for secreto in ("SQL_SECRETO", "DATO_PRIVADO", "mensaje privado")
@@ -2096,6 +1918,8 @@ def test_cta09_devuelve_contrato_original_sin_columnas_retiradas():
         "montoMaxTxNuevo",
         "modificadoPor",
         "fechaModificacion",
+        "solicitadoPorCliente",
+        "documentoVerificado",
     }
     sql = db.consultas[2][0]
     assert "MaxTransaccionesDia" not in sql and "FechaVigencia" not in sql

@@ -508,31 +508,11 @@ def bloquear_cliente(conn: Connection, id_cliente: int) -> dict[str, Any] | None
     return _one(
         conn,
         """
-        SELECT IdCliente AS id_cliente, Estado AS estado,
-               ConsentimientoDatos AS consentimiento_datos,
-               FechaConsentimiento AS fecha_consentimiento
+        SELECT IdCliente AS id_cliente, Estado AS estado, TipoCliente AS tipo_cliente,
+               FechaNacimiento AS fecha_nacimiento
         FROM Clientes.Cliente WITH (UPDLOCK, HOLDLOCK)
         WHERE IdCliente = :id_cliente
     """,
-        {"id_cliente": id_cliente},
-    )
-
-
-def riesgo_para_habilitacion(
-    conn: Connection, id_cliente: int
-) -> dict[str, Any] | None:
-    return _one(
-        conn,
-        """
-        SELECT TOP (1) r.ResultadoEvaluacion AS resultado, r.NivelRiesgoLAFT AS nivel,
-               CAST(r.FechaEvaluacion AS date) AS fecha, r.EsPEP AS es_pep,
-               r.TieneAntecedentes AS tiene_antecedentes,
-               a.PuedeImpedirVinculacion AS impide_vinculacion
-        FROM Clientes.RiesgoCliente AS r
-        LEFT JOIN Catalogo.TipoAntecedente AS a ON a.IdTipoAntecedente = r.IdTipoAntecedente
-        WHERE r.IdCliente = :id_cliente AND r.EsVigente = 1
-        ORDER BY r.FechaEvaluacion DESC, r.IdEvaluacion DESC
-        """,
         {"id_cliente": id_cliente},
     )
 

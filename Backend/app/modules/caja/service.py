@@ -47,11 +47,13 @@ from app.modules.caja.schemas import (
     PageMovimientoCaja,
     SeriesBilletesRequest,
 )
-from app.modules.clientes import repository as clientes_repo
-from app.modules.clientes.habilitacion import exigir_cliente_habilitado
 from app.modules.contabilidad.asientos import OperacionContable, generar_asiento
 from app.modules.contabilidad.service import ahora_ecuador
-from app.modules.cuentas import repository as cuentas_repo
+from app.modules.cuentas.service import (
+    activar_si_corresponde,
+    cuenta_operable,
+    disponible,
+)
 from app.modules.transacciones import repository as trx_repo
 from app.modules.transacciones.dependencias import (
     DatosAsiento,
@@ -1515,12 +1517,7 @@ def _comprobante(
                 fila["IdTransaccion"],
             )
         ),
-        saldo_disponible=decimal(
-            trx_repo.saldo_disponible(
-                conn,
-                fila["IdCuenta"],
-            )
-        ),
+        saldo_disponible=disponible(conn, fila["IdCuenta"]),
         denominaciones=denominaciones,
         fecha_hora_sistema=fila["FechaHoraSistema"],
         numero_autorizacion=fila["NumeroAutorizacion"],
@@ -1550,26 +1547,25 @@ def _validar_repeticion(
         )
 
 
-def verificar_operable_en_ventanilla(conn: Connection, id_cuenta: int) -> None:
+def verificar_operable_en_ventanilla(
+    conn: Connection, id_cuenta: int, naturaleza: str
+) -> None:
     """Titular Activo y producto que admite operaciones presenciales.
 
     Falla cerrada: sin datos del titular o del producto, la operación no sigue.
     """
-    restricciones = trx_repo.restricciones_cuenta(conn, id_cuenta) or {}
-
-    if restricciones.get("EstadoCliente") != "Activo":
-        raise problema(
-            409,
-            "CLIENTE_NO_ACTIVO",
-            "El cliente no está Activo.",
-        )
-
-    if not restricciones.get("PermiteOperacionesPresenciales"):
-        raise problema(
-            409,
-            "PRODUCTO_SIN_OPERACION_PRESENCIAL",
-            "El producto de la cuenta no admite operaciones en ventanilla.",
-        )
+    operable, motivos = cuenta_operable(conn, id_cuenta, naturaleza, "VENT")
+    if not operable:
+        codigo = motivos[0]
+        if codigo == "CUENTA_NO_ENCONTRADA":
+            codigo = "CLIENTE_NO_ACTIVO"
+        detalles = {
+            "CLIENTE_NO_ACTIVO": "El cliente no está Activo.",
+            "PRODUCTO_SIN_OPERACION_PRESENCIAL": "El producto no admite ventanilla.",
+            "CUENTA_NO_ACTIVA": "La cuenta no admite este movimiento.",
+            "MENOR_SIN_TUTOR": "La cuenta del menor no tiene un tutor autorizado vigente.",
+        }
+        raise problema(409, codigo, detalles[codigo])
 
 
 def operacion_ventanilla(
@@ -1674,13 +1670,6 @@ def operacion_ventanilla(
                 obligatorio=ingreso,
             )
 
-            # El bloqueo del titular va antes que el de la cuenta, como en CTA-05.
-            titular = None
-            if ingreso:
-                titular = cuentas_repo.obtener_titular_cuenta(conn, datos.id_cuenta)
-                if titular is not None:
-                    clientes_repo.bloquear_cliente(conn, titular)
-
             cuenta = trx_repo.obtener_cuenta(
                 conn,
                 datos.id_cuenta,
@@ -1693,81 +1682,57 @@ def operacion_ventanilla(
                     "La cuenta no existe.",
                 )
 
-            primer_deposito = (
-                tipo == "Deposito"
-                and ingreso
-                and cuenta["Estado"] == "PendienteDeposito"
+            estado_cuenta = cuenta["Estado"]
+            estados_admitidos = (
+                {"Activa", "PendienteDeposito", "Inactiva", "Bloqueada"}
+                if tipo == "Deposito"
+                else {"Activa"}
             )
-            if cuenta["Estado"] != "Activa" and not primer_deposito:
+            if estado_cuenta not in estados_admitidos:
                 raise problema(
                     409,
                     "CUENTA_NO_ACTIVA",
                     "La cuenta no está Activa.",
                 )
 
+            verificar_operable_en_ventanilla(
+                conn, datos.id_cuenta, configurado["Naturaleza"]
+            )
+            if estado_cuenta == "PendienteDeposito":
+                activar_si_corresponde(conn, datos.id_cuenta, datos.monto, cajero)
+
             id_canal = deps.id_canal_ventanilla
-            comision = Decimal(0)
-            descripcion = "Aprobada"
             fecha_hora = ahora_ecuador()
+            autorizacion = trx_repo.autorizar_operacion(
+                conn,
+                datos.id_cuenta,
+                id_canal,
+                tipo,
+                datos.monto,
+                fecha_hora=fecha_hora,
+            )
+            codigo = str(autorizacion["CodigoRespuesta"] or "").strip()
 
-            if primer_deposito:
-                if titular is None:
-                    raise problema(
-                        409, "CLIENTE_NO_HABILITADO", "No se pudo verificar el titular."
-                    )
-                exigir_cliente_habilitado(conn, titular, fecha_hora.date())
-                if datos.monto < cuenta["MontoAperturaAplicado"]:
-                    raise problema(
-                        422,
-                        "MONTO_BAJO_APERTURA",
-                        "El depósito es inferior al mínimo de apertura de la cuenta.",
-                    )
-
-            verificar_operable_en_ventanilla(conn, datos.id_cuenta)
-
-            if not ingreso:
-                autorizacion = trx_repo.autorizar_operacion(
-                    conn,
-                    datos.id_cuenta,
-                    id_canal,
-                    tipo,
-                    datos.monto,
-                    fecha_hora=fecha_hora,
+            if codigo == "51":
+                raise problema(
+                    422,
+                    "FONDOS_INSUFICIENTES",
+                    "El disponible no cubre el monto y la comisión.",
                 )
-
-                codigo = str(autorizacion["CodigoRespuesta"] or "").strip()
-
-                if codigo == "51":
-                    raise problema(
-                        422,
-                        "FONDOS_INSUFICIENTES",
-                        "El disponible no cubre el monto y la comisión.",
-                    )
-
-                if codigo == "05":
-                    raise problema(
-                        409,
-                        "CUENTA_NO_ACTIVA",
-                        "La cuenta no está Activa.",
-                    )
-
-                if codigo != "00":
-                    raise problema(
-                        422,
-                        "OPERACION_RECHAZADA",
-                        "La operación fue rechazada.",
-                    )
-
-                comision = decimal(autorizacion["Comision"] or 0)
-
-                descripcion = str(autorizacion["Mensaje"] or descripcion)
-
-                if saldo_esperado(_totales(conn, id_jornada)) < datos.monto:
-                    raise problema(
-                        409,
-                        "EFECTIVO_INSUFICIENTE_EN_CAJA",
-                        "La caja no tiene efectivo para el retiro.",
-                    )
+            if codigo == "05" and not ingreso:
+                raise problema(409, "CUENTA_NO_ACTIVA", "La cuenta no está Activa.")
+            if codigo != "00":
+                raise problema(
+                    422, "OPERACION_RECHAZADA", "La operación fue rechazada."
+                )
+            comision = decimal(autorizacion["Comision"] or 0)
+            descripcion = str(autorizacion["Mensaje"] or "Aprobada")
+            if not ingreso and saldo_esperado(_totales(conn, id_jornada)) < datos.monto:
+                raise problema(
+                    409,
+                    "EFECTIVO_INSUFICIENTE_EN_CAJA",
+                    "La caja no tiene efectivo para el retiro.",
+                )
 
             id_fecha = fecha_contable(conn, fecha_hora)
 
@@ -1808,13 +1773,6 @@ def operacion_ventanilla(
             )
 
             registro.id_registro = str(id_transaccion)
-
-            if primer_deposito:
-                # El procedimiento de movimientos recibe una cuenta activa. El commit
-                # también confirma saldo, asiento y caja, o revierte toda la operación.
-                cuentas_repo.activar_por_deposito(
-                    conn, datos.id_cuenta, cajero, jornada["IdAgencia"]
-                )
 
             trx_repo.aplicar_movimiento_cuenta(
                 conn,

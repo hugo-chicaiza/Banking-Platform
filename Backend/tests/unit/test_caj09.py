@@ -69,30 +69,6 @@ def test_caj09_deposito_completo(ctx: Contexto) -> None:
     assert ctx.llamadas["insertar_movimiento_caja"][0][6] == 777  # id del asiento
 
 
-@pytest.mark.parametrize("minimo, estado", [("150.00", 201), ("150.01", 422)])
-def test_primer_deposito_respeta_minimo_y_activa(ctx: Contexto, minimo, estado) -> None:
-    preparar_ventanilla(ctx)
-    ctx.fake(
-        "obtener_cuenta",
-        {"Estado": "PendienteDeposito", "MontoAperturaAplicado": Decimal(minimo)},
-        trx_repo,
-    )
-    ctx.fake("exigir_cliente_habilitado", None, service)
-    ctx.fake("activar_por_deposito", None, service.cuentas_repo)
-
-    r = ctx.cliente.post(f"{BASE}/jornadas/55/depositos", json=CUERPO_DEPOSITO)
-
-    assert r.status_code == estado, r.text
-    assert len(ctx.llamadas["exigir_cliente_habilitado"]) == 1
-    if estado == 422:
-        assert code(r) == "MONTO_BAJO_APERTURA"
-        assert not ctx.llamadas["activar_por_deposito"]
-        assert not ctx.llamadas["insertar_transaccion"]
-    else:
-        assert ctx.llamadas["activar_por_deposito"] == [(501, ID_CAJERO, "001")]
-        assert len(ctx.llamadas["aplicar_movimiento_cuenta"]) == 1
-
-
 @pytest.mark.parametrize("hora", ["18:59:59", "19:00:00"])
 def test_deposito_comparte_instante_con_el_calendario(
     ctx: Contexto, monkeypatch: pytest.MonkeyPatch, hora: str
@@ -174,14 +150,25 @@ def test_caj09_reglas(
     assert not ctx.llamadas["insertar_transaccion"]
 
 
-def test_caj09_cuenta_no_activa_o_inexistente(ctx: Contexto) -> None:
+def test_caj09_cuenta_cerrada_o_inexistente(ctx: Contexto) -> None:
     preparar_ventanilla(ctx)
-    ctx.fake("obtener_cuenta", {"Estado": "Bloqueada"}, trx_repo)
+    ctx.fake("obtener_cuenta", {"Estado": "Cerrada"}, trx_repo)
     r = ctx.cliente.post(f"{BASE}/jornadas/55/depositos", json=CUERPO_DEPOSITO)
     assert (r.status_code, code(r)) == (409, "CUENTA_NO_ACTIVA")
     ctx.fake("obtener_cuenta", None, trx_repo)
     r = ctx.cliente.post(f"{BASE}/jornadas/55/depositos", json=CUERPO_DEPOSITO)
     assert (r.status_code, code(r)) == (422, "CUENTA_NO_ENCONTRADA")
+
+
+@pytest.mark.parametrize("estado", ["Bloqueada", "Inactiva"])
+def test_caj09_cuenta_admite_depositos_sin_reactivarse(
+    ctx: Contexto, estado: str
+) -> None:
+    preparar_ventanilla(ctx)
+    ctx.fake("obtener_cuenta", {"Estado": estado}, trx_repo)
+    respuesta = ctx.cliente.post(f"{BASE}/jornadas/55/depositos", json=CUERPO_DEPOSITO)
+    assert respuesta.status_code == 201
+    assert ctx.llamadas["insertar_transaccion"]
 
 
 def test_caj09_falla_del_asiento_revierte_todo(ctx: Contexto) -> None:

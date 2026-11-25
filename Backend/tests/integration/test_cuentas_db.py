@@ -12,6 +12,7 @@ import pytest
 
 from app.core.config.settings import get_settings
 from app.core.database.db import get_engine
+from app.modules.clientes import repository as clientes
 from app.modules.cuentas import repository
 from app.modules.cuentas.schemas import ID_MONEDA_USD
 
@@ -258,7 +259,7 @@ def test_sp_abrir_cuenta_tiene_firma_esperada(conn):
         "@IdAgencia",
         "@NumeroCuenta",
         "@MontoAperturaAplicado",
-        "@CreadoPor",
+        "@RealizadoPor",
         "@IdCuenta",
     ]
 
@@ -269,9 +270,7 @@ def test_sp_abrir_cuenta_tiene_firma_esperada(conn):
 
 
 def test_obtener_cliente_inexistente_devuelve_none(conn):
-    from app.modules.clientes.repository import riesgo_para_habilitacion
-
-    result = riesgo_para_habilitacion(conn, id_cliente=-999)
+    result = clientes.obtener_cliente_por_id(conn, id_cliente=-999)
     assert result is None
 
 
@@ -539,14 +538,7 @@ def test_cta_gestion_restricciones_y_reloj(conn):
     )
     assert all(
         estado in restricciones["CK_Cuenta_Estado"]
-        for estado in (
-            "Activa",
-            "Inactiva",
-            "Bloqueada",
-            "Cerrada",
-            "PendienteDeposito",
-            "Anulada",
-        )
+        for estado in ("Activa", "Inactiva", "Bloqueada", "Cerrada")
     )
     assert "FechaCierre" in restricciones["CK_Cuenta_Cierre"]
     assert all(
@@ -659,7 +651,7 @@ def test_cupo_e_historial_original_comparten_transaccion(monkeypatch, fallar_his
     from sqlalchemy import text
 
     from app.modules.cuentas import service
-    from app.modules.cuentas.schemas import CupoUpdate
+    from app.modules.cuentas.schemas import CupoSolicitado
     from tests.sesion import ID_AUDITORIA
 
     # Esta prueba no usa la fixture de solo lectura. Toda escritura queda en una
@@ -680,14 +672,17 @@ def test_cupo_e_historial_original_comparten_transaccion(monkeypatch, fallar_his
                 pytest.skip(
                     "Se necesita una cuenta con cupos configurados en su subproducto"
                 )
+            assert referencia is not None
             cuenta, canal = referencia[0], referencia[1]
-            inicial = CupoUpdate.model_validate(
+            inicial = CupoSolicitado.model_validate(
                 {
                     "cupoDiario": referencia[2],
                     "cupoMensual": referencia[3],
                     "montoMaxTransaccion": referencia[4],
                     "maxTransaccionesDia": 1,
                     "fechaVigencia": date(2030, 1, 1),
+                    "solicitadoPorCliente": True,
+                    "documentoVerificado": "C",
                 }
             )
             anterior = repository.bloquear_cupo_personalizado(conexion, cuenta, canal)

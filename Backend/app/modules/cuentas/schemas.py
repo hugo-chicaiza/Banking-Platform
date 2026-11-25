@@ -1,7 +1,13 @@
 from datetime import date
 from typing import Annotated, Literal
 
-from pydantic import AwareDatetime, ConfigDict, Field, StringConstraints
+from pydantic import (
+    AwareDatetime,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    field_validator,
+)
 
 from app.core.api.schemas import CamelModel, Money
 
@@ -14,22 +20,9 @@ EstadoCuenta = Literal[
     "INACTIVA",
     "BLOQUEADA",
     "CERRADA",
-    "PENDIENTE_DEPOSITO",
-    "ANULADA",
+    "PendienteDeposito",
+    "Anulada",
 ]
-
-# CTA-01 · Creación de cuenta
-
-
-class CuentaCreate(CamelModel):
-    """Body de POST /api/v1/cuentas (CTA-01)."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    id_cliente: int = Field(gt=0, le=2147483647)
-    id_sub_producto: int = Field(gt=0, le=2147483647)
-    id_moneda: MonedaUsd = ID_MONEDA_USD
-
 
 # Respuesta de cuenta
 
@@ -47,8 +40,52 @@ class Cuenta(CamelModel):
     saldo: Money
     saldo_retenido: Money
     estado: EstadoCuenta
-    monto_apertura_aplicado: Money | None = None
-    fecha_activacion: AwareDatetime | None = None
+
+
+class CuentaDetalle(Cuenta):
+    nombre_titular: str | None = None
+    motivo_estado: str | None = None
+
+
+class CuentaPendienteCreate(CamelModel):
+    model_config = ConfigDict(extra="forbid", validate_by_name=False)
+    id_cliente: int = Field(gt=0, le=2147483647)
+    id_sub_producto: int = Field(gt=0, le=2147483647)
+
+
+class AnularApertura(CamelModel):
+    model_config = ConfigDict(extra="forbid")
+    motivo: Annotated[
+        str,
+        StringConstraints(strip_whitespace=True, min_length=1, max_length=300),
+    ]
+
+
+class AutorizadoCuenta(CamelModel):
+    id_cuenta_autorizado: int
+    id_cliente_autorizado: int
+    nombre_autorizado: str | None = None
+    rol: Literal["Tutor", "RepresentanteLegal", "Firmante"]
+    fecha_inicio: date
+    fecha_fin: date | None
+    vigente: bool
+
+
+class AutorizadoCuentaCreate(CamelModel):
+    model_config = ConfigDict(extra="forbid")
+    id_cliente_autorizado: int = Field(gt=0, le=2147483647)
+    rol: Literal["Tutor", "RepresentanteLegal", "Firmante"]
+
+
+class EventoCuenta(CamelModel):
+    id_cuenta_evento: int
+    tipo_evento: str
+    estado_anterior: str | None
+    estado_actual: str
+    detalle: str
+    realizado_por: int
+    id_agencia: str
+    fecha_evento: AwareDatetime
 
 
 class CuentaResumen(CamelModel):
@@ -132,6 +169,18 @@ class CupoUpdate(CamelModel):
     )
 
 
+class CupoSolicitado(CupoUpdate):
+    solicitado_por_cliente: Literal[True]
+    documento_verificado: Literal["C", "R", "P"]
+
+    @field_validator("solicitado_por_cliente", mode="before")
+    @classmethod
+    def confirmar_pedido(cls, valor: object) -> object:
+        if valor is not True:
+            raise ValueError("Debe confirmar el pedido del cliente.")
+        return valor
+
+
 class CupoEfectivo(CamelModel):
     id_canal: int
     origen: Literal["Personalizado", "Producto"]
@@ -142,6 +191,10 @@ class CupoEfectivo(CamelModel):
     fecha_vigencia: date | None
     consumido_hoy: Money
     consumido_mes: Money
+    tope_diario_producto: Money | None = None
+    tope_mensual_producto: Money | None = None
+    tope_transaccion_producto: Money | None = None
+    tope_frecuencia_producto: int | None = None
 
 
 class CupoHistorial(CamelModel):
@@ -154,6 +207,8 @@ class CupoHistorial(CamelModel):
     monto_max_tx_nuevo: Money | None
     modificado_por: int
     fecha_modificacion: AwareDatetime
+    solicitado_por_cliente: bool | None = None
+    documento_verificado: Literal["C", "R", "P"] | None = None
 
 
 class PageCupoHistorial(CamelModel):

@@ -1,32 +1,28 @@
-from datetime import UTC, date
+from datetime import date
 from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import Connection, text
 
-from app.modules.cuentas.schemas import CupoUpdate
+from app.modules.cuentas.schemas import CupoSolicitado, CupoUpdate
 
 _ESTADOS_CUENTA_BD = {
     "ACTIVA": "Activa",
     "INACTIVA": "Inactiva",
     "BLOQUEADA": "Bloqueada",
     "CERRADA": "Cerrada",
-    "PENDIENTE_DEPOSITO": "PendienteDeposito",
-    "ANULADA": "Anulada",
+    "PendienteDeposito": "PendienteDeposito",
+    "Anulada": "Anulada",
 }
 _ESTADOS_CUENTA_API = {valor: clave for clave, valor in _ESTADOS_CUENTA_BD.items()}
 
 
 def _cuenta_desde_bd(fila: dict[str, Any]) -> dict[str, Any]:
     """Adapta los estados verificados sin alterar el contrato ni la fila leída."""
-    cuenta = {
+    return {
         **fila,
         "estado": _ESTADOS_CUENTA_API.get(fila["estado"], fila["estado"]),
     }
-    fecha = fila.get("fecha_activacion")
-    if fecha is not None and fecha.tzinfo is None:
-        cuenta["fecha_activacion"] = fecha.replace(tzinfo=UTC)
-    return cuenta
 
 
 def _rows(
@@ -136,8 +132,7 @@ def obtener_cuenta_por_id(conn: Connection, id_cuenta: int) -> dict[str, Any] | 
                c.IdCliente AS id_cliente, c.IdProducto AS id_producto,
                c.IdAgencia AS id_agencia, p.TipoCuenta AS tipo_cuenta,
                c.Saldo AS saldo, c.SaldoRetenido AS saldo_retenido,
-               c.Estado AS estado, c.MontoAperturaAplicado AS monto_apertura_aplicado,
-               c.FechaActivacion AS fecha_activacion
+               c.Estado AS estado
         FROM Cuentas.Cuenta AS c
         INNER JOIN ProductosFinancieros.Producto AS p
           ON p.IdProducto = c.IdProducto
@@ -146,6 +141,32 @@ def obtener_cuenta_por_id(conn: Connection, id_cuenta: int) -> dict[str, Any] | 
         {"id_cuenta": id_cuenta},
     )
     return _cuenta_desde_bd(fila) if fila is not None else None
+
+
+def obtener_titular_y_motivo(
+    conn: Connection, id_cuenta: int, estado: str
+) -> dict[str, Any]:
+    return (
+        _one(
+            conn,
+            """
+        SELECT NULLIF(TRIM(COALESCE(NULLIF(TRIM(cl.RazonSocial), ''),
+                                    CONCAT_WS(' ', cl.Nombres, cl.Apellidos))), '') AS nombre_titular,
+               evento.Detalle AS motivo_estado
+        FROM Cuentas.Cuenta AS c
+        LEFT JOIN Clientes.Cliente AS cl ON cl.IdCliente=c.IdCliente
+        OUTER APPLY (
+            SELECT TOP (1) e.Detalle FROM Cuentas.CuentaEvento AS e
+            WHERE e.IdCuenta=c.IdCuenta AND e.EstadoActual=:estado
+              AND e.TipoEvento IN ('Anulacion','Bloqueo','Desbloqueo','Inactivacion','Reactivacion','Cierre')
+            ORDER BY e.FechaEvento DESC,e.IdCuentaEvento DESC
+        ) AS evento
+        WHERE c.IdCuenta=:id
+        """,
+            {"id": id_cuenta, "estado": _ESTADOS_CUENTA_BD[estado]},
+        )
+        or {}
+    )
 
 
 def consultar_movimientos(
@@ -213,16 +234,18 @@ def consultar_movimientos(
 
 
 def obtener_subproducto(conn: Connection, id_subproducto: int) -> dict[str, Any] | None:
-    """Devuelve el subproducto y su producto padre para validar CTA-01."""
+    """Conserva el estado del catálogo hasta que termina la transacción de apertura."""
     return _one(
         conn,
         """
         SELECT s.IdSubProducto AS id_subproducto,
                s.IdProducto AS id_producto,
-               s.Estado AS estado_subproducto,
+               CASE WHEN s.Estado = 'A' AND s.EstadoSubProducto = 'Activo'
+                    THEN 'A' ELSE 'I' END AS estado_subproducto,
                p.TipoProducto AS tipo_producto,
                p.TipoCuenta AS tipo_cuenta,
-               p.Estado AS estado_producto,
+               CASE WHEN p.Estado = 'A' AND p.EstadoProducto = 'Activo'
+                    THEN 'A' ELSE 'I' END AS estado_producto,
                p.MontoAperturaMinimo AS monto_apertura_minimo
         FROM ProductosFinancieros.SubProducto AS s WITH (HOLDLOCK)
         INNER JOIN ProductosFinancieros.Producto AS p WITH (HOLDLOCK)
@@ -246,70 +269,35 @@ def obtener_agencia(conn: Connection, id_agencia: str) -> dict[str, Any] | None:
     )
 
 
-# Apertura de la cuenta
-
-
-def abrir_cuenta(
+def registrar_apertura(
     conn: Connection,
-    numero_cuenta: str,
-    id_cliente: int,
-    id_subproducto: int,
-    id_agencia: str,
-    monto_apertura_aplicado: Decimal,
-    creado_por: int,
-) -> dict[str, Any]:
-    """Ejecuta la firma real del SP y lee la cuenta por su id de salida."""
-    salida = _one(
-        conn,
-        """
-        DECLARE @id_cuenta int;
-        EXEC Cuentas.usp_AbrirCuenta
-            @IdCliente       = :id_cliente,
-            @IdSubProducto   = :id_subproducto,
-            @IdAgencia       = :id_agencia,
-            @NumeroCuenta    = :numero_cuenta,
-            @MontoAperturaAplicado = :monto_apertura_aplicado,
-            @CreadoPor       = :creado_por,
-            @IdCuenta        = @id_cuenta OUTPUT;
-        SELECT @id_cuenta AS id_cuenta;
-        """,
-        {
-            "id_cliente": id_cliente,
-            "id_subproducto": id_subproducto,
-            "id_agencia": id_agencia,
-            "numero_cuenta": numero_cuenta,
-            "monto_apertura_aplicado": monto_apertura_aplicado,
-            "creado_por": creado_por,
-        },
-    )
-    cuenta = (
-        obtener_cuenta_por_id(conn, int(salida["id_cuenta"]))
-        if salida is not None and salida["id_cuenta"] is not None
-        else None
-    )
-    if cuenta is None:  # pragma: no cover
-        raise RuntimeError("usp_AbrirCuenta no devolvió la cuenta creada")
-
-    return cuenta
-
-
-def activar_por_deposito(
-    conn: Connection, id_cuenta: int, realizado_por: int, id_agencia: str
-) -> None:
-    conn.execute(
+    numero: str,
+    cliente: int,
+    subproducto: int,
+    agencia: str,
+    minimo: Decimal,
+    actor: int,
+) -> int:
+    return conn.execute(
         text("""
-        UPDATE Cuentas.Cuenta SET Estado = 'Activa', FechaActivacion = SYSUTCDATETIME()
-        WHERE IdCuenta = :id_cuenta AND Estado = 'PendienteDeposito';
-        IF @@ROWCOUNT <> 1 THROW 57630, 'No se pudo confirmar la activación.', 1;
-        INSERT INTO Cuentas.CuentaEvento
-            (IdCuenta, TipoEvento, EstadoAnterior, EstadoActual, RealizadoPor, IdAgencia)
-        VALUES (:id_cuenta, 'Activacion', 'PendienteDeposito', 'Activa', :actor, :agencia);
+            SET NOCOUNT ON;
+            DECLARE @Cuenta int;
+            EXEC Cuentas.usp_AbrirCuenta @IdCliente=:cliente, @IdSubProducto=:sub,
+                @IdAgencia=:agencia, @NumeroCuenta=:numero, @MontoAperturaAplicado=:minimo,
+                @RealizadoPor=:actor, @IdCuenta=@Cuenta OUTPUT;
+            SELECT @Cuenta;
         """),
-        {"id_cuenta": id_cuenta, "actor": realizado_por, "agencia": id_agencia},
-    )
+        {
+            "numero": numero,
+            "cliente": cliente,
+            "sub": subproducto,
+            "agencia": agencia,
+            "minimo": minimo,
+            "actor": actor,
+        },
+    ).scalar_one()
 
 
-# CTA-05: XLOCK protege estado/saldos y la clave referenciada por los desembolsos.
 def obtener_titular_cuenta(conn: Connection, id_cuenta: int) -> int | None:
     fila = _one(
         conn,
@@ -323,7 +311,7 @@ def bloquear_cuenta(conn: Connection, id_cuenta: int) -> dict[str, Any] | None:
     fila = _one(
         conn,
         """
-        SELECT IdCuenta AS id_cuenta, Estado AS estado,
+        SELECT IdCuenta AS id_cuenta, Estado AS estado, RTRIM(IdAgencia) AS id_agencia,
                Saldo AS saldo, SaldoRetenido AS saldo_retenido
         FROM Cuentas.Cuenta WITH (XLOCK, HOLDLOCK)
         WHERE IdCuenta = :id_cuenta
@@ -395,11 +383,27 @@ def consultar_cupos_efectivos(
                v.CupoDiario AS cupo_diario, v.CupoMensual AS cupo_mensual,
                v.MontoMaxTransaccion AS monto_max_transaccion,
                v.MaxTransaccionesDia AS max_transacciones_dia,
+               p.CupoDiarioMaximo AS tope_diario_producto,
+               p.CupoMensualMaximo AS tope_mensual_producto,
+               p.MontoMaxTransaccion AS tope_transaccion_producto,
+               p.MaxTransaccionesDia AS tope_frecuencia_producto,
                CASE WHEN v.Origen = 'CUENTA' THEN cc.FechaVigencia END AS fecha_vigencia,
                COALESCE(cons.consumido_hoy, 0) AS consumido_hoy,
                COALESCE(cons.consumido_mes, 0) AS consumido_mes
         FROM Canal.Canal AS canal
         CROSS APPLY Canal.fn_CupoVigente(:id_cuenta, canal.IdCanal) AS v
+        CROSS JOIN Reloj AS reloj
+        OUTER APPLY (
+            SELECT TOP (1) pc.CupoDiarioMaximo, pc.CupoMensualMaximo,
+                   pc.MontoMaxTransaccion, pc.MaxTransaccionesDia
+            FROM Cuentas.Cuenta AS cuenta
+            JOIN ProductosFinancieros.ProductoCanalCupo AS pc
+              ON pc.IdSubProducto = cuenta.IdSubProducto AND pc.IdCanal = canal.IdCanal
+            WHERE cuenta.IdCuenta = :id_cuenta AND pc.EstadoCupo = 'A'
+              AND pc.VigenciaDesde <= reloj.hoy
+              AND (pc.VigenciaHasta IS NULL OR pc.VigenciaHasta >= reloj.hoy)
+            ORDER BY pc.VigenciaDesde DESC, pc.IdProductoCanalCupo DESC
+        ) AS p
         LEFT JOIN Canal.CanalCupoClienteCustom AS cc
           ON cc.IdCuenta = :id_cuenta AND cc.IdCanal = canal.IdCanal
         LEFT JOIN Consumo AS cons ON cons.IdCanal = canal.IdCanal
@@ -424,7 +428,7 @@ def bloquear_cupo_producto(
     return _one(
         conn,
         """
-        SELECT p.CupoDiarioMaximo AS cupo_diario, p.CupoMensualMaximo AS cupo_mensual,
+        SELECT TOP (1) p.CupoDiarioMaximo AS cupo_diario, p.CupoMensualMaximo AS cupo_mensual,
                p.MontoMaxTransaccion AS monto_max_transaccion,
                p.MaxTransaccionesDia AS max_transacciones_dia
         FROM Cuentas.Cuenta AS c
@@ -433,6 +437,7 @@ def bloquear_cupo_producto(
         WHERE c.IdCuenta = :id_cuenta AND p.EstadoCupo = 'A'
           AND p.VigenciaDesde <= CONVERT(date,SYSDATETIMEOFFSET() AT TIME ZONE 'SA Pacific Standard Time')
           AND (p.VigenciaHasta IS NULL OR p.VigenciaHasta >= CONVERT(date,SYSDATETIMEOFFSET() AT TIME ZONE 'SA Pacific Standard Time'))
+        ORDER BY p.VigenciaDesde DESC, p.IdProductoCanalCupo DESC
         """,
         {"id_cuenta": id_cuenta, "id_canal": id_canal},
     )
@@ -495,7 +500,7 @@ def insertar_historial_cupo(
     id_cuenta: int,
     id_canal: int,
     anterior: dict[str, Any] | None,
-    payload: CupoUpdate,
+    payload: CupoSolicitado,
     modificado_por: int,
 ) -> None:
     # El único trigger de Custom valida topes; NO inserta CuposModHis.
@@ -505,11 +510,12 @@ def insertar_historial_cupo(
         INSERT INTO Canal.CuposModHis (
             IdCanalCupoCliente, CupoDiarioAnterior, CupoDiarioNuevo,
             CupoMensualAnterior, CupoMensualNuevo, MontoMaxTxAnterior,
-            MontoMaxTxNuevo, ModificadoPor
+            MontoMaxTxNuevo, ModificadoPor, SolicitadoPorCliente, DocumentoVerificado
         )
         SELECT IdCanalCupo, :diario_anterior, :cupo_diario,
                :mensual_anterior, :cupo_mensual, :max_anterior,
-               :monto_max_transaccion, :modificado_por
+               :monto_max_transaccion, :modificado_por,
+               :solicitado_por_cliente, :documento_verificado
         FROM Canal.CanalCupoClienteCustom
         WHERE IdCuenta = :id_cuenta AND IdCanal = :id_canal
         """),
@@ -547,6 +553,8 @@ def consultar_historial_cupo(
                    h.MontoMaxTxAnterior AS monto_max_tx_anterior,
                    h.MontoMaxTxNuevo AS monto_max_tx_nuevo,
                    h.ModificadoPor AS modificado_por,
+                   h.SolicitadoPorCliente AS solicitado_por_cliente,
+                   h.DocumentoVerificado AS documento_verificado,
                    h.FechaModificacion AS fecha_modificacion,
                    ROW_NUMBER() OVER (ORDER BY
                      CASE WHEN :campo = 'FechaModificacion' AND :direccion = 'asc'
