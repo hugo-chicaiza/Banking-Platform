@@ -135,8 +135,7 @@ def test_e602_cupo_efectivo_combina_capas_y_ambito(motores, caso):
 
     cuenta = cuenta_y_techo(motores, caso)
     migracion = (
-        Path(__file__).resolve().parents[2]
-        / "tests/sql/e602_limites_operacion.sql"
+        Path(__file__).resolve().parents[2] / "tests/sql/e602_limites_operacion.sql"
     )
     with (
         motores["cooperativa"]
