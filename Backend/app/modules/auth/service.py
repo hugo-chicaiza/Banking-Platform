@@ -903,7 +903,7 @@ def crear_usuario(
     )
     bloquear_corte_caja(conn_coop)
     _validar_cambio_directo_roles(
-        politica_roles.vigente(), usuario.roles, (), (datos.rol,)
+        politica_roles.para_operaciones(), usuario.roles, (), (datos.rol,)
     )
     multiagencia.validar_matriz((datos.rol,), asignadas, datos.id_agencia)
     for id_agencia in asignadas:
@@ -1245,16 +1245,19 @@ def _aplicar_rol_en_workos(
     roles: tuple[str, ...],
     usuario: Usuario,
     deshacer: Deshacer,
-    politica: politica_roles.PoliticaRoles,
+    politica: politica_roles.PoliticaRoles | None,
 ) -> None:
     gestion = get_workos().user_management
     seleccion = _parametros_roles_workos([slug_rol(rol) for rol in roles])
     if key:
         membresia = _membresia(key)
-        roles_proveedor = normalizar_roles(
-            sorted(_slugs(membresia)) if membresia else [], None
-        )
-        _validar_cambio_directo_roles(politica, usuario.roles, roles_proveedor, roles)
+        if politica is not None:
+            roles_proveedor = normalizar_roles(
+                sorted(_slugs(membresia)) if membresia else [], None
+            )
+            _validar_cambio_directo_roles(
+                politica, usuario.roles, roles_proveedor, roles
+            )
         if membresia is None:
             with _workos("create_organization_membership"):
                 creada = gestion.create_organization_membership(
@@ -1285,12 +1288,12 @@ def _aplicar_rol_en_workos(
 
 
 def _validar_cambio_directo_roles(
-    politica: politica_roles.PoliticaRoles,
+    politica: politica_roles.PoliticaRoles | None,
     actor: tuple[str, ...],
     actuales: tuple[str, ...],
     nuevos: tuple[str, ...],
 ) -> None:
-    if politica.requiere_aprobacion(actor, actuales, nuevos):
+    if politica is not None and politica.requiere_aprobacion(actor, actuales, nuevos):
         raise problema(
             409,
             "APROBACION_REQUERIDA",
@@ -1361,7 +1364,7 @@ def cambiar_rol(
                         )
                     if "ADMIN" not in nuevos:
                         _validar_ultimo_admin(conn, fila)
-                    politica = politica_roles.vigente()
+                    politica = politica_roles.para_operaciones()
                     _validar_cambio_directo_roles(
                         politica, usuario.roles, actuales, nuevos
                     )

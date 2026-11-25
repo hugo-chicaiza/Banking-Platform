@@ -89,6 +89,7 @@ class Settings(BaseSettings):
     limite_peticiones_activo: bool = True
     editor_accesos_activo: bool = False
     editor_funciones_activo: bool = False
+    e104_politica_roles_activa: bool = False
     e104_politica_roles: str | None = None
     e104_permiso_aprobar_roles: str = ""
     e104_recuperar_correo: bool = False

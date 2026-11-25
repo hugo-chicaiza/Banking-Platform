@@ -121,6 +121,12 @@ class CambioRoles:
         solicitante: str,
         id_solicitud: int,
     ) -> None:
+        if not get_settings().e104_politica_roles_activa:
+            raise problema(
+                503,
+                "OPERACION_NO_CONFIGURADA",
+                "La aprobación institucional de roles está suspendida.",
+            )
         fila = self._fila(conn, objetivo)
         id_usuario = int(objetivo.id)
         actor = identidad.vigente(solicitante, get_organizacion_id())
@@ -193,8 +199,9 @@ class CambioRoles:
 
 
 def operacion() -> Operacion | None:
-    permiso = get_settings().e104_permiso_aprobar_roles.strip()
-    if not permiso:
+    settings = get_settings()
+    permiso = settings.e104_permiso_aprobar_roles.strip()
+    if not settings.e104_politica_roles_activa or not permiso:
         return None
     return Operacion(
         CODIGO,
