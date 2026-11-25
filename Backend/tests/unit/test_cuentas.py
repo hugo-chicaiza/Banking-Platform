@@ -3,6 +3,7 @@ import json
 from datetime import UTC, date, datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any, cast, get_args
+from unittest.mock import Mock
 
 import httpx
 import pytest
@@ -58,6 +59,9 @@ class _FakeConn:
 
     def commit(self) -> None:
         self.commits += 1
+
+    def in_transaction(self) -> bool:
+        return bool(self.consultas) and not (self.commits or self.rollbacks)
 
     def rollback(self) -> None:
         self.rollbacks += 1
@@ -1030,6 +1034,84 @@ def test_cta07_cuenta_inexistente_y_sin_cupos():
     assert db.commits == db.rollbacks == 0
 
 
+@pytest.mark.parametrize(
+    ("catalogo", "fila", "por_operacion", "por_dia", "umbral"),
+    [
+        (None, None, 200, 500, None),
+        (10, None, 200, 500, None),
+        (10, (150, 750, 100), 150, 500, 100),
+        (10, (None, 300, None), 200, 300, None),
+    ],
+)
+def test_e602_cupo_efectivo_aplica_el_menor_tope_por_campo(
+    catalogo, fila, por_operacion, por_dia, umbral
+):
+    conn = Mock(spec=Connection)
+    conn.exec_driver_sql.return_value.scalar.return_value = catalogo
+    fecha = date(2026, 11, 25)
+    cupo = Mock()
+    cupo.mappings.return_value.one_or_none.return_value = {
+        "MontoMaxTransaccion": Decimal(200),
+        "CupoDiario": Decimal(500),
+        "CupoMensual": Decimal(2000),
+        "MaxTransaccionesDia": 20,
+    }
+    limite = Mock()
+    limite.mappings.return_value = (
+        [
+            dict(
+                zip(
+                    (
+                        "MontoMaximoOperacion",
+                        "MontoMaximoDiario",
+                        "MontoRequiereAprobacion",
+                    ),
+                    fila,
+                    strict=True,
+                )
+            )
+        ]
+        if fila is not None
+        else []
+    )
+    conn.execute.side_effect = [cupo, limite]
+
+    assert service.cupo_efectivo(
+        conn, 501, 4, fecha, tipo="Retiro", grupo=7, agencia="001"
+    ) == {
+        "MontoMaxTransaccion": por_operacion,
+        "CupoDiario": por_dia,
+        "CupoMensual": Decimal(2000),
+        "MaxTransaccionesDia": 20,
+        "MontoRequiereAprobacion": umbral,
+    }
+    assert conn.execute.call_count == (1 if catalogo is None else 2)
+    if catalogo is not None:
+        consulta, parametros = conn.execute.call_args.args
+        assert "Parametros.LimiteOperacion" in str(consulta)
+        assert parametros == {
+            "tipo": "Retiro",
+            "canal": 4,
+            "grupo": 7,
+            "agencia": "001",
+            "fecha": fecha,
+        }
+
+
+def test_e602_canal_sin_cupo_vigente_no_consulta_el_catalogo_institucional():
+    conn = Mock(spec=Connection)
+    conn.execute.return_value.mappings.return_value.one_or_none.return_value = None
+
+    assert (
+        service.cupo_efectivo(
+            conn, 501, 4, date(2026, 11, 25), tipo="Retiro", grupo=None, agencia="001"
+        )
+        is None
+    )
+
+    conn.exec_driver_sql.assert_not_called()
+
+
 def _db_actualizar_cupo(anterior=None, efectivo=None, producto=None):
     return _fake_conn(
         [_cuenta_bd_row()],
@@ -1047,6 +1129,7 @@ def _db_actualizar_cupo(anterior=None, efectivo=None, producto=None):
         [],
         [],
         [efectivo or _cupo_row()],
+        [],
     )
 
 
@@ -1062,20 +1145,21 @@ def _actualizar(db, **cambios):
 
 @pytest.mark.parametrize("existe", [False, True])
 @pytest.mark.parametrize("vencido", [False, True])
-def test_cta08_crea_actualiza_historial_una_vez_y_respuesta_efectiva(
-    existe, vencido, monkeypatch
-):
-    eventos = []
-    monkeypatch.setattr(service.audit, "registrar", eventos.append)
+def test_cta08_crea_actualiza_historial_una_vez_y_respuesta_efectiva(existe, vencido):
     anterior = _cupo_row(cupo_diario=Decimal(300)) if existe else None
     efectivo = _cupo_row(origen="Producto") if vencido else _cupo_row()
     db = _db_actualizar_cupo(anterior, efectivo)
     resultado = _actualizar(db, fechaVigencia="2020-01-01" if vencido else None)
     assert resultado.origen == ("Producto" if vencido else "Personalizado")
     assert db.commits == 1 and db.rollbacks == 0 and not db.respuestas
-    assert len(eventos) == 1
-    assert eventos[0].accion == "CTA_CUPO_CAMBIADO"
-    assert eventos[0].usuario == 12
+    sql, params = db.consultas[-1]
+    assert "INSERT Auditoria.EventoPendiente" in sql
+    assert params["codigo"] == "CTA_CUPO_CAMBIADO"
+    detalle = json.loads(params["contenido"])
+    assert detalle["sujeto"] == "12"
+    assert detalle["agencia"] == "001"
+    assert detalle["cambios"]["modificadoPor"] == 12
+    assert detalle["cambios"]["idCanal"] == 1
     assert (
         len([s for s, _ in db.consultas if "INSERT INTO Canal.CuposModHis" in s]) == 1
     )
@@ -1095,7 +1179,7 @@ def test_cta08_crea_actualiza_historial_una_vez_y_respuesta_efectiva(
     assert "p.IdSubProducto = c.IdSubProducto" in db.consultas[2][0]
     assert "WITH (HOLDLOCK)" in db.consultas[2][0]
     assert "WITH (UPDLOCK, HOLDLOCK)" in db.consultas[3][0]
-    assert db.consultas[-1][1] == {"id_cuenta": 501, "id_canal": 1}
+    assert db.consultas[-2][1] == {"id_cuenta": 501, "id_canal": 1}
 
 
 @pytest.mark.parametrize(
@@ -1176,6 +1260,7 @@ def test_cta08_recursos_ausentes(etapa, codigo):
         "guardar_cupo_personalizado",
         "insertar_historial_cupo",
         "consultar_cupos_efectivos",
+        "encolar_evento",
         "commit",
     ],
 )
@@ -1185,7 +1270,8 @@ def test_cta08_rollback_en_cada_etapa(monkeypatch, etapa):
     def fallar(*args, **kwargs):
         raise RuntimeError("fallo simulado")
 
-    monkeypatch.setattr(db if etapa == "commit" else repository, etapa, fallar)
+    destino = {"commit": db, "encolar_evento": service}.get(etapa, repository)
+    monkeypatch.setattr(destino, etapa, fallar)
     with pytest.raises(RuntimeError):
         _actualizar(db)
     assert db.commits == 0 and db.rollbacks == 1
@@ -1196,7 +1282,7 @@ def test_cta08_rollback_en_cada_etapa(monkeypatch, etapa):
 )
 def test_cta08_no_confirma_sin_respuesta_valida(filas):
     db = _db_actualizar_cupo()
-    db.respuestas[-1] = filas
+    db.respuestas[-2] = filas
     with pytest.raises((HTTPException, ValidationError)):
         _actualizar(db)
     assert db.commits == 0 and db.rollbacks == 1

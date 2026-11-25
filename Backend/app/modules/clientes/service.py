@@ -42,6 +42,7 @@ from app.modules.clientes.schemas import (
     TipoDocumento,
     ValidacionIdentificacion,
 )
+from app.modules.contabilidad.service import ZONA_ECUADOR
 from app.modules.cuentas.schemas import ID_MONEDA_USD
 from app.modules.parametros import general
 
@@ -1148,16 +1149,41 @@ def registrar_evaluacion_riesgo(
                 "ANTECEDENTE_REQUERIDO",
                 "El tipo de antecedente es obligatorio solo si tieneAntecedentes es true.",
             )
-        if (
-            payload.id_tipo_antecedente is not None
-            and not repository.existe_tipo_antecedente_activo(
+        if payload.id_tipo_antecedente is not None:
+            antecedente = repository.tipo_antecedente_activo(
                 conn, payload.id_tipo_antecedente
             )
-        ):
+            if antecedente is None:
+                raise _problema(
+                    422,
+                    "CATALOGO_INVALIDO",
+                    "El tipo de antecedente no existe o está inactivo.",
+                )
+            if (
+                antecedente["impide_vinculacion"]
+                and payload.resultado_evaluacion == "Aprobado"
+            ):
+                raise _problema(
+                    422,
+                    "ANTECEDENTE_IMPIDE_VINCULACION",
+                    "El antecedente impide registrar una evaluación aprobada.",
+                )
+        fecha_evaluacion = datetime.now(UTC)
+        fecha_operativa = fecha_evaluacion.astimezone(ZONA_ECUADOR).date()
+        clave = f"CLI_RIESGO_VIGENCIA_{payload.nivel_riesgo_laft.upper()}_MESES"
+        try:
+            meses_vigencia = general.valor(conn, clave, fecha_operativa)
+        except HTTPException as exc:
+            if exc.status_code != 404:
+                raise
             raise _problema(
-                422,
-                "CATALOGO_INVALIDO",
-                "El tipo de antecedente no existe o está inactivo.",
+                503,
+                "PARAMETRO_NO_DISPONIBLE",
+                "La vigencia del riesgo no está configurada.",
+            ) from exc
+        if type(meses_vigencia) is not int or meses_vigencia < 1:
+            raise _problema(
+                503, "PARAMETRO_INVALIDO", "La vigencia del riesgo no está configurada."
             )
         row = repository.insertar_evaluacion_riesgo(
             conn,
@@ -1165,6 +1191,9 @@ def registrar_evaluacion_riesgo(
             payload.model_dump(),
             evaluador=evaluador,
             direccion_ip=direccion_ip,
+            fecha_evaluacion=fecha_evaluacion,
+            fecha_operativa=fecha_operativa,
+            meses_vigencia=meses_vigencia,
         )
         resultado = RiesgoRegistrado(**row)
         conn.commit()

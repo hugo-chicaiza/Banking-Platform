@@ -17,11 +17,9 @@ Pruebas ejecutadas con SQL Server local y datos ficticios. El motor de asientos 
 
 ## Cuenta con retención activa
 
-Prueba conjunta con E6-05 sobre un saldo ficticio de USD 125,00. Se retuvieron USD 60,00 y la reclasificación trasladó los USD 65,00 de CAPITAL disponible. La retención siguió respaldada por el auxiliar RESTRINGIDO que recibió el crédito original.
+E6-06 devuelve `409 CUENTA_CON_RETENCIONES_ACTIVAS` al solicitar o ejecutar un cambio si hay saldo retenido o una retención activa, incluso una orden de monto cero. La liberación sigue la revisión y la autorización de E6-05. Una vez liberadas todas las retenciones, el asesor puede presentar la solicitud y la reclasificación usa el saldo completo.
 
-Al liberar, el asiento debitó USD 60,00 del auxiliar histórico y acreditó USD 60,00 al CAPITAL vigente de la cuenta. La reclasificación y la liberación se verificaron con los asientos locales 1895 y 1896. El disponible final fue USD 125,00, el retenido quedó en cero y el CAPITAL del destino recibió en total USD 125,00. La prueba se realizó dentro de una transacción reversible.
-
-E6-06 exige que el importe retenido concilie con las retenciones activas respaldadas por asientos contabilizados. Un saldo retenido sin respaldo deja la cuenta sin cambios y devuelve `RETENCION_SIN_RESPALDO_CONTABLE`.
+Los asientos locales 1895 y 1896 corresponden a una prueba de la versión anterior, que permitía reclasificar el saldo disponible con una retención en curso. E6-05 conserva la capacidad de liberar esas retenciones históricas desde su auxiliar original hacia el CAPITAL vigente.
 
 ## Consulta reproducible de asientos de prueba
 
@@ -37,7 +35,7 @@ WHERE a.IdAsientoContable = @id
 ORDER BY m.TipoMovimiento DESC;
 ```
 
-Las cuentas contables se resuelven por rol y vigencia. La plantilla E4-01 encontrada en una copia restaurada ya tenía líneas de CAPITAL y líneas opcionales de RESTRINGIDO. E6-06 utiliza su componente `PRINCIPAL` para los fondos libres e informa `RETENIDO=0` para conservar el auxiliar histórico hasta la liberación.
+Las cuentas contables se resuelven por rol y vigencia. La plantilla E4-01 encontrada en una copia restaurada ya tenía líneas de CAPITAL y líneas opcionales de RESTRINGIDO. E6-06 usa `PRINCIPAL` para el saldo completo y envía `RETENIDO=0` a la plantilla.
 
 Las semillas de CooperativaDB y SeguridadDB se ensayaron dos veces y se revirtieron dos veces en copias locales. Se conservaron las filas preexistentes de E4-01 y se retiró únicamente la configuración de E6-06 introducida en el ensayo.
 

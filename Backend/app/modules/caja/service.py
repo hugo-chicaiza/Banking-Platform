@@ -47,8 +47,10 @@ from app.modules.caja.schemas import (
     PageMovimientoCaja,
     SeriesBilletesRequest,
 )
+from app.modules.clientes import repository as clientes_repo
 from app.modules.contabilidad.asientos import OperacionContable, generar_asiento
 from app.modules.contabilidad.service import ahora_ecuador
+from app.modules.cuentas import repository as cuentas_repo
 from app.modules.cuentas.service import (
     activar_si_corresponde,
     cuenta_operable,
@@ -1568,6 +1570,39 @@ def verificar_operable_en_ventanilla(
         raise problema(409, codigo, detalles[codigo])
 
 
+def _validar_limite_institucional_retiro(
+    conn: Connection,
+    datos: OperacionVentanilla,
+    id_canal: int,
+    tipo: TipoVentanilla,
+    fecha: date,
+    agencia: str,
+) -> None:
+    limite = cuentas_repo.limite_institucional(
+        conn, id_canal, fecha, tipo=tipo, grupo=None, agencia=agencia.strip()
+    )
+    if limite is None:
+        return
+    por_operacion = limite["MontoMaximoOperacion"]
+    if por_operacion is not None and datos.monto > por_operacion:
+        raise problema(
+            422,
+            "LIMITE_INSTITUCIONAL_EXCEDIDO",
+            "El retiro supera el máximo institucional por operación.",
+        )
+    por_dia = limite["MontoMaximoDiario"]
+    if por_dia is not None:
+        usado = trx_repo.monto_diario_operaciones(
+            conn, datos.id_cuenta, id_canal, tipo, fecha
+        )
+        if usado + datos.monto > por_dia:
+            raise problema(
+                422,
+                "LIMITE_INSTITUCIONAL_EXCEDIDO",
+                "El retiro supera el máximo diario institucional.",
+            )
+
+
 def operacion_ventanilla(
     conn: Connection,
     usuario: Usuario,
@@ -1670,6 +1705,12 @@ def operacion_ventanilla(
                 obligatorio=ingreso,
             )
 
+            if tipo == "Deposito":
+                # Mantiene el orden titular → cuenta de los flujos de Clientes.
+                titular = cuentas_repo.obtener_titular_cuenta(conn, datos.id_cuenta)
+                if titular is not None:
+                    clientes_repo.bloquear_cliente(conn, titular)
+
             cuenta = trx_repo.obtener_cuenta(
                 conn,
                 datos.id_cuenta,
@@ -1724,6 +1765,10 @@ def operacion_ventanilla(
             if codigo != "00":
                 raise problema(
                     422, "OPERACION_RECHAZADA", "La operación fue rechazada."
+                )
+            if not ingreso:
+                _validar_limite_institucional_retiro(
+                    conn, datos, id_canal, tipo, fecha_hora.date(), jornada["IdAgencia"]
                 )
             comision = decimal(autorizacion["Comision"] or 0)
             descripcion = str(autorizacion["Mensaje"] or "Aprobada")
