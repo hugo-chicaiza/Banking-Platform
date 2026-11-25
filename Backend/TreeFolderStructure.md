@@ -13,6 +13,9 @@ backend/
 │   │   ├── security/
 │   │   │   ├── auth.py            # require\_auth (WorkOS JWT, F-03), require\_roles("CAJERO", ...)
 │   │   │   └── audit.py           # Writes Auditoria.Auditoria (F-04)
+│   │   ├── csv/                   # CSV export for every module: permission, formula neutralization, audit, no-store
+│   │   ├── pdf/                   # PDF generation (fpdf2, plain text only) and its HTTP response
+│   │   ├── documentos/            # Encrypted file storage (MongoDB, E5-08) + antimalware analysis (analisis.py)
 │   │   └── api/                   # HTTP layer shared by every router
 │   │       ├── schemas.py         # CamelModel (snake_case ↔ camelCase JSON), Money (Decimal → JSON number)
 │   │       ├── errors.py          # ProblemDetails + map THROW 5xxxx → HTTP/code (F-04 table)
@@ -110,6 +113,7 @@ Branches created before 2026-11-03 still use the old paths and must update them 
 | `from app.core.errors import ...` | `from app.core.api.errors import ...` |
 | `from app.core.middleware import ...` | `from app.core.api.middleware import ...` |
 | `from app.core.rate_limit import ...` | `from app.core.api.rate_limit import ...` |
+| `from app.modules.organizacion import exportacion` | `from app.core import csv as exportacion` |
 >
 > Rule: one `router.py`, `schemas.py`, `repository.py` (and `service.py` if needed) per module. Every developer adds
 > their endpoints to those files; never create parallel files (`router_cat02.py`). Split a module into sub-folders only

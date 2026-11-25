@@ -33,6 +33,7 @@ from fastapi import (
 from fastapi.responses import JSONResponse, RedirectResponse
 from sqlalchemy import Connection
 
+from app.core import csv as exportacion
 from app.core.api.errors import (
     RESPUESTAS_ERROR,
     ProblemDetailsRoute,
@@ -82,7 +83,6 @@ from app.modules.auth.schemas import (
     UsuarioSesion,
     UsuarioUpdate,
 )
-from app.modules.organizacion import exportacion
 
 COOKIE_STATE = "__Host-oauth_state"
 _DURACION_STATE = 10 * 60  # tiempo para completar el login en el Hosted UI

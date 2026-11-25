@@ -8,6 +8,7 @@ from app.core.documentos.http import (
 from app.core.documentos.servicio import (
     AlmacenamientoNoDisponible,
     ArchivoMuyGrande,
+    ArchivoRechazado,
     Documento,
     DocumentoNoDisponible,
     DocumentoNoEncontrado,
@@ -21,6 +22,7 @@ from app.core.documentos.servicio import (
 __all__ = [
     "AlmacenamientoNoDisponible",
     "ArchivoMuyGrande",
+    "ArchivoRechazado",
     "Documento",
     "DocumentoNoDisponible",
     "DocumentoNoEncontrado",

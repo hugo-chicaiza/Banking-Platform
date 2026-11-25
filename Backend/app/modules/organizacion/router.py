@@ -13,6 +13,7 @@ from fastapi import APIRouter, Depends, Path, Query, Request, Response
 from fastapi.responses import JSONResponse
 from sqlalchemy import Connection
 
+from app.core import csv as exportacion
 from app.core.api.errors import RESPUESTAS_ERROR, ProblemDetailsRoute, solo_parametros
 from app.core.api.middleware import ip_cliente, obtener_trace_id
 from app.core.database.db import cooperativa
@@ -27,7 +28,7 @@ from app.core.security.operador import auditar
 from app.modules.aprobaciones import router as aprobaciones
 from app.modules.aprobaciones.contratos import SolicitudAceptada
 from app.modules.aprobaciones.registro import Objetivo
-from app.modules.organizacion import exportacion, service
+from app.modules.organizacion import service
 from app.modules.organizacion.aprobacion import CODIGO_BAJA, TIPO_OBJETIVO
 from app.modules.organizacion.schemas import (
     Agencia,

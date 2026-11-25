@@ -151,3 +151,41 @@ def test_limite_configurable_preserva_tope_y_compatibilidad(monkeypatch):
     assert importaciones._limite_filas(conn) == 10
     monkeypatch.setattr(importaciones.general, "valor", lambda *args: 6000)
     assert importaciones._limite_filas(conn) == 5000
+
+
+@pytest.mark.parametrize(
+    "contenido",
+    [
+        CABECERA + b"1,Activo\x00,,DEUDORA\n",  # NUL
+        CABECERA + b"1,Activo\x1b[2J,,DEUDORA\n",  # control
+        CABECERA + b"1,Activo,,DEUDORA\n#!/bin/sh\n",  # script
+    ],
+)
+def test_analisis_rechaza_antes_de_parsear(contenido):
+    with pytest.raises(HTTPException) as error:
+        leer_csv("cuc.csv", contenido)
+    assert error.value.status_code == 422
+    assert error.value.detail["code"] == "ARCHIVO_INVALIDO"  # type: ignore[index]
+
+
+def test_eicar_se_rechaza_antes_de_parsear():
+    from app.core.documentos.analisis import EICAR
+
+    with pytest.raises(HTTPException) as error:
+        leer_csv("cuc.csv", CABECERA + b"1," + EICAR + b",,DEUDORA\n")
+    assert error.value.status_code == 422
+
+
+def test_celdas_de_formula_quedan_como_texto_literal():
+    """ASVS 1.2.x/1.2.10: `=CMD|...` no se evalúa; el código no pasa la regla numérica
+    y el nombre se conserva literal (va por parámetro SQL y core/csv lo neutraliza)."""
+    formula = "=CMD|' /C calc'!A0"
+    filas = leer_csv(
+        "cuc.csv",
+        CABECERA + f'"{formula}",Activo,,DEUDORA\n1,"{formula}",,DEUDORA\n'.encode(),
+    )
+    assert filas[0]["CodigoCuenta"] == formula and filas[1]["NombreCuenta"] == formula
+    revision = revisar(filas, {})
+    assert revision[0]["codigoError"] == "CODIGO_INVALIDO"
+    assert revision[1]["resultado"] == "Nueva"
+    assert revision[1]["NombreCuenta"] == formula

@@ -9,10 +9,12 @@ Cómo se guarda un archivo:
 4. Se guarda en MongoDB bajo una clave generada (UUID), nunca el nombre original.
    Nunca se sobrescribe: reemplazar es guardar otro y versionar en la tabla del módulo.
 
-Lo que sube un usuario queda en análisis `Pendiente` y no se entrega hasta que el
-análisis de malware lo marque `Limpio`; lo que genera el propio sistema (un PDF) nace
-`Limpio`. Los metadatos (nombre a mostrar, clase, versión, quién) los guarda cada
-módulo en su tabla junto con la clave, el hash, el tipo y el tamaño de `Referencia`.
+Lo que sube un usuario se analiza antes de cifrar (analisis.py, OWASP ASVS 5.0 5.4.3):
+`Rechazado` lanza ArchivoRechazado (422) y no se guarda nada; si pasa, se guarda
+`Limpio`. Lo que genera el propio sistema (un PDF) nace `Limpio` sin analizar. `leer`
+solo entrega `Limpio`; `Pendiente` queda para documentos anteriores o un análisis
+asíncrono futuro (`marcar_analisis`). Los metadatos (nombre a mostrar, clase, versión,
+quién) los guarda cada módulo en su tabla junto con la clave, el hash, el tipo y el tamaño de `Referencia`.
 Si el registro en SQL falla, el módulo llama `eliminar(clave)` (compensación).
 """
 
@@ -36,6 +38,7 @@ from app.core.documentos.almacen import (
     DocumentoInexistente,
     ErrorAlmacen,
 )
+from app.core.documentos.analisis import analizar
 
 logger = logging.getLogger(__name__)
 _NONCE = 12
@@ -63,6 +66,15 @@ class ArchivoMuyGrande(ErrorDocumento):
 
 class TipoNoPermitido(ErrorDocumento):
     """415: el contenido no es PDF, JPG ni PNG (o no es del tipo que se exige)."""
+
+
+class ArchivoRechazado(ErrorDocumento):
+    """422: el análisis antimalware lo rechazó. `motivo` es un código corto para logs y
+    auditoría (p. ej. "PDF_CONTENIDO_ACTIVO"); nunca va al usuario ni lleva contenido."""
+
+    def __init__(self, motivo: str | None = None) -> None:
+        super().__init__(motivo or "RECHAZADO")
+        self.motivo = motivo
 
 
 class DocumentoNoEncontrado(ErrorDocumento):
@@ -122,13 +134,22 @@ class ServicioDocumentos:
         tipo = tipo_por_contenido(contenido)
         if tipo is None or (tipos is not None and tipo not in tipos):
             raise TipoNoPermitido()
+        if not generado_por_sistema:
+            resultado = analizar(contenido, tipo)
+            if resultado.veredicto == "Rechazado":
+                logger.warning(
+                    "documentos: archivo rechazado origen=%s motivo=%s",
+                    origen,
+                    resultado.motivo,
+                )
+                raise ArchivoRechazado(resultado.motivo)
         clave = uuid.uuid4().hex
         sha256 = hashlib.sha256(contenido).hexdigest()
         nonce = os.urandom(_NONCE)
         cifrado = nonce + AESGCM(self.clave_cifrado).encrypt(
             nonce, contenido, self._dato_asociado(clave)
         )
-        analisis: Analisis = "Limpio" if generado_por_sistema else "Pendiente"
+        analisis: Analisis = "Limpio"
         try:
             self.almacen.guardar(
                 clave,
@@ -175,7 +196,7 @@ class ServicioDocumentos:
             logger.warning("documentos: no se pudo eliminar error=%s", exc)
 
     def marcar_analisis(self, clave: str, analisis: Analisis) -> None:
-        """Lo usa el análisis de malware cuando termina."""
+        """Para un análisis posterior (p. ej. reanalizar o un análisis asíncrono)."""
         try:
             self.almacen.marcar_analisis(clave, analisis)
         except DocumentoInexistente:
