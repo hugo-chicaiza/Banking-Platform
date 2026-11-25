@@ -31,6 +31,7 @@ def _catalogo_direcciones_aislado(monkeypatch):
     monkeypatch.setattr(service, "validar_tipo_direccion", lambda conn, codigo: None)
 
 
+from fastapi import Response
 from pydantic import ValidationError
 from sqlalchemy import Connection
 
@@ -1525,8 +1526,10 @@ def test_cli07_historial_y_aliases_sin_excluir_eliminados(estado):
     assert item["valorAnterior"] is None
     sql, params = db.consultas[1]
     assert "WHERE IdCliente = :id_cliente" in sql
-    assert "ValorAnterior AS" not in sql
-    assert "ValorNuevo" not in sql
+    # E5-04: antes/después y solicitud en columnas propias de ClientesHis.
+    assert "ValorAnterior AS valor_anterior_columna" in sql
+    assert "ValorNuevo AS valor_nuevo" in sql
+    assert "IdSolicitud AS id_solicitud" in sql
     assert "Estado" not in sql
     assert "IdHistorial DESC" in sql
     assert "ORDER BY p.numero_fila" in sql
@@ -1707,8 +1710,8 @@ def test_cli05_patch_distingue_omision_de_null():
 @pytest.mark.parametrize(
     "campo",
     [
-        "identificacion",
-        "tipoDocumento",
+        "genero",
+        "codigoPaisNacionalidad",
         "tipoCliente",
         "estado",
         "desconocido",
@@ -1852,7 +1855,7 @@ def _assert_sin_escrituras(db: _RiesgoConn) -> None:
 def test_cli05_edicion_valida_audita_solo_cambios_efectivos(juridico):
     actual = _cliente_row()
     cambios: dict[str, Any] = {
-        "email": "nuevo@correo.ec",
+        "telefono_celular": "0987654321",
         "nombre_comercial": "Comercial",
     }
     if juridico:
@@ -1863,17 +1866,15 @@ def test_cli05_edicion_valida_audita_solo_cambios_efectivos(juridico):
             genero=None,
             estado_civil=None,
         )
-        cambios["razon_social"] = "Nueva Empresa"
+        cambios["telefono_convencional"] = "022999888"
     else:
-        cambios["nombres"] = "María Elena"
+        cambios["estado_civil"] = "Casado"
     db = _conn_escritura(actual=actual, cambios=cambios)
-    payload = ClienteUpdate.model_validate(
-        {**cambios, "telefono_celular": actual["telefono_celular"]}
-    )
+    payload = ClienteUpdate.model_validate({**cambios, "email": actual["email"]})
     resultado = service.editar_cliente(
         cast(Connection, db), 10, payload, 12, "192.0.2.10"
     )
-    assert resultado.email == cambios["email"]
+    assert resultado.telefono_celular == cambios["telefono_celular"]
     assert resultado.direcciones[0].estado == "Activo"
     assert (db.commits, db.rollbacks) == (1, 0)
     assert not db.respuestas
@@ -1889,11 +1890,14 @@ def test_cli05_edicion_valida_audita_solo_cambios_efectivos(juridico):
             "valorNuevo": valor,
             "motivo": "Actualización de datos",
         }
+        assert auditoria["valor_nuevo"] == service.texto_historial(valor)
+        assert auditoria["valor_anterior"] == service.texto_historial(actual[campo])
+        assert auditoria["id_solicitud"] is None
     sql, params = db.consultas[3]
     assert "CASE WHEN :enviado_email = 1 THEN :email ELSE Email END" in sql
-    assert params["enviado_email"] is True
-    assert params["enviado_telefono_celular"] is False
-    assert cambios["email"] not in sql
+    assert params["enviado_email"] is False
+    assert params["enviado_telefono_celular"] is True
+    assert cambios["telefono_celular"] not in sql
 
 
 def test_cli05_null_explicito_se_distingue_de_omision_en_sql():
@@ -1951,6 +1955,7 @@ def test_cli05_sin_cambios_libera_bloqueo_y_no_escribe(enviados):
     [
         (None, "CLIENTE_NO_ENCONTRADO", 404),
         (_cliente_row(estado="Eliminado"), "CLIENTE_NO_EDITABLE", 409),
+        (_cliente_row(estado="Bloqueado"), "CLIENTE_BLOQUEADO", 423),
     ],
 )
 def test_cli05_cliente_inexistente_o_eliminado(cliente, code, status):
@@ -1971,11 +1976,8 @@ def test_cli05_cliente_inexistente_o_eliminado(cliente, code, status):
 @pytest.mark.parametrize(
     ("tipo", "cambios"),
     [
-        ("Natural", {"apellidos": None}),
+        # Nombres y razón social son sensibles: se validan al solicitar (aprobacion.py).
         ("Natural", {"estado_civil": None}),
-        ("Natural", {"razon_social": "Empresa"}),
-        ("Juridico", {"razon_social": None}),
-        ("Juridico", {"apellidos": "Perez"}),
         ("Juridico", {"estado_civil": "Casado"}),
     ],
 )
@@ -2027,12 +2029,12 @@ def test_cli05_valida_actividad_economica(existe):
 
 @pytest.mark.parametrize("fallo", [0, 1, 2, 3, 4, 5, 6, "commit"])
 def test_cli05_rollback_en_lecturas_actualizacion_auditoria_y_commit(fallo):
-    db = _conn_escritura(fallo=fallo)
+    db = _conn_escritura(cambios={"telefono_celular": "0987654321"}, fallo=fallo)
     with pytest.raises(RuntimeError, match="Fallo"):
         service.editar_cliente(
             cast(Connection, db),
             10,
-            ClienteUpdate(email="nuevo@correo.ec"),
+            ClienteUpdate(telefono_celular="0987654321"),
             12,
             "192.0.2.10",
         )
@@ -2040,7 +2042,7 @@ def test_cli05_rollback_en_lecturas_actualizacion_auditoria_y_commit(fallo):
 
 
 def test_cli05_fallo_segunda_auditoria_revierte_todo():
-    cambios = {"email": "nuevo@correo.ec", "nombres": "Nuevo Nombre"}
+    cambios = {"telefono_celular": "0987654321", "nombre_comercial": "Nuevo Nombre"}
     db = _conn_escritura(cambios=cambios, fallo=5)
     with pytest.raises(RuntimeError):
         service.editar_cliente(
@@ -2055,13 +2057,13 @@ def test_cli05_fallo_segunda_auditoria_revierte_todo():
 
 
 def test_cli05_prevalida_todas_las_auditorias_antes_de_escribir():
-    actual = _cliente_row(nombres="x" * 250)
+    actual = _cliente_row(nombre_comercial="x" * 250)
     db = _conn_escritura(actual=actual)
     with pytest.raises(service.HTTPException) as exc:
         service.editar_cliente(
             cast(Connection, db),
             10,
-            ClienteUpdate(email="nuevo@correo.ec", nombres="y" * 250),
+            ClienteUpdate(telefono_celular="0987654321", nombre_comercial="y" * 250),
             12,
             "192.0.2.10",
         )
@@ -2519,12 +2521,16 @@ def test_routers_edicion_propagan_identidad_roles_e_ip_confiable(monkeypatch, es
         metodo.assert_called_once_with(conn, 10, payload, 12, "192.0.2.10", ("ASESOR",))
     else:
         monkeypatch.setattr(service, "editar_cliente", metodo)
-        payload_edicion = ClienteUpdate(email="nuevo@correo.ec")
+        payload_edicion = ClienteUpdate(telefono_celular="0987654321")
         assert (
-            router.editar_cliente(10, payload_edicion, request, usuario, 12, conn)
+            router.editar_cliente(
+                10, payload_edicion, request, Response(), usuario, 12, conn
+            )
             is esperado
         )
-        metodo.assert_called_once_with(conn, 10, payload_edicion, 12, "192.0.2.10")
+        args = metodo.call_args.args
+        assert args[:5] == (conn, 10, payload_edicion, 12, "192.0.2.10")
+        assert callable(args[5])
 
 
 def test_cli05_cli06_openapi_sin_sockets():
@@ -2543,12 +2549,17 @@ def test_cli05_cli06_openapi_sin_sockets():
         assert {p["name"] for p in ruta["parameters"]} == {"idCliente"}
         for status in ("400", "401", "403", "404", "409", "422", "503"):
             assert "application/problem+json" in ruta["responses"][status]["content"]
+    edicion = contrato["paths"]["/api/v1/clientes/{idCliente}"]["patch"]["responses"]
+    assert edicion["202"]["content"]["application/json"]["schema"]["$ref"].endswith(
+        "/SolicitudAceptada"
+    )
+    assert "application/problem+json" in edicion["423"]["content"]
     modelo = contrato["components"]["schemas"]["ClienteUpdate"]
     assert modelo["additionalProperties"] is False
-    assert (
-        not {"estado", "identificacion", "tipoCliente", "tipoDocumento"}
-        & modelo["properties"].keys()
-    )
+    assert not {"estado", "tipoCliente", "genero"} & modelo["properties"].keys()
+    assert {"identificacion", "tipoDocumento", "fechaNacimiento"} <= modelo[
+        "properties"
+    ].keys()
     assert modelo["properties"]["nombres"]["type"] == "string"
     assert modelo["properties"]["email"]["type"] == "string"
     assert modelo["properties"]["telefonoCelular"]["type"] == "string"
