@@ -7,7 +7,7 @@ BEGIN TRANSACTION;
 IF COL_LENGTH('Canal.CuposModHis', 'SolicitadoPorCliente') IS NULL
     ALTER TABLE Canal.CuposModHis ADD SolicitadoPorCliente bit NULL;
 IF COL_LENGTH('Canal.CuposModHis', 'DocumentoVerificado') IS NULL
-    ALTER TABLE Canal.CuposModHis ADD DocumentoVerificado char(1) NULL;
+    ALTER TABLE Canal.CuposModHis ADD DocumentoVerificado varchar(1) NULL;
 IF OBJECT_ID('Canal.CK_CuposModHis_PedidoCliente', 'C') IS NULL
     EXEC sys.sp_executesql N'ALTER TABLE Canal.CuposModHis WITH CHECK ADD CONSTRAINT CK_CuposModHis_PedidoCliente
         CHECK ((SolicitadoPorCliente IS NULL AND DocumentoVerificado IS NULL)

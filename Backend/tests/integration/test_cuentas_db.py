@@ -672,6 +672,7 @@ def test_cupo_e_historial_original_comparten_transaccion(monkeypatch, fallar_his
                 pytest.skip(
                     "Se necesita una cuenta con cupos configurados en su subproducto"
                 )
+            assert referencia is not None
             cuenta, canal = referencia[0], referencia[1]
             inicial = CupoSolicitado.model_validate(
                 {

@@ -1385,7 +1385,7 @@ def sesion_cuentas(monkeypatch):
         service, "obtener_cupos", lambda *a: [service.CupoEfectivo(**_cupo_row())]
     )
     monkeypatch.setattr(
-        service, "actualizar_cupo", lambda *a: service.CupoEfectivo(**_cupo_row())
+        service, "actualizar_cupo", lambda *a, **k: service.CupoEfectivo(**_cupo_row())
     )
     monkeypatch.setattr(
         service,
@@ -1527,6 +1527,10 @@ def test_cta_nuevos_contratos_openapi():
         "fechaVigencia",
         "consumidoHoy",
         "consumidoMes",
+        "topeDiarioProducto",
+        "topeMensualProducto",
+        "topeTransaccionProducto",
+        "topeFrecuenciaProducto",
     }
     for campo in (
         "cupoDiario",
