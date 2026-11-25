@@ -1,3 +1,4 @@
+SET NOCOUNT ON;
 SET XACT_ABORT ON;
 IF COALESCE(CONVERT(nvarchar(128), SESSION_CONTEXT(N'migration_database')), N'') <> DB_NAME()
     THROW 57660, 'Falta confirmar la base destino de E6-06.', 1;

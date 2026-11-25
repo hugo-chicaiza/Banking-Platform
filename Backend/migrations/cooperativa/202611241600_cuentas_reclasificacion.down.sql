@@ -1,3 +1,4 @@
+SET NOCOUNT ON;
 SET XACT_ABORT ON;
 IF COALESCE(CONVERT(nvarchar(128), SESSION_CONTEXT(N'migration_database')), N'') <> DB_NAME()
     THROW 57660, 'Falta confirmar la base destino de E6-06.', 1;
@@ -30,7 +31,7 @@ IF @concepto IS NOT NULL
    AND NOT EXISTS (SELECT 1 FROM Contabilidad.AsientoContable WHERE IdConceptoContable=@concepto)
 BEGIN
     DELETE FROM Contabilidad.ConceptoContable
-    WHERE IdConceptoContable=@concepto AND CodigoConcepto='CUENTAS_RECLASIFICACION';
+    WHERE IdConceptoContable=@concepto AND CodigoConcepto='CTA_RECLASIFICACION';
     EXEC sys.sp_dropextendedproperty @name=N'E606_ConceptoReclasificacion';
 END;
 COMMIT TRANSACTION;
