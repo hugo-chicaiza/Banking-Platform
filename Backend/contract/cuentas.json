@@ -44,6 +44,17 @@
             "title": "Idcuentaautorizado",
             "type": "integer"
           },
+          "nombreAutorizado": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nombreautorizado"
+          },
           "rol": {
             "enum": [
               "Tutor",
@@ -165,6 +176,99 @@
           "estado"
         ],
         "title": "Cuenta",
+        "type": "object"
+      },
+      "CuentaDetalle": {
+        "properties": {
+          "estado": {
+            "enum": [
+              "ACTIVA",
+              "INACTIVA",
+              "BLOQUEADA",
+              "CERRADA",
+              "PendienteDeposito",
+              "Anulada"
+            ],
+            "title": "Estado",
+            "type": "string"
+          },
+          "idAgencia": {
+            "title": "Idagencia",
+            "type": "string"
+          },
+          "idCliente": {
+            "title": "Idcliente",
+            "type": "integer"
+          },
+          "idCuenta": {
+            "title": "Idcuenta",
+            "type": "integer"
+          },
+          "idMoneda": {
+            "const": 840,
+            "title": "Idmoneda",
+            "type": "integer"
+          },
+          "idProducto": {
+            "title": "Idproducto",
+            "type": "integer"
+          },
+          "motivoEstado": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Motivoestado"
+          },
+          "nombreTitular": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nombretitular"
+          },
+          "numeroCuenta": {
+            "title": "Numerocuenta",
+            "type": "string"
+          },
+          "saldo": {
+            "title": "Saldo",
+            "type": "number"
+          },
+          "saldoRetenido": {
+            "title": "Saldoretenido",
+            "type": "number"
+          },
+          "tipoCuenta": {
+            "enum": [
+              "Ahorro",
+              "Corriente"
+            ],
+            "title": "Tipocuenta",
+            "type": "string"
+          }
+        },
+        "required": [
+          "idCuenta",
+          "numeroCuenta",
+          "idCliente",
+          "idProducto",
+          "idAgencia",
+          "tipoCuenta",
+          "idMoneda",
+          "saldo",
+          "saldoRetenido",
+          "estado"
+        ],
+        "title": "CuentaDetalle",
         "type": "object"
       },
       "CuentaEstadoUpdate": {
@@ -339,6 +443,50 @@
             ],
             "title": "Origen",
             "type": "string"
+          },
+          "topeDiarioProducto": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Topediarioproducto"
+          },
+          "topeFrecuenciaProducto": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Topefrecuenciaproducto"
+          },
+          "topeMensualProducto": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Topemensualproducto"
+          },
+          "topeTransaccionProducto": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Topetransaccionproducto"
           }
         },
         "required": [
@@ -401,6 +549,22 @@
             ],
             "title": "Cupomensualnuevo"
           },
+          "documentoVerificado": {
+            "anyOf": [
+              {
+                "enum": [
+                  "C",
+                  "R",
+                  "P"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Documentoverificado"
+          },
           "fechaModificacion": {
             "format": "date-time",
             "title": "Fechamodificacion",
@@ -435,6 +599,17 @@
               }
             ],
             "title": "Montomaxtxnuevo"
+          },
+          "solicitadoPorCliente": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Solicitadoporcliente"
           }
         },
         "required": [
@@ -451,9 +626,8 @@
         "title": "CupoHistorial",
         "type": "object"
       },
-      "CupoUpdate": {
+      "CupoSolicitado": {
         "additionalProperties": false,
-        "description": "Límites positivos según CK_CanalCupoClienteCustom_Cupos de la base actual.",
         "properties": {
           "cupoDiario": {
             "anyOf": [
@@ -478,6 +652,15 @@
               }
             ],
             "title": "Cupomensual"
+          },
+          "documentoVerificado": {
+            "enum": [
+              "C",
+              "R",
+              "P"
+            ],
+            "title": "Documentoverificado",
+            "type": "string"
           },
           "fechaVigencia": {
             "anyOf": [
@@ -509,15 +692,22 @@
               }
             ],
             "title": "Montomaxtransaccion"
+          },
+          "solicitadoPorCliente": {
+            "const": true,
+            "title": "Solicitadoporcliente",
+            "type": "boolean"
           }
         },
         "required": [
           "cupoDiario",
           "cupoMensual",
           "montoMaxTransaccion",
-          "maxTransaccionesDia"
+          "maxTransaccionesDia",
+          "solicitadoPorCliente",
+          "documentoVerificado"
         ],
-        "title": "CupoUpdate",
+        "title": "CupoSolicitado",
         "type": "object"
       },
       "EventoCuenta": {
@@ -2647,7 +2837,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Cuenta"
+                  "$ref": "#/components/schemas/CuentaDetalle"
                 }
               }
             },
@@ -6084,7 +6274,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/CupoUpdate"
+                "$ref": "#/components/schemas/CupoSolicitado"
               }
             }
           },
@@ -6634,6 +6824,7 @@
           "cuentas"
         ],
         "x-roles": [
+          "ASESOR",
           "SUPERVISOR",
           "ADMIN"
         ]

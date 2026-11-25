@@ -352,6 +352,13 @@ def test_h05_ventanilla_rechaza_titular_o_producto(
     ctx: Contexto, ruta: str, restricciones: dict[str, Any] | None, codigo: str
 ) -> None:
     preparar_ventanilla(ctx, "Deposito" if ruta == "depositos" else "Retiro")
+    if restricciones is not None:
+        restricciones = {
+            "EstadoCuenta": "Activa",
+            "TipoCliente": "Natural",
+            "FechaNacimiento": None,
+            **restricciones,
+        }
     ctx.fake("restricciones_cuenta", restricciones, trx_repo)
     ctx.fake("autorizar_operacion", AssertionError("No debe autorizar"), trx_repo)
 
@@ -363,6 +370,29 @@ def test_h05_ventanilla_rechaza_titular_o_producto(
     assert not ctx.llamadas["aplicar_movimiento_cuenta"]
 
 
+@pytest.mark.parametrize(
+    ("naturaleza", "esperado"),
+    [("C", (True, [])), ("D", (False, ["CUENTA_NO_ACTIVA"]))],
+)
+def test_e602_cuenta_bloqueada_admite_creditos(
+    ctx: Contexto, naturaleza: str, esperado: tuple[bool, list[str]]
+) -> None:
+    from app.modules.cuentas.service import cuenta_operable
+
+    ctx.fake(
+        "restricciones_cuenta",
+        {
+            "EstadoCuenta": "Bloqueada",
+            "EstadoCliente": "Activo",
+            "TipoCliente": "Natural",
+            "FechaNacimiento": None,
+            "PermiteOperacionesPresenciales": True,
+        },
+        trx_repo,
+    )
+    assert cuenta_operable(ctx.conn, 501, naturaleza, "VENT") == esperado
+
+
 def test_h05_deposito_con_titular_activo_sigue_igual(ctx: Contexto) -> None:
     preparar_ventanilla(ctx)
 
@@ -370,6 +400,49 @@ def test_h05_deposito_con_titular_activo_sigue_igual(ctx: Contexto) -> None:
 
     assert r.status_code == 201, r.text
     assert ctx.llamadas["restricciones_cuenta"] == [(501,)]
+
+
+def test_e602_deposito_rechazado_por_autorizador_no_mueve_dinero(ctx: Contexto) -> None:
+    preparar_ventanilla(ctx)
+    ctx.fake(
+        "autorizar_operacion",
+        {"CodigoRespuesta": "05", "Mensaje": "Restricción del producto", "Comision": 0},
+        trx_repo,
+    )
+    respuesta = ctx.cliente.post(f"{BASE}/jornadas/55/depositos", json=CUERPO_DEPOSITO)
+    assert respuesta.status_code == 422
+    assert code(respuesta) == "OPERACION_RECHAZADA"
+    assert not ctx.llamadas["insertar_transaccion"]
+    assert not ctx.llamadas["aplicar_movimiento_cuenta"]
+
+
+def test_e602_retiro_de_menor_sin_tutor(
+    ctx: Contexto, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from datetime import date
+
+    from app.modules.cuentas import service as cuentas
+
+    preparar_ventanilla(ctx, "Retiro")
+    monkeypatch.setattr(cuentas, "hoy", lambda: date(2026, 11, 24))
+    monkeypatch.setattr(cuentas, "edad_mayoria", lambda *_: 18)
+    monkeypatch.setattr(cuentas, "relacion_vigente", lambda *_: None)
+    ctx.fake(
+        "restricciones_cuenta",
+        {
+            "EstadoCuenta": "Activa",
+            "EstadoCliente": "Activo",
+            "IdCliente": 125,
+            "TipoCliente": "Natural",
+            "FechaNacimiento": date(2016, 11, 24),
+            "PermiteOperacionesPresenciales": True,
+        },
+        trx_repo,
+    )
+    respuesta = ctx.cliente.post(f"{BASE}/jornadas/55/retiros", json=CUERPO_DEPOSITO)
+    assert respuesta.status_code == 409
+    assert code(respuesta) == "MENOR_SIN_TUTOR"
+    assert not ctx.llamadas["insertar_transaccion"]
 
 
 # --- H-06 · CAJ-16 reescribía el conteo sin rastro -----------------------------------

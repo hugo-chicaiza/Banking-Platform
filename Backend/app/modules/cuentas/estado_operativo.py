@@ -86,7 +86,12 @@ def bloquear(
 
 
 def reactivar(
-    conn: Connection, id_cuenta: int, agencia: str, documento: str, actor: int
+    conn: Connection,
+    id_cuenta: int,
+    agencia: str,
+    documento: str,
+    actor: int,
+    motivo: str,
 ) -> None:
     cliente = repository.obtener_titular_cuenta(conn, id_cuenta)
     if cliente is None:
@@ -104,7 +109,7 @@ def reactivar(
         "Reactivacion",
         "Inactiva",
         "Activa",
-        f"Documento verificado: {documento}",
+        f"{motivo}. Documento verificado: {documento}",
         actor,
     )
 

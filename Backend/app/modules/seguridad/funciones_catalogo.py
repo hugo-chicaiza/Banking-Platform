@@ -222,7 +222,7 @@ FUNCIONES = (
         "cuentas.cupos.modificar",
         "Modificar cupos",
         "Cuentas",
-        ("ADMIN", "SUPERVISOR"),
+        ("ASESOR", "ADMIN", "SUPERVISOR"),
         (("PUT", Q + "/{idCuenta}/cupos/{idCanal}"),),
         "/cuentas",
         ("cuentas.cupos.consultar",),

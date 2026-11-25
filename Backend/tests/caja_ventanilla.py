@@ -86,6 +86,11 @@ def preparar_ventanilla(ctx: Contexto, tipo: str = "Deposito") -> DependenciasFa
     )
     ctx.fake("obtener_jornada", JORNADA)
     ctx.fake("dotacion_inicial_registrada", True)
+    ctx.fake(
+        "autorizar_operacion",
+        {"CodigoRespuesta": "00", "Mensaje": "Aprobada", "Comision": Decimal(0)},
+        trx_repo,
+    )
     ctx.fake("obtener_cuadre_de_jornada", None)
     ctx.fake("valores_denominaciones", {1: Decimal("50.00")})
     ctx.fake(
@@ -101,7 +106,13 @@ def preparar_ventanilla(ctx: Contexto, tipo: str = "Deposito") -> DependenciasFa
     )
     ctx.fake(
         "restricciones_cuenta",
-        {"EstadoCliente": "Activo", "PermiteOperacionesPresenciales": True},
+        {
+            "EstadoCuenta": "Activa",
+            "EstadoCliente": "Activo",
+            "TipoCliente": "Natural",
+            "FechaNacimiento": None,
+            "PermiteOperacionesPresenciales": True,
+        },
         trx_repo,
     )
     ctx.fake("id_fecha_contable", 20261104)

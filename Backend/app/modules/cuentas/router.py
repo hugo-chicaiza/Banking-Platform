@@ -30,10 +30,11 @@ from app.modules.cuentas.schemas import (
     AutorizadoCuenta,
     AutorizadoCuentaCreate,
     Cuenta,
+    CuentaDetalle,
     CuentaEstadoUpdate,
     CuentaPendienteCreate,
     CupoEfectivo,
-    CupoUpdate,
+    CupoSolicitado,
     EstadoCuenta,
     EventoCuenta,
     PageCuenta,
@@ -239,15 +240,15 @@ def listar_cuentas(
 @_consultas_router.get(
     "/{idCuenta}",
     operation_id="CTA03",
-    response_model=Cuenta,
+    response_model=CuentaDetalle,
     openapi_extra={"x-roles": _ROLES_CONSULTA},
 )
-def obtener_cuenta(idCuenta: int, conn: Db) -> Cuenta:
+def obtener_cuenta(idCuenta: int, conn: Db) -> CuentaDetalle:
     """Detalle de cuenta en cualquier estado (CTA-03 / A-02).
 
     `idMoneda` es siempre 840 porque la cooperativa opera exclusivamente en USD.
     """
-    return service.obtener_cuenta(conn, idCuenta)
+    return service.obtener_detalle(conn, idCuenta)
 
 
 @_consultas_router.get(
@@ -307,11 +308,11 @@ router.include_router(_consultas_router, prefix="/cuentas")
 
 
 _ROLES_ESTADO_CUPOS = ["ASESOR", "SUPERVISOR", "ADMIN"]
-_ROLES_MODIFICAR_CUPO = ["SUPERVISOR", "ADMIN"]
+_ROLES_MODIFICAR_CUPO = ["ASESOR", "SUPERVISOR", "ADMIN"]
 _ROLES_HISTORIAL_CUPO = ["SUPERVISOR", "AUDITOR", "ADMIN"]
 LectorCupos = Annotated[Usuario, Depends(require_roles(*_ROLES_ESTADO_CUPOS))]
 GestorEstado = Annotated[Usuario, Depends(require_roles("ASESOR", "SUPERVISOR"))]
-GestorCupo = Annotated[Usuario, Depends(require_roles("SUPERVISOR", "ADMIN"))]
+GestorCupo = Annotated[Usuario, Depends(require_roles(*_ROLES_MODIFICAR_CUPO))]
 AuditorCupo = Annotated[Usuario, Depends(require_roles(*_ROLES_HISTORIAL_CUPO))]
 IdRecurso = Annotated[int, Path(gt=0, le=2147483647)]
 _gestion_router = APIRouter(
@@ -385,7 +386,12 @@ def cambiar_estado_cuenta(
                 422, "DOCUMENTO_REQUERIDO", "Confirme el documento verificado."
             )
         estado_operativo.reactivar(
-            conn, idCuenta, agencia, payload.documento_verificado, modificado_por
+            conn,
+            idCuenta,
+            agencia,
+            payload.documento_verificado,
+            modificado_por,
+            payload.motivo,
         )
     else:
         if (actual.estado, payload.estado) in {
@@ -446,12 +452,19 @@ def obtener_cupos(
 def actualizar_cupo(
     idCuenta: IdRecurso,
     idCanal: IdRecurso,
-    payload: CupoUpdate,
+    payload: CupoSolicitado,
     usuario: GestorCupo,
     modificado_por: UsuarioAuditoria,
     conn: Db,
 ) -> CupoEfectivo:
     """Guarda cupo e historial en una transacción y devuelve el cupo vigente."""
+    if not {"SUPERVISOR", "ADMIN"}.intersection(usuario.roles):
+        agencia = usuario.agencia()
+        if agencia is None:
+            raise problema(403, "AGENCIA_REQUERIDA", "Seleccione una agencia activa.")
+        return service.actualizar_cupo(
+            conn, idCuenta, idCanal, payload, modificado_por, agencia=agencia
+        )
     return service.actualizar_cupo(conn, idCuenta, idCanal, payload, modificado_por)
 
 

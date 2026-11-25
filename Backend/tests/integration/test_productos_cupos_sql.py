@@ -3,7 +3,9 @@
 import os
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
-from datetime import timedelta
+from datetime import datetime, time, timedelta
+from decimal import Decimal
+from pathlib import Path
 from threading import Barrier
 from typing import cast
 from uuid import uuid4
@@ -15,6 +17,7 @@ from sqlalchemy.exc import DBAPIError
 
 from app.modules.parametros.service import hoy
 from app.modules.productos import programacion as p
+from app.modules.transacciones import repository as transacciones
 from tests.integration import test_productos_programacion_sql as base_sql
 from tests.integration.test_productos_programacion_sql import (
     CHECKER,
@@ -80,25 +83,155 @@ def cuenta_y_techo(motores, caso):
     return cuenta
 
 
-def test_ac5_cuenta_superior_al_techo_rechazada_en_servicio_y_trigger(motores, caso):
-    from app.modules.cuentas import service as cuentas
-    from app.modules.cuentas.schemas import CupoUpdate
+def test_e602_activacion_registra_un_evento_y_revierte_con_el_deposito(motores, caso):
+    from app.modules.cuentas.service import activar_si_corresponde
 
     cuenta = cuenta_y_techo(motores, caso)
-    payload = CupoUpdate.model_validate(
+    with motores["cooperativa"].connect() as c, c.begin() as transaccion:
+        parametros = {"cuenta": cuenta}
+        c.execute(
+            text("SELECT IdCuenta FROM Cuentas.Cuenta WHERE IdCuenta=:cuenta"),
+            parametros,
+        ).close()
+        migracion = (
+            Path(__file__).resolve().parents[2]
+            / "migrations/cooperativa/202611232320_cuentas_apertura_eventos.up.sql"
+        )
+        c.exec_driver_sql("""
+            DECLARE @bd sysname = DB_NAME();
+            EXEC sys.sp_set_session_context @key=N'migration_database', @value=@bd;
+            SET QUOTED_IDENTIFIER ON;
+        """)
+        c.exec_driver_sql(migracion.read_text(encoding="utf-8"))
+        c.execute(
+            text("""UPDATE Cuentas.Cuenta
+                SET Estado='PendienteDeposito', Saldo=0, MontoAperturaAplicado=20
+                WHERE IdCuenta=:cuenta"""),
+            parametros,
+        )
+        evento = text("""SELECT COUNT(*) FROM Cuentas.CuentaEvento
+            WHERE IdCuenta=:cuenta AND TipoEvento='Activacion'""")
+        with pytest.raises(HTTPException) as error:
+            activar_si_corresponde(c, cuenta, Decimal("19.99"), MAKER.id_interno)
+        assert codigo_error(error.value) == "MONTO_BAJO_APERTURA"
+        assert c.execute(evento, parametros).scalar_one() == 0
+        deposito = c.begin_nested()
+        assert activar_si_corresponde(c, cuenta, Decimal(20), MAKER.id_interno)
+        assert not activar_si_corresponde(c, cuenta, Decimal(20), MAKER.id_interno)
+        assert c.execute(evento, parametros).scalar_one() == 1
+        deposito.rollback()
+        assert c.execute(evento, parametros).scalar_one() == 0
+        assert (
+            c.execute(
+                text("SELECT Estado FROM Cuentas.Cuenta WHERE IdCuenta=:cuenta"),
+                parametros,
+            ).scalar_one()
+            == "PendienteDeposito"
+        )
+        transaccion.rollback()
+
+
+def test_e602_cupo_efectivo_combina_capas_y_ambito(motores, caso):
+    from app.modules.cuentas.service import cupo_efectivo
+
+    cuenta = cuenta_y_techo(motores, caso)
+    migracion = (
+        Path(__file__).resolve().parents[2] / "tests/sql/e602_limites_operacion.sql"
+    )
+    with (
+        motores["cooperativa"]
+        .connect()
+        .execution_options(isolation_level="AUTOCOMMIT") as c
+    ):
+        c.exec_driver_sql("SET QUOTED_IDENTIFIER ON; BEGIN TRANSACTION;")
+        try:
+            c.exec_driver_sql("""
+                DECLARE @bd sysname = DB_NAME();
+                EXEC sys.sp_set_session_context @key=N'migration_database', @value=@bd;
+            """)
+            c.exec_driver_sql(migracion.read_text(encoding="utf-8"))
+            c.execute(
+                text("""
+                    INSERT Canal.CanalCupoClienteCustom
+                      (IdCuenta,IdCanal,CupoDiario,CupoMensual,MontoMaxTransaccion,
+                       MaxTransaccionesDia,Estado,ModificadoPor)
+                    VALUES (:cuenta,1,800,4000,400,15,'A',:actor);
+                    INSERT Parametros.LimiteOperacion
+                      (CodigoTipoTransaccion,IdCanal,GrupoID,IdAgencia,
+                       MontoMaximoOperacion,MontoMaximoDiario,VigenciaDesde)
+                    VALUES ('Retiro',1,900303,NULL,450,750,:desde),
+                           ('Retiro',1,900303,'001',300,700,:desde);
+                """),
+                {"cuenta": cuenta, "actor": MAKER.id_interno, "desde": hoy()},
+            )
+            local = cupo_efectivo(
+                c, cuenta, 1, hoy(), tipo="Retiro", grupo=900303, agencia="001"
+            )
+            general = cupo_efectivo(
+                c, cuenta, 1, hoy(), tipo="Retiro", grupo=900303, agencia="002"
+            )
+            anterior = cupo_efectivo(
+                c,
+                cuenta,
+                1,
+                hoy() - timedelta(days=1),
+                tipo="Retiro",
+                grupo=900303,
+                agencia="001",
+            )
+            assert local is not None and general is not None and anterior is not None
+            assert (local["MontoMaxTransaccion"], local["CupoDiario"]) == (300, 700)
+            assert (general["MontoMaxTransaccion"], general["CupoDiario"]) == (400, 750)
+            assert (anterior["MontoMaxTransaccion"], anterior["CupoDiario"]) == (
+                400,
+                800,
+            )
+        finally:
+            c.exec_driver_sql("IF XACT_STATE()<>0 ROLLBACK TRANSACTION;")
+
+
+def test_e603_ajuste_inmediato_persiste_pedido_y_documento(motores, caso):
+    from app.modules.cuentas import service as cuentas
+    from app.modules.cuentas.schemas import CupoSolicitado
+
+    cuenta = cuenta_y_techo(motores, caso)
+    payload = CupoSolicitado.model_validate(
+        {
+            "cupoDiario": "600",
+            "cupoMensual": "4000",
+            "montoMaxTransaccion": "400",
+            "maxTransaccionesDia": 10,
+            "solicitadoPorCliente": True,
+            "documentoVerificado": "P",
+        }
+    )
+    with motores["cooperativa"].connect() as conn:
+        vigente = cuentas.actualizar_cupo(conn, cuenta, 1, payload, MAKER.id_interno)
+        assert vigente.cupo_diario == 600
+        historial = cuentas.obtener_historial_cupo(conn, cuenta, 1).items
+        assert len(historial) == 1
+        assert historial[0].solicitado_por_cliente is True
+        assert historial[0].documento_verificado == "P"
+
+
+def test_ac5_cuenta_superior_al_techo_rechazada_en_servicio_y_trigger(motores, caso):
+    from app.modules.cuentas import service as cuentas
+    from app.modules.cuentas.schemas import CupoSolicitado
+
+    cuenta = cuenta_y_techo(motores, caso)
+    payload = CupoSolicitado.model_validate(
         {
             "cupoDiario": "1001",
             "cupoMensual": "5000",
             "montoMaxTransaccion": "500",
             "maxTransaccionesDia": 20,
+            "solicitadoPorCliente": True,
+            "documentoVerificado": "C",
         }
     )
     with motores["cooperativa"].connect() as c, pytest.raises(HTTPException) as e:
         cuentas.actualizar_cupo(c, cuenta, 1, payload, MAKER.id_interno)
-    assert (
-        e.value.status_code == 422
-        and codigo_error(e.value) == "CUPO_SUPERA_MAXIMO_PRODUCTO"
-    )
+    assert e.value.status_code == 422 and codigo_error(e.value) == "CUPO_SOBRE_TOPE"
     with pytest.raises(DBAPIError, match="52003"), motores["cooperativa"].begin() as c:
         c.execute(
             text(
@@ -156,6 +289,19 @@ def test_p7_techo_futuro_aplica_menor_sin_alterar_personalizado(motores, caso):
             and futuro["CupoDiario"] == 100
             and futuro["MontoMaxTransaccion"] == 50
         )
+        autorizacion_actual = transacciones.autorizar_operacion(
+            c, cuenta, 1, "Retiro", 100, fecha_hora=datetime.combine(hoy(), time(12))
+        )
+        autorizacion_futura = transacciones.autorizar_operacion(
+            c,
+            cuenta,
+            1,
+            "Retiro",
+            100,
+            fecha_hora=datetime.combine(hoy() + timedelta(days=2), time(12)),
+        )
+        assert autorizacion_actual["CodigoRespuesta"].strip() == "00"
+        assert autorizacion_futura["CodigoRespuesta"].strip() == "61"
         assert (
             c.execute(
                 text(

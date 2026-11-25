@@ -25,6 +25,7 @@ from app.modules.cuentas.schemas import (
     Cuenta,
     CuentaEstadoUpdate,
     CuentaPendienteCreate,
+    CupoSolicitado,
     CupoUpdate,
     EstadoCuenta,
     SaldoCuenta,
@@ -511,7 +512,7 @@ def test_consultas_contrato_openapi_sin_sockets():
     contrato = app.openapi()
     for sufijo, operacion, modelo in [
         ("", "CTA02", "PageCuenta"),
-        ("/{idCuenta}", "CTA03", "Cuenta"),
+        ("/{idCuenta}", "CTA03", "CuentaDetalle"),
         ("/{idCuenta}/saldo", "CTA04", "SaldoCuenta"),
     ]:
         ruta = contrato["paths"][f"/api/v1/cuentas{sufijo}"]["get"]
@@ -706,10 +707,21 @@ def test_router_listado_propaga_parametros(filtros):
 
 @pytest.mark.parametrize("consulta", [router.obtener_cuenta, router.obtener_saldo])
 def test_router_detalle_y_saldo_propagan_id(consulta):
-    db = _fake_conn([_cuenta_row(id_cuenta=712)])
+    filas = [[_cuenta_row(id_cuenta=712)]]
+    if consulta is router.obtener_cuenta:
+        filas.append(
+            [{"nombre_titular": "Titular de prueba", "motivo_estado": "Orden judicial"}]
+        )
+    db = _fake_conn(*filas)
     resultado = consulta(712, cast(Connection, db))
     assert resultado.id_cuenta == 712
     assert db.consultas[0][1] == {"id_cuenta": 712}
+    if consulta is router.obtener_cuenta:
+        assert resultado.model_dump()["nombre_titular"] == "Titular de prueba"
+        assert resultado.model_dump()["motivo_estado"] == "Orden judicial"
+        sql, parametros = db.consultas.pop()
+        assert "WHERE c.IdCuenta=:id" in sql
+        assert parametros == {"id": 712, "estado": "Activa"}
     _assert_solo_lectura(db)
 
 
@@ -773,6 +785,10 @@ _CUPO_BODY = {
     "cupoMensual": "5000.00",
     "montoMaxTransaccion": "200.00",
     "maxTransaccionesDia": 10,
+}
+_CUPO_SOLICITADO = _CUPO_BODY | {
+    "solicitadoPorCliente": True,
+    "documentoVerificado": "C",
 }
 
 
@@ -1033,20 +1049,27 @@ def _actualizar(db, **cambios):
         cast(Connection, db),
         501,
         1,
-        CupoUpdate.model_validate(_CUPO_BODY | cambios),
+        CupoSolicitado.model_validate(_CUPO_SOLICITADO | cambios),
         12,
     )
 
 
 @pytest.mark.parametrize("existe", [False, True])
 @pytest.mark.parametrize("vencido", [False, True])
-def test_cta08_crea_actualiza_historial_una_vez_y_respuesta_efectiva(existe, vencido):
+def test_cta08_crea_actualiza_historial_una_vez_y_respuesta_efectiva(
+    existe, vencido, monkeypatch
+):
+    eventos = []
+    monkeypatch.setattr(service.audit, "registrar", eventos.append)
     anterior = _cupo_row(cupo_diario=Decimal(300)) if existe else None
     efectivo = _cupo_row(origen="Producto") if vencido else _cupo_row()
     db = _db_actualizar_cupo(anterior, efectivo)
     resultado = _actualizar(db, fechaVigencia="2020-01-01" if vencido else None)
     assert resultado.origen == ("Producto" if vencido else "Personalizado")
     assert db.commits == 1 and db.rollbacks == 0 and not db.respuestas
+    assert len(eventos) == 1
+    assert eventos[0].accion == "CTA_CUPO_CAMBIADO"
+    assert eventos[0].usuario == 12
     assert (
         len([s for s, _ in db.consultas if "INSERT INTO Canal.CuposModHis" in s]) == 1
     )
@@ -1089,8 +1112,24 @@ def test_cta08_cada_tope_maximo(campo, valor):
     db = _db_actualizar_cupo()
     with pytest.raises(HTTPException) as exc:
         _actualizar(db, **body)
-    _assert_http_error(exc, 422, "CUPO_SUPERA_MAXIMO_PRODUCTO")
+    _assert_http_error(exc, 422, "CUPO_SOBRE_TOPE")
     assert db.rollbacks == 1 and db.commits == 0 and len(db.consultas) == 3
+
+
+def test_cta08_asesor_no_modifica_cuenta_de_otra_agencia():
+    db = _fake_conn([{"id_cuenta": 501, "estado": "Activa", "id_agencia": "002"}])
+    with pytest.raises(HTTPException) as exc:
+        service.actualizar_cupo(
+            cast(Connection, db),
+            501,
+            1,
+            CupoSolicitado.model_validate(_CUPO_SOLICITADO),
+            12,
+            agencia="001",
+        )
+    _assert_http_error(exc, 404, "CUENTA_NO_ENCONTRADA")
+    assert db.rollbacks == 1 and db.commits == 0
+    assert len(db.consultas) == 1
 
 
 @pytest.mark.parametrize(
@@ -1189,7 +1228,7 @@ def test_cta08_error_de_tope_conserva_compatibilidad_global():
     especifico = traducir_error_bd(error, operacion="CTA08")
     assert especifico.status_code == 422
     assert isinstance(especifico.detail, dict)
-    assert especifico.detail.get("code") == "CUPO_SUPERA_MAXIMO_PRODUCTO"
+    assert especifico.detail.get("code") == "CUPO_SOBRE_TOPE"
 
 
 @pytest.mark.parametrize("campo", ["cupoDiario", "cupoMensual", "montoMaxTransaccion"])
@@ -1206,7 +1245,9 @@ def test_cta08_rechaza_cupos_no_positivos_antes_del_servicio(
 
     monkeypatch.setattr(service, "actualizar_cupo", no_ejecutar)
     respuesta = asyncio.run(
-        _http_cuentas("PUT", "/api/v1/cuentas/501/cupos/1", _CUPO_BODY | {campo: valor})
+        _http_cuentas(
+            "PUT", "/api/v1/cuentas/501/cupos/1", _CUPO_SOLICITADO | {campo: valor}
+        )
     )
     assert respuesta.status_code == 400
     assert respuesta.headers["content-type"].startswith("application/problem+json")
@@ -1239,7 +1280,7 @@ def test_cta08_admite_el_minimo_positivo_representable_en_la_base():
 
 
 def test_cta08_openapi_publica_importes_estrictamente_positivos():
-    propiedades = app.openapi()["components"]["schemas"]["CupoUpdate"]["properties"]
+    propiedades = app.openapi()["components"]["schemas"]["CupoSolicitado"]["properties"]
     for campo in ("cupoDiario", "cupoMensual", "montoMaxTransaccion"):
         numerico = next(p for p in propiedades[campo]["anyOf"] if p["type"] == "number")
         assert numerico["exclusiveMinimum"] == 0
@@ -1356,7 +1397,7 @@ def sesion_cuentas(monkeypatch):
         service, "obtener_cupos", lambda *a: [service.CupoEfectivo(**_cupo_row())]
     )
     monkeypatch.setattr(
-        service, "actualizar_cupo", lambda *a: service.CupoEfectivo(**_cupo_row())
+        service, "actualizar_cupo", lambda *a, **k: service.CupoEfectivo(**_cupo_row())
     )
     monkeypatch.setattr(
         service,
@@ -1378,7 +1419,12 @@ _RUTAS_NUEVAS = [
         {"ASESOR", "SUPERVISOR"},
     ),
     ("GET", "/api/v1/cuentas/501/cupos", None, {"ASESOR", "SUPERVISOR", "ADMIN"}),
-    ("PUT", "/api/v1/cuentas/501/cupos/1", _CUPO_BODY, {"SUPERVISOR", "ADMIN"}),
+    (
+        "PUT",
+        "/api/v1/cuentas/501/cupos/1",
+        _CUPO_SOLICITADO,
+        {"ASESOR", "SUPERVISOR", "ADMIN"},
+    ),
     (
         "GET",
         "/api/v1/cuentas/501/cupos/1/historial",
@@ -1502,6 +1548,10 @@ def test_cta_nuevos_contratos_openapi():
         "fechaVigencia",
         "consumidoHoy",
         "consumidoMes",
+        "topeDiarioProducto",
+        "topeMensualProducto",
+        "topeTransaccionProducto",
+        "topeFrecuenciaProducto",
     }
     for campo in (
         "cupoDiario",
@@ -1582,10 +1632,10 @@ def test_cta08_trigger_rollback_y_error_http_sanitizado(
 
     app.dependency_overrides[cooperativa] = lambda: db
     respuesta = asyncio.run(
-        _http_cuentas("PUT", "/api/v1/cuentas/501/cupos/1", _CUPO_BODY)
+        _http_cuentas("PUT", "/api/v1/cuentas/501/cupos/1", _CUPO_SOLICITADO)
     )
     assert respuesta.status_code == 422
-    assert respuesta.json()["code"] == "CUPO_SUPERA_MAXIMO_PRODUCTO"
+    assert respuesta.json()["code"] == "CUPO_SOBRE_TOPE"
     assert all(
         secreto not in respuesta.text
         for secreto in ("SQL_SECRETO", "DATO_PRIVADO", "mensaje privado")
@@ -1878,6 +1928,8 @@ def test_cta09_devuelve_contrato_original_sin_columnas_retiradas():
         "montoMaxTxNuevo",
         "modificadoPor",
         "fechaModificacion",
+        "solicitadoPorCliente",
+        "documentoVerificado",
     }
     sql = db.consultas[2][0]
     assert "MaxTransaccionesDia" not in sql and "FechaVigencia" not in sql

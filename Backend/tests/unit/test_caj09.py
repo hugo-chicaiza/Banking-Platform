@@ -150,14 +150,25 @@ def test_caj09_reglas(
     assert not ctx.llamadas["insertar_transaccion"]
 
 
-def test_caj09_cuenta_no_activa_o_inexistente(ctx: Contexto) -> None:
+def test_caj09_cuenta_cerrada_o_inexistente(ctx: Contexto) -> None:
     preparar_ventanilla(ctx)
-    ctx.fake("obtener_cuenta", {"Estado": "Bloqueada"}, trx_repo)
+    ctx.fake("obtener_cuenta", {"Estado": "Cerrada"}, trx_repo)
     r = ctx.cliente.post(f"{BASE}/jornadas/55/depositos", json=CUERPO_DEPOSITO)
     assert (r.status_code, code(r)) == (409, "CUENTA_NO_ACTIVA")
     ctx.fake("obtener_cuenta", None, trx_repo)
     r = ctx.cliente.post(f"{BASE}/jornadas/55/depositos", json=CUERPO_DEPOSITO)
     assert (r.status_code, code(r)) == (422, "CUENTA_NO_ENCONTRADA")
+
+
+@pytest.mark.parametrize("estado", ["Bloqueada", "Inactiva"])
+def test_caj09_cuenta_admite_depositos_sin_reactivarse(
+    ctx: Contexto, estado: str
+) -> None:
+    preparar_ventanilla(ctx)
+    ctx.fake("obtener_cuenta", {"Estado": estado}, trx_repo)
+    respuesta = ctx.cliente.post(f"{BASE}/jornadas/55/depositos", json=CUERPO_DEPOSITO)
+    assert respuesta.status_code == 201
+    assert ctx.llamadas["insertar_transaccion"]
 
 
 def test_caj09_falla_del_asiento_revierte_todo(ctx: Contexto) -> None:
