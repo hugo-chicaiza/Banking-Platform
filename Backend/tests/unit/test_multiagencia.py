@@ -2,17 +2,24 @@
 
 import copy
 from dataclasses import replace
+from decimal import Decimal
+from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
 from workos.exceptions import ServerException
 
+from app.core.security import audit
+from app.core.security.auth import _contexto_pagina_vigente
 from app.core.security.operador import agencia_de_consulta, exigir_agencia_autorizada
 from app.main import app
 from app.modules.auth import agencias
 from app.modules.auth import agencias_repository as repo
+from app.modules.cuentas import service as cuentas
+from app.modules.cuentas.schemas import Cuenta
 from tests.sesion import ID_AUDITORIA, simular_sesion, usuario_con_roles
 from tests.unit import test_usuarios as fixtures_usuarios
+from tests.unit.test_cuentas import _cuenta_row
 from tests.unit.test_usuarios import ADMIN, BASE, NUEVO, _http_error
 
 base_original = fixtures_usuarios.base
@@ -77,7 +84,15 @@ def test_admin_agrega_revoca_y_cambia_principal(client, base, workos):
 
 
 @pytest.mark.parametrize(
-    "rol", ["ADMIN", "CONTADOR", "SUPERVISOR", "AUDITOR", "APROBADOR_CREDITO"]
+    "rol",
+    [
+        "ADMIN",
+        "CONTADOR",
+        "SUPERVISOR",
+        "AUDITOR",
+        "APROBADOR_CREDITO",
+        "CONTADOR,AUDITOR",
+    ],
 )
 def test_roles_multiples(client, base, rol):
     base.usuarios[3]["RolesWorkOS"] = rol
@@ -288,7 +303,62 @@ def actor_admin_global():
     )
 
 
-def test_admin_todas_agencias_sin_seleccion_y_filtro_explicito(client, base):
+def test_admin_abre_cuenta_y_conserva_acceso_global(client, base, monkeypatch):
+    eventos = []
+    monkeypatch.setattr(audit, "registrar", eventos.append)
+    monkeypatch.setattr(
+        cuentas.clientes_repository,
+        "bloquear_cliente",
+        lambda *_: {
+            "fecha_nacimiento": None,
+            "tipo_cliente": "Natural",
+        },
+    )
+    monkeypatch.setattr(
+        cuentas, "cliente_habilitado", lambda *_: SimpleNamespace(habilitado=True)
+    )
+    monkeypatch.setattr(
+        cuentas.repository,
+        "obtener_subproducto",
+        lambda *_: {"tipo_producto": "Cuenta"},
+    )
+    monkeypatch.setattr(
+        cuentas.productos_service, "cliente_elegible", lambda *_: (True, [])
+    )
+    monkeypatch.setattr(
+        cuentas.productos_service,
+        "condiciones_vigentes",
+        lambda *_: {
+            "monto_apertura_minimo": Decimal(10),
+        },
+    )
+    monkeypatch.setattr(
+        cuentas.repository,
+        "obtener_agencia",
+        lambda _, agencia: {
+            "estado": "A" if agencia in base.agencias else "I",
+        },
+    )
+    monkeypatch.setattr(cuentas, "siguiente_numero_cuenta", lambda *_: "00000501")
+    aperturas = []
+
+    def registrar_apertura(
+        _conn, _numero, _cliente, _subproducto, agencia, _minimo, actor
+    ):
+        aperturas.append((agencia, actor))
+        return 501
+
+    monkeypatch.setattr(cuentas.repository, "registrar_apertura", registrar_apertura)
+    monkeypatch.setattr(
+        cuentas,
+        "obtener_cuenta",
+        lambda *_: Cuenta(
+            **_cuenta_row(id_agencia=aperturas[-1][0], estado="PendienteDeposito")
+        ),
+    )
+    asignaciones = copy.deepcopy(base.multi)
+    ruta_cuentas = "/api/v1/cuentas"
+    apertura = {"idCliente": 125, "idSubProducto": 20}
     simular_sesion(app, actor_admin_global())
     initial = client.get("/api/v1/auth/agencias").json()
     assert initial["alcanceGlobal"] is True
@@ -298,10 +368,80 @@ def test_admin_todas_agencias_sin_seleccion_y_filtro_explicito(client, base):
     assert initial["idAgenciaPrincipal"] == "001"
     assert agencia_de_consulta(actor_admin_global(), None) is None
     assert agencia_de_consulta(actor_admin_global(), "002") == "002"
-    r = client.post("/api/v1/auth/agencia-activa", json={"idAgencia": "002"})
-    assert r.status_code == 409 and r.json()["code"] == "ADMIN_ACCESO_TODAS_AGENCIAS"
+    assert (
+        client.post(ruta_cuentas, json=apertura).json()["code"] == "AGENCIA_REQUERIDA"
+    )
+    for destino in ("002", "001"):
+        r = client.post("/api/v1/auth/agencia-activa", json={"idAgencia": destino})
+        assert r.status_code == 200, r.text
+        assert r.json()["idAgencia"] == destino
+        assert r.json()["alcanceGlobal"] and r.json()["accesoTodasAgencias"]
+        simular_sesion(app, actor_admin_global())
+        assert client.get("/api/v1/auth/me").json()["idAgencia"] == destino
+        assert agencia_de_consulta(actor_admin_global(), None) is None
+        r = client.post(ruta_cuentas, json=apertura)
+        assert r.status_code == 201, r.text
+        assert r.json()["idAgencia"] == destino
+    assert aperturas == [("002", ID_AUDITORIA), ("001", ID_AUDITORIA)]
+    assert base.multi == asignaciones
+    assert not _contexto_pagina_vigente(actor_admin_global(), "global")
+    assert _contexto_pagina_vigente(actor_admin_global(), "001")
+    cambios = [e for e in eventos if e.accion == "CAMBIAR_CONTEXTO"]
+    assert len(cambios) == 2
+    assert cambios[1].agencia == "002"
+    assert "agencia_destino=001" in cambios[1].descripcion
     r = client.post("/api/v1/auth/agencia-activa", json={"idAgencia": None})
     assert r.status_code == 200 and r.json()["idAgenciaPrincipal"] == "001"
+
+
+def test_admin_no_opera_en_agencia_desactivada(client, base):
+    ruta = "/api/v1/auth/agencia-activa"
+    simular_sesion(app, actor_admin_global())
+    assert client.post(ruta, json={"idAgencia": "002"}).status_code == 200
+    base.agencias.remove("002")
+    simular_sesion(app, actor_admin_global())
+    contexto = client.get("/api/v1/auth/agencias").json()
+    assert contexto["idAgencia"] is None and contexto["alcanceGlobal"]
+    assert {a["idAgencia"] for a in contexto["agenciasPermitidas"]} == {"001"}
+    r = client.post(ruta, json={"idAgencia": "002"})
+    assert r.status_code == 403 and r.json()["code"] == "SIN_ACCESO_AGENCIA"
+
+
+def test_usuario_opera_en_tres_agencias_y_se_cambia_su_principal(
+    client, base, monkeypatch
+):
+    from app.modules.contabilidad import service as contabilidad
+
+    recibidas = []
+
+    def listar(_conn, **params):
+        recibidas.append(params["id_agencia"])
+        return {"items": [], "total": 0, "page": 1, "page_size": 20}
+
+    monkeypatch.setattr(contabilidad, "listar_asientos", listar)
+    base.agencias.add("003")
+    base.usuarios[2]["RolesWorkOS"] = "CONTADOR"
+    r = client.put(
+        BASE + "/2/agencias",
+        json={
+            "idAgencias": ["001", "002", "003"],
+            "idAgenciaPrincipal": "003",
+            "version": 0,
+        },
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["idAgenciaPrincipal"] == "003"
+    simular_sesion(app, actor_contador(base))
+    for agencia in ("001", "002", "003"):
+        r = client.post("/api/v1/auth/agencia-activa", json={"idAgencia": agencia})
+        assert r.status_code == 200, r.text
+        assert r.json()["idAgencia"] == agencia
+        assert r.json()["idAgenciaPrincipal"] == "003"
+        simular_sesion(app, actor_contador(base))
+        r = client.get(f"/api/v1/contabilidad/asientos?idAgencia={agencia}")
+        assert r.status_code == 200, r.text
+    assert recibidas == ["001", "002", "003"]
+    assert sorted(base.multi[2]) == ["001", "002", "003"]
 
 
 def test_contador_no_puede_seleccionar_global(client, base):
