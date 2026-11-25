@@ -24,6 +24,7 @@ def escenario(monkeypatch):
     motor = MagicMock()
     motor.connect.return_value.__enter__.return_value = coop
     opciones = SimpleNamespace(
+        e104_politica_roles_activa=True,
         e104_corte_asignacion_caja=False,
         e104_recuperar_correo=True,
         e104_permiso_aprobar_roles=" qa:roles ",
@@ -96,6 +97,16 @@ def test_aprobador_no_puede_ser_usuario_objetivo():
     with pytest.raises(HTTPException) as error:
         roles.validar_aprobador(OBJETIVO, 7)
     assert error.value.status_code == 403
+
+
+def test_aprobacion_suspendida_no_registra_ni_aplica_cambios(escenario):
+    escenario.opciones.e104_politica_roles_activa = False
+    assert roles.operacion() is None
+    with pytest.raises(HTTPException) as error:
+        roles.CambioRoles().aplicar(escenario.conn, OBJETIVO, CAMBIO, "solicitante", 1)
+    assert error.value.status_code == 503
+    escenario.gestion.assert_not_called()
+    assert escenario.gestion.mock_calls == []
 
 
 def test_preparar_congela_cambio_y_version_de_agencia(escenario):

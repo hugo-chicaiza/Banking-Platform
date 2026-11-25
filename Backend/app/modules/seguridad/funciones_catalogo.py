@@ -233,6 +233,19 @@ FUNCIONES = (
         ("cuentas.consultar",),
     ),
     _f(
+        "cuentas.retenciones",
+        "Gestionar retenciones",
+        "Cuentas",
+        ("SUPERVISOR", "CUMPLIMIENTO"),
+        (
+            ("GET", Q + "/{idCuenta}/retenciones"),
+            ("POST", Q + "/{idCuenta}/retenciones"),
+            ("POST", Q + "/{idCuenta}/retenciones/{idRet}/liberacion"),
+        ),
+        "/cuentas",
+        ("cuentas.consultar",),
+    ),
+    _f(
         "cuentas.cupos.consultar",
         "Consultar cupos",
         "Cuentas",
@@ -632,6 +645,7 @@ FUNCIONES = (
         (
             ("GET", B + "/plantillas"),
             ("GET", B + "/plantillas/catalogos"),
+            ("GET", B + "/reglas-contables"),
             ("GET", B + "/plantillas/{id_plantilla}/solicitudes"),
             ("GET", B + "/tipos-asiento/{id_tipo}/plantillas"),
             ("GET", B + "/plantillas/{id_plantilla}"),

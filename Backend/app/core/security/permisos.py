@@ -40,6 +40,7 @@ PERMISOS: dict[str, tuple[str, ...]] = {
     "con-cuenta-editar": ("CONTADOR",),
     "con-reclasificacion-preparar": ("CONTADOR",),
     "con-reclasificacion-aprobar": ("CONTADOR",),
+    "cta-retencion": ("SUPERVISOR", "CUMPLIMIENTO"),
 }
 
 

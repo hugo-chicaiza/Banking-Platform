@@ -83,8 +83,18 @@ def cuenta_y_techo(motores, caso):
     return cuenta
 
 
-def test_e602_activacion_registra_un_evento_y_revierte_con_el_deposito(motores, caso):
-    from app.modules.cuentas.service import activar_si_corresponde
+def test_e602_activacion_registra_un_evento_y_revierte_con_el_deposito(
+    motores, caso, monkeypatch
+):
+    from app.modules.clientes.habilitacion import HabilitacionCliente
+    from app.modules.cuentas import service as cuentas_service
+
+    activar_si_corresponde = cuentas_service.activar_si_corresponde
+    monkeypatch.setattr(
+        cuentas_service,
+        "cliente_habilitado",
+        lambda *_: HabilitacionCliente(habilitado=True, motivos=[]),
+    )
 
     cuenta = cuenta_y_techo(motores, caso)
     with motores["cooperativa"].connect() as c, c.begin() as transaccion:

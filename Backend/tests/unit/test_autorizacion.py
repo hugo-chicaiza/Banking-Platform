@@ -243,6 +243,12 @@ ROLES_POR_RUTA: dict[tuple[str, str], tuple[str, ...]] = {
     ("GET", "/api/v1/creditos/tipos/{idTipoCredito}/condiciones"): ("ASESOR", "ADMIN"),
     ("POST", "/api/v1/creditos/simulaciones"): ("ASESOR", "ADMIN"),
     ("POST", "/api/v1/cuentas"): ("ASESOR", "ADMIN"),
+    ("GET", "/api/v1/cuentas/{idCuenta}/retenciones"): ("SUPERVISOR", "CUMPLIMIENTO"),
+    ("POST", "/api/v1/cuentas/{idCuenta}/retenciones"): ("SUPERVISOR", "CUMPLIMIENTO"),
+    ("POST", "/api/v1/cuentas/{idCuenta}/retenciones/{idRet}/liberacion"): (
+        "SUPERVISOR",
+        "CUMPLIMIENTO",
+    ),
     ("GET", "/api/v1/cuentas/{idCuenta}/subproductos-destino"): ("ASESOR",),
     ("POST", "/api/v1/cuentas/{idCuenta}/subproducto"): ("ASESOR",),
     ("GET", "/api/v1/cuentas/{idCuenta}/formulario-apertura"): ("ASESOR", "ADMIN"),
@@ -557,6 +563,7 @@ ROLES_POR_RUTA.update(
         ): ("CONTADOR",),
         ("GET", "/api/v1/contabilidad/plantillas/{id_plantilla}"): ("CONTADOR",),
         ("GET", "/api/v1/contabilidad/plantillas"): ("CONTADOR",),
+        ("GET", "/api/v1/contabilidad/reglas-contables"): ("CONTADOR",),
         ("GET", "/api/v1/contabilidad/plantillas/catalogos"): ("CONTADOR",),
         ("GET", "/api/v1/contabilidad/plantillas/{id_plantilla}/solicitudes"): (
             "CONTADOR",
@@ -656,6 +663,15 @@ def test_atm_registrado_exige_credencial_aun_con_sesion_workos(
     assert "/api/v1/atm/auth" in app.openapi()["paths"]
 
 
+def test_reglas_contables_rechaza_encabezado_de_laboratorio_sin_sesion(client):
+    respuesta = client.get(
+        "https://testserver/api/v1/contabilidad/reglas-contables",
+        headers={"X-Lab-Actor": "contador"},
+    )
+    assert respuesta.status_code == 401
+    assert _code(respuesta) == "NO_AUTENTICADO"
+
+
 def test_logout_exige_jwt_atm_aun_con_sesion_workos(client):
     simular_sesion(app, USUARIO)
     respuesta = client.post("https://testserver/api/v1/atm/logout")
@@ -738,6 +754,7 @@ def test_roles_de_la_tarea_pasan_el_control(client, ruta, monkeypatch):
             "/api/v1/parametros/{clave}/valores",
             "/api/v1/parametros/{clave}/valores/{id_valor}",
         }
+        or "/retenciones" in ruta[1]
         or ruta[1] == "/api/v1/cuentas/{idCuenta}/subproducto"
     ):
         from app.modules.aprobaciones import identidad
