@@ -614,7 +614,7 @@ FUNCIONES = (
         ("contabilidad.plantillas.consultar",),
     ),
     _f(
-        "contabilidad.cuentas_producto.consultar",
+        "contabilidad.cuentasProducto.consultar",
         "Consultar cuentas contables de los productos",
         "Contabilidad",
         PERMISOS["prd-consultar"],
@@ -626,13 +626,13 @@ FUNCIONES = (
         "/contabilidad/cuentas-producto",
     ),
     _f(
-        "contabilidad.cuentas_producto.editar",
+        "contabilidad.cuentasProducto.editar",
         "Solicitar asignaciones de cuentas a productos",
         "Contabilidad",
         PERMISOS["con-cuenta-editar"],
         (("PUT", B + "/cuentas-producto/tipos/{id_tipo}"),),
         "/contabilidad/cuentas-producto",
-        ("contabilidad.cuentas_producto.consultar",),
+        ("contabilidad.cuentasProducto.consultar",),
         delegable=False,
     ),
     _f(
