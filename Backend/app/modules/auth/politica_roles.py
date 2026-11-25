@@ -19,8 +19,13 @@ class PoliticaRoles(BaseModel):
 
     @model_validator(mode="after")
     def politica_completa(self) -> "PoliticaRoles":
-        if set(self.niveles) != set(ROLES):
+        faltantes = set(ROLES) - set(self.niveles)
+        if faltantes - {"CUMPLIMIENTO"}:
             raise ValueError("La jerarquía debe cubrir todos los roles vigentes.")
+        if self.privilegiados.intersection(faltantes) or any(
+            set(par).intersection(faltantes) for par in self.incompatibles
+        ):
+            raise ValueError("La política menciona un rol sin nivel configurado.")
         pares = {frozenset(par) for par in self.incompatibles}
         if len(pares) != len(self.incompatibles) or any(len(par) != 2 for par in pares):
             raise ValueError("Cada incompatibilidad debe unir dos roles distintos.")
