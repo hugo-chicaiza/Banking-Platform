@@ -25,6 +25,7 @@ PERMISOS: dict[str, tuple[str, ...]] = {
     # E0-08: permisos de aprobacion acordados; nunca se conceden por ser ADMIN.
     "parametros:aprobar": ("SUPERVISOR",),
     "agencias:aprobar": ("SUPERVISOR",),
+    "cuentas:aprobar": ("SUPERVISOR",),
     # E5-04: aprobación de cambios sensibles en clientes
     "clientes:aprobar": ("SUPERVISOR",),
     "prd-consultar": tuple(r for r in _TODOS if r != "CAJERO"),
@@ -39,6 +40,7 @@ PERMISOS: dict[str, tuple[str, ...]] = {
     "con-cuenta-editar": ("CONTADOR",),
     "con-reclasificacion-preparar": ("CONTADOR",),
     "con-reclasificacion-aprobar": ("CONTADOR",),
+    "cta-retencion": ("SUPERVISOR", "CUMPLIMIENTO"),
 }
 
 

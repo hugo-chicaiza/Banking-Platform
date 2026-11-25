@@ -71,6 +71,7 @@ Rol = Literal[
     "APROBADOR_CREDITO",
     "CONTADOR",
     "AUDITOR",
+    "CUMPLIMIENTO",
 ]
 ROLES: tuple[Rol, ...] = get_args(Rol)
 

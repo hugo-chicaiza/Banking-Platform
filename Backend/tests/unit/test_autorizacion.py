@@ -243,6 +243,14 @@ ROLES_POR_RUTA: dict[tuple[str, str], tuple[str, ...]] = {
     ("GET", "/api/v1/creditos/tipos/{idTipoCredito}/condiciones"): ("ASESOR", "ADMIN"),
     ("POST", "/api/v1/creditos/simulaciones"): ("ASESOR", "ADMIN"),
     ("POST", "/api/v1/cuentas"): ("ASESOR", "ADMIN"),
+    ("GET", "/api/v1/cuentas/{idCuenta}/retenciones"): ("SUPERVISOR", "CUMPLIMIENTO"),
+    ("POST", "/api/v1/cuentas/{idCuenta}/retenciones"): ("SUPERVISOR", "CUMPLIMIENTO"),
+    ("POST", "/api/v1/cuentas/{idCuenta}/retenciones/{idRet}/liberacion"): (
+        "SUPERVISOR",
+        "CUMPLIMIENTO",
+    ),
+    ("GET", "/api/v1/cuentas/{idCuenta}/subproductos-destino"): ("ASESOR",),
+    ("POST", "/api/v1/cuentas/{idCuenta}/subproducto"): ("ASESOR",),
     ("GET", "/api/v1/cuentas/{idCuenta}/formulario-apertura"): ("ASESOR", "ADMIN"),
     ("POST", "/api/v1/cuentas/{idCuenta}/autorizados"): ("ASESOR", "ADMIN"),
     ("POST", "/api/v1/cuentas/{idCuenta}/autorizados/{idAut}/fin"): ("ASESOR", "ADMIN"),
@@ -251,29 +259,54 @@ ROLES_POR_RUTA: dict[tuple[str, str], tuple[str, ...]] = {
         "CAJERO",
         "SUPERVISOR",
         "ADMIN",
+        "CUMPLIMIENTO",
     ),
     ("POST", "/api/v1/cuentas/{idCuenta}/anulacion"): ("ASESOR", "ADMIN"),
-    ("GET", "/api/v1/cuentas"): ("ASESOR", "CAJERO", "SUPERVISOR", "ADMIN"),
-    ("GET", "/api/v1/cuentas/{idCuenta}"): ("ASESOR", "CAJERO", "SUPERVISOR", "ADMIN"),
+    ("GET", "/api/v1/cuentas"): (
+        "ASESOR",
+        "CAJERO",
+        "SUPERVISOR",
+        "ADMIN",
+        "CUMPLIMIENTO",
+    ),
+    ("GET", "/api/v1/cuentas/{idCuenta}"): (
+        "ASESOR",
+        "CAJERO",
+        "SUPERVISOR",
+        "ADMIN",
+        "CUMPLIMIENTO",
+    ),
     ("GET", "/api/v1/cuentas/{idCuenta}/saldo"): (
         "ASESOR",
         "CAJERO",
         "SUPERVISOR",
         "ADMIN",
+        "CUMPLIMIENTO",
     ),
     ("GET", "/api/v1/cuentas/{idCuenta}/autorizados"): (
         "ASESOR",
         "CAJERO",
         "SUPERVISOR",
         "ADMIN",
+        "CUMPLIMIENTO",
     ),
     ("GET", "/api/v1/cuentas/{idCuenta}/movimientos"): (
         "ASESOR",
         "CAJERO",
         "SUPERVISOR",
         "ADMIN",
+        "CUMPLIMIENTO",
     ),
-    ("PATCH", "/api/v1/cuentas/{idCuenta}/estado"): ("ASESOR", "SUPERVISOR", "ADMIN"),
+    ("PATCH", "/api/v1/cuentas/{idCuenta}/estado"): (
+        "ASESOR",
+        "SUPERVISOR",
+        "CUMPLIMIENTO",
+    ),
+    ("GET", "/api/v1/cuentas/catalogos/motivos-bloqueo"): (
+        "ASESOR",
+        "SUPERVISOR",
+        "CUMPLIMIENTO",
+    ),
     ("GET", "/api/v1/cuentas/{idCuenta}/cupos"): ("ASESOR", "SUPERVISOR", "ADMIN"),
     ("PUT", "/api/v1/cuentas/{idCuenta}/cupos/{idCanal}"): (
         "ASESOR",
@@ -695,19 +728,25 @@ def test_rol_fuera_de_la_tarea_recibe_403(client, ruta, roles):
 def test_roles_de_la_tarea_pasan_el_control(client, ruta, monkeypatch):
     roles = ROLES_POR_RUTA[ruta]
     usuario = usuario_con_roles(*roles)
-    if ruta[1].startswith(
-        (
-            "/api/v1/aprobaciones",
-            "/api/v1/productos",
-            "/api/v1/contabilidad/cuentas-producto",
-            "/api/v1/seguridad/historial-parametros",
+    if (
+        ruta[1].startswith(
+            (
+                "/api/v1/aprobaciones",
+                "/api/v1/productos",
+                "/api/v1/contabilidad/cuentas-producto",
+                "/api/v1/seguridad/historial-parametros",
+            )
         )
-    ) or ruta[1] in {
-        "/api/v1/parametros",
-        "/api/v1/parametros/{clave}",
-        "/api/v1/parametros/{clave}/valores",
-        "/api/v1/parametros/{clave}/valores/{id_valor}",
-    }:
+        or ruta[1]
+        in {
+            "/api/v1/parametros",
+            "/api/v1/parametros/{clave}",
+            "/api/v1/parametros/{clave}/valores",
+            "/api/v1/parametros/{clave}/valores/{id_valor}",
+        }
+        or "/retenciones" in ruta[1]
+        or ruta[1] == "/api/v1/cuentas/{idCuenta}/subproducto"
+    ):
         from app.modules.aprobaciones import identidad
 
         # Esta matriz comprueba el guarda comun. La revalidacion WorkOS y el
