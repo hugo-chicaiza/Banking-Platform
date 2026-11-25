@@ -430,10 +430,12 @@ def listar_seguros(conn: Connection) -> list[dict[str, Any]]:
     )
 
 
-def fecha_nacimiento_cliente(conn: Connection, id_cliente: int) -> tuple[bool, Any]:
-    """(existe el cliente, su fecha de nacimiento o None)."""
+def perfil_cliente(conn: Connection, id_cliente: int) -> tuple[str, date | None] | None:
+    """Tipo y fecha de nacimiento del cliente, si existe."""
     fila = conn.execute(
-        text("SELECT FechaNacimiento FROM Clientes.Cliente WHERE IdCliente = :id"),
+        text(
+            "SELECT TipoCliente, FechaNacimiento FROM Clientes.Cliente WHERE IdCliente = :id"
+        ),
         {"id": id_cliente},
     ).first()
-    return (fila is not None, fila[0] if fila else None)
+    return (fila[0], fila[1]) if fila is not None else None

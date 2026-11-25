@@ -415,6 +415,19 @@ def activar_si_corresponde(
     return True
 
 
+def rol_para_apertura(
+    conn: Connection, tipo_cliente: str, nacimiento: date | None, fecha: date
+) -> RolRelacion | None:
+    """Identifica la relación obligatoria para ofrecer o abrir una cuenta."""
+    if tipo_cliente == "Juridico":
+        return "RepresentanteLegal"
+    if nacimiento is not None and edad_en(nacimiento, fecha) < edad_mayoria(
+        conn, fecha
+    ):
+        return "Tutor"
+    return None
+
+
 def abrir_cuenta_pendiente(
     conn: Connection, payload: CuentaPendienteCreate, agencia: str, actor: int
 ) -> Cuenta:
@@ -455,14 +468,9 @@ def abrir_cuenta_pendiente(
                 "El subproducto no es elegible para este cliente.",
                 bloqueos=motivos,
             )
-        nacimiento = cliente["fecha_nacimiento"]
-        rol: RolRelacion | None = None
-        if cliente["tipo_cliente"] == "Juridico":
-            rol = "RepresentanteLegal"
-        elif nacimiento is not None and edad_en(nacimiento, fecha) < edad_mayoria(
-            conn, fecha
-        ):
-            rol = "Tutor"
+        rol = rol_para_apertura(
+            conn, cliente["tipo_cliente"], cliente["fecha_nacimiento"], fecha
+        )
         relacion = (
             None
             if rol is None
