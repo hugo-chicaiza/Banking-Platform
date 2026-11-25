@@ -41,6 +41,14 @@ PERMISOS: dict[str, tuple[str, ...]] = {
     "con-reclasificacion-preparar": ("CONTADOR",),
     "con-reclasificacion-aprobar": ("CONTADOR",),
     "cta-retencion": ("SUPERVISOR", "CUMPLIMIENTO"),
+    "tar-consultar": ("ASESOR", "SUPERVISOR", "ADMIN"),
+    "tar-consultar:historial": ("SUPERVISOR", "AUDITOR", "ADMIN"),
+    "tar-solicitar": ("ASESOR", "ADMIN"),
+    "tar-solicitar:aprobar": ("SUPERVISOR",),
+    "tar-estado": ("ASESOR", "SUPERVISOR", "ADMIN"),
+    "tar-estado:aprobar": ("SUPERVISOR",),
+    "tar-pin": ("ASESOR", "ADMIN"),
+    "tar-pin:entregar": ("ASESOR", "SUPERVISOR", "ADMIN"),
 }
 
 
