@@ -5,7 +5,7 @@ from sqlalchemy import Connection
 
 from app.core.api.errors import ProblemDetailsRoute, problema
 from app.core.database.db import cooperativa
-from app.core.security.auth import Usuario, require_permiso
+from app.core.security.auth import Usuario, require_auth, require_permiso
 from app.modules.aprobaciones import router as apr
 from app.modules.aprobaciones.contratos import SolicitudAceptada
 from app.modules.aprobaciones.registro import Objetivo
@@ -13,7 +13,11 @@ from app.modules.cuentas import retenciones as r
 from app.modules.cuentas import retenciones_aprobacion as a
 from app.modules.parametros.service import hoy
 
-router = APIRouter(route_class=ProblemDetailsRoute, tags=["cuentas"])
+router = APIRouter(
+    route_class=ProblemDetailsRoute,
+    tags=["cuentas"],
+    dependencies=[Depends(require_auth)],
+)
 IdCuenta = Annotated[int, Path(gt=0, le=2147483647)]
 IdRetencion = Annotated[int, Path(gt=0, le=9223372036854775807)]
 Db = Annotated[Connection, Depends(cooperativa)]

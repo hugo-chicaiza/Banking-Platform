@@ -230,6 +230,19 @@ FUNCIONES = (
         ("cuentas.consultar",),
     ),
     _f(
+        "cuentas.retenciones",
+        "Gestionar retenciones",
+        "Cuentas",
+        ("SUPERVISOR", "CUMPLIMIENTO"),
+        (
+            ("GET", Q + "/{idCuenta}/retenciones"),
+            ("POST", Q + "/{idCuenta}/retenciones"),
+            ("POST", Q + "/{idCuenta}/retenciones/{idRet}/liberacion"),
+        ),
+        "/cuentas",
+        ("cuentas.consultar",),
+    ),
+    _f(
         "cuentas.cupos.consultar",
         "Consultar cupos",
         "Cuentas",
