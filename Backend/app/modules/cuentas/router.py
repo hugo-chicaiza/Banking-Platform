@@ -23,7 +23,12 @@ from app.core.security.auth import (
 from app.modules.aprobaciones import router as aprobaciones
 from app.modules.aprobaciones.contratos import SolicitudAceptada
 from app.modules.aprobaciones.registro import Objetivo
-from app.modules.cuentas import autorizados, estado_operativo, service
+from app.modules.cuentas import (
+    autorizados,
+    cambio_subproducto,
+    estado_operativo,
+    service,
+)
 from app.modules.cuentas.formulario import formulario_apertura
 from app.modules.cuentas.schemas import (
     AnularApertura,
@@ -503,4 +508,60 @@ def obtener_historial_cupo(
     )
 
 
+_cambio_router = APIRouter(
+    route_class=ProblemDetailsRoute,
+    responses=RESPUESTAS_ERROR,
+    dependencies=[Depends(solo_parametros())],
+)
+AsesorCambio = Annotated[Usuario, Depends(require_roles(*cambio_subproducto.ROLES))]
+
+
+def _objetivo_cambio(id_cuenta: int, usuario: Usuario) -> Objetivo:
+    agencia = usuario.agencia()
+    if agencia is None:
+        raise problema(403, "AGENCIA_REQUERIDA", "Seleccione una agencia activa.")
+    return Objetivo("Cuenta", str(id_cuenta), agencia)
+
+
+@_cambio_router.get(
+    "/{idCuenta}/subproductos-destino",
+    operation_id="CTASubproductosDestino",
+    openapi_extra={"x-roles": list(cambio_subproducto.ROLES)},
+)
+def destinos_subproducto(
+    idCuenta: IdRecurso, usuario: AsesorCambio, conn: Db
+) -> cambio_subproducto.Comparacion:
+    return cambio_subproducto.destinos(conn, _objetivo_cambio(idCuenta, usuario), hoy())
+
+
+@_cambio_router.post(
+    "/{idCuenta}/subproducto",
+    operation_id="CTACambioSubproducto",
+    status_code=202,
+    openapi_extra={"x-roles": list(cambio_subproducto.ROLES)},
+)
+def solicitar_cambio_subproducto(
+    idCuenta: IdRecurso,
+    datos: cambio_subproducto.Destino,
+    request: Request,
+    usuario: AsesorCambio,
+    actor: aprobaciones.Actual,
+    cola: aprobaciones.Cola,
+) -> SolicitudAceptada:
+    cambio = cambio_subproducto.CambioAprobable(
+        id_sub_producto=datos.id_sub_producto,
+        realizado_por=actor.id_interno,
+    )
+    id_solicitud = cola.solicitar(
+        actor,
+        cambio_subproducto.CODIGO,
+        _objetivo_cambio(idCuenta, usuario),
+        cambio.model_dump(mode="json"),
+        hoy(),
+        aprobaciones.contexto(request, usuario),
+    )
+    return SolicitudAceptada(id_solicitud=id_solicitud)
+
+
 router.include_router(_gestion_router, prefix="/cuentas")
+router.include_router(_cambio_router, prefix="/cuentas")

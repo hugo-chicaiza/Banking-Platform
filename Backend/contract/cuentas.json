@@ -106,6 +106,148 @@
         "title": "AutorizadoCuentaCreate",
         "type": "object"
       },
+      "ComisionFicha": {
+        "properties": {
+          "codigoComision": {
+            "title": "Codigocomision",
+            "type": "string"
+          },
+          "delProducto": {
+            "title": "Delproducto",
+            "type": "boolean"
+          },
+          "descripcion": {
+            "title": "Descripcion",
+            "type": "string"
+          },
+          "idComision": {
+            "title": "Idcomision",
+            "type": "integer"
+          },
+          "nombreCanal": {
+            "title": "Nombrecanal",
+            "type": "string"
+          },
+          "tipoCalculo": {
+            "title": "Tipocalculo",
+            "type": "string"
+          },
+          "valor": {
+            "title": "Valor",
+            "type": "number"
+          }
+        },
+        "required": [
+          "idComision",
+          "codigoComision",
+          "descripcion",
+          "tipoCalculo",
+          "valor",
+          "nombreCanal",
+          "delProducto"
+        ],
+        "title": "ComisionFicha",
+        "type": "object"
+      },
+      "Comparacion": {
+        "properties": {
+          "actual": {
+            "$ref": "#/components/schemas/FichaSubProducto"
+          },
+          "destinos": {
+            "items": {
+              "$ref": "#/components/schemas/FichaSubProducto"
+            },
+            "title": "Destinos",
+            "type": "array"
+          }
+        },
+        "required": [
+          "actual",
+          "destinos"
+        ],
+        "title": "Comparacion",
+        "type": "object"
+      },
+      "CondicionesFicha": {
+        "properties": {
+          "costoMantenimiento": {
+            "title": "Costomantenimiento",
+            "type": "number"
+          },
+          "mesesInactividad": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mesesinactividad"
+          },
+          "montoAperturaMinimo": {
+            "title": "Montoaperturaminimo",
+            "type": "number"
+          },
+          "periodicidadCosto": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Periodicidadcosto"
+          },
+          "periodicidadInteres": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Periodicidadinteres"
+          },
+          "saldoMinimo": {
+            "title": "Saldominimo",
+            "type": "number"
+          },
+          "tasaInteresAnual": {
+            "title": "Tasainteresanual",
+            "type": "number"
+          },
+          "vigenciaDesde": {
+            "format": "date",
+            "title": "Vigenciadesde",
+            "type": "string"
+          },
+          "vigenciaHasta": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Vigenciahasta"
+          }
+        },
+        "required": [
+          "montoAperturaMinimo",
+          "saldoMinimo",
+          "tasaInteresAnual",
+          "costoMantenimiento",
+          "vigenciaDesde"
+        ],
+        "title": "CondicionesFicha",
+        "type": "object"
+      },
       "Cuenta": {
         "description": "Representación de una cuenta bancaria devuelta por el API.",
         "properties": {
@@ -392,6 +534,78 @@
           "estado"
         ],
         "title": "CuentaResumen",
+        "type": "object"
+      },
+      "CupoCanalVista": {
+        "properties": {
+          "codigoCanal": {
+            "title": "Codigocanal",
+            "type": "string"
+          },
+          "cupoDiarioMaximo": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cupodiariomaximo"
+          },
+          "cupoMensualMaximo": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cupomensualmaximo"
+          },
+          "habilitado": {
+            "title": "Habilitado",
+            "type": "boolean"
+          },
+          "idCanal": {
+            "title": "Idcanal",
+            "type": "integer"
+          },
+          "maxTransaccionesDia": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Maxtransaccionesdia"
+          },
+          "montoMaxTransaccion": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Montomaxtransaccion"
+          },
+          "nombreCanal": {
+            "title": "Nombrecanal",
+            "type": "string"
+          }
+        },
+        "required": [
+          "idCanal",
+          "codigoCanal",
+          "nombreCanal",
+          "habilitado"
+        ],
+        "title": "CupoCanalVista",
         "type": "object"
       },
       "CupoEfectivo": {
@@ -710,6 +924,121 @@
         "title": "CupoSolicitado",
         "type": "object"
       },
+      "Destino": {
+        "additionalProperties": false,
+        "properties": {
+          "idSubProducto": {
+            "exclusiveMinimum": 0.0,
+            "maximum": 2147483647.0,
+            "title": "Idsubproducto",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "idSubProducto"
+        ],
+        "title": "Destino",
+        "type": "object"
+      },
+      "ElegibilidadFicha": {
+        "description": "Edad que rige: la mínima es la más alta de subproducto, red (tarjetas) y política\nEDAD_MINIMA (créditos); la máxima, la del subproducto. null = sin límite.",
+        "properties": {
+          "edadMaxima": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Edadmaxima"
+          },
+          "edadMinima": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Edadminima"
+          },
+          "edadMinimaPolitica": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Edadminimapolitica"
+          },
+          "edadMinimaRed": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Edadminimared"
+          },
+          "edadMinimaSubproducto": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Edadminimasubproducto"
+          },
+          "idSubProductoRequerido": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Idsubproductorequerido"
+          },
+          "maximoPorCliente": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Maximoporcliente"
+          },
+          "requiereTutor": {
+            "default": false,
+            "title": "Requieretutor",
+            "type": "boolean"
+          },
+          "tipoClientePermitido": {
+            "default": "Ambos",
+            "enum": [
+              "Natural",
+              "Juridico",
+              "Ambos"
+            ],
+            "title": "Tipoclientepermitido",
+            "type": "string"
+          }
+        },
+        "title": "ElegibilidadFicha",
+        "type": "object"
+      },
       "EventoCuenta": {
         "properties": {
           "detalle": {
@@ -764,6 +1093,93 @@
           "fechaEvento"
         ],
         "title": "EventoCuenta",
+        "type": "object"
+      },
+      "FichaSubProducto": {
+        "description": "Lo que el asesor lee al cliente: lo vigente hoy del subproducto y lo que hereda.",
+        "properties": {
+          "comisiones": {
+            "items": {
+              "$ref": "#/components/schemas/ComisionFicha"
+            },
+            "title": "Comisiones",
+            "type": "array"
+          },
+          "condiciones": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CondicionesFicha"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "cupos": {
+            "items": {
+              "$ref": "#/components/schemas/CupoCanalVista"
+            },
+            "title": "Cupos",
+            "type": "array"
+          },
+          "elegibilidad": {
+            "$ref": "#/components/schemas/ElegibilidadFicha"
+          },
+          "fecha": {
+            "format": "date",
+            "title": "Fecha",
+            "type": "string"
+          },
+          "producto": {
+            "$ref": "#/components/schemas/app__modules__productos__schemas__Producto"
+          },
+          "restricciones": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RestriccionesVista"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "seguros": {
+            "items": {
+              "$ref": "#/components/schemas/SeguroFicha"
+            },
+            "title": "Seguros",
+            "type": "array"
+          },
+          "sistemasAmortizacion": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Sistemasamortizacion",
+            "type": "array"
+          },
+          "subproducto": {
+            "$ref": "#/components/schemas/app__modules__productos__schemas__SubProducto"
+          },
+          "tasas": {
+            "items": {
+              "$ref": "#/components/schemas/TasaFicha"
+            },
+            "title": "Tasas",
+            "type": "array"
+          }
+        },
+        "required": [
+          "producto",
+          "subproducto",
+          "fecha",
+          "elegibilidad",
+          "cupos",
+          "tasas",
+          "comisiones",
+          "seguros",
+          "sistemasAmortizacion"
+        ],
+        "title": "FichaSubProducto",
         "type": "object"
       },
       "MovimientoCuenta": {
@@ -958,6 +1374,34 @@
         "title": "PageMovimientoCuenta",
         "type": "object"
       },
+      "RestriccionesVista": {
+        "properties": {
+          "diasSinRetiros": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Diassinretiros"
+          },
+          "saldoMinimo": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Saldominimo"
+          }
+        },
+        "title": "RestriccionesVista",
+        "type": "object"
+      },
       "SaldoCuenta": {
         "properties": {
           "fechaConsulta": {
@@ -998,6 +1442,44 @@
         "title": "SaldoCuenta",
         "type": "object"
       },
+      "SeguroFicha": {
+        "properties": {
+          "delProducto": {
+            "title": "Delproducto",
+            "type": "boolean"
+          },
+          "esObligatorio": {
+            "title": "Esobligatorio",
+            "type": "boolean"
+          },
+          "idSeguro": {
+            "title": "Idseguro",
+            "type": "integer"
+          },
+          "nombre": {
+            "title": "Nombre",
+            "type": "string"
+          },
+          "tipoCalculo": {
+            "title": "Tipocalculo",
+            "type": "string"
+          },
+          "valor": {
+            "title": "Valor",
+            "type": "number"
+          }
+        },
+        "required": [
+          "idSeguro",
+          "nombre",
+          "tipoCalculo",
+          "valor",
+          "esObligatorio",
+          "delProducto"
+        ],
+        "title": "SeguroFicha",
+        "type": "object"
+      },
       "SolicitudAceptada": {
         "properties": {
           "estado": {
@@ -1023,6 +1505,369 @@
           "idSolicitud"
         ],
         "title": "SolicitudAceptada",
+        "type": "object"
+      },
+      "TasaFicha": {
+        "properties": {
+          "delProducto": {
+            "title": "Delproducto",
+            "type": "boolean"
+          },
+          "idTasaInteres": {
+            "title": "Idtasainteres",
+            "type": "integer"
+          },
+          "montoMaximo": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Montomaximo"
+          },
+          "montoMinimo": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Montominimo"
+          },
+          "plazoMaximoMeses": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Plazomaximomeses"
+          },
+          "tasaNominalAnual": {
+            "title": "Tasanominalanual",
+            "type": "number"
+          },
+          "tipoTasa": {
+            "title": "Tipotasa",
+            "type": "string"
+          },
+          "vigente": {
+            "title": "Vigente",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "idTasaInteres",
+          "tipoTasa",
+          "tasaNominalAnual",
+          "vigente",
+          "delProducto"
+        ],
+        "title": "TasaFicha",
+        "type": "object"
+      },
+      "app__modules__productos__schemas__Producto": {
+        "properties": {
+          "codigoProducto": {
+            "title": "Codigoproducto",
+            "type": "string"
+          },
+          "descripcion": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Descripcion"
+          },
+          "estado": {
+            "enum": [
+              "A",
+              "I"
+            ],
+            "title": "Estado",
+            "type": "string"
+          },
+          "estadoCatalogo": {
+            "anyOf": [
+              {
+                "enum": [
+                  "Borrador",
+                  "Activo",
+                  "Suspendido",
+                  "Retirado"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Estadocatalogo"
+          },
+          "idProducto": {
+            "title": "Idproducto",
+            "type": "integer"
+          },
+          "idRed": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Idred"
+          },
+          "idTipoCredito": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Idtipocredito"
+          },
+          "idTipoProducto": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Idtipoproducto"
+          },
+          "montoAperturaMinimo": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Montoaperturaminimo"
+          },
+          "nombreProducto": {
+            "title": "Nombreproducto",
+            "type": "string"
+          },
+          "nombreRed": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nombrered"
+          },
+          "nombreTipoCredito": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nombretipocredito"
+          },
+          "permiteOperacionesPresenciales": {
+            "title": "Permiteoperacionespresenciales",
+            "type": "boolean"
+          },
+          "subproductos": {
+            "items": {
+              "$ref": "#/components/schemas/app__modules__productos__schemas__SubProducto"
+            },
+            "title": "Subproductos",
+            "type": "array"
+          },
+          "tipoCuenta": {
+            "anyOf": [
+              {
+                "enum": [
+                  "Ahorro",
+                  "Corriente"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tipocuenta"
+          },
+          "tipoProducto": {
+            "enum": [
+              "Cuenta",
+              "Tarjeta",
+              "Credito"
+            ],
+            "title": "Tipoproducto",
+            "type": "string"
+          }
+        },
+        "required": [
+          "idProducto",
+          "codigoProducto",
+          "nombreProducto",
+          "tipoProducto",
+          "permiteOperacionesPresenciales",
+          "estado"
+        ],
+        "title": "Producto",
+        "type": "object"
+      },
+      "app__modules__productos__schemas__SubProducto": {
+        "properties": {
+          "codigoSubProducto": {
+            "title": "Codigosubproducto",
+            "type": "string"
+          },
+          "edadMaxima": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Edadmaxima"
+          },
+          "edadMinima": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Edadminima"
+          },
+          "estado": {
+            "enum": [
+              "A",
+              "I"
+            ],
+            "title": "Estado",
+            "type": "string"
+          },
+          "estadoCatalogo": {
+            "anyOf": [
+              {
+                "enum": [
+                  "Borrador",
+                  "Activo",
+                  "Suspendido",
+                  "Retirado"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Estadocatalogo"
+          },
+          "fechaRegistro": {
+            "format": "date-time",
+            "title": "Fecharegistro",
+            "type": "string"
+          },
+          "idProducto": {
+            "title": "Idproducto",
+            "type": "integer"
+          },
+          "idSubProducto": {
+            "title": "Idsubproducto",
+            "type": "integer"
+          },
+          "idSubProductoRequerido": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Idsubproductorequerido"
+          },
+          "maximoPorCliente": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Maximoporcliente"
+          },
+          "nombreSubProducto": {
+            "title": "Nombresubproducto",
+            "type": "string"
+          },
+          "requiereTutor": {
+            "default": false,
+            "title": "Requieretutor",
+            "type": "boolean"
+          },
+          "tipoClientePermitido": {
+            "default": "Ambos",
+            "enum": [
+              "Natural",
+              "Juridico",
+              "Ambos"
+            ],
+            "title": "Tipoclientepermitido",
+            "type": "string"
+          },
+          "tipoTarjeta": {
+            "anyOf": [
+              {
+                "enum": [
+                  "Debito",
+                  "Credito"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tipotarjeta"
+          }
+        },
+        "required": [
+          "idSubProducto",
+          "idProducto",
+          "codigoSubProducto",
+          "nombreSubProducto",
+          "estado",
+          "fechaRegistro"
+        ],
+        "title": "SubProducto",
         "type": "object"
       }
     }
@@ -10385,6 +11230,1144 @@
           "SUPERVISOR",
           "ADMIN",
           "CUMPLIMIENTO"
+        ]
+      }
+    },
+    "/api/v1/cuentas/{idCuenta}/subproducto": {
+      "post": {
+        "operationId": "CTACambioSubproducto",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "idCuenta",
+            "required": true,
+            "schema": {
+              "exclusiveMinimum": 0,
+              "maximum": 2147483647,
+              "title": "Idcuenta",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Destino"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SolicitudAceptada"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "properties": {
+                    "bloqueos": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "detail": {
+                      "type": "string"
+                    },
+                    "errors": {
+                      "items": {
+                        "properties": {
+                          "field": {
+                            "type": "string"
+                          },
+                          "message": {
+                            "type": "string"
+                          }
+                        },
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "status": {
+                      "type": "integer"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "traceId": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "code",
+                    "detail",
+                    "traceId"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "properties": {
+                    "bloqueos": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "detail": {
+                      "type": "string"
+                    },
+                    "errors": {
+                      "items": {
+                        "properties": {
+                          "field": {
+                            "type": "string"
+                          },
+                          "message": {
+                            "type": "string"
+                          }
+                        },
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "status": {
+                      "type": "integer"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "traceId": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "code",
+                    "detail",
+                    "traceId"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "properties": {
+                    "bloqueos": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "detail": {
+                      "type": "string"
+                    },
+                    "errors": {
+                      "items": {
+                        "properties": {
+                          "field": {
+                            "type": "string"
+                          },
+                          "message": {
+                            "type": "string"
+                          }
+                        },
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "status": {
+                      "type": "integer"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "traceId": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "code",
+                    "detail",
+                    "traceId"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "properties": {
+                    "bloqueos": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "detail": {
+                      "type": "string"
+                    },
+                    "errors": {
+                      "items": {
+                        "properties": {
+                          "field": {
+                            "type": "string"
+                          },
+                          "message": {
+                            "type": "string"
+                          }
+                        },
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "status": {
+                      "type": "integer"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "traceId": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "code",
+                    "detail",
+                    "traceId"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "properties": {
+                    "bloqueos": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "detail": {
+                      "type": "string"
+                    },
+                    "errors": {
+                      "items": {
+                        "properties": {
+                          "field": {
+                            "type": "string"
+                          },
+                          "message": {
+                            "type": "string"
+                          }
+                        },
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "status": {
+                      "type": "integer"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "traceId": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "code",
+                    "detail",
+                    "traceId"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "properties": {
+                    "bloqueos": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "detail": {
+                      "type": "string"
+                    },
+                    "errors": {
+                      "items": {
+                        "properties": {
+                          "field": {
+                            "type": "string"
+                          },
+                          "message": {
+                            "type": "string"
+                          }
+                        },
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "status": {
+                      "type": "integer"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "traceId": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "code",
+                    "detail",
+                    "traceId"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "properties": {
+                    "bloqueos": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "detail": {
+                      "type": "string"
+                    },
+                    "errors": {
+                      "items": {
+                        "properties": {
+                          "field": {
+                            "type": "string"
+                          },
+                          "message": {
+                            "type": "string"
+                          }
+                        },
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "status": {
+                      "type": "integer"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "traceId": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "code",
+                    "detail",
+                    "traceId"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Too Many Requests"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "properties": {
+                    "bloqueos": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "detail": {
+                      "type": "string"
+                    },
+                    "errors": {
+                      "items": {
+                        "properties": {
+                          "field": {
+                            "type": "string"
+                          },
+                          "message": {
+                            "type": "string"
+                          }
+                        },
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "status": {
+                      "type": "integer"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "traceId": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "code",
+                    "detail",
+                    "traceId"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "properties": {
+                    "bloqueos": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "detail": {
+                      "type": "string"
+                    },
+                    "errors": {
+                      "items": {
+                        "properties": {
+                          "field": {
+                            "type": "string"
+                          },
+                          "message": {
+                            "type": "string"
+                          }
+                        },
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "status": {
+                      "type": "integer"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "traceId": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "code",
+                    "detail",
+                    "traceId"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "security": [
+          {
+            "APIKeyCookie": []
+          }
+        ],
+        "summary": "Solicitar Cambio Subproducto",
+        "tags": [
+          "cuentas"
+        ],
+        "x-roles": [
+          "ASESOR"
+        ]
+      }
+    },
+    "/api/v1/cuentas/{idCuenta}/subproductos-destino": {
+      "get": {
+        "operationId": "CTASubproductosDestino",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "idCuenta",
+            "required": true,
+            "schema": {
+              "exclusiveMinimum": 0,
+              "maximum": 2147483647,
+              "title": "Idcuenta",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Comparacion"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "properties": {
+                    "bloqueos": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "detail": {
+                      "type": "string"
+                    },
+                    "errors": {
+                      "items": {
+                        "properties": {
+                          "field": {
+                            "type": "string"
+                          },
+                          "message": {
+                            "type": "string"
+                          }
+                        },
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "status": {
+                      "type": "integer"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "traceId": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "code",
+                    "detail",
+                    "traceId"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "properties": {
+                    "bloqueos": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "detail": {
+                      "type": "string"
+                    },
+                    "errors": {
+                      "items": {
+                        "properties": {
+                          "field": {
+                            "type": "string"
+                          },
+                          "message": {
+                            "type": "string"
+                          }
+                        },
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "status": {
+                      "type": "integer"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "traceId": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "code",
+                    "detail",
+                    "traceId"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "properties": {
+                    "bloqueos": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "detail": {
+                      "type": "string"
+                    },
+                    "errors": {
+                      "items": {
+                        "properties": {
+                          "field": {
+                            "type": "string"
+                          },
+                          "message": {
+                            "type": "string"
+                          }
+                        },
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "status": {
+                      "type": "integer"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "traceId": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "code",
+                    "detail",
+                    "traceId"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "properties": {
+                    "bloqueos": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "detail": {
+                      "type": "string"
+                    },
+                    "errors": {
+                      "items": {
+                        "properties": {
+                          "field": {
+                            "type": "string"
+                          },
+                          "message": {
+                            "type": "string"
+                          }
+                        },
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "status": {
+                      "type": "integer"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "traceId": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "code",
+                    "detail",
+                    "traceId"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "properties": {
+                    "bloqueos": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "detail": {
+                      "type": "string"
+                    },
+                    "errors": {
+                      "items": {
+                        "properties": {
+                          "field": {
+                            "type": "string"
+                          },
+                          "message": {
+                            "type": "string"
+                          }
+                        },
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "status": {
+                      "type": "integer"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "traceId": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "code",
+                    "detail",
+                    "traceId"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "properties": {
+                    "bloqueos": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "detail": {
+                      "type": "string"
+                    },
+                    "errors": {
+                      "items": {
+                        "properties": {
+                          "field": {
+                            "type": "string"
+                          },
+                          "message": {
+                            "type": "string"
+                          }
+                        },
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "status": {
+                      "type": "integer"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "traceId": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "code",
+                    "detail",
+                    "traceId"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "properties": {
+                    "bloqueos": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "detail": {
+                      "type": "string"
+                    },
+                    "errors": {
+                      "items": {
+                        "properties": {
+                          "field": {
+                            "type": "string"
+                          },
+                          "message": {
+                            "type": "string"
+                          }
+                        },
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "status": {
+                      "type": "integer"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "traceId": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "code",
+                    "detail",
+                    "traceId"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Too Many Requests"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "properties": {
+                    "bloqueos": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "detail": {
+                      "type": "string"
+                    },
+                    "errors": {
+                      "items": {
+                        "properties": {
+                          "field": {
+                            "type": "string"
+                          },
+                          "message": {
+                            "type": "string"
+                          }
+                        },
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "status": {
+                      "type": "integer"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "traceId": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "code",
+                    "detail",
+                    "traceId"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "properties": {
+                    "bloqueos": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "detail": {
+                      "type": "string"
+                    },
+                    "errors": {
+                      "items": {
+                        "properties": {
+                          "field": {
+                            "type": "string"
+                          },
+                          "message": {
+                            "type": "string"
+                          }
+                        },
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "status": {
+                      "type": "integer"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "traceId": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "code",
+                    "detail",
+                    "traceId"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "security": [
+          {
+            "APIKeyCookie": []
+          }
+        ],
+        "summary": "Destinos Subproducto",
+        "tags": [
+          "cuentas"
+        ],
+        "x-roles": [
+          "ASESOR"
         ]
       }
     }
