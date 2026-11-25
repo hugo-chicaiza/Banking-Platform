@@ -243,6 +243,12 @@ ROLES_POR_RUTA: dict[tuple[str, str], tuple[str, ...]] = {
     ("GET", "/api/v1/creditos/tipos/{idTipoCredito}/condiciones"): ("ASESOR", "ADMIN"),
     ("POST", "/api/v1/creditos/simulaciones"): ("ASESOR", "ADMIN"),
     ("POST", "/api/v1/cuentas"): ("ASESOR", "ADMIN"),
+    ("GET", "/api/v1/cuentas/{idCuenta}/retenciones"): ("SUPERVISOR", "CUMPLIMIENTO"),
+    ("POST", "/api/v1/cuentas/{idCuenta}/retenciones"): ("SUPERVISOR", "CUMPLIMIENTO"),
+    ("POST", "/api/v1/cuentas/{idCuenta}/retenciones/{idRet}/liberacion"): (
+        "SUPERVISOR",
+        "CUMPLIMIENTO",
+    ),
     ("GET", "/api/v1/cuentas/{idCuenta}/subproductos-destino"): ("ASESOR",),
     ("POST", "/api/v1/cuentas/{idCuenta}/subproducto"): ("ASESOR",),
     ("GET", "/api/v1/cuentas/{idCuenta}/formulario-apertura"): ("ASESOR", "ADMIN"),
@@ -738,6 +744,7 @@ def test_roles_de_la_tarea_pasan_el_control(client, ruta, monkeypatch):
             "/api/v1/parametros/{clave}/valores",
             "/api/v1/parametros/{clave}/valores/{id_valor}",
         }
+        or "/retenciones" in ruta[1]
         or ruta[1] == "/api/v1/cuentas/{idCuenta}/subproducto"
     ):
         from app.modules.aprobaciones import identidad
