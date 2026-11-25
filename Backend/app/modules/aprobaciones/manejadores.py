@@ -114,6 +114,7 @@ class Parametro:
 def registro_inicial() -> Registro:
     from app.modules.auth.aprobacion_roles import operacion as operacion_roles
     from app.modules.contabilidad.plantillas import OPERACION_PLANTILLA
+    from app.modules.cuentas.cambio_subproducto import OPERACION as cambio_subproducto
 
     registro = Registro()
     registro.agregar(
@@ -131,6 +132,7 @@ def registro_inicial() -> Registro:
     registro.agregar(operacion_productos())
     registro.agregar(operacion_numeracion())
     registro.agregar(OPERACION_PLANTILLA)
+    registro.agregar(cambio_subproducto)
     registro.agregar(operacion_mapeo())
     for operacion in operaciones_estado():
         registro.agregar(operacion)
