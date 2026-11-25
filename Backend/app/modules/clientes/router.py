@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse
 from sqlalchemy import Connection
 
+from app.core import csv as csv_tool
 from app.core.api.errors import RESPUESTAS_ERROR, ProblemDetailsRoute, problema
 from app.core.api.middleware import ip_cliente
 from app.core.database.db import cooperativa
@@ -15,35 +16,44 @@ from app.core.security.auth import (
 )
 from app.modules.aprobaciones import router as aprobaciones
 from app.modules.aprobaciones.contratos import SolicitudAceptada
-from app.modules.clientes import correos, service
+from app.modules.clientes import correos, revelacion, service
 from app.modules.clientes.aprobacion import CODIGO_EDICION, objetivo
 from app.modules.clientes.habilitacion import HabilitacionCliente, cliente_habilitado
 from app.modules.clientes.schemas import (
     Cliente,
+    ClienteBusqueda,
     ClienteCreate,
     ClienteEstadoUpdate,
     ClientePerfil,
     ClienteUpdate,
+    DesafioRevelacion,
     Direccion,
     DireccionNueva,
     DireccionUpdate,
-    EstadoCliente,
     PageCliente,
     PageClienteHistorial,
+    Revelacion,
     Riesgo,
     RiesgoCreate,
     RiesgoRegistrado,
-    TipoCliente,
+    SolicitudRevelacion,
     TipoDocumento,
     ValidacionIdentificacion,
 )
 from app.modules.clientes.visibilidad import aplicar_visibilidad, puede_ver_direcciones
 from app.modules.parametros.service import hoy
 
+
+def _sin_cache(response: Response) -> None:
+    """Datos personales: ningún intermediario ni navegador los guarda (ASVS 14.3.2)."""
+    response.headers["Cache-Control"] = "no-store"
+
+
 router = APIRouter(
     tags=["clientes"],
-    dependencies=[Depends(require_auth)],
+    dependencies=[Depends(require_auth), Depends(_sin_cache)],
 )
+_ROLES_EXPORTACION = ["SUPERVISOR", "ADMIN"]
 _gestion_router = APIRouter(route_class=ProblemDetailsRoute, responses=RESPUESTAS_ERROR)
 
 Db = Annotated[Connection, Depends(cooperativa)]
@@ -56,37 +66,88 @@ _consultas_router = APIRouter(route_class=ProblemDetailsRoute)
 _ROLES_CONSULTA = ["ASESOR", "CAJERO", "SUPERVISOR", "ADMIN"]
 
 
-@_consultas_router.get(
-    "",
+@_consultas_router.post(
+    "/busqueda",
     operation_id="CLI03",
     response_model=PageCliente,
     responses=RESPUESTAS_ERROR,
     dependencies=[Depends(require_roles(*_ROLES_CONSULTA))],
     openapi_extra={"x-roles": _ROLES_CONSULTA},
 )
-def listar_clientes(
+def buscar_clientes(
+    filtros: ClienteBusqueda,
     conn: Db,
     usuario: Annotated[Usuario, Depends(require_auth)],
-    q: str | None = None,
-    identificacion: str | None = None,
-    tipo_cliente: Annotated[TipoCliente | None, Query(alias="tipoCliente")] = None,
-    estado: EstadoCliente | None = None,
-    page: Annotated[int, Query(ge=1)] = 1,
-    page_size: Annotated[int, Query(alias="pageSize", ge=1, le=100)] = 20,
-    sort: str | None = None,
 ) -> PageCliente:
-    """Busca clientes por filtros combinados, con paginación (CLI-03 / C-03)."""
-    resultado = service.listar_clientes(
-        conn,
-        q=q,
-        identificacion=identificacion,
-        tipo_cliente=tipo_cliente,
-        estado=estado,
-        page=page,
-        page_size=page_size,
-        sort=sort,
+    """E5-05 · filtros en el cuerpo (no en la URL); siempre con filtro y paginada."""
+    return aplicar_visibilidad(service.listar_clientes(conn, filtros), usuario)
+
+
+_COLUMNAS_EXPORTACION = (
+    "idCliente",
+    "identificacion",
+    "tipoCliente",
+    "nombres",
+    "apellidos",
+    "razonSocial",
+    "estado",
+    "idAgenciaRegistro",
+    "email",
+    "telefonoCelular",
+)
+MAX_FILAS_EXPORTACION = 5000
+
+
+@_consultas_router.post(
+    "/busqueda/exportacion",
+    operation_id="CLIExportar",
+    responses={**RESPUESTAS_ERROR, **csv_tool.RESPUESTA_CSV},
+    response_class=Response,
+    dependencies=[Depends(require_roles(*_ROLES_EXPORTACION))],
+    openapi_extra={"x-roles": _ROLES_EXPORTACION, "x-permissions": ["org-exportar"]},
+)
+def exportar_clientes(
+    filtros: ClienteBusqueda,
+    request: Request,
+    conn: Db,
+    usuario: Annotated[Usuario, Depends(require_auth)],
+) -> Response:
+    """CSV del resultado de la búsqueda, enmascarado y auditado (CLI_EXPORTACION)."""
+    csv_tool.autorizar(usuario)
+    filas: list[list[Any]] = []
+    pagina = filtros.model_copy(update={"page_size": 100})
+    for numero in range(1, MAX_FILAS_EXPORTACION // 100 + 1):
+        resultado = aplicar_visibilidad(
+            service.listar_clientes(conn, pagina.model_copy(update={"page": numero})),
+            usuario,
+            permitido=False,
+        )
+        filas.extend(
+            [
+                c.id_cliente,
+                c.identificacion,
+                c.tipo_cliente,
+                c.nombres,
+                c.apellidos,
+                c.razon_social,
+                c.estado,
+                c.id_agencia_registro,
+                c.email,
+                c.telefono_celular,
+            ]
+            for c in resultado.items
+        )
+        if numero * 100 >= resultado.total:
+            break
+    return csv_tool.responder_csv(
+        usuario,
+        ip_cliente(request.scope),
+        "clientes",
+        "Clientes.Cliente",
+        _COLUMNAS_EXPORTACION,
+        filas[:MAX_FILAS_EXPORTACION],
+        evento="CLI_EXPORTACION",
     )
-    return aplicar_visibilidad(resultado, usuario)
 
 
 @_consultas_router.get(
@@ -182,7 +243,9 @@ def registrar_cliente(
     visibles = puede_ver_direcciones(usuario)
 
     return aplicar_visibilidad(
-        service.registrar_cliente(conn, payload, creado_por, direccion_ip),
+        service.registrar_cliente(
+            conn, payload, creado_por, direccion_ip, usuario.agencia()
+        ),
         usuario,
         permitido=visibles,
     )
@@ -493,8 +556,47 @@ def listar_historial_cliente(
     )
 
 
+_ROLES_REVELACION = ["ASESOR", "SUPERVISOR", "ADMIN"]
+_revelacion_router = APIRouter(
+    route_class=ProblemDetailsRoute, responses=RESPUESTAS_ERROR
+)
+Revelador = Annotated[Usuario, Depends(require_roles(*_ROLES_REVELACION))]
+
+
+@_revelacion_router.post(
+    "/{idCliente}/revelacion/desafio",
+    operation_id="CLIRevelacionDesafio",
+    response_model=DesafioRevelacion,
+    openapi_extra={"x-roles": _ROLES_REVELACION},
+)
+def pedir_desafio(idCliente: int, usuario: Revelador, conn: Db) -> DesafioRevelacion:
+    """Pide el segundo factor (TOTP de WorkOS) antes de mostrar un dato completo."""
+    return revelacion.desafiar(conn, idCliente, usuario)
+
+
+@_revelacion_router.post(
+    "/{idCliente}/revelacion",
+    operation_id="CLIRevelacion",
+    response_model=Revelacion,
+    openapi_extra={"x-roles": _ROLES_REVELACION},
+)
+def revelar_datos(
+    idCliente: int,
+    solicitud: SolicitudRevelacion,
+    request: Request,
+    usuario: Revelador,
+    id_interno: UsuarioAuditoria,
+    conn: Db,
+) -> Revelacion:
+    """Valor completo de los campos pedidos tras verificar el código; auditado."""
+    return revelacion.revelar(
+        conn, idCliente, solicitud, usuario, id_interno, ip_cliente(request.scope)
+    )
+
+
 router.include_router(_gestion_router, prefix="/clientes")
 router.include_router(_edicion_router, prefix="/clientes")
 router.include_router(_riesgo_router, prefix="/clientes")
 router.include_router(_consultas_router, prefix="/clientes")
+router.include_router(_revelacion_router, prefix="/clientes")
 router.include_router(correos.router, prefix="/clientes")

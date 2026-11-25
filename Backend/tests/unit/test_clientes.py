@@ -41,6 +41,7 @@ from app.core.security.permisos import permisos_de
 from app.main import app
 from app.modules.clientes import repository, router, service
 from app.modules.clientes.schemas import (
+    ClienteBusqueda,
     ClienteCreate,
     ClienteEstadoUpdate,
     ClienteUpdate,
@@ -1249,39 +1250,39 @@ def test_cli03_filtros_combinados_y_direcciones_en_lote():
     )
     resultado = service.listar_clientes(
         cast(Connection, db),
-        q="María",
-        identificacion=CEDULA_VALIDA_1,
-        tipo_cliente="Natural",
-        estado="Activo",
+        ClienteBusqueda(
+            nombre="María",
+            identificacion=CEDULA_VALIDA_1,
+            tipo_cliente="Natural",
+            estado="Activo",
+        ),
     )
     assert (resultado.page, resultado.page_size, resultado.total) == (1, 20, 2)
     assert [c.id_cliente for c in resultado.items] == [10, 11]
     assert [d.id_direccion for d in resultado.items[0].direcciones] == [1, 2]
     assert resultado.items[1].direcciones == []
     sql, params = db.consultas[0]
-    assert params["q_like"] == "%María%"
+    assert params["nombre_inicio"] == "MARÍA%"
     assert params["identificacion"] == CEDULA_VALIDA_1
     assert params["tipo_cliente"] == "Natural"
     assert params["estado"] == "Activo"
     assert "Identificacion = :identificacion" in sql
     assert "TipoCliente = :tipo_cliente" in sql
     assert "Estado = :estado" in sql
-    for columna in ("Identificacion", "Nombres", "Apellidos", "RazonSocial"):
-        assert f"{columna} LIKE :q_like" in sql
+    assert "NombreBusqueda LIKE :nombre_inicio" in sql
     assert db.consultas[1][1] == {"ids_clientes": [10, 11], "solo_activas": False}
     assert resultado.model_dump(by_alias=True)["pageSize"] == 20
     _assert_solo_lectura(db)
 
 
-@pytest.mark.parametrize("q", [None, "Lopez", "1710", "Empresa", "' OR 1=1 --"])
+@pytest.mark.parametrize("q", ["Lopez", "1710", "Empresa", "' OR 1=1 --"])
 def test_cli03_q_usa_parametros_ligados(q):
     db = _RiesgoConn([[{"id_cliente": None, "total": 0}]])
-    resultado = service.listar_clientes(cast(Connection, db), q=q)
+    resultado = service.listar_clientes(cast(Connection, db), ClienteBusqueda(nombre=q))
     sql, params = db.consultas[0]
-    assert params["q_like"] == (None if q is None else f"%{q}%")
+    assert params["nombre_inicio"] == repository.patron_inicio(q)
     assert (params["campo"], params["direccion"]) == ("IdCliente", "asc")
-    if q is not None:
-        assert q not in sql
+    assert q not in sql
     assert resultado.items == []
     assert resultado.total == 0
     _assert_solo_lectura(db)
@@ -1291,7 +1292,8 @@ def test_cli03_q_usa_parametros_ligados(q):
 def test_cli03_pagina_vacia_conserva_total(page, page_size, total):
     db = _RiesgoConn([[{"id_cliente": None, "total": total}]])
     resultado = service.listar_clientes(
-        cast(Connection, db), page=page, page_size=page_size
+        cast(Connection, db),
+        ClienteBusqueda(estado="Activo", page=page, page_size=page_size),
     )
     assert resultado.items == []
     assert (resultado.page, resultado.page_size, resultado.total) == (
@@ -1310,7 +1312,10 @@ def test_cli03_pagina_vacia_conserva_total(page, page_size, total):
 def test_cli03_orden_valido_y_paginacion(campo, direccion):
     db = _RiesgoConn([[_cliente_row(total=7)], []])
     resultado = service.listar_clientes(
-        cast(Connection, db), page=2, page_size=3, sort=f"{campo},{direccion}"
+        cast(Connection, db),
+        ClienteBusqueda(
+            estado="Activo", page=2, page_size=3, sort=f"{campo},{direccion}"
+        ),
     )
     sql, params = db.consultas[0]
     assert params["campo"] == service.CAMPOS_ORDEN_CLIENTES[campo]
@@ -1341,7 +1346,9 @@ def test_cli03_orden_valido_y_paginacion(campo, direccion):
 def test_cli03_sort_invalido_400_antes_de_consultar(sort):
     db = _RiesgoConn([])
     with pytest.raises(service.HTTPException) as exc:
-        service.listar_clientes(cast(Connection, db), sort=sort)
+        service.listar_clientes(
+            cast(Connection, db), ClienteBusqueda(estado="Activo", sort=sort)
+        )
     _assert_http_error(exc, 400, "SORT_INVALIDO")
     assert db.consultas == []
 
@@ -1445,41 +1452,31 @@ def test_consultas_contrato_openapi_sin_sockets():
     from app.core.api.errors import ProblemDetailsRoute
 
     contrato = app.openapi()
-    for sufijo, operacion, modelo, roles in [
-        ("", "CLI03", "PageCliente", router._ROLES_CONSULTA),
-        ("/{idCliente}", "CLI04", "Cliente", router._ROLES_CONSULTA),
+    for metodo, sufijo, operacion, modelo, roles in [
+        ("post", "/busqueda", "CLI03", "PageCliente", router._ROLES_CONSULTA),
+        ("get", "/{idCliente}", "CLI04", "Cliente", router._ROLES_CONSULTA),
         (
+            "get",
             "/{idCliente}/perfil",
             "CLI08",
             "ClientePerfil",
             ["ASESOR", "SUPERVISOR", "ADMIN"],
         ),
     ]:
-        ruta = contrato["paths"][f"/api/v1/clientes{sufijo}"]["get"]
+        ruta = contrato["paths"][f"/api/v1/clientes{sufijo}"][metodo]
         assert ruta["operationId"] == operacion
         assert ruta["x-roles"] == roles
         respuesta = ruta["responses"]["200"]["content"]["application/json"]["schema"]
         assert respuesta["$ref"].endswith(f"/{modelo}")
         for status in ("400", "401", "403", "404"):
             assert "application/problem+json" in ruta["responses"][status]["content"]
-    parametros = {
-        p["name"]: p["schema"]
-        for p in contrato["paths"]["/api/v1/clientes"]["get"]["parameters"]
-    }
-    assert set(parametros) == {
-        "q",
-        "identificacion",
-        "tipoCliente",
-        "estado",
-        "page",
-        "pageSize",
-        "sort",
-    }
-    assert parametros["page"]["default"] == 1
-    assert parametros["page"]["minimum"] == 1
-    assert parametros["pageSize"]["default"] == 20
-    assert parametros["pageSize"]["minimum"] == 1
-    assert parametros["pageSize"]["maximum"] == 100
+    # E5-05: los filtros van en el cuerpo, nunca como parámetros de la URL.
+    busqueda = contrato["paths"]["/api/v1/clientes/busqueda"]["post"]
+    assert "parameters" not in busqueda
+    assert busqueda["requestBody"]["content"]["application/json"]["schema"][
+        "$ref"
+    ].endswith("/ClienteBusqueda")
+    assert "get" not in contrato["paths"].get("/api/v1/clientes", {})
     assert all(
         isinstance(r, ProblemDetailsRoute) for r in router._consultas_router.routes
     )
@@ -2519,19 +2516,20 @@ def test_routers_edicion_propagan_identidad_roles_e_ip_confiable(monkeypatch, es
         monkeypatch.setattr(service, "cambiar_estado_cliente", metodo)
         payload = ClienteEstadoUpdate(estado="Bloqueado", motivo="Control")
         assert (
-            router.cambiar_estado_cliente(10, payload, request, usuario, 12, conn)
-            is esperado
+            router.cambiar_estado_cliente(
+                10, payload, request, usuario, 12, conn
+            ).identificacion
+            == "******4065"
         )
         metodo.assert_called_once_with(conn, 10, payload, 12, "192.0.2.10", ("ASESOR",))
     else:
         monkeypatch.setattr(service, "editar_cliente", metodo)
         payload_edicion = ClienteUpdate(telefono_celular="0987654321")
-        assert (
-            router.editar_cliente(
-                10, payload_edicion, request, Response(), usuario, 12, conn
-            )
-            is esperado
+        resultado = router.editar_cliente(
+            10, payload_edicion, request, Response(), usuario, 12, conn
         )
+        assert isinstance(resultado, service.Cliente)
+        assert resultado.identificacion == "******4065"
         args = metodo.call_args.args
         assert args[:5] == (conn, 10, payload_edicion, 12, "192.0.2.10")
         assert callable(args[5])

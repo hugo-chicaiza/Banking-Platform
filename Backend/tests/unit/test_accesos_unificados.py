@@ -14,6 +14,7 @@ from app.core.security import audit, secciones
 from app.core.security.auth import ROLES
 from app.main import app
 from app.modules.clientes import service as clientes
+from app.modules.clientes.schemas import PageCliente
 from app.modules.seguridad import accesos, repository
 from tests.sesion import simular_sesion, usuario_con_roles
 
@@ -85,16 +86,22 @@ def test_guarda_y_retira_api_y_sesion_sin_cambiar_workos(entorno, monkeypatch):
     monkeypatch.setattr(
         clientes,
         "listar_clientes",
-        lambda conn, **kw: {"items": [], "total": 0, "page": 1, "page_size": 20},
+        lambda conn, filtros: PageCliente(items=[], total=0, page=1, page_size=20),
     )
     app.dependency_overrides[cooperativa] = lambda: object()
-    assert cliente.get("/api/v1/clientes").status_code == 200
+    assert (
+        cliente.post("/api/v1/clientes/busqueda", json={"estado": "Activo"}).status_code
+        == 200
+    )
     simular_sesion(app, usuario_con_roles("ADMIN"))
     datos = cuerpo(cliente)
     assert cliente.put("/api/v1/seguridad/pestanas", json=datos).status_code == 200
     assert base.eventos[0].descripcion.endswith("motivo=Ajuste de acceso del puesto")
     simular_sesion(app, usuario_con_roles("ASESOR"))
-    assert cliente.get("/api/v1/clientes").status_code == 403
+    assert (
+        cliente.post("/api/v1/clientes/busqueda", json={"estado": "Activo"}).status_code
+        == 403
+    )
     assert (
         "/clientes-busqueda"
         not in cliente.get("/api/v1/auth/me").json()["accesosSecciones"]["habilitadas"]
@@ -103,7 +110,10 @@ def test_guarda_y_retira_api_y_sesion_sin_cambiar_workos(entorno, monkeypatch):
     datos = cuerpo(cliente, ["ASESOR"])
     assert cliente.put("/api/v1/seguridad/pestanas", json=datos).status_code == 200
     simular_sesion(app, usuario_con_roles("ASESOR"))
-    assert cliente.get("/api/v1/clientes").status_code == 200
+    assert (
+        cliente.post("/api/v1/clientes/busqueda", json={"estado": "Activo"}).status_code
+        == 200
+    )
 
 
 def test_version_desactualizada_no_sobrescribe(entorno):
@@ -165,7 +175,10 @@ def test_sin_configuracion_no_concede_por_fallo(entorno, monkeypatch):
     monkeypatch.setattr(
         repository, "pestanas", Mock(side_effect=SQLAlchemyError("falso"))
     )
-    assert cliente.get("/api/v1/clientes").status_code == 503
+    assert (
+        cliente.post("/api/v1/clientes/busqueda", json={"estado": "Activo"}).status_code
+        == 503
+    )
 
 
 @pytest.mark.parametrize("lock", [-1, -2, -3, -999])
