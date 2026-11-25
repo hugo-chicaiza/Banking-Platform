@@ -242,6 +242,7 @@ FUERA_DEL_EDITOR = (
     # Plantillas ya tiene funciones en el editor nuevo. El modo anterior conserva
     # sus permisos WorkOS y no necesita una sección legada adicional.
     ("GET", "/api/v1/contabilidad/plantillas"),
+    ("GET", "/api/v1/contabilidad/reglas-contables"),
     ("GET", "/api/v1/contabilidad/plantillas/catalogos"),
     ("GET", "/api/v1/contabilidad/plantillas/{id_plantilla}/solicitudes"),
     ("GET", "/api/v1/contabilidad/tipos-asiento/{id_tipo}/plantillas"),

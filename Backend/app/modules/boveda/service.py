@@ -33,7 +33,9 @@ from app.modules.boveda.schemas import (
     ResumenArqueoBoveda,
     TipoArqueo,
 )
+from app.modules.contabilidad import repository as repo_contable
 from app.modules.contabilidad import service as contabilidad
+from app.modules.contabilidad.boveda_versionada import codigo_boveda
 
 _GLOBALES = frozenset({"ADMIN", "CONTADOR", "AUDITOR"})
 _TESTIGOS = frozenset({"SUPERVISOR", "AUDITOR", "ADMIN"})
@@ -185,6 +187,7 @@ def _aplicar(
     arqueo: int | None = None,
     clave: str | None = None,
     huella: str | None = None,
+    usar_version: bool | None = None,
 ) -> int:
     inventario = _inventario_valido(conn, boveda)
     monto = sum((valores[i] * n for i, n in piezas.items()), Decimal(0))
@@ -237,6 +240,7 @@ def _aplicar(
     repo.actualizar_inventario(
         conn, boveda["id_boveda"], movimiento, piezas, ingreso, ahora, saldo
     )
+    opciones_contables = {} if usar_version is None else {"usar_version": usar_version}
     asiento = contabilidad.contabilizar_boveda(
         conn,
         agencia=boveda["id_agencia"],
@@ -247,6 +251,7 @@ def _aplicar(
         actor=actor,
         movimiento=movimiento,
         ahora=ahora,
+        **opciones_contables,
     )
     repo.vincular_asiento(conn, movimiento, asiento)
     boveda["saldo_actual"] = saldo
@@ -277,6 +282,19 @@ def ejecutar_movimiento_autorizado(
     destino = solicitud["id_boveda_contraparte"]
     tipo = solicitud["tipo_movimiento"]
     fecha = contabilidad.resolver_id_fecha_contable(conn, contabilidad.ahora_ecuador())
+    usar_version = None
+    if tipo == "Traslado":
+        repo_contable.bloquear_contabilizacion(conn)
+        dia = repo_contable.obtener_por_id(conn, fecha)
+        usar_version = dia is not None and all(
+            repo_contable.obtener_plantilla(
+                conn,
+                codigo_boveda(boveda["id_agencia"], tipo, naturaleza),
+                dia["fecha"],
+            )
+            is not None
+            for boveda, naturaleza in ((origen, "E"), (bovedas[destino], "I"))
+        )
     id_origen = _aplicar(
         conn,
         origen,
@@ -289,6 +307,7 @@ def ejecutar_movimiento_autorizado(
         fecha,
         solicitud["observaciones"],
         contraparte=destino,
+        usar_version=usar_version,
     )
     movimientos = [id_origen]
     if tipo == "Traslado":
@@ -305,6 +324,7 @@ def ejecutar_movimiento_autorizado(
             solicitud["observaciones"],
             contraparte=origen["id_boveda"],
             relacionado=id_origen,
+            usar_version=usar_version,
         )
         repo.relacionar_movimiento(conn, id_origen, id_destino)
         movimientos.append(id_destino)

@@ -563,6 +563,7 @@ ROLES_POR_RUTA.update(
         ): ("CONTADOR",),
         ("GET", "/api/v1/contabilidad/plantillas/{id_plantilla}"): ("CONTADOR",),
         ("GET", "/api/v1/contabilidad/plantillas"): ("CONTADOR",),
+        ("GET", "/api/v1/contabilidad/reglas-contables"): ("CONTADOR",),
         ("GET", "/api/v1/contabilidad/plantillas/catalogos"): ("CONTADOR",),
         ("GET", "/api/v1/contabilidad/plantillas/{id_plantilla}/solicitudes"): (
             "CONTADOR",
@@ -660,6 +661,15 @@ def test_atm_registrado_exige_credencial_aun_con_sesion_workos(
     assert _code(respuesta) == "TERMINAL_NO_AUTORIZADO"
     assert eventos_auditados[-1].accion == "ACCESO_DENEGADO"
     assert "/api/v1/atm/auth" in app.openapi()["paths"]
+
+
+def test_reglas_contables_rechaza_encabezado_de_laboratorio_sin_sesion(client):
+    respuesta = client.get(
+        "https://testserver/api/v1/contabilidad/reglas-contables",
+        headers={"X-Lab-Actor": "contador"},
+    )
+    assert respuesta.status_code == 401
+    assert _code(respuesta) == "NO_AUTENTICADO"
 
 
 def test_logout_exige_jwt_atm_aun_con_sesion_workos(client):
