@@ -1,5 +1,6 @@
 """Concesión real por función sin llamadas a WorkOS ni SQL compartido."""
 
+import re
 from dataclasses import replace
 from typing import cast
 
@@ -38,6 +39,19 @@ def entorno(monkeypatch):
     )
     yield ajustes
     app.dependency_overrides.clear()
+
+
+def test_ids_de_funcion_cumplen_el_contrato_del_frontend():
+    # El editor de Roles y accesos rechaza el catálogo entero si un id no cumple
+    # este patrón (src/features/seguridad/api/funciones.api.ts): sin guion bajo.
+    patron = re.compile(r"^[a-z][a-zA-Z0-9.]{0,79}$")
+    invalidos = [
+        id_
+        for f in FUNCIONES
+        for id_ in (f.id, *f.dependencias)
+        if not patron.fullmatch(id_)
+    ]
+    assert not invalidos
 
 
 def test_catalogo_completo_y_sin_ambiguedades():
