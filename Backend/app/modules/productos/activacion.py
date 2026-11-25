@@ -144,8 +144,13 @@ def lista(conn: Connection, id_sub: int, fecha: date) -> list[dict[str, Any]]:
         and s["EdadMinima"] > s["EdadMaxima"]
     ):
         motivo = "La edad mínima supera la máxima."
-    elif s["RequiereTutor"]:
-        motivo = "Requiere tutor y la relación con el tutor aún no se puede verificar (módulo de clientes)."
+    elif s["RequiereTutor"] and not _existe(
+        conn,
+        """SELECT 1 FROM Catalogo.TipoRelacionCliente
+           WHERE Codigo='Tutor' AND Estado='A'
+             AND OBJECT_ID(N'Clientes.ClienteRelacion', N'U') IS NOT NULL""",
+    ):
+        motivo = "La relación Tutor debe estar disponible en el catálogo de clientes."
     puntos.append(("ELEGIBILIDAD", motivo is None, motivo))
     puntos.append(_plantillas(conn, s["CodigoTipo"], fecha))
     return [

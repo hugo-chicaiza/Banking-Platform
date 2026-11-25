@@ -822,6 +822,13 @@ def cliente_elegible(
 
     permitido = str(datos["tipo_permitido"]).strip().casefold()
     tipo = str(datos["tipo_cliente"]).strip().casefold()
+    # El catálogo legado podía ofrecer el ahorro de persona jurídica a ambos tipos.
+    ahorro_juridico = (
+        datos["tipo_producto"] == "Cuenta"
+        and datos["codigo_sub_producto"] == "AHO001-PJ"
+    )
+    if ahorro_juridico:
+        permitido = "juridico"
     if permitido not in ("ambos", tipo):
         motivos.append("TIPO_CLIENTE_NO_PERMITIDO")
 
@@ -839,7 +846,9 @@ def cliente_elegible(
                 motivos.append("EDAD_INFERIOR_MINIMA")
             if datos["edad_maxima"] is not None and edad > datos["edad_maxima"]:
                 motivos.append("EDAD_SUPERIOR_MAXIMA")
-    elif datos["edad_minima"] is not None or datos["edad_maxima"] is not None:
+    elif not ahorro_juridico and (
+        datos["edad_minima"] is not None or datos["edad_maxima"] is not None
+    ):
         motivos.append("EDAD_NO_APLICA_A_PERSONA_JURIDICA")
 
     if (
