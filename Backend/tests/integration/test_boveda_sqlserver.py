@@ -1,7 +1,9 @@
 """BOV real en SQL Server local: migración, persistencia, rollback y concurrencia."""
 
+import json
 import os
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import closing
 from dataclasses import replace
 from datetime import datetime
 from decimal import Decimal
@@ -20,6 +22,14 @@ from app.modules.boveda.solicitudes import service as solicitudes
 from app.modules.boveda.solicitudes.schemas import SolicitudMovimientoRequest
 from app.modules.caja import service as caja
 from app.modules.contabilidad import repository as contabilidad
+from app.modules.contabilidad.asientos import reversar
+from app.modules.contabilidad.plantillas import (
+    Linea,
+    Version,
+    confirmar_aprobacion,
+    crear,
+)
+from app.modules.contabilidad.reglas import listar_reglas
 from tests.integration.boveda_sql_lab import LaboratorioBoveda
 from tests.sesion import USUARIO
 
@@ -92,6 +102,151 @@ def saldos_contables(conn):
             text("SELECT CodigoCuenta, Saldo FROM Contabilidad.CuentasContables")
         ).all()
     )
+
+
+def test_sql_catalogo_contable_vigencia_alcance_y_origen(motor):
+    with motor.begin() as conn:
+        migracion = (
+            Path(__file__).resolve().parents[2]
+            / "migrations/cooperativa/202611251500_asientos_plantilla_uso.up.sql"
+        )
+        for _ in range(2):
+            conn.exec_driver_sql(migracion.read_text(encoding="utf-8"))
+        assert (
+            conn.scalar(
+                text("""
+            SELECT COUNT(*) FROM sys.indexes
+            WHERE object_id=OBJECT_ID('Contabilidad.AsientoContable')
+              AND name='IX_AsientoContable_PlantillaAplicada'
+        """)
+            )
+            == 1
+        )
+        conn.execute(
+            text("""
+            ALTER TABLE Contabilidad.ConceptoContable ADD CodigoConcepto varchar(30) NULL;
+            INSERT Contabilidad.ConceptoContable (IdConceptoContable) VALUES (1);
+            INSERT Contabilidad.PlantillaAsiento
+                (CodigoPlantilla, IdConceptoContable, Origen, IdTipoAsiento, Nombre,
+                 Estado, Version, VigenciaDesde)
+            VALUES ('DOT_CAJA',1,'CAJA',1,'Dotación v1',1,1,'20261101'),
+                   ('DOT_CAJA',1,'CAJA',1,'Dotación v2',1,2,'20261116');
+        """)
+        )
+        reglas = listar_reglas(conn, "001", datetime(2026, 11, 16).date())["reglas"]
+        versiones = [r for r in reglas if r["versionada"]]
+        assert [r["vigente"] for r in versiones] == [True, False]
+        assert versiones[0]["Origen"] == "CAJA"
+        assert (versiones[0]["desde"], versiones[0]["hacia"]) == ("BOVEDA", "CAJA")
+        assert versiones[0]["Usada"] is False
+        boveda = [r for r in reglas if not r["versionada"]]
+        assert len(boveda) == 6
+        assert {r["IdAgencia"] for r in boveda} == {"001"}
+        assert all(r["vigente"] is None and r["Version"] is None for r in boveda)
+        traslado = next(r for r in boveda if r["idRegla"] == "boveda:001:Traslado:E")
+        assert traslado["hacia"] == "EFECTIVO_EN_TRANSITO"
+
+
+def test_sql_alta_primera_version_solo_como_borrador(motor):
+    with motor.begin() as conn:
+        conn.execute(
+            text("""
+            ALTER TABLE Contabilidad.ConceptoContable ADD Estado varchar(10) NULL;
+            INSERT Contabilidad.ConceptoContable (IdConceptoContable) VALUES (1);
+        """)
+        )
+        conn.execute(text("UPDATE Contabilidad.ConceptoContable SET Estado='Activo'"))
+    with motor.connect() as conn:
+        creada = crear(
+            conn,
+            1,
+            Version(
+                codigoPlantilla="DEV_ATM",
+                idConceptoContable=1,
+                nombre="Devolución ATM",
+                vigenciaDesde=datetime(2026, 11, 17).date(),
+                lineas=[
+                    Linea(lado="DEBITO", origen="FIJA", base="PRINCIPAL", cuenta=1),
+                    Linea(lado="CREDITO", origen="FIJA", base="PRINCIPAL", cuenta=2),
+                ],
+            ),
+            7,
+        )
+        fila = conn.execute(
+            text("""
+            SELECT Version, Estado, Origen, CreadoPor FROM Contabilidad.PlantillaAsiento
+            WHERE IdPlantillaAsiento=:id
+        """),
+            {"id": creada["idPlantillaAsiento"]},
+        ).one()
+        assert tuple(fila) == (1, False, "ATM", 7)
+
+
+def test_sql_preparacion_contable_repetible_y_sin_activar(motor):
+    with motor.begin() as conn:
+        conn.exec_driver_sql(
+            "ALTER TABLE Contabilidad.ConceptoContable ADD Estado varchar(10) NULL"
+        )
+        conn.exec_driver_sql("""
+            INSERT Contabilidad.ConceptoContable (IdConceptoContable, Estado) VALUES (1, 'Activo');
+            CREATE TABLE Contabilidad.RolCuentaProducto (CodigoRol varchar(30) PRIMARY KEY, Estado char(1));
+            INSERT Contabilidad.RolCuentaProducto VALUES ('CAPITAL', 'A');
+            INSERT Contabilidad.CuentasContables
+                (CodigoCuenta,NombreCuenta,Naturaleza,Saldo,Estado,FechaCreacion,EsImputable)
+            VALUES ('11010510','Ventanilla ficticia','DEUDORA',0,1,GETDATE(),1),
+                   ('19902505','Faltante ficticio','DEUDORA',0,1,GETDATE(),1);
+        """)
+        script = (
+            Path(__file__).resolve().parents[2]
+            / "scripts/sql/preparar_cobertura_e403.sql"
+        ).read_text(encoding="utf-8")
+        script = script.replace(
+            "@VigenciaDesde date = NULL", "@VigenciaDesde date = '20261117'"
+        )
+        script = script.replace(
+            "@Catalogo nvarchar(max) = N'[]'",
+            """@Catalogo nvarchar(max) = N'[{"codigo":"CUENTAS_TRANSFERENCIA_INTERNA","idTipo":1,"idConcepto":1},
+                {"codigo":"BOV_001_AJUSTEFALTANTE_E","idTipo":1,"idConcepto":1}]'""",
+        )
+        with closing(conn.connection.cursor()) as cursor:
+            resultados = []
+            for _ in range(2):
+                cursor.execute(script)
+                cursor.fetchall()
+                assert cursor.nextset()
+                familias = {fila.Codigo: fila for fila in cursor.fetchall()}
+                assert cursor.nextset()
+                boveda = {
+                    (fila.IdAgencia, fila.Tipo, fila.Naturaleza): fila
+                    for fila in cursor.fetchall()
+                }
+                assert not cursor.nextset()
+                resultados.append((familias, boveda))
+        assert resultados[0] == resultados[1]
+        familias, boveda = resultados[0]
+        plantilla = json.loads(familias["CUENTAS_TRANSFERENCIA_INTERNA"].BorradorE403)
+        assert [l["origen"] for l in plantilla["lineas"]] == [
+            "PRODUCTO",
+            "CONTRAPRODUCTO",
+        ]
+        assert familias["CAJA_SOBRANTE"].Estado == "CUENTA_HOJA_REQUERIDA"
+        borrador_bov = json.loads(
+            boveda["001", "AjusteFaltante", "E"].BorradorVinculoVersionado
+        )
+        assert borrador_bov["agencia"] == "001"
+        assert borrador_bov["lineas"][1] == {
+            "lado": "CREDITO",
+            "cuenta": 1,
+            "origen": "FIJA",
+            "base": "DIFERENCIA",
+        }
+        assert (
+            boveda["001", "ProvisionExterna", "I"].Estado
+            == "CONTRAPARTIDA_EXTERNA_REQUERIDA"
+        )
+        assert (
+            conn.scalar(text("SELECT COUNT(*) FROM Contabilidad.PlantillaAsiento")) == 0
+        )
 
 
 def test_sql_boveda_no_contabiliza_en_feriado_con_periodo_abierto(motor):
@@ -197,6 +352,55 @@ def test_sql_caja_y_boveda_comparten_auxiliar_y_superiores(motor):
                     WHERE Estado = 'CONTABILIZADO' AND TotalDebito = TotalCredito
                 """)
                 ).scalar_one() == 2 * (intento + 1)
+
+
+def test_sql_version_aplicada_y_reverso_unico(motor):
+    with motor.begin() as conn:
+        conn.exec_driver_sql("""
+            INSERT Contabilidad.ConceptoContable (IdConceptoContable) VALUES (1);
+            INSERT Contabilidad.PlantillaAsiento
+                (CodigoPlantilla, IdConceptoContable, Origen, IdTipoAsiento, Nombre, Estado, VigenciaDesde)
+            VALUES ('DOT_CAJA',1,'CAJA',1,'Dotación de ensayo',1,'20261101');
+            INSERT Contabilidad.PlantillaAsientoDetalle
+                (IdPlantillaAsiento, Orden, IdCuentaContable, TipoMovimiento, ComponenteImporte)
+            SELECT IdPlantillaAsiento, v.Orden, v.Cuenta, v.Lado, 'PRINCIPAL'
+            FROM Contabilidad.PlantillaAsiento
+            CROSS JOIN (VALUES (1, 2, 'DEBITO'), (2, 1, 'CREDITO')) v(Orden, Cuenta, Lado);
+        """)
+        operacion = caja.OperacionContable(
+            codigo_plantilla="DOT_CAJA",
+            clave_evento="DOTACION_CAJA:LAB:REVERSO",
+            id_agencia="001",
+            id_fecha_contable=1,
+            id_usuario=7,
+            fecha_hora=datetime(2026, 11, 16, 10),
+            importes={"PRINCIPAL": Decimal(10)},
+        )
+        asiento = caja.generar_asiento(conn, operacion)
+        assert (
+            conn.scalar(
+                text("""
+            SELECT p.Version FROM Contabilidad.AsientoContable a
+            JOIN Contabilidad.PlantillaAsiento p ON p.IdPlantillaAsiento = a.IdPlantillaAsiento
+            WHERE a.IdAsientoContable = :id
+        """),
+                {"id": asiento},
+            )
+            == 1
+        )
+        espejo = reversar(conn, asiento, "Reverso de ensayo", actor=9)
+        original = contabilidad.movimientos_asiento(conn, asiento)
+        reversado = contabilidad.movimientos_asiento(conn, espejo)
+        for linea, contra in zip(original, reversado, strict=True):
+            assert linea["id_cuenta_contable"] == contra["id_cuenta_contable"]
+            assert linea["monto"] == contra["monto"]
+            assert linea["tipo_movimiento"] != contra["tipo_movimiento"]
+    with motor.begin() as conn:
+        with pytest.raises(HTTPException) as error:
+            reversar(conn, asiento, "Reintento de ensayo", actor=9)
+        assert (
+            cast(dict[str, Any], error.value.detail)["code"] == "ASIENTO_YA_REVERSADO"
+        )
 
 
 def proyectar_custodios_para_conciliacion(conn):
@@ -863,6 +1067,152 @@ def test_sql_traslado_con_trigger_contable_se_ejecuta_una_sola_vez(motor):
                 text("SELECT COUNT(*) FROM Boveda.MovimientoBoveda")
             ).scalar_one()
             == 2
+        )
+
+
+@pytest.mark.parametrize("ambas", [False, True])
+def test_sql_traslado_migracion_sin_mezclar_rutas(motor, ambas):
+    with motor.begin() as conn:
+        conn.exec_driver_sql("""
+            UPDATE Contabilidad.CuentasContables SET CodigoCuenta='19080505', IdCuentaSuperior=NULL
+            WHERE IdCuentaContable=2;
+            INSERT Contabilidad.ConceptoContable (IdConceptoContable) VALUES (1);
+            INSERT Contabilidad.PlantillaAsiento
+                (CodigoPlantilla, IdConceptoContable, Origen, IdTipoAsiento, Nombre, Estado, VigenciaDesde)
+            VALUES ('BOV_001_TRASLADO_E',1,'BOVEDA',1,'Salida',1,'20261101');
+        """)
+        if ambas:
+            conn.exec_driver_sql("""
+                INSERT Contabilidad.PlantillaAsiento
+                    (CodigoPlantilla, IdConceptoContable, Origen, IdTipoAsiento, Nombre, Estado, VigenciaDesde)
+                VALUES ('BOV_002_TRASLADO_I',1,'BOVEDA',1,'Ingreso',1,'20261101');
+            """)
+        conn.exec_driver_sql("""
+            INSERT Contabilidad.PlantillaAsientoDetalle
+                (IdPlantillaAsiento, Orden, IdCuentaContable, TipoMovimiento, ComponenteImporte)
+            SELECT p.IdPlantillaAsiento, v.Orden,
+                   CASE WHEN RIGHT(p.CodigoPlantilla,1)=v.Efectivo THEN 1 ELSE 2 END,
+                   v.Lado, 'PRINCIPAL'
+            FROM Contabilidad.PlantillaAsiento p CROSS JOIN
+                (VALUES (1,'DEBITO','I'),(2,'CREDITO','E')) v(Orden,Lado,Efectivo);
+        """)
+    with motor.connect() as conn:
+        solicitud = solicitudes.crear(
+            conn,
+            OPERADOR,
+            7,
+            1,
+            movimiento("Traslado", idBovedaContraparte=2),
+            "local",
+            None,
+        )
+        args = (conn, APROBADOR, 9, solicitud.id_solicitud_movimiento, "local")
+        primera = solicitudes.aprobar(*args)
+        assert solicitudes.aprobar(*args) == primera
+        assert len(primera) == 2
+        assert (
+            conn.scalar(text("SELECT COUNT(*) FROM Contabilidad.AsientoContable")) == 2
+        )
+        assert conn.scalar(
+            text("""
+            SELECT COUNT(*) FROM Contabilidad.AsientoContable WHERE IdPlantillaAsiento IS NOT NULL
+        """)
+        ) == (2 if ambas else 0)
+        assert saldos_contables(conn)["19080505"] == 0
+
+
+def test_sql_rep_tdb_exige_ingreso_valido(motor):
+    migracion = (
+        Path(__file__).resolve().parents[2]
+        / "migrations/cooperativa/202611251501_rep_tdb_cuenta_ingreso.up.sql"
+    )
+    with motor.begin() as conn:
+        conn.exec_driver_sql("CREATE SCHEMA Transacciones")
+        conn.exec_driver_sql("""
+            CREATE TABLE Transacciones.CategoriaServicio (Codigo varchar(20) PRIMARY KEY, IdCuentaContable int NULL);
+            CREATE TABLE Transacciones.Comisiones (CodigoComision varchar(20) PRIMARY KEY, Categoria varchar(20), Estado char(1));
+            INSERT Transacciones.CategoriaServicio VALUES ('BASICO',NULL);
+            INSERT Transacciones.Comisiones VALUES ('REP-TDB','BASICO','I');
+        """)
+        for _ in range(2):
+            conn.exec_driver_sql(migracion.read_text(encoding="utf-8"))
+    with pytest.raises(DBAPIError, match="57872"), motor.begin() as conn:
+        conn.exec_driver_sql(
+            "UPDATE Transacciones.Comisiones SET Estado='A' WHERE CodigoComision='REP-TDB'"
+        )
+    with motor.begin() as conn:
+        assert conn.scalar(text("SELECT Estado FROM Transacciones.Comisiones")) == "I"
+
+
+def test_sql_registrar_catalogos_reutiliza_tipo_y_es_repetible(motor):
+    archivo = (
+        Path(__file__).resolve().parents[2] / "scripts/sql/registrar_catalogos_e403.sql"
+    )
+    with motor.begin() as conn:
+        conn.exec_driver_sql(
+            "CREATE SEQUENCE Contabilidad.ConceptosLab AS int START WITH 1"
+        )
+        conn.exec_driver_sql("""
+            ALTER TABLE Contabilidad.ConceptoContable
+                ADD CodigoConcepto varchar(30), ConceptoDetalle varchar(100), Estado varchar(10);
+            ALTER TABLE Contabilidad.ConceptoContable
+                ADD DEFAULT (NEXT VALUE FOR Contabilidad.ConceptosLab) FOR IdConceptoContable;
+        """)
+    salidas = []
+    for _ in range(2):
+        with motor.connect() as conn:
+            salida = conn.exec_driver_sql(
+                archivo.read_text(encoding="utf-8")
+            ).scalar_one()
+            conn.commit()
+            salidas.append({fila["codigo"]: fila for fila in json.loads(salida)})
+    assert salidas[0] == salidas[1]
+    assert salidas[0]["BOV_001_TRASLADO_E"]["idTipo"] == 1
+    assert "CAJA_FALTANTE" in salidas[0]
+    with motor.connect() as conn:
+        assert (
+            conn.scalar(text("SELECT COUNT(*) FROM Contabilidad.PlantillaAsiento")) == 0
+        )
+
+
+def test_sql_borrador_boveda_exige_otro_aprobador(motor):
+    with motor.begin() as conn:
+        conn.exec_driver_sql(
+            "ALTER TABLE Contabilidad.ConceptoContable ADD Estado varchar(10) NULL"
+        )
+        conn.exec_driver_sql("""
+            INSERT Contabilidad.ConceptoContable (IdConceptoContable, Estado) VALUES (1, 'Activo');
+            UPDATE Contabilidad.CuentasContables SET CodigoCuenta='19080505', IdCuentaSuperior=NULL
+            WHERE IdCuentaContable=2;
+        """)
+    with motor.connect() as conn:
+        datos = Version(
+            codigoPlantilla="BOV_001_TRASLADO_E",
+            nombre="Salida",
+            idConceptoContable=1,
+            vigenciaDesde=datetime(2026, 11, 17).date(),
+            soloPrimeraVersion=True,
+            lineas=[
+                Linea(lado="DEBITO", base="PRINCIPAL", origen="FIJA", cuenta=2),
+                Linea(lado="CREDITO", base="PRINCIPAL", origen="FIJA", cuenta=1),
+            ],
+        )
+        id_version = crear(conn, 1, datos, 7)["idPlantillaAsiento"]
+        with pytest.raises(HTTPException) as repetida:
+            crear(conn, 1, datos, 7)
+        assert (
+            cast(dict[str, Any], repetida.value.detail)["code"] == "FAMILIA_EXISTENTE"
+        )
+    with motor.begin() as conn:
+        with pytest.raises(HTTPException) as error:
+            confirmar_aprobacion(conn, id_version, 7, datetime(2026, 11, 16).date())
+        assert (
+            cast(dict[str, Any], error.value.detail)["code"]
+            == "AUTOAPROBACION_PROHIBIDA"
+        )
+        confirmar_aprobacion(conn, id_version, 9, datetime(2026, 11, 16).date())
+        assert contabilidad.obtener_plantilla(
+            conn, "BOV_001_TRASLADO_E", datos.vigenciaDesde
         )
 
 

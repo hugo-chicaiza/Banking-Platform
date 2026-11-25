@@ -361,6 +361,7 @@ def plantilla_boveda(
         FROM Contabilidad.PlantillaBoveda p WITH (HOLDLOCK)
         JOIN Contabilidad.TiposAsiento t WITH (HOLDLOCK) ON t.IdTipoAsiento = p.IdTipoAsiento
         WHERE p.IdAgencia = :agencia AND p.TipoMovimiento = :tipo AND p.Naturaleza = :naturaleza
+          AND t.EsManual = 0
     """,
         {"agencia": agencia, "tipo": tipo, "naturaleza": naturaleza},
     )
@@ -387,6 +388,8 @@ def cuenta_boveda(conn: Connection, id_cuenta: int) -> dict[str, Any] | None:
         SELECT Estado AS estado, EsImputable AS imputable
         FROM Contabilidad.CuentasContables WITH (UPDLOCK, HOLDLOCK)
         WHERE IdCuentaContable = :id
+          AND NOT EXISTS (SELECT 1 FROM Contabilidad.CuentasContables h WITH (HOLDLOCK)
+                          WHERE h.IdCuentaSuperior = :id)
     """,
         {"id": id_cuenta},
     )
