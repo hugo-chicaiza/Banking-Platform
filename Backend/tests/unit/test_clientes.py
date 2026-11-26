@@ -1204,9 +1204,9 @@ def test_cli13_router_propaga_evaluador_e_ip(monkeypatch):
     resultado = router.registrar_evaluacion_riesgo(
         10, payload, request, Response(), _usuario_historial("ASESOR"), 7, conn
     )
-    args = registrar.call_args.args
-    assert args[:5] == (conn, 10, payload, 7, "198.51.100.4")
-    assert callable(args[5])  # E5-06: solicitar a la cola CLI-RIESGO
+    assert registrar.call_args.args == (conn, 10, payload, 7, "198.51.100.4")
+    # E5-06: solicitar a la cola CLI-RIESGO
+    assert callable(registrar.call_args.kwargs["solicitar"])
     assert isinstance(resultado, RiesgoRegistrado)
     assert resultado.es_vigente is True
 
