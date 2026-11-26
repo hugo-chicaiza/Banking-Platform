@@ -9,7 +9,9 @@ from sqlalchemy.exc import SQLAlchemyError
 from app.core.database.db import cooperativa
 from app.core.security import audit
 from app.main import app
-from app.modules.tarjetas import repository, router, sobre_pin
+from app.modules.aprobaciones import router as aprobaciones
+from app.modules.aprobaciones.identidad import Actor
+from app.modules.tarjetas import aprobacion, repository, router, sobre_pin
 from tests.pin_version import DriverLimitesSQL
 from tests.sesion import ID_AUDITORIA, simular_sesion
 from tests.tarjetas_hsm import instalar
@@ -49,7 +51,18 @@ def _cliente(monkeypatch, conn: _Conn | None = None) -> TestClient:
     conn = conn if conn is not None else _Conn()
     app.dependency_overrides[cooperativa] = lambda: conn
     app.dependency_overrides[router.seguridad] = lambda: conn
+    app.dependency_overrides[aprobaciones.actual] = lambda: Actor(
+        "user_prueba",
+        "org_auditoria_qa",
+        "QA",
+        ID_AUDITORIA,
+        ("ASESOR",),
+        frozenset(),
+        ("001",),
+    )
+    app.dependency_overrides[aprobaciones.servicio] = lambda: None
     simular_sesion(app)
+    monkeypatch.setattr(aprobacion, "id_solicitud", lambda *_: None)
     monkeypatch.setattr(repository, "insertar_historial", lambda *a: None)
     monkeypatch.setattr(repository, "obtener_envio", lambda *_a: None)
     servicio_sobre = SimpleNamespace(preparar=lambda *_a: "sobre-prueba")

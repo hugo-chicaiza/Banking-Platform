@@ -454,11 +454,28 @@ CampoRevelable = Literal[
 ]
 
 
+class SolicitudDesafio(CamelModel):
+    """Campos que se quieren ver: el código obtenido solo servirá para ellos."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    campos: list[CampoRevelable] = Field(min_length=1, max_length=5)
+
+    @field_validator("campos")
+    @classmethod
+    def sin_repetidos(cls, valor: list[str]) -> list[str]:
+        if len(set(valor)) != len(valor):
+            raise ValueError("Cada campo se pide una sola vez.")
+        return valor
+
+
 class DesafioRevelacion(CamelModel):
     """Desafío MFA de WorkOS para el factor TOTP del usuario de la sesión."""
 
     id_desafio: str | None = None
-    expira_en: str | None = None  # ISO 8601 tal como lo da WorkOS
+    # Firma que ata el desafío a esta acción, cliente y campos (core/security/mfa.py).
+    comprobante: str | None = None
+    expira_en: str | None = None  # ISO 8601
     # False mientras REVELACION_EXIGE_MFA esté apagado: se revela sin código.
     requiere_codigo: bool = True
 
@@ -471,6 +488,9 @@ class SolicitudRevelacion(CamelModel):
         default=None, min_length=1, max_length=100, pattern=r"^[A-Za-z0-9_]+$"
     )
     codigo: str | None = Field(default=None, pattern=r"^[0-9]{6}$")
+    comprobante: str | None = Field(
+        default=None, max_length=200, pattern=r"^[0-9]{1,12}\.[A-Za-z0-9_-]{20,100}$"
+    )
 
     @field_validator("campos")
     @classmethod

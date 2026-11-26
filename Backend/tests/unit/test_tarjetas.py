@@ -7,6 +7,7 @@ cierran fuera de development.
 import hashlib
 import logging
 import re
+from dataclasses import replace
 from datetime import date, datetime
 from types import SimpleNamespace
 from typing import Any
@@ -19,9 +20,11 @@ from app.core.database.db import cooperativa
 from app.core.security.auth import ROLES
 from app.core.security.hsm import HsmNoDisponible, es_pin_debil
 from app.main import app
-from app.modules.tarjetas import repository, router, schemas, service
+from app.modules.aprobaciones import router as aprobaciones
+from app.modules.aprobaciones.identidad import Actor
+from app.modules.tarjetas import aprobacion, repository, router, schemas, service
 from tests.pin_version import DriverLimitesSQL
-from tests.sesion import simular_sesion, usuario_con_roles
+from tests.sesion import USUARIO, simular_sesion, usuario_con_roles
 from tests.tarjetas_hsm import HSM, PAN, instalar, pin_generado, pin_valido
 
 BASE = "/api/v1/tarjetas"
@@ -93,7 +96,7 @@ class _Conn:
 
 @pytest.fixture()
 def conns():
-    return SimpleNamespace(coop=_Conn(), seg=_Conn())
+    return SimpleNamespace(coop=_Conn(), seg=_Conn(), inscripciones=[])
 
 
 @pytest.fixture(autouse=True)
@@ -131,10 +134,20 @@ def dependencias_e610(monkeypatch):
 
 
 @pytest.fixture()
-def client(conns):
+def client(conns, monkeypatch):
     app.dependency_overrides[cooperativa] = lambda: conns.coop
     app.dependency_overrides[router.seguridad] = lambda: conns.seg
-    simular_sesion(app)
+    app.dependency_overrides[aprobaciones.actual] = lambda: Actor(
+        "user_prueba", "org_prueba", "QA", 1, ("ASESOR",), frozenset(), ("002",)
+    )
+    app.dependency_overrides[aprobaciones.servicio] = lambda: None
+    monkeypatch.setattr(
+        aprobacion, "programar", lambda *args: conns.inscripciones.append(args)
+    )
+    monkeypatch.setattr(aprobacion, "publicar_al_solicitar", lambda *_: 37)
+    monkeypatch.setattr(aprobacion, "id_solicitud", lambda *_: None)
+    monkeypatch.setattr(aprobacion, "gestionada", lambda *_: False)
+    simular_sesion(app, replace(USUARIO, id_agencia=CUENTA["id_agencia"]))
     yield TestClient(app, raise_server_exceptions=False)
     app.dependency_overrides.clear()
 
@@ -189,6 +202,14 @@ def test_emitir_201_nace_solicitada_sin_pin_pan_ni_hash(client, conns, emision):
     cuerpo = r.json()
     assert cuerpo["estadoActual"] == "Solicitada"
     assert cuerpo["pinAsignado"] is False
+    assert cuerpo["idSolicitudAprobacion"] == 37
+    [(conexion, id_tarjeta, actor, agencia)] = conns.inscripciones
+    assert (conexion, id_tarjeta, actor.id_interno, agencia) == (
+        conns.coop,
+        301,
+        1,
+        "002",
+    )
     assert cuerpo["fechaSolicitud"] == "2026-11-01"
     assert cuerpo["fechaResolucion"] is None
     assert "hashNumeroTarjeta" not in cuerpo
@@ -196,6 +217,34 @@ def test_emitir_201_nace_solicitada_sin_pin_pan_ni_hash(client, conns, emision):
     assert "envio" not in emision
     assert emision["historial"][2:5] == ("CambioEstado", None, "Solicitada")
     assert r.headers["cache-control"] == "no-store"
+
+
+@pytest.mark.parametrize(
+    "agencia,codigo", [(None, "AGENCIA_REQUERIDA"), ("001", "AGENCIA_NO_COINCIDE")]
+)
+def test_emitir_exige_la_agencia_confirmada(
+    client, conns, emision, monkeypatch, agencia, codigo
+):
+    simular_sesion(app, replace(USUARIO, id_agencia=agencia))
+    app.dependency_overrides[aprobaciones.actual] = lambda: Actor(
+        "user_prueba", "org_prueba", "QA", 1, ("ADMIN",), frozenset(), ("001", "002")
+    )
+    respuesta = client.post(BASE, json=PAYLOAD)
+
+    assert (respuesta.status_code, _code(respuesta)) == (403, codigo)
+    assert not conns.inscripciones and not emision and conns.coop.commits == 0
+
+
+def test_cambio_directo_no_resuelve_tarjeta_inscrita(client, monkeypatch):
+    cambio = _estado(monkeypatch, FILA)
+    monkeypatch.setattr(aprobacion, "gestionada", lambda *_: True)
+
+    respuesta = client.post(
+        f"{BASE}/301/estado", json={"estado": "Anulada", "motivo": "Prueba"}
+    )
+
+    assert (respuesta.status_code, _code(respuesta)) == (409, "APROBACION_REQUERIDA")
+    assert not cambio["historiales"]
 
 
 def test_emitir_guarda_mascara_y_hash_que_corresponden_a_un_pan_luhn(client, emision):
@@ -876,7 +925,10 @@ def test_e610_entrega_verificada_activa_tarjeta(client, monkeypatch):
 
 
 def test_tar08_registra_el_despacho_y_conserva_fecha_al_repetir(client, monkeypatch):
-    _estado(monkeypatch, {**FILA, "estado_actual": "Generada"})
+    _estado(
+        monkeypatch,
+        {**FILA, "estado_actual": "Generada", "id_agencia": CUENTA["id_agencia"]},
+    )
     envio: dict[str, str | datetime | None] = {
         "codigo_seguimiento": None,
         "despachado_en": None,

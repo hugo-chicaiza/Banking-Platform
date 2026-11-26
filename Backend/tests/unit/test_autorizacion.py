@@ -769,6 +769,7 @@ def test_roles_de_la_tarea_pasan_el_control(client, ruta, monkeypatch):
         }
         or "/retenciones" in ruta[1]
         or ruta[1] == "/api/v1/cuentas/{idCuenta}/subproducto"
+        or ruta == ("POST", "/api/v1/tarjetas")
     ):
         from app.modules.aprobaciones import identidad
 

@@ -60,6 +60,9 @@ class Operacion:
     aplicar_diferido: bool = False
     validar_aprobador: Callable[[Objetivo, int], None] | None = None
     contexto_aplicacion: Callable[[], AbstractContextManager[None]] | None = None
+    cancelable_por_solicitante: bool = True
+    cancelar_por_revocacion: bool = True
+    aplicar_descarte: Callable[[Connection, dict[str, Any]], None] | None = None
 
 
 class Registro:
@@ -72,8 +75,11 @@ class Registro:
             raise ValueError("La operacion ya tiene un manejador registrado.")
         self._operaciones[llave] = operacion
 
+    def buscar(self, codigo: str, tipo: str) -> Operacion | None:
+        return self._operaciones.get((codigo, tipo))
+
     def obtener(self, codigo: str, tipo: str) -> Operacion:
-        operacion = self._operaciones.get((codigo, tipo))
+        operacion = self.buscar(codigo, tipo)
         if operacion is None:
             raise problema(
                 404, "OPERACION_NO_DISPONIBLE", "La operacion no esta disponible."

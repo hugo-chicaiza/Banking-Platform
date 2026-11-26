@@ -1,98 +1,67 @@
-"""E5-05 · "Mostrar valor completo" con segundo factor (MFA de WorkOS) y auditoría.
+"""E5-05 · "Mostrar valor completo" con segundo factor y auditoría.
 
-Flujo: el usuario pide un desafío para su propio factor TOTP de AuthKit, escribe el
-código de su app y la revelación devuelve solo los campos pedidos. No se guarda estado:
-la verificación comprueba que el desafío pertenece a un factor del usuario de la sesión.
-Cada intento, exitoso o fallido, se audita con quién, qué cliente y qué campos, nunca
-con los valores (ASVS 6.3.3, 8.2.3, 16.2.1, 16.2.5, 16.3.1).
+El MFA es la pieza común `app.core.security.mfa`: el desafío queda ligado a la acción
+`clientes.revelar`, al cliente y a los campos pedidos, así que un código obtenido para
+otro cliente, otros campos u otra acción no sirve aquí. Con REVELACION_EXIGE_MFA
+apagado se revela sin código (pendiente E5-05). Cada intento, exitoso o fallido, se
+audita con quién, qué cliente y qué campos, nunca con los valores (ASVS 8.2.3, 16.2.1,
+16.2.5, 16.3.1).
 """
 
-import logging
 from collections.abc import Iterable
 
-import httpx
 from sqlalchemy import Connection
-from workos.exceptions import (
-    BadRequestException,
-    BaseRequestException,
-    NotFoundException,
-)
 
 from app.core.api.errors import problema
 from app.core.config.settings import get_settings
-from app.core.security import audit
-from app.core.security.auth import Usuario, get_workos
+from app.core.security import audit, mfa
+from app.core.security.auth import Usuario
 from app.modules.clientes import correos, service
 from app.modules.clientes.schemas import (
+    CampoRevelable,
     DesafioRevelacion,
     Revelacion,
     SolicitudRevelacion,
 )
 
-logger = logging.getLogger(__name__)
 EVENTO = "CLI_DATO_REVELADO"
+ACCION = "clientes.revelar"
 
 
-def _no_disponible() -> Exception:
-    return problema(
-        503,
-        "MFA_NO_DISPONIBLE",
-        "No pudimos comprobar el segundo factor; intenta otra vez.",
-    )
+def recurso(id_cliente: int, campos: Iterable[CampoRevelable]) -> str:
+    """Lo que autoriza el código: este cliente y exactamente estos campos."""
+    return f"cliente:{id_cliente}|campos:{','.join(sorted(set(campos)))}"
 
 
-def _factores(usuario: Usuario) -> list[str]:
-    try:
-        factores = get_workos().user_management.list_auth_factors(
-            user_id=usuario.id_usuario
-        )
-        return [f.id for f in factores if getattr(f, "type", None) == "totp"]
-    except (BaseRequestException, httpx.HTTPError) as error:
-        logger.warning(
-            "revelacion: factores no disponibles tipo=%s", type(error).__name__
-        )
-        raise _no_disponible() from None
-
-
-def desafiar(conn: Connection, id_cliente: int, usuario: Usuario) -> DesafioRevelacion:
+def desafiar(
+    conn: Connection,
+    id_cliente: int,
+    usuario: Usuario,
+    campos: list[CampoRevelable],
+) -> DesafioRevelacion:
     service.obtener_cliente(conn, id_cliente)  # 404 antes de molestar al usuario
     if not get_settings().revelacion_exige_mfa:
         return DesafioRevelacion(requiere_codigo=False)
-    factores = _factores(usuario)
-    if not factores:
-        raise problema(
-            409,
-            "MFA_NO_CONFIGURADO",
-            "Configura la verificación en dos pasos de tu cuenta para ver datos completos.",
-        )
-    try:
-        reto = get_workos().mfa.challenge_factor(authentication_factor_id=factores[0])
-    except (BaseRequestException, httpx.HTTPError) as error:
-        logger.warning("revelacion: desafío no creado tipo=%s", type(error).__name__)
-        raise _no_disponible() from None
-    # Nunca se devuelve reto.code: solo el id para verificar.
-    return DesafioRevelacion(id_desafio=reto.id, expira_en=reto.expires_at)
+    desafio = mfa.pedir_desafio(usuario, ACCION, recurso(id_cliente, campos))
+    return DesafioRevelacion(
+        id_desafio=desafio.id_desafio,
+        comprobante=desafio.comprobante,
+        expira_en=desafio.expira_en,
+    )
 
 
-def _verificar(usuario: Usuario, solicitud: SolicitudRevelacion) -> bool:
+def _verificar(
+    usuario: Usuario, id_cliente: int, solicitud: SolicitudRevelacion
+) -> bool:
     if not get_settings().revelacion_exige_mfa:
         return True  # Pendiente E5-05: MFA apagado; el permiso y la auditoría siguen.
-    if solicitud.id_desafio is None or solicitud.codigo is None:
-        return False
-    factores = set(_factores(usuario))
-    try:
-        respuesta = get_workos().mfa.verify_challenge(
-            authentication_challenge_id=solicitud.id_desafio, code=solicitud.codigo
-        )
-    except (BadRequestException, NotFoundException):
-        return False  # código vencido, ya usado o desafío inexistente
-    except (BaseRequestException, httpx.HTTPError) as error:
-        logger.warning(
-            "revelacion: verificación no disponible tipo=%s", type(error).__name__
-        )
-        raise _no_disponible() from None
-    return bool(respuesta.valid) and (
-        respuesta.challenge.authentication_factor_id in factores
+    return mfa.verificar(
+        usuario,
+        ACCION,
+        recurso(id_cliente, solicitud.campos),
+        solicitud.id_desafio,
+        solicitud.comprobante,
+        solicitud.codigo,
     )
 
 
@@ -125,7 +94,7 @@ def revelar(
     ip: str,
 ) -> Revelacion:
     cliente = service.obtener_cliente(conn, id_cliente)
-    if not _verificar(usuario, solicitud):
+    if not _verificar(usuario, id_cliente, solicitud):
         _auditar(id_cliente, solicitud.campos, "Fallido", id_interno, ip)
         # 422 y no 403: es un dato mal escrito, no falta de permiso (el 403 lo audita
         # además el middleware de accesos denegados y quedaría dos veces).

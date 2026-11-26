@@ -125,6 +125,7 @@ def registro_inicial() -> Registro:
     from app.modules.cuentas.retenciones_aprobacion import (
         operaciones as operaciones_retencion,
     )
+    from app.modules.tarjetas.aprobacion import OPERACION as solicitud_tarjeta
 
     registro = Registro()
     registro.agregar(
@@ -149,6 +150,7 @@ def registro_inicial() -> Registro:
     registro.agregar(OPERACION_RIESGO)
     registro.agregar(OPERACION_ESTADO)
     registro.agregar(OPERACION_REINCORPORACION)
+    registro.agregar(solicitud_tarjeta)
     for operacion in operaciones_estado():
         registro.agregar(operacion)
     for operacion in operaciones_retencion():
