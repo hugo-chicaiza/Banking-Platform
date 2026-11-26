@@ -8,6 +8,7 @@ from zoneinfo import ZoneInfo
 from fastapi import APIRouter, Depends, Path, Query, Request, Response
 from pydantic import ConfigDict, Field, field_validator
 
+from app.core import csv as exportacion
 from app.core.api.errors import ProblemDetailsRoute, problema
 from app.core.api.middleware import ip_cliente, obtener_trace_id
 from app.core.api.schemas import CamelModel
@@ -27,7 +28,6 @@ from app.modules.aprobaciones.motores import motor
 from app.modules.aprobaciones.registro import Objetivo
 from app.modules.aprobaciones.scheduler import lifespan
 from app.modules.aprobaciones.servicio import Servicio
-from app.modules.organizacion import exportacion
 
 router = APIRouter(
     prefix="/aprobaciones",

@@ -1,16 +1,19 @@
 """Almacenamiento de documentos (app.core.documentos), con el adaptador en memoria."""
 
+import io
 import os
 from typing import Any
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from PIL import Image
 
 from app.core.database import mongo
 from app.core.documentos import (
     AlmacenamientoNoDisponible,
     ArchivoMuyGrande,
+    ArchivoRechazado,
     DocumentoNoDisponible,
     DocumentoNoEncontrado,
     ErrorDocumento,
@@ -24,8 +27,16 @@ from app.core.documentos.almacen import AlmacenMemoria, ErrorAlmacen
 from app.core.pdf import DocumentoPdf
 
 PDF = DocumentoPdf("Prueba").contenido()
-PNG = b"\x89PNG\r\n\x1a\n" + os.urandom(64)
-JPG = b"\xff\xd8\xff\xe0" + os.urandom(64)
+
+
+def _imagen(formato: str) -> bytes:
+    salida = io.BytesIO()
+    Image.new("RGB", (4, 4), (200, 30, 30)).save(salida, formato)
+    return salida.getvalue()
+
+
+PNG = _imagen("PNG")
+JPG = _imagen("JPEG")
 
 
 @pytest.fixture
@@ -48,11 +59,16 @@ def test_pdf_del_sistema_se_guarda_cifrado_y_se_lee(servicio, almacen):
     assert servicio.leer(ref.clave).contenido == PDF
 
 
-def test_lo_que_sube_un_usuario_espera_el_analisis(servicio):
+def test_lo_que_sube_un_usuario_se_analiza_antes_de_guardar(servicio, almacen):
     ref = servicio.guardar(PNG, origen="clientes")
-    assert ref.analisis == "Pendiente"
-    with pytest.raises(DocumentoNoDisponible):
-        servicio.leer(ref.clave)
+    assert ref.analisis == "Limpio"  # análisis síncrono: pasó las reglas
+    assert servicio.leer(ref.clave).contenido == PNG
+    antes = len(almacen.documentos)
+    with pytest.raises(ArchivoRechazado) as error:  # políglota PNG + ZIP
+        servicio.guardar(PNG + b"PK\x03\x04\x14\x00" + os.urandom(32), origen="x")
+    assert error.value.motivo == "DATOS_TRAS_FIN"
+    assert len(almacen.documentos) == antes  # no se guarda nada
+    # Un análisis posterior todavía puede bloquear la entrega
     servicio.marcar_analisis(ref.clave, "Rechazado")
     with pytest.raises(DocumentoNoDisponible):
         servicio.leer(ref.clave)
@@ -160,6 +176,7 @@ def test_coleccion_compartida_usa_uri_y_base(monkeypatch):
     [
         (ArchivoMuyGrande(), 413, "ARCHIVO_MUY_GRANDE"),
         (TipoNoPermitido(), 415, "TIPO_NO_PERMITIDO"),
+        (ArchivoRechazado("EICAR"), 422, "ARCHIVO_RECHAZADO"),
         (DocumentoNoEncontrado(), 404, "DOCUMENTO_NO_ENCONTRADO"),
         (DocumentoNoDisponible(), 409, "DOCUMENTO_NO_DISPONIBLE"),
         (AlmacenamientoNoDisponible(), 503, "ALMACENAMIENTO_NO_DISPONIBLE"),
@@ -174,7 +191,6 @@ def test_errores_http(error: ErrorDocumento, status: int, codigo: str):
 def test_enlace_de_descarga(servicio):
     """Así lo usa la ruta de un módulo: su permiso y su auditoría, luego la respuesta."""
     ref = servicio.guardar(PNG, origen="clientes")
-    servicio.marcar_analisis(ref.clave, "Limpio")
     app = FastAPI()
 
     @app.get("/archivos/{clave}/contenido")

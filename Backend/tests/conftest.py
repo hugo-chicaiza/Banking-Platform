@@ -29,6 +29,15 @@ def _sin_sobres_de_pin(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _sin_reputacion_real(monkeypatch):
+    """El análisis de archivos nunca consulta VirusTotal por la VIRUSTOTAL_API_KEY de
+    .env: solo reglas locales, salvo que la prueba instale su clave y un httpx falso."""
+    from app.core.documentos import analisis
+
+    monkeypatch.setattr(analisis, "_clave_reputacion", lambda: "")
+
+
+@pytest.fixture(autouse=True)
 def _sin_workos_real_en_seguridad(monkeypatch):
     """Seguridad (permisos de roles) nunca llama al WorkOS real configurado en .env:
     sin un falso instalado por la prueba, WorkOS responde como caído (503)."""

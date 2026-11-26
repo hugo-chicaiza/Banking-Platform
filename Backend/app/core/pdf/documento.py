@@ -20,8 +20,18 @@ Fuentes: las base de PDF (Helvetica, Courier), que no se incrustan ni se descarg
 así el generador funciona sin internet. Solo cubren Latin-1: los caracteres de
 fuera (rayas, comillas tipográficas, emojis) se cambian por un equivalente o por «?»
 en vez de romper el documento. El texto nunca se registra en logs.
+
+Seguridad (OWASP ASVS 5.0 1.2.x, 5.4.x): el documento solo dibuja texto plano con
+fpdf2; no interpreta HTML ni markdown (`markdown=False`, sin `write_html`) y no crea
+enlaces, acciones ni JavaScript con texto de usuario. Todo texto (títulos, campos,
+tablas, metadatos title/author/creator y `generado_por`) pasa por `texto_pdf`: quita
+caracteres de control (deja el salto de línea solo donde el bloque admite varias
+líneas) y limita la longitud. Quien use `pdf` (el FPDF de fpdf2) directamente no debe
+pasar texto de usuario a `link`, `markdown` ni `write_html`. El PDF resultante pasa el
+análisis de core/documentos/analisis.py como `Limpio`.
 """
 
+import re
 from collections.abc import Sequence
 from datetime import datetime, timedelta, timezone, tzinfo
 from typing import Any, Literal
@@ -55,10 +65,36 @@ _GRIS = (110, 110, 110)
 _AZUL = (31, 56, 100)
 
 
-def texto_pdf(valor: Any) -> str:
-    """El valor como texto que las fuentes base pueden dibujar (Latin-1)."""
+# Controles C0 (salvo \n), DEL y C1: no se dibujan y C1 sí cabe en Latin-1
+_CONTROL = re.compile(r"[\x00-\x09\x0b-\x1f\x7f-\x9f]")
+MAX_TEXTO = 5000  # un párrafo
+MAX_VALOR = 1000  # valor de un campo o celda
+MAX_LINEA = 300  # títulos, etiquetas, cabeceras
+MAX_METADATO = 200  # title/author/creator, institución, quién lo generó
+
+
+def texto_pdf(
+    valor: Any, *, max_largo: int = MAX_TEXTO, multilinea: bool = True
+) -> str:
+    """El valor como texto que las fuentes base pueden dibujar (Latin-1), sin
+    caracteres de control y de `max_largo` caracteres como máximo (con «...»). Con
+    `multilinea=False` los saltos de línea se vuelven espacios."""
     texto = "" if valor is None else str(valor)
-    return texto.translate(_EQUIVALENTES).encode("latin-1", "replace").decode("latin-1")
+    texto = texto.replace("\r\n", "\n").replace("\r", "\n").replace("\t", " ")
+    if not multilinea:
+        texto = texto.replace("\n", " ")
+    texto = _CONTROL.sub("", texto)
+    texto = (
+        texto.translate(_EQUIVALENTES).encode("latin-1", "replace").decode("latin-1")
+    )
+    if len(texto) > max_largo:
+        texto = texto[: max(max_largo - 3, 0)] + "..."
+    return texto
+
+
+def _linea(valor: Any, max_largo: int = MAX_LINEA) -> str:
+    """Texto de una sola línea (cabeceras, etiquetas, metadatos)."""
+    return texto_pdf(valor, max_largo=max_largo, multilinea=False)
 
 
 class _Pdf(FPDF):
@@ -80,7 +116,7 @@ class _Pdf(FPDF):
         self._con_encabezado = encabezado
         self._con_pie = pie
         fecha = datetime.now(zona).strftime("%d/%m/%Y %H:%M")
-        quien = f" por {texto_pdf(generado_por)}" if generado_por else ""
+        quien = f" por {_linea(generado_por, MAX_METADATO)}" if generado_por else ""
         self._generado = f"Generado{quien} el {fecha} ({nombre_zona})"
 
     def header(self) -> None:
@@ -89,13 +125,13 @@ class _Pdf(FPDF):
         nombre = self._institucion.nombre if self._institucion else ""
         self.set_font("Helvetica", "B", 10)
         self.set_text_color(*_AZUL)
-        self.cell(self.epw / 2, 6, texto_pdf(nombre), align="L")
+        self.cell(self.epw / 2, 6, _linea(nombre, MAX_METADATO), align="L")
         self.set_font("Helvetica", "", 9)
         self.set_text_color(*_GRIS)
         self.cell(
             0,
             6,
-            texto_pdf(self._titulo_doc),
+            self._titulo_doc,
             align="R",
             new_x=XPos.LMARGIN,
             new_y=YPos.NEXT,
@@ -105,7 +141,7 @@ class _Pdf(FPDF):
             self.cell(
                 0,
                 4,
-                texto_pdf(f"RUC {self._institucion.ruc}"),
+                _linea(f"RUC {self._institucion.ruc}", 40),
                 align="L",
                 new_x=XPos.LMARGIN,
                 new_y=YPos.NEXT,
@@ -154,13 +190,14 @@ class DocumentoPdf:
             if isinstance(institucion, str)
             else institucion
         )
+        titulo_doc = _linea(titulo, MAX_METADATO)
         self._pdf = _Pdf(
-            texto_pdf(titulo), datos, encabezado, pie, generado_por, zona, nombre_zona
+            titulo_doc, datos, encabezado, pie, generado_por, zona, nombre_zona
         )
-        self._pdf.set_title(texto_pdf(titulo))
+        self._pdf.set_title(titulo_doc)
         if datos:
-            self._pdf.set_creator(texto_pdf(datos.nombre))
-            self._pdf.set_author(texto_pdf(datos.nombre))
+            self._pdf.set_creator(_linea(datos.nombre, MAX_METADATO))
+            self._pdf.set_author(_linea(datos.nombre, MAX_METADATO))
         izquierda, arriba, derecha = margenes
         self._pdf.set_margins(izquierda, arriba, derecha)
         self._pdf.set_auto_page_break(auto=salto_automatico, margin=20 if pie else 15)
@@ -178,7 +215,7 @@ class DocumentoPdf:
         self._pdf.multi_cell(
             0,
             tamano * 0.55,
-            texto_pdf(texto),
+            texto_pdf(texto, max_largo=MAX_LINEA),
             align=alineacion,
             new_x=XPos.LMARGIN,
             new_y=YPos.NEXT,
@@ -192,7 +229,7 @@ class DocumentoPdf:
         self._pdf.multi_cell(
             0,
             7,
-            texto_pdf(texto),
+            texto_pdf(texto, max_largo=MAX_LINEA),
             align=alineacion,
             new_x=XPos.LMARGIN,
             new_y=YPos.NEXT,
@@ -228,10 +265,14 @@ class DocumentoPdf:
         """Pares etiqueta–valor, uno por línea (datos de una ficha o comprobante)."""
         for etiqueta, valor in pares:
             self._pdf.set_font("Helvetica", "B", 10)
-            self._pdf.cell(ancho_etiqueta, 6, texto_pdf(etiqueta))
+            self._pdf.cell(ancho_etiqueta, 6, _linea(etiqueta))
             self._pdf.set_font("Helvetica", "", 10)
             self._pdf.multi_cell(
-                0, 6, texto_pdf(valor), new_x=XPos.LMARGIN, new_y=YPos.NEXT
+                0,
+                6,
+                texto_pdf(valor, max_largo=MAX_VALOR),
+                new_x=XPos.LMARGIN,
+                new_y=YPos.NEXT,
             )
         self._pdf.ln(2)
 
@@ -257,11 +298,11 @@ class DocumentoPdf:
         ) as tabla:
             fila_cabecera = tabla.row()
             for columna in columnas:
-                fila_cabecera.cell(texto_pdf(columna))
+                fila_cabecera.cell(_linea(columna))
             for fila in filas:
                 nueva = tabla.row()
                 for valor in fila:
-                    nueva.cell(texto_pdf(valor))
+                    nueva.cell(texto_pdf(valor, max_largo=MAX_VALOR))
         self._pdf.ln(3)
 
     def destacado(
@@ -282,7 +323,7 @@ class DocumentoPdf:
             self._pdf.cell(
                 0,
                 8,
-                texto_pdf(etiqueta),
+                _linea(etiqueta),
                 align="C",
                 new_x=XPos.LMARGIN,
                 new_y=YPos.NEXT,
@@ -291,7 +332,7 @@ class DocumentoPdf:
         self._pdf.cell(
             0,
             tamano / 2,
-            texto_pdf(texto),
+            _linea(texto, 100),
             align="C",
             new_x=XPos.LMARGIN,
             new_y=YPos.NEXT,

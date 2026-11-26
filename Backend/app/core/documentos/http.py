@@ -16,6 +16,7 @@ from app.core.documentos.servicio import (
     EXTENSION,
     AlmacenamientoNoDisponible,
     ArchivoMuyGrande,
+    ArchivoRechazado,
     Documento,
     DocumentoNoDisponible,
     DocumentoNoEncontrado,
@@ -26,7 +27,7 @@ from app.core.pdf import nombre_archivo
 
 
 def problema_documento(exc: ErrorDocumento) -> HTTPException:
-    """Error del almacenamiento → respuesta HTTP (E5-08: 413, 415, 503)."""
+    """Error del almacenamiento → respuesta HTTP (E5-08: 413, 415, 422, 503)."""
     if isinstance(exc, ArchivoMuyGrande):
         return problema(
             413, "ARCHIVO_MUY_GRANDE", "El archivo supera el tamaño máximo (5 MB)."
@@ -34,6 +35,13 @@ def problema_documento(exc: ErrorDocumento) -> HTTPException:
     if isinstance(exc, TipoNoPermitido):
         return problema(
             415, "TIPO_NO_PERMITIDO", "Solo se aceptan archivos PDF, JPG o PNG."
+        )
+    if isinstance(exc, ArchivoRechazado):
+        # Mensaje genérico: el motivo queda en el log, no orienta a quien prueba evadirlo
+        return problema(
+            422,
+            "ARCHIVO_RECHAZADO",
+            "El archivo no superó la revisión de seguridad y no se guardó.",
         )
     if isinstance(exc, DocumentoNoEncontrado):
         return problema(404, "DOCUMENTO_NO_ENCONTRADO", "El documento no existe.")

@@ -202,6 +202,9 @@ class Settings(BaseSettings):
     documentos_max_bytes: Annotated[int, Field(ge=1024, le=15 * 1024 * 1024)] = (
         5 * 1024 * 1024
     )
+    # Reputación opcional por hash (core/documentos/analisis.py). Vacía = solo reglas
+    # locales. Solo se envía el SHA-256, nunca el archivo (LOPDP).
+    virustotal_api_key: SecretStr = SecretStr("")
 
     # Vínculos administrados por despliegue, nunca por el navegador ni por email.
     workos_audit_user_ids: dict[

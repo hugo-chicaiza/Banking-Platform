@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, Path, Query, Request, Response
 from pydantic import ConfigDict, Field, field_validator
 from sqlalchemy import Connection, bindparam, text
 
+from app.core import csv as exportacion
 from app.core.api.errors import (
     RESPUESTAS_ERROR,
     ProblemDetailsRoute,
@@ -25,7 +26,6 @@ from app.modules.aprobaciones.contratos import SolicitudAceptada
 from app.modules.aprobaciones.identidad import Actor
 from app.modules.aprobaciones.motores import motor
 from app.modules.aprobaciones.registro import Objetivo
-from app.modules.organizacion import exportacion
 from app.modules.parametros import general
 from app.modules.parametros.service import hoy
 

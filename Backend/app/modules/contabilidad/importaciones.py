@@ -1,4 +1,12 @@
-"""Preparación y aplicación transaccional de catálogos del regulador."""
+"""Preparación y aplicación transaccional de catálogos del regulador.
+
+Seguridad del archivo (E5-08): antes de parsear, `analizar(contenido, "text/csv")`
+(OWASP ASVS 5.0 5.2.2 y 5.4.3: UTF-8 estricto, sin NUL/controles ni firmas binarias);
+si lo rechaza, el 422 ARCHIVO_INVALIDO del módulo sin procesar nada. El CSV se lee con
+`csv` estricto y cada valor viaja como parámetro SQL o dentro de JSON con OPENJSON, nunca concatenado
+(ASVS 1.2.x). Una celda `=CMD|...` queda como texto: el código no pasa la regla numérica
+y un nombre así se guarda literal; al exportar, core/csv la neutraliza (ASVS 1.2.10).
+"""
 
 import csv
 import io
@@ -14,6 +22,7 @@ from starlette.concurrency import run_in_threadpool
 
 from app.core.api.errors import ProblemDetailsRoute, problema
 from app.core.database.db import cooperativa
+from app.core.documentos.analisis import analizar
 from app.core.security.auth import UsuarioActual, require_permiso
 from app.core.security.operador import IdInterno, auditar, exigir_id_interno
 from app.modules.contabilidad.schemas import INT32_MAX
@@ -46,6 +55,8 @@ def leer_csv(nombre: str, contenido: bytes) -> list[dict[str, Any]]:
         or PurePath(nombre).suffix.lower() != ".csv"
         or len(contenido) > MAX_BYTES
     ):
+        raise archivo_invalido()
+    if analizar(contenido, "text/csv").veredicto == "Rechazado":
         raise archivo_invalido()
     filas: list[dict[str, Any]] = []
     try:
@@ -230,7 +241,8 @@ async def subir(
         if len(contenido) + len(fragmento) > MAX_BYTES:
             raise archivo_invalido()
         contenido.extend(fragmento)
-    filas = leer_csv(nombre, bytes(contenido))
+    # En un hilo: el análisis puede consultar la reputación por red (timeout corto)
+    filas = await run_in_threadpool(leer_csv, nombre, bytes(contenido))
     return await run_in_threadpool(guardar_revision, conn, actor, nombre, filas)
 
 
