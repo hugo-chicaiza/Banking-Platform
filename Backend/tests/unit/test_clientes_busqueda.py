@@ -20,7 +20,7 @@ from workos.exceptions import BadRequestException
 from app.core.api.rate_limit import _clasificar
 from app.core.database.db import cooperativa
 from app.main import app
-from app.modules.clientes import correos, repository, revelacion, service
+from app.modules.clientes import correos, repository, service
 from app.modules.clientes.schemas import (
     Cliente,
     ClienteBusqueda,
@@ -283,11 +283,17 @@ class _WorkOS:
 @pytest.fixture
 def mfa(monkeypatch):
     def instalar(exige=True, **kw):
+        from pydantic import SecretStr
+
         from app.core.config.settings import get_settings
+        from app.core.security import mfa as mfa_core
 
         monkeypatch.setattr(get_settings(), "revelacion_exige_mfa", exige)
+        monkeypatch.setattr(
+            get_settings(), "workos_cookie_password", SecretStr("x" * 40)
+        )
         falso = _WorkOS(**kw)
-        monkeypatch.setattr(revelacion, "get_workos", lambda: falso)
+        monkeypatch.setattr(mfa_core, "get_workos", lambda: falso)
         monkeypatch.setattr(service, "obtener_cliente", lambda conn, i: _cliente())
         monkeypatch.setattr(
             correos, "listar_activos", lambda c, i: [{"email": "otro@example.com"}]
@@ -304,21 +310,34 @@ SOLICITUD = {
 }
 
 
+def _solicitud(http, campos=("identificacion", "email"), cliente=10) -> dict:
+    """Pide el desafío real (con su comprobante) para esos campos y arma la revelación."""
+    desafio = http.post(
+        f"{BASE}/{cliente}/revelacion/desafio", json={"campos": list(campos)}
+    ).json()
+    return {
+        "campos": list(campos),
+        "idDesafio": desafio["idDesafio"],
+        "comprobante": desafio["comprobante"],
+        "codigo": "123456",
+    }
+
+
 def test_desafio_no_entrega_el_codigo(http, mfa):
     _sesion("ASESOR")
     mfa()
-    cuerpo = http.post(f"{BASE}/10/revelacion/desafio").json()
-    assert cuerpo == {
-        "idDesafio": "auth_challenge_1",
-        "expiraEn": None,
-        "requiereCodigo": True,
-    }
+    cuerpo = http.post(
+        f"{BASE}/10/revelacion/desafio", json={"campos": ["email"]}
+    ).json()
+    assert cuerpo["idDesafio"] == "auth_challenge_1"
+    assert cuerpo["requiereCodigo"] is True
+    assert cuerpo["comprobante"] and "999999" not in cuerpo["comprobante"]
 
 
 def test_sin_factor_mfa_no_hay_revelacion(http, mfa):
     _sesion("ASESOR")
     mfa(factores=())
-    respuesta = http.post(f"{BASE}/10/revelacion/desafio")
+    respuesta = http.post(f"{BASE}/10/revelacion/desafio", json={"campos": ["email"]})
     assert (respuesta.status_code, respuesta.json()["code"]) == (
         409,
         "MFA_NO_CONFIGURADO",
@@ -330,7 +349,7 @@ def test_revelacion_valida_devuelve_solo_lo_pedido_y_audita(
 ):
     _sesion("ASESOR")
     falso = mfa()
-    respuesta = http.post(f"{BASE}/10/revelacion", json=SOLICITUD)
+    respuesta = http.post(f"{BASE}/10/revelacion", json=_solicitud(http))
     assert respuesta.status_code == 200
     cuerpo = respuesta.json()
     assert cuerpo["identificacion"] == "1710034065"
@@ -358,7 +377,7 @@ def test_codigo_invalido_o_ajeno_se_rechaza_y_audita(
 ):
     _sesion("ASESOR")
     mfa(**caso)
-    respuesta = http.post(f"{BASE}/10/revelacion", json=SOLICITUD)
+    respuesta = http.post(f"{BASE}/10/revelacion", json=_solicitud(http))
     assert (respuesta.status_code, respuesta.json()["code"]) == (422, "MFA_INVALIDO")
     assert "1710034065" not in respuesta.text
     (evento,) = eventos_auditados
@@ -369,7 +388,7 @@ def test_correos_secundarios_se_revelan_si_se_piden(http, mfa):
     _sesion("SUPERVISOR")
     mfa()
     cuerpo = http.post(
-        f"{BASE}/10/revelacion", json={**SOLICITUD, "campos": ["correosSecundarios"]}
+        f"{BASE}/10/revelacion", json=_solicitud(http, ("correosSecundarios",))
     ).json()
     assert cuerpo["correosSecundarios"] == ["otro@example.com"]
 
@@ -463,8 +482,10 @@ def test_exportar_sin_filtro_es_400(http):
 def test_sin_mfa_el_desafio_no_llama_a_workos(http, mfa):
     _sesion("ASESOR")
     falso = mfa(exige=False, factores=())
-    cuerpo = http.post(f"{BASE}/10/revelacion/desafio").json()
-    assert cuerpo == {"idDesafio": None, "expiraEn": None, "requiereCodigo": False}
+    cuerpo = http.post(
+        f"{BASE}/10/revelacion/desafio", json={"campos": ["email"]}
+    ).json()
+    assert cuerpo["requiereCodigo"] is False and cuerpo["idDesafio"] is None
     assert falso.verificado == []
 
 
@@ -493,3 +514,23 @@ def test_sin_mfa_sigue_exigiendo_el_rol(http, mfa):
         http.post(f"{BASE}/10/revelacion", json={"campos": ["email"]}).status_code
         == 403
     )
+
+
+def test_codigo_pedido_para_un_campo_no_revela_otro(http, mfa, eventos_auditados):
+    # El desafío se pidió para ver el correo; no autoriza ver el documento.
+    _sesion("ASESOR")
+    falso = mfa()
+    solicitud = _solicitud(http, ("email",))
+    solicitud["campos"] = ["identificacion"]
+    respuesta = http.post(f"{BASE}/10/revelacion", json=solicitud)
+    assert (respuesta.status_code, respuesta.json()["code"]) == (422, "MFA_INVALIDO")
+    assert "1710034065" not in respuesta.text
+    assert falso.verificado == []  # rechazado antes de consultar a WorkOS
+
+
+def test_codigo_pedido_para_un_cliente_no_revela_otro(http, mfa):
+    _sesion("ASESOR")
+    mfa()
+    solicitud = _solicitud(http, ("email",), cliente=10)
+    respuesta = http.post(f"{BASE}/11/revelacion", json=solicitud)
+    assert respuesta.json()["code"] == "MFA_INVALIDO"
