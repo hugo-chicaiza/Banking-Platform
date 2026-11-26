@@ -426,16 +426,20 @@ CampoRevelable = Literal[
 class DesafioRevelacion(CamelModel):
     """Desafío MFA de WorkOS para el factor TOTP del usuario de la sesión."""
 
-    id_desafio: str
+    id_desafio: str | None = None
     expira_en: str | None = None  # ISO 8601 tal como lo da WorkOS
+    # False mientras REVELACION_EXIGE_MFA esté apagado: se revela sin código.
+    requiere_codigo: bool = True
 
 
 class SolicitudRevelacion(CamelModel):
     model_config = ConfigDict(extra="forbid")
 
     campos: list[CampoRevelable] = Field(min_length=1, max_length=5)
-    id_desafio: str = Field(min_length=1, max_length=100, pattern=r"^[A-Za-z0-9_]+$")
-    codigo: str = Field(pattern=r"^[0-9]{6}$")
+    id_desafio: str | None = Field(
+        default=None, min_length=1, max_length=100, pattern=r"^[A-Za-z0-9_]+$"
+    )
+    codigo: str | None = Field(default=None, pattern=r"^[0-9]{6}$")
 
     @field_validator("campos")
     @classmethod

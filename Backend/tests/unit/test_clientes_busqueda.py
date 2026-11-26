@@ -282,7 +282,10 @@ class _WorkOS:
 
 @pytest.fixture
 def mfa(monkeypatch):
-    def instalar(**kw):
+    def instalar(exige=True, **kw):
+        from app.core.config.settings import get_settings
+
+        monkeypatch.setattr(get_settings(), "revelacion_exige_mfa", exige)
         falso = _WorkOS(**kw)
         monkeypatch.setattr(revelacion, "get_workos", lambda: falso)
         monkeypatch.setattr(service, "obtener_cliente", lambda conn, i: _cliente())
@@ -305,7 +308,11 @@ def test_desafio_no_entrega_el_codigo(http, mfa):
     _sesion("ASESOR")
     mfa()
     cuerpo = http.post(f"{BASE}/10/revelacion/desafio").json()
-    assert cuerpo == {"idDesafio": "auth_challenge_1", "expiraEn": None}
+    assert cuerpo == {
+        "idDesafio": "auth_challenge_1",
+        "expiraEn": None,
+        "requiereCodigo": True,
+    }
 
 
 def test_sin_factor_mfa_no_hay_revelacion(http, mfa):
@@ -446,3 +453,43 @@ def test_exportar_sin_filtro_es_400(http):
     _sesion("ADMIN", permisos=("org-exportar",))
     respuesta = http.post(f"{BASE}/busqueda/exportacion", json={})
     assert respuesta.json()["code"] == "FILTRO_REQUERIDO"
+
+
+# ---------------------------------------------------------------------------
+# Pendiente E5-05: MFA apagado por defecto (REVELACION_EXIGE_MFA=false)
+# ---------------------------------------------------------------------------
+
+
+def test_sin_mfa_el_desafio_no_llama_a_workos(http, mfa):
+    _sesion("ASESOR")
+    falso = mfa(exige=False, factores=())
+    cuerpo = http.post(f"{BASE}/10/revelacion/desafio").json()
+    assert cuerpo == {"idDesafio": None, "expiraEn": None, "requiereCodigo": False}
+    assert falso.verificado == []
+
+
+def test_sin_mfa_se_revela_con_permiso_y_queda_auditado(http, mfa, eventos_auditados):
+    _sesion("SUPERVISOR")
+    falso = mfa(exige=False)
+    respuesta = http.post(f"{BASE}/10/revelacion", json={"campos": ["telefonoCelular"]})
+    assert respuesta.status_code == 200
+    assert respuesta.json()["telefonoCelular"] == "0991234567"
+    assert falso.verificado == []
+    (evento,) = eventos_auditados
+    assert (evento.accion, evento.resultado) == ("CLI_DATO_REVELADO", "Exitoso")
+
+
+def test_con_mfa_activo_falta_el_codigo_es_422(http, mfa):
+    _sesion("ASESOR")
+    mfa(exige=True)
+    respuesta = http.post(f"{BASE}/10/revelacion", json={"campos": ["email"]})
+    assert (respuesta.status_code, respuesta.json()["code"]) == (422, "MFA_INVALIDO")
+
+
+def test_sin_mfa_sigue_exigiendo_el_rol(http, mfa):
+    _sesion("CAJERO")
+    mfa(exige=False)
+    assert (
+        http.post(f"{BASE}/10/revelacion", json={"campos": ["email"]}).status_code
+        == 403
+    )

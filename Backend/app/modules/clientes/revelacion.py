@@ -19,6 +19,7 @@ from workos.exceptions import (
 )
 
 from app.core.api.errors import problema
+from app.core.config.settings import get_settings
 from app.core.security import audit
 from app.core.security.auth import Usuario, get_workos
 from app.modules.clientes import correos, service
@@ -55,6 +56,8 @@ def _factores(usuario: Usuario) -> list[str]:
 
 def desafiar(conn: Connection, id_cliente: int, usuario: Usuario) -> DesafioRevelacion:
     service.obtener_cliente(conn, id_cliente)  # 404 antes de molestar al usuario
+    if not get_settings().revelacion_exige_mfa:
+        return DesafioRevelacion(requiere_codigo=False)
     factores = _factores(usuario)
     if not factores:
         raise problema(
@@ -72,6 +75,10 @@ def desafiar(conn: Connection, id_cliente: int, usuario: Usuario) -> DesafioReve
 
 
 def _verificar(usuario: Usuario, solicitud: SolicitudRevelacion) -> bool:
+    if not get_settings().revelacion_exige_mfa:
+        return True  # Pendiente E5-05: MFA apagado; el permiso y la auditoría siguen.
+    if solicitud.id_desafio is None or solicitud.codigo is None:
+        return False
     factores = set(_factores(usuario))
     try:
         respuesta = get_workos().mfa.verify_challenge(
