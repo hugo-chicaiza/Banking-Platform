@@ -197,7 +197,9 @@ def _guardar_cambios_cliente(
         for campo, valor in cambios.items()
     ]
     if "estado" in cambios:
-        repository.actualizar_estado_cliente(conn, actual.id_cliente, cambios["estado"])
+        repository.actualizar_estado_cliente(
+            conn, actual.id_cliente, cambios["estado"], motivo=motivo
+        )
     else:
         repository.actualizar_cliente(conn, actual.id_cliente, cambios)
     for campo, observaciones, anterior, nuevo in auditorias:
@@ -524,9 +526,12 @@ def _validar_productos_cliente(conn: Connection, id_cliente: int) -> None:
     if tiene_productos:
         raise problema(
             409,
-            "CLIENTE_CON_PRODUCTOS_VIGENTES",
+            "CLIENTE_CON_PRODUCTOS",
             "El cliente conserva cuentas o créditos vigentes.",
         )
+
+
+SolicitarEstado = Callable[[dict[str, Any]], SolicitudAceptada]
 
 
 def cambiar_estado_cliente(
@@ -538,7 +543,8 @@ def cambiar_estado_cliente(
     roles: tuple[str, ...],
     *,
     funcion_autorizada: bool = False,
-) -> Cliente:
+    solicitar: SolicitarEstado | None = None,
+) -> Cliente | SolicitudAceptada:
     """CLI-06: roles de una identidad autenticada; mismo estado es conflicto."""
     if not funcion_autorizada and not set(roles) & {"ASESOR", "SUPERVISOR", "ADMIN"}:
         raise problema(403, "SIN_PERMISO", "No tiene permiso para esta operación.")
@@ -547,12 +553,35 @@ def cambiar_estado_cliente(
         if payload.estado not in _TRANSICIONES_CLIENTE.get(actual.estado, set()):
             raise problema(
                 409,
-                "TRANSICION_CLIENTE_INVALIDA",
+                "TRANSICION_INVALIDA",
                 "El cambio de estado no está permitido.",
             )
         if payload.estado in ("Inactivo", "Eliminado"):
             _validar_productos_cliente(conn, id_cliente)
-        return _guardar_cambios_cliente(
+
+        requiere_aprobacion = (
+            payload.estado == "Bloqueado"
+            or (payload.estado == "Activo" and actual.estado == "Bloqueado")
+            or payload.estado == "Eliminado"
+        )
+        if requiere_aprobacion:
+            conn.rollback()
+            if solicitar is None:
+                raise RuntimeError("Falta el servicio de aprobación de E0-08.")
+            from app.modules.clientes.aprobacion_estado import ContenidoEstado
+
+            # Ya validado arriba: un destino fuera de Bloqueado/Activo/Eliminado no llega aquí.
+            contenido = ContenidoEstado.model_validate(
+                {
+                    "estado": payload.estado,
+                    "motivo": payload.motivo,
+                    "modificado_por": modificado_por,
+                    "direccion_ip": direccion_ip,
+                }
+            )
+            return solicitar(contenido.model_dump(mode="json", by_alias=True))
+
+        resultado = _guardar_cambios_cliente(
             conn,
             actual,
             {"estado": payload.estado},
@@ -563,6 +592,18 @@ def cambiar_estado_cliente(
     except Exception:
         conn.rollback()
         raise
+    audit.registrar(
+        audit.EventoAuditoria(
+            accion="CLI_ESTADO",
+            tabla="Clientes.Cliente",
+            id_registro=str(id_cliente),
+            resultado="Exitoso",
+            usuario=modificado_por,
+            ip=direccion_ip,
+            descripcion=f"Estado: {actual.estado} -> {payload.estado}",
+        )
+    )
+    return resultado
 
 
 def listar_clientes(conn: Connection, filtros: ClienteBusqueda) -> PageCliente:

@@ -18,6 +18,12 @@ from app.modules.aprobaciones import router as aprobaciones
 from app.modules.aprobaciones.contratos import SolicitudAceptada
 from app.modules.clientes import correos, revelacion, service
 from app.modules.clientes.aprobacion import CODIGO_EDICION, objetivo
+from app.modules.clientes.aprobacion_estado import (
+    CODIGO_ESTADO,
+)
+from app.modules.clientes.aprobacion_estado import (
+    objetivo as objetivo_estado,
+)
 from app.modules.clientes.aprobacion_riesgo import (
     CODIGO_RIESGO,
 )
@@ -563,20 +569,67 @@ def editar_cliente(
     return aplicar_visibilidad(resultado, usuario, permitido=visibles)
 
 
+def _solicitar_estado(
+    request: Request, usuario: Usuario, id_cliente: int
+) -> service.SolicitarEstado:
+    def solicitar(contenido: dict[str, Any]) -> SolicitudAceptada:
+        actor = aprobaciones.actual(usuario)
+        try:
+            id_solicitud = aprobaciones.servicio().solicitar(
+                actor,
+                CODIGO_ESTADO,
+                objetivo_estado(id_cliente),
+                contenido,
+                hoy(),
+                aprobaciones.contexto(request, usuario),
+            )
+        except HTTPException as error:
+            detalle: Any = error.detail
+            if (
+                isinstance(detalle, dict)
+                and detalle.get("code") == "SOLICITUD_YA_PENDIENTE"
+            ):
+                raise problema(
+                    409,
+                    "CAMBIO_ESTADO_PENDIENTE",
+                    "El cliente ya tiene un cambio de estado pendiente de aprobación.",
+                ) from None
+            raise
+        return SolicitudAceptada(id_solicitud=id_solicitud)
+
+    return solicitar
+
+
 @_edicion_router.patch(
     "/{idCliente}/estado",
     operation_id="CLI06",
     response_model=Cliente,
+    responses={
+        **RESPUESTAS_ERROR,
+        202: {
+            "model": SolicitudAceptada,
+            "description": "Cambio de estado enviado a aprobación de otra persona.",
+        },
+        409: {
+            **RESPUESTAS_ERROR[500],
+            "description": "Cambio de estado pendiente o conflicto de transición",
+        },
+        422: {
+            **RESPUESTAS_ERROR[500],
+            "description": "Datos de cambio de estado inválidos",
+        },
+    },
     openapi_extra={"x-roles": ["ASESOR", "SUPERVISOR", "ADMIN"]},
 )
 def cambiar_estado_cliente(
     idCliente: int,
     payload: ClienteEstadoUpdate,
     request: Request,
+    response: Response,
     usuario: GestorEstado,
     modificado_por: UsuarioAuditoria,
     conn: Db,
-) -> Cliente:
+) -> Cliente | Response:
     """Transición explícita, con comprobación de productos para la baja."""
     from app.modules.seguridad import funciones
 
@@ -593,8 +646,15 @@ def cambiar_estado_cliente(
         modificado_por,
         ip_cliente(request.scope),
         usuario.roles,
+        solicitar=_solicitar_estado(request, usuario, idCliente),
         **autorizacion,
     )
+    if isinstance(resultado, SolicitudAceptada):
+        return JSONResponse(
+            resultado.model_dump(mode="json", by_alias=True),
+            status_code=202,
+            headers=dict(response.headers),
+        )
     return aplicar_visibilidad(resultado, usuario, permitido=visibles)
 
 

@@ -40,6 +40,7 @@ from app.core.security import auth
 from app.core.security.auth import Usuario, require_roles
 from app.core.security.permisos import permisos_de
 from app.main import app
+from app.modules.aprobaciones.contratos import SolicitudAceptada
 from app.modules.clientes import repository, router, service
 from app.modules.clientes.schemas import (
     ClienteBusqueda,
@@ -1809,8 +1810,11 @@ def test_cli06_rechaza_motivo_invalido(motivo):
 def test_cli06_motivo_obligatorio_y_maximo_real():
     with pytest.raises(ValidationError):
         ClienteEstadoUpdate.model_validate({"estado": "Activo"})
-    payload = ClienteEstadoUpdate(estado="Suspendido", motivo="x" * 500)
-    assert len(payload.motivo) == 500
+    # E5-07: el motivo se guarda en Clientes.Cliente.MotivoEstado varchar(300).
+    payload = ClienteEstadoUpdate(estado="Suspendido", motivo="x" * 300)
+    assert len(payload.motivo) == 300
+    with pytest.raises(ValidationError):
+        ClienteEstadoUpdate(estado="Suspendido", motivo="x" * 301)
 
 
 @pytest.mark.parametrize("email", ["sin-arroba", "a@", "a b@correo.ec", "a@correo"])
@@ -2151,29 +2155,50 @@ def test_cli06_matriz_de_transiciones(origen, destino):
     payload = ClienteEstadoUpdate.model_validate(
         {"estado": destino, "motivo": "Revisión"}
     )
+    requiere_aprobacion = (
+        destino == "Bloqueado"
+        or (destino == "Activo" and origen == "Bloqueado")
+        or destino == "Eliminado"
+    )
     if (origen, destino) in TRANSICIONES_C04:
-        resultado = service.cambiar_estado_cliente(
-            cast(Connection, db), 10, payload, 12, "192.0.2.10", ("ASESOR",)
+        solicitar = (
+            MagicMock(return_value=SolicitudAceptada(id_solicitud=1))
+            if requiere_aprobacion
+            else None
         )
-        assert resultado.estado == destino
-        assert resultado.direcciones[0].estado == "Activo"
-        auditoria = _auditorias(db)
-        assert len(auditoria) == 1
-        assert auditoria[0]["campo"] == "Estado"
-        assert json.loads(auditoria[0]["observaciones"]) == {
-            "v": 1,
-            "valorAnterior": origen,
-            "valorNuevo": destino,
-            "motivo": "Revisión",
-        }
-        assert (db.commits, db.rollbacks) == (1, 0)
-        assert not db.respuestas
+        resultado = service.cambiar_estado_cliente(
+            cast(Connection, db),
+            10,
+            payload,
+            12,
+            "192.0.2.10",
+            ("ASESOR",),
+            solicitar=solicitar,
+        )
+        if requiere_aprobacion:
+            assert isinstance(resultado, SolicitudAceptada)
+            assert (db.commits, db.rollbacks) == (0, 1)
+        else:
+            assert isinstance(resultado, service.Cliente)
+            assert resultado.estado == destino
+            assert resultado.direcciones[0].estado == "Activo"
+            auditoria = _auditorias(db)
+            assert len(auditoria) == 1
+            assert auditoria[0]["campo"] == "Estado"
+            assert json.loads(auditoria[0]["observaciones"]) == {
+                "v": 1,
+                "valorAnterior": origen,
+                "valorNuevo": destino,
+                "motivo": "Revisión",
+            }
+            assert (db.commits, db.rollbacks) == (1, 0)
+            assert not db.respuestas
     else:
         with pytest.raises(service.HTTPException) as exc:
             service.cambiar_estado_cliente(
                 cast(Connection, db), 10, payload, 12, "192.0.2.10", ("ASESOR",)
             )
-        _assert_http_error(exc, 409, "TRANSICION_CLIENTE_INVALIDA")
+        _assert_http_error(exc, 409, "TRANSICION_INVALIDA")
         _assert_sin_escrituras(db)
         assert db.rollbacks == 1
 
@@ -2189,11 +2214,18 @@ def test_cli06_bloqueo_desbloqueo_para_roles_confirmados(rol, origen, destino):
     payload = ClienteEstadoUpdate.model_validate(
         {"estado": destino, "motivo": "Control"}
     )
-    assert (
+    solicitar = MagicMock(return_value=SolicitudAceptada(id_solicitud=1))
+    assert isinstance(
         service.cambiar_estado_cliente(
-            cast(Connection, db), 10, payload, 12, "192.0.2.10", (rol,)
-        ).estado
-        == destino
+            cast(Connection, db),
+            10,
+            payload,
+            12,
+            "192.0.2.10",
+            (rol,),
+            solicitar=solicitar,
+        ),
+        SolicitudAceptada,
     )
 
 
@@ -2230,7 +2262,7 @@ def test_cli06_cliente_inexistente():
 
 def test_cli06_rechaza_motivo_que_no_cabe_en_json_sin_truncarlo():
     db = _conn_escritura(cambios={"estado": "Suspendido"})
-    payload = ClienteEstadoUpdate(estado="Suspendido", motivo="x" * 500)
+    payload = ClienteEstadoUpdate.model_construct(estado="Suspendido", motivo="x" * 500)
     with pytest.raises(service.HTTPException) as exc:
         service.cambiar_estado_cliente(
             cast(Connection, db), 10, payload, 12, "192.0.2.10", ("ASESOR",)
@@ -2264,7 +2296,7 @@ def test_cli06_cuentas_que_impiden_baja(destino, estado, saldo, retenido):
             "192.0.2.10",
             ("ADMIN",),
         )
-    _assert_http_error(exc, 409, "CLIENTE_CON_PRODUCTOS_VIGENTES")
+    _assert_http_error(exc, 409, "CLIENTE_CON_PRODUCTOS")
     _assert_sin_escrituras(db)
     assert db.rollbacks == 1
     assert "WITH (UPDLOCK, HOLDLOCK)" in db.consultas[3][0]
@@ -2339,7 +2371,7 @@ def test_cli06_credito_con_deuda_real_impide_baja(cuota):
             "192.0.2.10",
             ("ADMIN",),
         )
-    _assert_http_error(exc, 409, "CLIENTE_CON_PRODUCTOS_VIGENTES")
+    _assert_http_error(exc, 409, "CLIENTE_CON_PRODUCTOS")
     _assert_sin_escrituras(db)
     assert db.rollbacks == 1
     sql = db.consultas[6][0]
@@ -2381,6 +2413,7 @@ def test_cli06_sin_productos_vigentes_permite_baja(estado_desembolso):
         [{"id_solicitud": 30, "estado": estado_desembolso}],
     ]
     db = _conn_escritura(cambios={"estado": "Eliminado"}, lecturas=lecturas)
+    solicitar = MagicMock(return_value=SolicitudAceptada(id_solicitud=1))
     resultado = service.cambiar_estado_cliente(
         cast(Connection, db),
         10,
@@ -2388,10 +2421,12 @@ def test_cli06_sin_productos_vigentes_permite_baja(estado_desembolso):
         12,
         "192.0.2.10",
         ("ADMIN",),
+        solicitar=solicitar,
     )
-    assert resultado.estado == "Eliminado"
-    assert (db.commits, db.rollbacks) == (1, 0)
-    assert not db.respuestas
+    assert isinstance(resultado, SolicitudAceptada)
+    # E5-07: eliminar espera la aprobación; nada se escribe antes.
+    _assert_sin_escrituras(db)
+    assert db.rollbacks == 1
 
 
 @pytest.mark.parametrize(
@@ -2562,13 +2597,16 @@ def test_routers_edicion_propagan_identidad_roles_e_ip_confiable(monkeypatch, es
     if estado:
         monkeypatch.setattr(service, "cambiar_estado_cliente", metodo)
         payload = ClienteEstadoUpdate(estado="Bloqueado", motivo="Control")
-        assert (
-            router.cambiar_estado_cliente(
-                10, payload, request, usuario, 12, conn
-            ).identificacion
-            == "******4065"
+        resultado_estado = router.cambiar_estado_cliente(
+            10, payload, request, Response(), usuario, 12, conn
         )
-        metodo.assert_called_once_with(conn, 10, payload, 12, "192.0.2.10", ("ASESOR",))
+        assert isinstance(resultado_estado, service.Cliente)
+        assert resultado_estado.identificacion == "******4065"
+        metodo.assert_called_once()
+        args = metodo.call_args.args
+        kwargs = metodo.call_args.kwargs
+        assert args == (conn, 10, payload, 12, "192.0.2.10", ("ASESOR",))
+        assert callable(kwargs.get("solicitar"))
     else:
         monkeypatch.setattr(service, "editar_cliente", metodo)
         payload_edicion = ClienteUpdate(telefono_celular="0987654321")
@@ -2632,7 +2670,7 @@ def test_cli06_obligacion_de_desembolso_pendiente_impide_baja(destino):
             "192.0.2.10",
             ("ADMIN",),
         )
-    _assert_http_error(exc, 409, "CLIENTE_CON_PRODUCTOS_VIGENTES")
+    _assert_http_error(exc, 409, "CLIENTE_CON_PRODUCTOS")
     _assert_sin_escrituras(db)
     assert db.rollbacks == 1
 
