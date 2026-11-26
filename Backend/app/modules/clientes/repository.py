@@ -1163,6 +1163,8 @@ def listar_evaluaciones_riesgo(
                r.IdTipoAntecedente AS id_tipo_antecedente,
                r.Observaciones AS observaciones,
                r.EsVigente AS es_vigente,
+               r.VigenteHasta AS vigente_hasta,
+               r.IdSolicitud AS id_solicitud,
                c.Estado AS estado_cliente
         FROM Clientes.RiesgoCliente AS r
         JOIN Clientes.Cliente AS c ON c.IdCliente = r.IdCliente
@@ -1189,6 +1191,7 @@ def insertar_evaluacion_riesgo(
     fecha_evaluacion: datetime,
     fecha_operativa: date,
     meses_vigencia: int,
+    id_solicitud: int | None = None,
 ) -> dict[str, Any]:
     """Inserta con EsVigente=0; el trigger mantiene vigencia y estado del cliente.
 
@@ -1202,6 +1205,7 @@ def insertar_evaluacion_riesgo(
         "fecha_evaluacion": fecha_evaluacion,
         "fecha_operativa": fecha_operativa,
         "meses_vigencia": meses_vigencia,
+        "id_solicitud": id_solicitud,
     }
     row = _one(
         conn,
@@ -1211,13 +1215,14 @@ def insertar_evaluacion_riesgo(
         INSERT INTO Clientes.RiesgoCliente (
             IdCliente, NivelRiesgoLAFT, EsPEP, ResultadoEvaluacion,
             FechaEvaluacion, Evaluador, TieneAntecedentes, IdTipoAntecedente,
-            Observaciones, EsVigente, VigenteHasta
+            Observaciones, EsVigente, VigenteHasta, IdSolicitud
         )
         OUTPUT INSERTED.IdEvaluacion INTO @Evaluacion
         VALUES (
             :id_cliente, :nivel_riesgo_laft, :es_pep, :resultado_evaluacion,
             :fecha_evaluacion, :evaluador, :tiene_antecedentes, :id_tipo_antecedente,
-            :observaciones, 0, DATEADD(month, :meses_vigencia, CAST(:fecha_operativa AS date))
+            :observaciones, 0, DATEADD(month, :meses_vigencia, CAST(:fecha_operativa AS date)),
+            :id_solicitud
         );
         SELECT IdEvaluacion AS id_evaluacion FROM @Evaluacion;
         """,

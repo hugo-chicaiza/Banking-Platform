@@ -15,6 +15,7 @@ from app.modules.catalogos.tipos_direccion import (
     validar_activo as validar_tipo_direccion,
 )
 from app.modules.clientes import repository
+from app.modules.clientes.habilitacion import activar_si_cumple
 from app.modules.clientes.schemas import (
     CAMPOS_CON_RESPALDO,
     CAMPOS_SENSIBLES,
@@ -27,6 +28,7 @@ from app.modules.clientes.schemas import (
     ClientePerfil,
     ClienteUpdate,
     ContenidoEdicion,
+    ContenidoRiesgo,
     CreditoPerfil,
     CuentaPerfil,
     Direccion,
@@ -1131,59 +1133,92 @@ def eliminar_direccion(
         raise
 
 
+def validar_datos_riesgo(
+    conn: Connection,
+    datos: RiesgoCreate | ContenidoRiesgo,
+    fecha_operativa: date,
+) -> int:
+    """Valida antecedentes, catálogos y vigencia de la evaluación de riesgo."""
+    if datos.tiene_antecedentes != (datos.id_tipo_antecedente is not None):
+        raise _problema(
+            422,
+            "ANTECEDENTE_REQUERIDO",
+            "El tipo de antecedente es obligatorio solo si tieneAntecedentes es true.",
+        )
+    if datos.id_tipo_antecedente is not None:
+        antecedente = repository.tipo_antecedente_activo(
+            conn, datos.id_tipo_antecedente
+        )
+        if antecedente is None:
+            raise _problema(
+                422,
+                "CATALOGO_INVALIDO",
+                "El tipo de antecedente no existe o está inactivo.",
+            )
+        if (
+            antecedente["impide_vinculacion"]
+            and datos.resultado_evaluacion == "Aprobado"
+        ):
+            raise _problema(
+                422,
+                "ANTECEDENTE_IMPIDE_VINCULACION",
+                "El antecedente impide registrar una evaluación aprobada.",
+            )
+    clave = f"CLI_RIESGO_VIGENCIA_{datos.nivel_riesgo_laft.upper()}_MESES"
+    try:
+        meses_vigencia = general.valor(conn, clave, fecha_operativa)
+    except HTTPException as exc:
+        if exc.status_code != 404:
+            raise
+        raise _problema(
+            503,
+            "PARAMETRO_NO_DISPONIBLE",
+            "La vigencia del riesgo no está configurada.",
+        ) from exc
+    if type(meses_vigencia) is not int or meses_vigencia < 1:
+        raise _problema(
+            503, "PARAMETRO_INVALIDO", "La vigencia del riesgo no está configurada."
+        )
+    return meses_vigencia
+
+
+SolicitarRiesgo = Callable[[dict[str, Any]], SolicitudAceptada]
+
+
 def registrar_evaluacion_riesgo(
     conn: Connection,
     id_cliente: int,
     payload: RiesgoCreate,
     evaluador: int,
     direccion_ip: str,
-) -> RiesgoRegistrado:
-    """Valida y registra una evaluación con auditoría en una transacción."""
+    solicitar: SolicitarRiesgo | None = None,
+) -> RiesgoRegistrado | SolicitudAceptada:
+    """Valida y registra una evaluación o la envía a aprobación de CLI-RIESGO."""
     try:
         cliente = _validar_cliente_existe(conn, id_cliente, bloquear=True)
         _validar_cliente_no_eliminado(cliente, id_cliente)
-        if payload.tiene_antecedentes != (payload.id_tipo_antecedente is not None):
-            raise _problema(
-                422,
-                "ANTECEDENTE_REQUERIDO",
-                "El tipo de antecedente es obligatorio solo si tieneAntecedentes es true.",
-            )
-        if payload.id_tipo_antecedente is not None:
-            antecedente = repository.tipo_antecedente_activo(
-                conn, payload.id_tipo_antecedente
-            )
-            if antecedente is None:
-                raise _problema(
-                    422,
-                    "CATALOGO_INVALIDO",
-                    "El tipo de antecedente no existe o está inactivo.",
-                )
-            if (
-                antecedente["impide_vinculacion"]
-                and payload.resultado_evaluacion == "Aprobado"
-            ):
-                raise _problema(
-                    422,
-                    "ANTECEDENTE_IMPIDE_VINCULACION",
-                    "El antecedente impide registrar una evaluación aprobada.",
-                )
         fecha_evaluacion = datetime.now(UTC)
         fecha_operativa = fecha_evaluacion.astimezone(ZONA_ECUADOR).date()
-        clave = f"CLI_RIESGO_VIGENCIA_{payload.nivel_riesgo_laft.upper()}_MESES"
-        try:
-            meses_vigencia = general.valor(conn, clave, fecha_operativa)
-        except HTTPException as exc:
-            if exc.status_code != 404:
-                raise
-            raise _problema(
-                503,
-                "PARAMETRO_NO_DISPONIBLE",
-                "La vigencia del riesgo no está configurada.",
-            ) from exc
-        if type(meses_vigencia) is not int or meses_vigencia < 1:
-            raise _problema(
-                503, "PARAMETRO_INVALIDO", "La vigencia del riesgo no está configurada."
+        meses_vigencia = validar_datos_riesgo(conn, payload, fecha_operativa)
+
+        requiere_aprobacion = (
+            payload.es_pep
+            or payload.nivel_riesgo_laft == "Alto"
+            or payload.resultado_evaluacion == "Rechazado"
+        )
+        if requiere_aprobacion:
+            conn.rollback()
+            if solicitar is None:
+                raise RuntimeError("Falta el servicio de aprobación de E0-08.")
+            contenido = ContenidoRiesgo.model_validate(
+                {
+                    **payload.model_dump(),
+                    "evaluador": evaluador,
+                    "direccion_ip": direccion_ip,
+                }
             )
+            return solicitar(contenido.model_dump(mode="json", by_alias=True))
+
         row = repository.insertar_evaluacion_riesgo(
             conn,
             id_cliente,
@@ -1194,11 +1229,48 @@ def registrar_evaluacion_riesgo(
             fecha_operativa=fecha_operativa,
             meses_vigencia=meses_vigencia,
         )
+        habilitado = activar_si_cumple(
+            conn,
+            id_cliente,
+            fecha_operativa,
+            actor=evaluador,
+            ip=direccion_ip,
+        )
+        if habilitado:
+            filas = repository.listar_evaluaciones_riesgo(
+                conn, id_cliente, id_evaluacion=row["id_evaluacion"]
+            )
+            if filas:
+                row = filas[0]
         resultado = RiesgoRegistrado(**row)
         conn.commit()
     except Exception:
         conn.rollback()
         raise
+
+    audit.registrar(
+        audit.EventoAuditoria(
+            accion="CLI_RIESGO_EVALUADO",
+            tabla="Clientes.RiesgoCliente",
+            id_registro=str(resultado.id_evaluacion),
+            resultado="Exitoso",
+            usuario=evaluador,
+            ip=direccion_ip,
+            descripcion=f"Nivel={payload.nivel_riesgo_laft}; PEP={'si' if payload.es_pep else 'no'}; Resultado={payload.resultado_evaluacion}",
+        )
+    )
+    if habilitado:
+        audit.registrar(
+            audit.EventoAuditoria(
+                accion="CLI_HABILITADO",
+                tabla="Clientes.Cliente",
+                id_registro=str(id_cliente),
+                resultado="Exitoso",
+                usuario=evaluador,
+                ip=direccion_ip,
+                descripcion="Cliente habilitado automáticamente tras evaluación de riesgo",
+            )
+        )
     return resultado
 
 

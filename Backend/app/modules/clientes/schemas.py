@@ -359,6 +359,23 @@ class Riesgo(RiesgoCreate):
     fecha_evaluacion: datetime
     evaluador: int
     es_vigente: bool
+    vigente_hasta: date | None = None
+    id_solicitud: int | None = None
+
+
+class ContenidoRiesgo(CamelModel):
+    """Contenido congelado en la solicitud de CLI-RIESGO (E5-06)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    nivel_riesgo_laft: NivelRiesgoLAFT = Field(alias="nivelRiesgoLAFT")
+    es_pep: bool = Field(default=False, alias="esPEP")
+    resultado_evaluacion: ResultadoEvaluacion = Field(alias="resultadoEvaluacion")
+    tiene_antecedentes: bool = False
+    id_tipo_antecedente: int | None = None
+    observaciones: str | None = Field(default=None, max_length=250)
+    evaluador: IdEntero
+    direccion_ip: str = Field(min_length=1, max_length=45)
 
 
 class RiesgoRegistrado(Riesgo):
