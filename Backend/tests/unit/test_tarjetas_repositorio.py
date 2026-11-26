@@ -17,6 +17,8 @@ def test_actualizar_estado_sql_fijo_con_marcas_como_parametros():
         "resolucion": 0,
         "emision": 0,
         "pin_asignado": 0,
+        "motivo": None,
+        "entrega": 0,
     }
 
     repository.actualizar_estado(

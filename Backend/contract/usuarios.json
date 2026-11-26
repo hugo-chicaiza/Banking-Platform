@@ -307,7 +307,8 @@
                   "SUPERVISOR",
                   "APROBADOR_CREDITO",
                   "CONTADOR",
-                  "AUDITOR"
+                  "AUDITOR",
+                  "CUMPLIMIENTO"
                 ],
                 "type": "string"
               },
@@ -328,7 +329,8 @@
                     "SUPERVISOR",
                     "APROBADOR_CREDITO",
                     "CONTADOR",
-                    "AUDITOR"
+                    "AUDITOR",
+                    "CUMPLIMIENTO"
                   ],
                   "type": "string"
                 },
@@ -443,7 +445,8 @@
               "SUPERVISOR",
               "APROBADOR_CREDITO",
               "CONTADOR",
-              "AUDITOR"
+              "AUDITOR",
+              "CUMPLIMIENTO"
             ],
             "title": "Rol",
             "type": "string"
@@ -868,7 +871,8 @@
                     "SUPERVISOR",
                     "APROBADOR_CREDITO",
                     "CONTADOR",
-                    "AUDITOR"
+                    "AUDITOR",
+                    "CUMPLIMIENTO"
                   ],
                   "type": "string"
                 },
@@ -1316,7 +1320,7 @@
                 }
               }
             },
-            "description": "Unprocessable Content"
+            "description": "Unprocessable Entity"
           },
           "429": {
             "content": {
@@ -1818,7 +1822,7 @@
                 }
               }
             },
-            "description": "Unprocessable Content"
+            "description": "Unprocessable Entity"
           },
           "429": {
             "content": {
@@ -2324,7 +2328,7 @@
                 }
               }
             },
-            "description": "Unprocessable Content"
+            "description": "Unprocessable Entity"
           },
           "429": {
             "content": {
@@ -2838,7 +2842,7 @@
                 }
               }
             },
-            "description": "Unprocessable Content"
+            "description": "Unprocessable Entity"
           },
           "429": {
             "content": {
@@ -3353,7 +3357,7 @@
                 }
               }
             },
-            "description": "Unprocessable Content"
+            "description": "Unprocessable Entity"
           },
           "429": {
             "content": {
@@ -3858,7 +3862,7 @@
                 }
               }
             },
-            "description": "Unprocessable Content"
+            "description": "Unprocessable Entity"
           },
           "429": {
             "content": {
@@ -4371,7 +4375,7 @@
                 }
               }
             },
-            "description": "Unprocessable Content"
+            "description": "Unprocessable Entity"
           },
           "429": {
             "content": {
@@ -4899,7 +4903,7 @@
                 }
               }
             },
-            "description": "Unprocessable Content"
+            "description": "Unprocessable Entity"
           },
           "429": {
             "content": {
@@ -5427,7 +5431,7 @@
                 }
               }
             },
-            "description": "Unprocessable Content"
+            "description": "Unprocessable Entity"
           },
           "429": {
             "content": {
@@ -5953,7 +5957,7 @@
                 }
               }
             },
-            "description": "Unprocessable Content"
+            "description": "Unprocessable Entity"
           },
           "429": {
             "content": {

@@ -76,6 +76,10 @@ class BovedaContexto:
             service.contabilidad, "resolver_id_fecha_contable", lambda *args: 1
         )
         monkeypatch.setattr(
+            service.repo_contable, "bloquear_contabilizacion", lambda *args: None
+        )
+        monkeypatch.setattr(service.repo_contable, "obtener_por_id", lambda *args: None)
+        monkeypatch.setattr(
             service.contabilidad, "contabilizar_boveda", self.contabilizar
         )
         for nombre in (

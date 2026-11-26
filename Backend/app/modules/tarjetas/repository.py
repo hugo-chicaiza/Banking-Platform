@@ -84,13 +84,32 @@ def obtener_cuenta(conn: Connection, id_cuenta: int) -> dict[str, Any] | None:
         conn,
         """
         SELECT c.IdCuenta AS id_cuenta, c.IdCliente AS id_cliente,
-               c.IdAgencia AS id_agencia, c.Estado AS estado,
+               RTRIM(c.IdAgencia) AS id_agencia, c.Estado AS estado,
+               tp.Codigo AS tipo_cuenta,
                cl.Nombres AS nombres, cl.Apellidos AS apellidos
-        FROM Cuentas.Cuenta AS c
+        FROM Cuentas.Cuenta AS c WITH (UPDLOCK, HOLDLOCK)
         JOIN Clientes.Cliente AS cl ON cl.IdCliente = c.IdCliente
+        JOIN ProductosFinancieros.SubProducto AS sp ON sp.IdSubProducto = c.IdSubProducto
+        JOIN ProductosFinancieros.Producto AS p ON p.IdProducto = sp.IdProducto
+        LEFT JOIN ProductosFinancieros.TipoProducto AS tp ON tp.IdTipoProducto = p.IdTipoProducto
         WHERE c.IdCuenta = :id_cuenta
         """,
         {"id_cuenta": id_cuenta},
+    )
+
+
+def principal_viva(conn: Connection, id_cuenta: int) -> bool:
+    return (
+        _one(
+            conn,
+            """
+        SELECT TOP (1) IdTarjeta FROM Tarjeta.Tarjeta
+        WHERE IdCuenta = :id_cuenta AND EsExtension = 0
+          AND Estado NOT IN ('Cancelada', 'Anulada', 'Vencida', 'Cerrada')
+        """,
+            {"id_cuenta": id_cuenta},
+        )
+        is not None
     )
 
 
@@ -164,7 +183,7 @@ def insertar_tarjeta(conn: Connection, datos: dict[str, Any]) -> int:
                 TipoTarjeta, NombresTitular, ApellidosTitular, IdCliente, IdCuenta,
                 IdProducto, IdAgencia, EsExtension, IdTarjetaTitular, FechaSolicitud,
                 FechaEmision, FechaExpiracion, PinAsignado, CreadoPor, IdBIN,
-                IdSubProducto, Estado
+                IdSubProducto, Estado, RequiereEntregaVerificada
             )
             OUTPUT INSERTED.IdTarjeta INTO @nuevas
             VALUES (
@@ -173,7 +192,7 @@ def insertar_tarjeta(conn: Connection, datos: dict[str, Any]) -> int:
                 :id_producto, :id_agencia, :es_extension, :id_titular, @hoy,
                 -- FechaEmision es obligatoria: provisional hasta pasar a Generada
                 @hoy, DATEADD(year, 5, @hoy), 0, :creado_por, :id_bin,
-                :id_sub_producto, 'Solicitada'
+                :id_sub_producto, 'Solicitada', 1
             );
             SELECT IdTarjeta FROM @nuevas;
             """
@@ -290,7 +309,62 @@ def obtener_tarjeta(
     desde = " FROM Tarjeta.Tarjeta" + (" WITH (UPDLOCK, ROWLOCK)" if bloquear else "")
     return _one(
         conn,
-        "SELECT" + _COLUMNAS_TARJETA + desde + " WHERE IdTarjeta = :id_tarjeta",
+        "SELECT"
+        + _COLUMNAS_TARJETA
+        + """, RTRIM(IdAgencia) AS id_agencia, CreadoPor AS creado_por,
+        MotivoEstado AS motivo_estado, EntregaVerificadaEn AS entrega_verificada_en,
+        SobreDescargadoEn AS sobre_descargado_en"""
+        + desde
+        + " WHERE IdTarjeta = :id_tarjeta",
+        {"id_tarjeta": id_tarjeta},
+    )
+
+
+def obtener_envio(conn: Connection, id_tarjeta: int) -> dict[str, Any] | None:
+    return _one(
+        conn,
+        """
+        SELECT CodigoSeguimiento AS codigo_seguimiento, DespachadoEn AS despachado_en
+        FROM Tarjeta.EnviosTarjeta WHERE IdTarjeta = :id_tarjeta AND RequiereEnvio = 1
+        """,
+        {"id_tarjeta": id_tarjeta},
+    )
+
+
+def registrar_despacho(conn: Connection, id_tarjeta: int, codigo: str) -> None:
+    conn.execute(
+        text("""
+            UPDATE Tarjeta.EnviosTarjeta
+            SET CodigoSeguimiento = :codigo,
+                DespachadoEn = COALESCE(DespachadoEn, SYSUTCDATETIME())
+            WHERE IdTarjeta = :id_tarjeta AND RequiereEnvio = 1
+        """),
+        {"id_tarjeta": id_tarjeta, "codigo": codigo},
+    )
+
+
+def motivo_estado(conn: Connection, codigo: str) -> dict[str, Any] | None:
+    return _one(
+        conn,
+        """
+        SELECT PermiteDesbloqueo AS permite_desbloqueo
+        FROM Catalogo.MotivoEstadoTarjeta WHERE Codigo = :codigo AND Estado = 'A'
+        """,
+        {"codigo": codigo},
+    )
+
+
+def ultimo_bloqueo(conn: Connection, id_tarjeta: int) -> dict[str, Any] | None:
+    return _one(
+        conn,
+        """
+            SELECT TOP (1) RealizadoPor AS realizado_por,
+                CASE WHEN Descripcion = 'Bloqueo por intentos de PIN en ATM' THEN 1
+                    ELSE 0 END AS bloqueo_pin
+            FROM Tarjeta.TarjetaHis
+            WHERE IdTarjeta = :id_tarjeta AND EstadoActual = 'Bloqueada'
+            ORDER BY IdHistorial DESC
+        """,
         {"id_tarjeta": id_tarjeta},
     )
 
@@ -319,6 +393,8 @@ def actualizar_estado(
     resolucion: bool = False,
     emision: bool = False,
     pin_asignado: bool = False,
+    motivo: str | None = None,
+    entrega: bool = False,
 ) -> None:
     """resolucion: FechaResolucion = ahora (aprobación o rechazo).
     emision: FechaEmision = hoy y FechaExpiracion a cinco años (paso a Generada).
@@ -340,7 +416,10 @@ def actualizar_estado(
                 FechaExpiracion = CASE WHEN :emision = 1
                     THEN DATEADD(year, 5, CONVERT(date, SYSDATETIMEOFFSET() AT TIME ZONE 'SA Pacific Standard Time'))
                     ELSE FechaExpiracion END,
-                PinAsignado = CASE WHEN :pin_asignado = 1 THEN 1 ELSE PinAsignado END
+                PinAsignado = CASE WHEN :pin_asignado = 1 THEN 1 ELSE PinAsignado END,
+                MotivoEstado = :motivo,
+                EntregaVerificadaEn = CASE WHEN :entrega = 1
+                    THEN SYSUTCDATETIME() ELSE EntregaVerificadaEn END
             WHERE IdTarjeta = :id_tarjeta
             """
         ),
@@ -350,6 +429,8 @@ def actualizar_estado(
             "resolucion": int(resolucion),
             "emision": int(emision),
             "pin_asignado": int(pin_asignado),
+            "motivo": motivo,
+            "entrega": int(entrega),
         },
     )
 
@@ -377,8 +458,19 @@ def dias_laborables_desde(conn: Connection, fecha: date) -> int:
 def marcar_pin_asignado(conn: Connection, id_tarjeta: int) -> None:
     conn.execute(
         text(
-            "UPDATE Tarjeta.Tarjeta SET PinAsignado = 1 WHERE IdTarjeta = :id_tarjeta"
+            """UPDATE Tarjeta.Tarjeta SET PinAsignado = 1, SobreDescargadoEn = NULL
+               WHERE IdTarjeta = :id_tarjeta"""
         ),
+        {"id_tarjeta": id_tarjeta},
+    )
+
+
+def marcar_sobre_descargado(conn: Connection, id_tarjeta: int) -> None:
+    conn.execute(
+        text("""
+            UPDATE Tarjeta.Tarjeta SET SobreDescargadoEn = SYSUTCDATETIME()
+            WHERE IdTarjeta = :id_tarjeta
+        """),
         {"id_tarjeta": id_tarjeta},
     )
 

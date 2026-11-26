@@ -28,6 +28,7 @@ def configuracion(monkeypatch):
         "crear_asiento_boveda": 99,
         "linea_boveda": None,
         "contabilizar_asiento": None,
+        "obtener_plantilla": None,
     }.items():
         mocks[nombre] = MagicMock(return_value=resultado)
         monkeypatch.setattr(repo, nombre, mocks[nombre])

@@ -10,16 +10,25 @@ from app.core.api.errors import (
     problema,
     solo_parametros,
 )
-from app.core.api.middleware import ip_cliente, obtener_trace_id
+from app.core.api.middleware import ip_cliente
 from app.core.database.db import cooperativa
 from app.core.pdf import respuesta_pdf, respuestas_pdf
+from app.core.security import audit
 from app.core.security.auth import (
     Usuario,
     UsuarioAuditoria,
     require_auth,
     require_roles,
 )
-from app.modules.cuentas import autorizados, service
+from app.modules.aprobaciones import router as aprobaciones
+from app.modules.aprobaciones.contratos import SolicitudAceptada
+from app.modules.aprobaciones.registro import Objetivo
+from app.modules.cuentas import (
+    autorizados,
+    cambio_subproducto,
+    estado_operativo,
+    service,
+)
 from app.modules.cuentas.formulario import formulario_apertura
 from app.modules.cuentas.schemas import (
     AnularApertura,
@@ -38,6 +47,7 @@ from app.modules.cuentas.schemas import (
     PageMovimientoCuenta,
     SaldoCuenta,
 )
+from app.modules.parametros.service import hoy
 
 router = APIRouter(
     tags=["cuentas"],
@@ -157,7 +167,7 @@ def finalizar_autorizado(
     return Response(status_code=204)
 
 
-_ROLES_CONSULTA = ["ASESOR", "CAJERO", "SUPERVISOR", "ADMIN"]
+_ROLES_CONSULTA = ["ASESOR", "CAJERO", "SUPERVISOR", "ADMIN", "CUMPLIMIENTO"]
 _consultas_router = APIRouter(
     route_class=ProblemDetailsRoute,
     responses=RESPUESTAS_ERROR,
@@ -306,9 +316,8 @@ _ROLES_ESTADO_CUPOS = ["ASESOR", "SUPERVISOR", "ADMIN"]
 _ROLES_MODIFICAR_CUPO = ["ASESOR", "SUPERVISOR", "ADMIN"]
 _ROLES_HISTORIAL_CUPO = ["SUPERVISOR", "AUDITOR", "ADMIN"]
 LectorCupos = Annotated[Usuario, Depends(require_roles(*_ROLES_ESTADO_CUPOS))]
-GestorEstado = Annotated[
-    Usuario, Depends(require_roles("ASESOR", "SUPERVISOR", "ADMIN"))
-]
+_ROLES_ESTADO = ["ASESOR", "SUPERVISOR", "CUMPLIMIENTO"]
+GestorEstado = Annotated[Usuario, Depends(require_roles(*_ROLES_ESTADO))]
 GestorCupo = Annotated[Usuario, Depends(require_roles(*_ROLES_MODIFICAR_CUPO))]
 AuditorCupo = Annotated[Usuario, Depends(require_roles(*_ROLES_HISTORIAL_CUPO))]
 IdRecurso = Annotated[int, Path(gt=0, le=2147483647)]
@@ -326,7 +335,8 @@ _gestion_router = APIRouter(
     operation_id="CTA05",
     response_model=Cuenta,
     dependencies=[Depends(solo_parametros())],
-    openapi_extra={"x-roles": _ROLES_ESTADO_CUPOS},
+    responses={202: {"model": SolicitudAceptada}},
+    openapi_extra={"x-roles": _ROLES_ESTADO},
 )
 def cambiar_estado_cuenta(
     idCuenta: IdRecurso,
@@ -335,16 +345,95 @@ def cambiar_estado_cuenta(
     usuario: GestorEstado,
     modificado_por: UsuarioAuditoria,
     conn: Db,
-) -> Cuenta:
-    """Cambia el estado con bloqueo transaccional y auditoría del usuario de sesión."""
-    return service.cambiar_estado_cuenta(
-        conn,
-        idCuenta,
-        payload,
-        modificado_por,
-        ip_cliente(request.scope),
-        obtener_trace_id(request.scope),
+) -> Cuenta | Response:
+    agencia = usuario.agencia()
+    if agencia is None:
+        raise problema(403, "AGENCIA_REQUERIDA", "Seleccione una agencia activa.")
+    if payload.estado not in {"ACTIVA", "BLOQUEADA"}:
+        raise problema(
+            409, "TRANSICION_INVALIDA", "El cambio de estado no está permitido."
+        )
+    actual = service.obtener_cuenta(conn, idCuenta)
+    if actual.id_agencia != agencia:
+        raise problema(
+            404, "CUENTA_NO_ENCONTRADA", "La cuenta no existe en la agencia."
+        )
+    if payload.estado == "BLOQUEADA" and {"SUPERVISOR", "CUMPLIMIENTO"}.intersection(
+        usuario.roles
+    ):
+        estado_operativo.bloquear(
+            conn, idCuenta, agencia, payload.motivo, modificado_por
+        )
+    elif (
+        payload.estado == "ACTIVA"
+        and actual.estado == "BLOQUEADA"
+        and "SUPERVISOR" in usuario.roles
+    ):
+        conn.rollback()
+        solicitud = aprobaciones.servicio().solicitar(
+            aprobaciones.actual(usuario),
+            estado_operativo.CODIGO,
+            Objetivo("Cuenta", str(idCuenta), agencia),
+            {"motivo": payload.motivo},
+            hoy(),
+            aprobaciones.contexto(request, usuario),
+        )
+        aceptada = SolicitudAceptada(id_solicitud=solicitud)
+        return Response(
+            aceptada.model_dump_json(by_alias=True),
+            status_code=202,
+            media_type="application/json",
+        )
+    elif (
+        payload.estado == "ACTIVA"
+        and actual.estado == "INACTIVA"
+        and "ASESOR" in usuario.roles
+    ):
+        if payload.documento_verificado is None:
+            raise problema(
+                422, "DOCUMENTO_REQUERIDO", "Confirme el documento verificado."
+            )
+        estado_operativo.reactivar(
+            conn,
+            idCuenta,
+            agencia,
+            payload.documento_verificado,
+            modificado_por,
+            payload.motivo,
+        )
+    else:
+        if (actual.estado, payload.estado) in {
+            ("ACTIVA", "BLOQUEADA"),
+            ("BLOQUEADA", "ACTIVA"),
+            ("INACTIVA", "ACTIVA"),
+        }:
+            raise problema(
+                403, "SIN_PERMISO", "No tiene permiso para cambiar ese estado."
+            )
+        raise problema(
+            409, "TRANSICION_INVALIDA", "El cambio de estado no está permitido."
+        )
+    resultado = service.obtener_cuenta(conn, idCuenta)
+    conn.commit()
+    accion = "CTA_BLOQUEO" if payload.estado == "BLOQUEADA" else "CTA_REACTIVACION"
+    audit.registrar(
+        audit.EventoAuditoria(
+            accion=accion,
+            tabla="Cuentas.Cuenta",
+            id_registro=str(idCuenta),
+            resultado="Exitoso",
+            usuario=modificado_por,
+            ip=ip_cliente(request.scope),
+            descripcion="Cambio de estado de cuenta",
+            agencia=agencia,
+        )
     )
+    return resultado
+
+
+@_gestion_router.get("/catalogos/motivos-bloqueo", operation_id="CTAMotivosBloqueo")
+def motivos_bloqueo(usuario: GestorEstado, conn: Db) -> list[dict]:
+    return estado_operativo.motivos_bloqueo(conn)
 
 
 @_gestion_router.get(
@@ -372,19 +461,27 @@ def actualizar_cupo(
     idCuenta: IdRecurso,
     idCanal: IdRecurso,
     payload: CupoSolicitado,
+    request: Request,
     usuario: GestorCupo,
     modificado_por: UsuarioAuditoria,
     conn: Db,
 ) -> CupoEfectivo:
     """Guarda cupo e historial en una transacción y devuelve el cupo vigente."""
+    agencia = None
     if not {"SUPERVISOR", "ADMIN"}.intersection(usuario.roles):
         agencia = usuario.agencia()
         if agencia is None:
             raise problema(403, "AGENCIA_REQUERIDA", "Seleccione una agencia activa.")
-        return service.actualizar_cupo(
-            conn, idCuenta, idCanal, payload, modificado_por, agencia=agencia
-        )
-    return service.actualizar_cupo(conn, idCuenta, idCanal, payload, modificado_por)
+    return service.actualizar_cupo(
+        conn,
+        idCuenta,
+        idCanal,
+        payload,
+        modificado_por,
+        agencia=agencia,
+        usuario=usuario,
+        ip=ip_cliente(request.scope),
+    )
 
 
 @_gestion_router.get(
@@ -419,4 +516,60 @@ def obtener_historial_cupo(
     )
 
 
+_cambio_router = APIRouter(
+    route_class=ProblemDetailsRoute,
+    responses=RESPUESTAS_ERROR,
+    dependencies=[Depends(solo_parametros())],
+)
+AsesorCambio = Annotated[Usuario, Depends(require_roles(*cambio_subproducto.ROLES))]
+
+
+def _objetivo_cambio(id_cuenta: int, usuario: Usuario) -> Objetivo:
+    agencia = usuario.agencia()
+    if agencia is None:
+        raise problema(403, "AGENCIA_REQUERIDA", "Seleccione una agencia activa.")
+    return Objetivo("Cuenta", str(id_cuenta), agencia)
+
+
+@_cambio_router.get(
+    "/{idCuenta}/subproductos-destino",
+    operation_id="CTASubproductosDestino",
+    openapi_extra={"x-roles": list(cambio_subproducto.ROLES)},
+)
+def destinos_subproducto(
+    idCuenta: IdRecurso, usuario: AsesorCambio, conn: Db
+) -> cambio_subproducto.Comparacion:
+    return cambio_subproducto.destinos(conn, _objetivo_cambio(idCuenta, usuario), hoy())
+
+
+@_cambio_router.post(
+    "/{idCuenta}/subproducto",
+    operation_id="CTACambioSubproducto",
+    status_code=202,
+    openapi_extra={"x-roles": list(cambio_subproducto.ROLES)},
+)
+def solicitar_cambio_subproducto(
+    idCuenta: IdRecurso,
+    datos: cambio_subproducto.Destino,
+    request: Request,
+    usuario: AsesorCambio,
+    actor: aprobaciones.Actual,
+    cola: aprobaciones.Cola,
+) -> SolicitudAceptada:
+    cambio = cambio_subproducto.CambioAprobable(
+        id_sub_producto=datos.id_sub_producto,
+        realizado_por=actor.id_interno,
+    )
+    id_solicitud = cola.solicitar(
+        actor,
+        cambio_subproducto.CODIGO,
+        _objetivo_cambio(idCuenta, usuario),
+        cambio.model_dump(mode="json"),
+        hoy(),
+        aprobaciones.contexto(request, usuario),
+    )
+    return SolicitudAceptada(id_solicitud=id_solicitud)
+
+
 router.include_router(_gestion_router, prefix="/cuentas")
+router.include_router(_cambio_router, prefix="/cuentas")

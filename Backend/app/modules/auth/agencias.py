@@ -289,8 +289,6 @@ def resolver_sesion(llave: str, sid: str, roles: Sequence[str]) -> str | None:
         ):
             id_, principal, ids = _alcance(conn, llave, roles)
             permitidas = {a.id_agencia for a in _operativas(coop, ids, roles)}
-            if "ADMIN" in roles and not (set(roles) & UNICA):
-                return None
             contexto = repo.contexto(conn, hash_sesion(sid), id_)
             if contexto:
                 return (
@@ -298,7 +296,9 @@ def resolver_sesion(llave: str, sid: str, roles: Sequence[str]) -> str | None:
                     if contexto["vigente"] and contexto["agencia"] in permitidas
                     else None
                 )
-            if principal not in permitidas:
+            if (
+                "ADMIN" in roles and not (set(roles) & UNICA)
+            ) or principal not in permitidas:
                 return None
             repo.inicializar_contexto(conn, hash_sesion(sid), id_, principal)
             conn.commit()
@@ -360,16 +360,6 @@ def seleccionar(
         try:
             _usuario(conn, id_, True)
             _, _, ids = _alcance(conn, actor.id_usuario, actor.roles)
-            if (
-                agencia is not None
-                and "ADMIN" in actor.roles
-                and not (set(actor.roles) & UNICA)
-            ):
-                raise problema(
-                    409,
-                    "ADMIN_ACCESO_TODAS_AGENCIAS",
-                    "El administrador tiene acceso a todas las agencias. Use los filtros de la consulta.",
-                )
             global_pedido = (
                 agencia is None
                 and "ADMIN" in actor.roles
@@ -395,7 +385,6 @@ def seleccionar(
             elif agencia is not None:
                 repo.guardar_contexto(conn, hash_sesion(actor.id_sesion), id_, agencia)
             conn.commit()
-            actor._leidos.pop("agencia", None)
         except Exception:
             conn.rollback()
             raise

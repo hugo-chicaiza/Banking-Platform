@@ -61,6 +61,7 @@ def test_solicitud_version_reutiliza_estado_y_acciones_de_e008():
         "codigo": "CON-PLANTILLA",
         "tipo": "PlantillaAsiento",
         "objetivo": "17",
+        "agencia": None,
         "actor": "user_revisor",
         "puede_revisar": 1,
     }

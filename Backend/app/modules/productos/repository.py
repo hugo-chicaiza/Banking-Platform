@@ -700,7 +700,8 @@ def datos_elegibilidad(
         """
         SELECT c.TipoCliente AS tipo_cliente, c.FechaNacimiento AS fecha_nacimiento,
                c.Estado AS estado_cliente,
-               s.IdSubProducto AS id_subproducto, s.TipoClientePermitido AS tipo_permitido,
+               s.IdSubProducto AS id_subproducto, s.CodigoSubProducto AS codigo_sub_producto,
+               s.TipoClientePermitido AS tipo_permitido,
                s.EdadMinima AS edad_minima, s.EdadMaxima AS edad_maxima,
                s.RequiereTutor AS requiere_tutor,
                s.IdSubProductoRequerido AS id_requerido,

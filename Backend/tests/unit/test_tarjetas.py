@@ -50,6 +50,9 @@ FILA = {
     "id_cuenta": 4,
     "id_producto": 4,
     "estado_actual": "Solicitada",
+    "creado_por": 2,
+    "id_agencia": "001",
+    "motivo_estado": "PEDIDO_CLIENTE",
     "es_extension": False,
     "id_tarjeta_titular": None,
     "pin_asignado": False,
@@ -109,6 +112,24 @@ def seg(monkeypatch):
     return instalar(monkeypatch)
 
 
+@pytest.fixture(autouse=True)
+def dependencias_e610(monkeypatch):
+    monkeypatch.setattr(repository, "obtener_envio", lambda *_a: None)
+    monkeypatch.setattr(
+        repository, "motivo_estado", lambda *_a: {"permite_desbloqueo": True}
+    )
+    monkeypatch.setattr(
+        repository,
+        "ultimo_bloqueo",
+        lambda *_a: {"realizado_por": 2, "bloqueo_pin": False},
+    )
+    monkeypatch.setattr(repository, "marcar_sobre_descargado", lambda *_a: None)
+    sobre = SimpleNamespace(
+        preparar=lambda *_a: "sobre-prueba", descartar=lambda *_a: None
+    )
+    monkeypatch.setattr(service.sobre_pin, "obtener_servicio", lambda: sobre)
+
+
 @pytest.fixture()
 def client(conns):
     app.dependency_overrides[cooperativa] = lambda: conns.coop
@@ -133,6 +154,8 @@ def emision(monkeypatch):
     )
     monkeypatch.setattr(repository, "obtener_tarjeta", lambda c, i, **k: FILA)
     monkeypatch.setattr(repository, "existe_ciudad", lambda c, i: True)
+    monkeypatch.setattr(service, "cliente_elegible", lambda *_a: (True, []))
+    monkeypatch.setattr(repository, "principal_viva", lambda *_a: False)
 
     def insertar(_conn, datos):
         capturado["tarjeta"] = datos
@@ -314,15 +337,13 @@ def test_emitir_usa_el_subproducto_elegido(client, emision, monkeypatch):
         return {
             **SUBPRODUCTO,
             "id_sub_producto": 6,
-            "codigo_sub_producto": "TCR001-MC",
+            "codigo_sub_producto": "TDB002-MC",
             "codigo_bin": "510000",
         }
 
     monkeypatch.setattr(repository, "obtener_subproducto_con_bin", subproducto)
 
-    r = client.post(
-        BASE, json={**PAYLOAD, "idSubProducto": 6, "tipoTarjeta": "Credito"}
-    )
+    r = client.post(BASE, json={**PAYLOAD, "idSubProducto": 6})
 
     assert r.status_code == 201
     assert recibido == {"producto": 4, "sub": 6}
@@ -357,11 +378,15 @@ def test_emitir_subproducto_sin_bin_activo_422(client, emision, monkeypatch, cam
 
 
 @pytest.mark.parametrize(
-    ("tipo", "codigo"),
-    [("Credito", "TDB001-MC"), ("Debito", "TCR001-MC"), ("Debito", "XYZ001")],
+    ("tipo", "codigo", "esperado"),
+    [
+        ("Credito", "TDB001-MC", "SOLO_DEBITO"),
+        ("Debito", "TCR001-MC", "TIPO_TARJETA_NO_COINCIDE"),
+        ("Debito", "XYZ001", "TIPO_TARJETA_NO_COINCIDE"),
+    ],
 )
 def test_emitir_tipo_que_no_corresponde_al_subproducto_422(
-    client, conns, emision, monkeypatch, tipo, codigo
+    client, conns, emision, monkeypatch, tipo, codigo, esperado
 ):
     monkeypatch.setattr(
         repository,
@@ -371,7 +396,7 @@ def test_emitir_tipo_que_no_corresponde_al_subproducto_422(
 
     r = client.post(BASE, json={**PAYLOAD, "tipoTarjeta": tipo})
 
-    assert r.status_code == 422 and _code(r) == "TIPO_TARJETA_NO_COINCIDE"
+    assert r.status_code == 422 and _code(r) == esperado
     assert "tarjeta" not in emision and conns.coop.commits == 0
 
 
@@ -614,10 +639,20 @@ def test_detalle_id_invalido_400(client, valor):
 
 def _estado(monkeypatch, fila, transicion=True):
     capturado: dict[str, Any] = {"historiales": []}
-    monkeypatch.setattr(repository, "obtener_tarjeta", lambda c, i, **k: fila)
+
+    def obtener(c, i, **k):
+        if fila is None or "estado" not in capturado:
+            return fila
+        pin = fila["pin_asignado"] or any(
+            marcas.get("pin_asignado") for _, marcas in capturado["transiciones"]
+        )
+        return {**fila, "estado_actual": capturado["estado"], "pin_asignado": pin}
+
+    monkeypatch.setattr(repository, "obtener_tarjeta", obtener)
     monkeypatch.setattr(repository, "existe_transicion", lambda c, o, d: transicion)
 
     def actualizar(_c, _i, estado, **marcas):
+        capturado.setdefault("transiciones", []).append((estado, marcas))
         capturado["estado"] = estado
         capturado["marcas"] = marcas
 
@@ -651,12 +686,22 @@ def test_estado_valido_200_registra_historial_y_fechas(
     )
 
     r = client.post(
-        f"{BASE}/301/estado", json={"estado": destino, "motivo": " Motivo "}
+        f"{BASE}/301/estado",
+        json={
+            "estado": destino,
+            "motivo": " Motivo ",
+            **({"codigoMotivo": "PEDIDO_CLIENTE"} if destino == "Bloqueada" else {}),
+        },
     )
 
     assert r.status_code == 200
     assert capturado["estado"] == destino
-    esperado = {"resolucion": False, "emision": False, "pin_asignado": False}
+    esperado = {
+        "resolucion": False,
+        "emision": False,
+        "entrega": False,
+        "motivo": "PEDIDO_CLIENTE" if destino == "Bloqueada" else None,
+    }
     assert capturado["marcas"] == {**esperado, **marcas}
     assert capturado["historial"][2:6] == (evento, anterior, destino, "Motivo")
     # ip_cliente: "testclient" no es una IP válida (ASVS 4.1.3)
@@ -664,11 +709,10 @@ def test_estado_valido_200_registra_historial_y_fechas(
     assert conns.coop.commits == 1 and conns.seg.commits == 0
 
 
-@pytest.mark.parametrize(("tipo", "temporal"), [("Debito", True), ("Credito", False)])
 def test_aprobar_genera_pin_automatico_sin_exponerlo(
-    client, conns, monkeypatch, seg, caplog, tipo, temporal
+    client, conns, monkeypatch, seg, caplog
 ):
-    capturado = _estado(monkeypatch, {**FILA, "tipo_tarjeta": tipo})
+    capturado = _estado(monkeypatch, FILA)
     seg.custodiar()
     caplog.set_level(logging.DEBUG)
 
@@ -677,13 +721,14 @@ def test_aprobar_genera_pin_automatico_sin_exponerlo(
     )
 
     assert r.status_code == 200
-    assert capturado["marcas"] == {
-        "resolucion": True,
-        "emision": False,
-        "pin_asignado": True,
-    }
+    assert r.json()["estadoActual"] == "Generada"
+    assert capturado["transiciones"][0] == (
+        "Aprobada",
+        {"resolucion": True, "pin_asignado": True},
+    )
+    assert capturado["marcas"]["emision"]
     fila = seg.pin()
-    assert fila["estado"] == "Activo" and fila["requiere_cambio"] is temporal
+    assert fila["estado"] == "Activo" and fila["requiere_cambio"]
     # El Offset verifica un PIN no trivial que eligió el HSM, y solo ese
     pin = pin_generado(seg)
     assert not es_pin_debil(pin)
@@ -747,15 +792,122 @@ def test_aprobar_si_falla_cooperativa_la_tarjeta_sigue_solicitada_y_se_reintenta
     assert len(primer_offset) == 4
 
 
-def test_generada_a_activa_a_mano_409_activacion_automatica(client, conns, monkeypatch):
+def test_generada_a_activa_exige_documento(client, conns, monkeypatch):
     capturado = _estado(
         monkeypatch, {**FILA, "estado_actual": "Generada", "pin_asignado": True}
     )
 
     r = client.post(f"{BASE}/301/estado", json={"estado": "Activa", "motivo": "x"})
 
-    assert r.status_code == 409 and _code(r) == "ACTIVACION_AUTOMATICA"
+    assert r.status_code == 422 and _code(r) == "DOCUMENTO_REQUERIDO"
     assert "estado" not in capturado and conns.coop.commits == 0
+
+
+def test_e610_impide_autoaprobacion(client, monkeypatch, seg):
+    capturado = _estado(monkeypatch, {**FILA, "creado_por": 1})
+    seg.custodiar()
+
+    respuesta = client.post(
+        f"{BASE}/301/estado", json={"estado": "Aprobada", "motivo": "prueba"}
+    )
+
+    assert (
+        respuesta.status_code == 403
+        and _code(respuesta) == "AUTOAPROBACION_NO_PERMITIDA"
+    )
+    assert "estado" not in capturado and not seg.pines
+
+
+def test_e610_cuenta_con_principal_viva_rechaza_otra(client, emision, monkeypatch):
+    monkeypatch.setattr(repository, "principal_viva", lambda *_a: True)
+
+    respuesta = client.post(BASE, json=PAYLOAD)
+
+    assert (
+        respuesta.status_code == 409 and _code(respuesta) == "TARJETA_PRINCIPAL_VIGENTE"
+    )
+    assert "tarjeta" not in emision
+
+
+def test_e610_certificados_no_admiten_tarjetas(client, emision, monkeypatch):
+    monkeypatch.setattr(
+        repository,
+        "obtener_cuenta",
+        lambda *_a: {**CUENTA, "tipo_cuenta": "CERTIFICADO_APORTACION"},
+    )
+
+    respuesta = client.post(BASE, json=PAYLOAD)
+
+    assert (
+        respuesta.status_code == 422 and _code(respuesta) == "CUENTA_NO_ADMITE_TARJETA"
+    )
+    assert "tarjeta" not in emision
+
+
+@pytest.mark.parametrize("motivo", ["PERDIDA", "ROBO"])
+def test_e610_perdida_o_robo_requieren_reposicion(client, monkeypatch, motivo):
+    _estado(
+        monkeypatch, {**FILA, "estado_actual": "Bloqueada", "motivo_estado": motivo}
+    )
+
+    respuesta = client.post(
+        f"{BASE}/301/estado", json={"estado": "Activa", "motivo": "prueba"}
+    )
+
+    assert respuesta.status_code == 409 and _code(respuesta) == "REPOSICION_REQUERIDA"
+
+
+def test_e610_entrega_verificada_activa_tarjeta(client, monkeypatch):
+    capturado = _estado(
+        monkeypatch,
+        {
+            **FILA,
+            "estado_actual": "Generada",
+            "pin_asignado": True,
+            "sobre_descargado_en": datetime(2026, 11, 25, 15),
+        },
+    )
+    cuerpo = {"estado": "Activa", "motivo": "Entrega", "documentoVerificado": True}
+
+    respuesta = client.post(f"{BASE}/301/estado", json=cuerpo)
+
+    assert respuesta.status_code == 200 and respuesta.json()["estadoActual"] == "Activa"
+    assert capturado["marcas"]["entrega"]
+
+
+def test_tar08_registra_el_despacho_y_conserva_fecha_al_repetir(client, monkeypatch):
+    _estado(monkeypatch, {**FILA, "estado_actual": "Generada"})
+    envio: dict[str, str | datetime | None] = {
+        "codigo_seguimiento": None,
+        "despachado_en": None,
+    }
+    monkeypatch.setattr(repository, "obtener_envio", lambda *_a: dict(envio))
+    llamados = []
+
+    def guardar(_conn, _id, codigo):
+        llamados.append(codigo)
+        envio.update(
+            codigo_seguimiento=codigo, despachado_en=datetime(2026, 11, 25, 15)
+        )
+
+    monkeypatch.setattr(repository, "registrar_despacho", guardar)
+    ruta = f"{BASE}/301/envio"
+    cuerpo = {"codigoSeguimiento": "GUIA-123"}
+    respuesta = client.patch(ruta, json=cuerpo)
+    repetida = client.patch(ruta, json=cuerpo)
+
+    assert respuesta.status_code == repetida.status_code == 200
+    assert (
+        respuesta.json()
+        == repetida.json()
+        == {
+            "idTarjeta": 301,
+            "estadoEnvio": "Despachado",
+            "codigoSeguimiento": "GUIA-123",
+            "despachadoEn": "2026-11-25T15:00:00Z",
+        }
+    )
+    assert llamados == ["GUIA-123"]
 
 
 def test_estado_transicion_invalida_409(client, conns, monkeypatch):
@@ -1401,16 +1553,18 @@ def test_sobre_se_entrega_una_sola_vez(client, monkeypatch, seg, sobres):
     assert r.status_code == 409 and _code(r) == "SOBRE_PIN_ENTREGADO"
 
 
-def test_aprobar_credito_no_genera_sobre(client, monkeypatch, seg, sobres):
+def test_aprobar_credito_409_sin_generar_sobre(client, monkeypatch, seg, sobres):
     _estado(monkeypatch, {**FILA, "tipo_tarjeta": "Credito"})
     seg.custodiar()
     monkeypatch.setattr(repository, "existe_tarjeta", lambda c, i: True)
 
-    client.post(f"{BASE}/301/estado", json={"estado": "Aprobada", "motivo": "Aprobada"})
+    rechazo = client.post(
+        f"{BASE}/301/estado", json={"estado": "Aprobada", "motivo": "Aprobada"}
+    )
     r = client.get(f"{BASE}/301/sobre-pin")
 
     assert r.status_code == 404 and _code(r) == "SOBRE_PIN_NO_DISPONIBLE"
-    assert seg.pin()["requiere_cambio"] is False
+    assert rechazo.status_code == 409 and 301 not in seg.pines
 
 
 def test_aprobar_debito_si_no_se_guarda_el_sobre_503_y_no_cambia_nada(
@@ -1448,18 +1602,15 @@ def test_aprobar_debito_si_falla_el_offset_se_descarta_el_sobre(
     assert not (sobres / "301.json").exists()
 
 
-def test_aprobar_debito_sin_almacen_aprueba_sin_sobre(client, monkeypatch, seg):
+def test_aprobar_debito_sin_almacen_conserva_solicitud(client, monkeypatch, seg):
     capturado = _estado(monkeypatch, FILA)
     seg.custodiar()
-    monkeypatch.setattr(repository, "existe_tarjeta", lambda c, i: True)
+    monkeypatch.setattr(service.sobre_pin, "obtener_servicio", lambda: None)
 
     r = client.post(f"{BASE}/301/estado", json={"estado": "Aprobada", "motivo": "x"})
 
-    assert r.status_code == 200 and capturado["estado"] == "Aprobada"
-    sobre = client.get(f"{BASE}/301/sobre-pin")
-    assert (
-        sobre.status_code == 503 and _code(sobre) == "SOBRE_PIN_ALMACEN_NO_DISPONIBLE"
-    )
+    assert r.status_code == 503 and _code(r) == "SOBRE_PIN_NO_GUARDADO"
+    assert "estado" not in capturado and 301 not in seg.pines
 
 
 def test_regenerar_debito_reemplaza_el_sobre(client, monkeypatch, seg, sobres):
@@ -1478,7 +1629,7 @@ def test_regenerar_debito_reemplaza_el_sobre(client, monkeypatch, seg, sobres):
 
 
 def test_sobre_pin_tarjeta_inexistente_404(client, monkeypatch, sobres):
-    monkeypatch.setattr(repository, "existe_tarjeta", lambda c, i: False)
+    monkeypatch.setattr(repository, "obtener_tarjeta", lambda *_a, **_k: None)
 
     r = client.get(f"{BASE}/301/sobre-pin")
 
@@ -1486,7 +1637,7 @@ def test_sobre_pin_tarjeta_inexistente_404(client, monkeypatch, sobres):
 
 
 def test_sobre_pin_sin_sobre_404(client, monkeypatch, sobres):
-    monkeypatch.setattr(repository, "existe_tarjeta", lambda c, i: True)
+    _estado(monkeypatch, {**FILA, "estado_actual": "Generada", "pin_asignado": True})
 
     r = client.get(f"{BASE}/301/sobre-pin")
 
@@ -1514,7 +1665,7 @@ def test_sobre_pin_se_audita_sin_el_pin(
     client.get(f"{BASE}/301/sobre-pin")
 
     evento = eventos_auditados[-1]
-    assert evento.descripcion == "TAR-07 Entrega de sobre de PIN"
+    assert evento.descripcion == "TAR_SOBRE_DESCARGADO"
     assert evento.resultado == "Exitoso" and evento.accion == "SELECT"
     assert pin_generado(seg) not in str(eventos_auditados)
 

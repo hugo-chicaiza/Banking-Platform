@@ -237,7 +237,9 @@ def validar_tarjeta(
                     "TARJETA_NO_ACTIVA",
                     "La tarjeta no está activa.",
                 )
-        elif tarjeta.get("tipo_tarjeta") != "Debito":
+        elif tarjeta.get("tipo_tarjeta") != "Debito" or tarjeta.get(
+            "requiere_entrega_verificada"
+        ):
             raise problema(
                 409,
                 "TARJETA_NO_ACTIVA",
