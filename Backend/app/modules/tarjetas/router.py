@@ -25,7 +25,8 @@ from app.core.security.auth import (
     require_permiso,
     require_roles,
 )
-from app.modules.tarjetas import service
+from app.modules.aprobaciones import router as aprobaciones
+from app.modules.tarjetas import aprobacion, service
 from app.modules.tarjetas.schemas import (
     MAX_INT,
     MAX_PAGE_SIZE,
@@ -119,6 +120,17 @@ def _ip(request: Request) -> str | None:
     return ip_cliente(request.scope)
 
 
+def _agencia_operativa(operador: UsuarioActual) -> str:
+    agencia = operador.agencia()
+    if not agencia:
+        raise problema(
+            403,
+            "AGENCIA_REQUERIDA",
+            "Seleccione una agencia operativa para solicitar la tarjeta.",
+        )
+    return agencia
+
+
 # TAR-01. Roles: ASESOR, ADMIN
 @router.post(
     "",
@@ -129,16 +141,39 @@ def _ip(request: Request) -> str | None:
 def emitir_tarjeta(
     payload: TarjetaCreate,
     request: Request,
+    agencia: Annotated[str, Depends(_agencia_operativa)],
+    operador: UsuarioActual,
     usuario: UsuarioAuditoria,
+    actor: aprobaciones.Actual,
+    cola: aprobaciones.Cola,
     conn: Db,
     conn_seguridad: Annotated[Connection, Depends(seguridad)],
 ) -> Any:
-    """Registra la solicitud de tarjeta (estado Solicitada, sin PIN) para una cuenta
-    Activa. El PIN se genera al aprobarla (TAR-04).
+    """Registra una tarjeta Solicitada para su aprobación por otro operador.
 
-    El PAN ficticio queda cifrado en el repositorio aislado de pruebas.
+    Requiere confirmar la agencia operativa de la cuenta. Si la publicación en la
+    cola se difiere, la respuesta devuelve idSolicitudAprobacion nulo y la recupera el ejecutor.
     """
-    return service.crear_tarjeta(conn, conn_seguridad, payload, usuario, _ip(request))
+    if usuario != actor.id_interno:
+        raise problema(403, "ACTOR_NO_ACTIVO", "No se pudo acreditar al solicitante.")
+    actor.alcance(agencia)
+
+    def registrar(conexion: Connection, id_tarjeta: int) -> None:
+        aprobacion.programar(conexion, id_tarjeta, actor, agencia)
+
+    tarjeta = service.crear_tarjeta(
+        conn,
+        conn_seguridad,
+        payload,
+        usuario,
+        _ip(request),
+        agencia_operativa=agencia,
+        registrar_solicitud=registrar,
+    )
+    tarjeta.id_solicitud_aprobacion = aprobacion.publicar_al_solicitar(
+        cola, tarjeta.id_tarjeta, aprobaciones.contexto(request, operador)
+    )
+    return tarjeta
 
 
 # TAR-02. Roles: ASESOR, SUPERVISOR, ADMIN
@@ -188,7 +223,10 @@ def buscar_tarjetas(
 )
 def detalle_tarjeta(id_tarjeta: IdTarjetaPath, conn: Db) -> Any:
     """Detalle de una tarjeta."""
-    return service.obtener_tarjeta(conn, id_tarjeta)
+    tarjeta = service.obtener_tarjeta(conn, id_tarjeta)
+    if tarjeta.estado_actual == "Solicitada":
+        tarjeta.id_solicitud_aprobacion = aprobacion.id_solicitud(conn, id_tarjeta)
+    return tarjeta
 
 
 # TAR-04. Roles: ASESOR, SUPERVISOR, ADMIN
@@ -206,7 +244,7 @@ def cambiar_estado(
     conn: Db,
     conn_seguridad: Annotated[Connection, Depends(seguridad)],
 ) -> Any:
-    """Al aprobar una solicitud queda Generada. La activación exige entrega verificada."""
+    """Cambia el estado de la tarjeta. Las solicitudes inscritas se resuelven en Aprobaciones."""
     return service.cambiar_estado(
         conn,
         conn_seguridad,
@@ -215,6 +253,7 @@ def cambiar_estado(
         usuario,
         _ip(request),
         permisos=operador.permisos,
+        tiene_solicitud=aprobacion.gestionada,
     )
 
 
