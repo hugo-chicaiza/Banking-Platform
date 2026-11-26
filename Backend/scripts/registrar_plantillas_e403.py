@@ -36,6 +36,8 @@ class Linea(BaseModel):
         "SEGURO",
         "DIFERENCIA",
         "TOTAL",
+        "PRIMA_FIJA",
+        "PRIMA_VARIABLE",
     ]
     origen: Literal["FIJA", "PRODUCTO", "CONTRAPRODUCTO", "COMISION"]
     cuenta: Id | None = None
