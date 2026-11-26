@@ -5,7 +5,7 @@ IF COALESCE(CONVERT(nvarchar(128), SESSION_CONTEXT(N'migration_database')), N'')
 
 BEGIN TRANSACTION;
 IF COL_LENGTH('Clientes.Cliente', 'IdAgenciaRegistro') IS NULL
-    ALTER TABLE Clientes.Cliente ADD IdAgenciaRegistro char(3) NULL
+    ALTER TABLE Clientes.Cliente ADD IdAgenciaRegistro char(3) NULL -- NOSONAR: T-SQL, no PL/SQL; char(3) igual que Organizacion.Agencia.IdAgencia (la FK exige el mismo tipo)
         CONSTRAINT FK_Cliente_AgenciaRegistro REFERENCES Organizacion.Agencia (IdAgencia);
 
 /* Mayúsculas y comparación sin acentos; la búsqueda usa "empieza con" por palabra. */
