@@ -31,6 +31,7 @@ from app.core.config.settings import Settings
 from app.modules.atm import router, service, session
 from app.modules.atm.schemas import CuentaATM
 from app.modules.tarjetas import service as tarjetas
+from app.modules.tarjetas import sobre_pin
 from tests.pin_version import FECHA_PIN, VERSION_PIN, DriverLimitesSQL
 from tests.tarjetas_hsm import HSM, PAN
 
@@ -173,7 +174,7 @@ class LocalConnection:
 
 
 @pytest.fixture
-def lab(monkeypatch):
+def lab(monkeypatch, tmp_path):
     def prohibited(*_a, **_kw):
         raise AssertionError("SQL/red real prohibidos")
 
@@ -210,6 +211,14 @@ def lab(monkeypatch):
     monkeypatch.setattr(service, "obtener_hsm", lambda: HSM)
     monkeypatch.setattr(service, "pan_de_prueba", lambda *_: PAN)
     monkeypatch.setattr(tarjetas, "pan_de_prueba", lambda *_: PAN)
+    sobres = sobre_pin.ServicioSobres(
+        sobre_pin.AlmacenDisco(tmp_path),
+        sobre_pin.Cifrador(bytes(range(32))),
+        "Cooperativa de prueba",
+        "example.invalid",
+        30,
+    )
+    monkeypatch.setattr(sobre_pin, "obtener_servicio", lambda: sobres)
     monkeypatch.setattr(
         service,
         "validar_tarjeta",

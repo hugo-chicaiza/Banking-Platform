@@ -18,12 +18,20 @@ from app.core.api.middleware import ip_cliente
 from app.core.config.settings import get_settings
 from app.core.database.db import cooperativa, get_engine
 from app.core.pdf import respuesta_pdf, respuestas_pdf
-from app.core.security.auth import UsuarioAuditoria, require_auth, require_roles
+from app.core.security.auth import (
+    UsuarioActual,
+    UsuarioAuditoria,
+    require_auth,
+    require_permiso,
+    require_roles,
+)
 from app.modules.tarjetas import service
 from app.modules.tarjetas.schemas import (
     MAX_INT,
     MAX_PAGE_SIZE,
     MAX_PAGINA,
+    EnvioTarjeta,
+    EnvioTarjetaUpdate,
     EstadoTarjeta,
     PageTarjeta,
     PageTarjetaHistorial,
@@ -116,7 +124,7 @@ def _ip(request: Request) -> str | None:
     "",
     response_model=Tarjeta,
     status_code=201,
-    dependencies=[Depends(require_roles("ASESOR", "ADMIN"))],
+    dependencies=[Depends(require_permiso("tar-solicitar"))],
 )
 def emitir_tarjeta(
     payload: TarjetaCreate,
@@ -138,7 +146,7 @@ def emitir_tarjeta(
     "",
     response_model=PageTarjeta,
     dependencies=[
-        Depends(require_roles("ASESOR", "SUPERVISOR", "ADMIN")),
+        Depends(require_permiso("tar-consultar")),
         Depends(
             solo_parametros(
                 "idCliente",
@@ -176,7 +184,7 @@ def buscar_tarjetas(
 @router.get(
     "/{idTarjeta}",
     response_model=Tarjeta,
-    dependencies=[Depends(require_roles("ASESOR", "SUPERVISOR", "ADMIN"))],
+    dependencies=[Depends(require_permiso("tar-consultar"))],
 )
 def detalle_tarjeta(id_tarjeta: IdTarjetaPath, conn: Db) -> Any:
     """Detalle de una tarjeta."""
@@ -187,21 +195,51 @@ def detalle_tarjeta(id_tarjeta: IdTarjetaPath, conn: Db) -> Any:
 @router.post(
     "/{idTarjeta}/estado",
     response_model=Tarjeta,
-    dependencies=[Depends(require_roles("ASESOR", "SUPERVISOR", "ADMIN"))],
+    dependencies=[Depends(require_permiso("tar-estado"))],
 )
 def cambiar_estado(
     id_tarjeta: IdTarjetaPath,
     payload: TarjetaEstadoUpdate,
     request: Request,
+    operador: UsuarioActual,
     usuario: UsuarioAuditoria,
     conn: Db,
     conn_seguridad: Annotated[Connection, Depends(seguridad)],
 ) -> Any:
-    """Cambia el estado según Tarjeta.TransicionEstado. Al aprobar, el HSM genera el
-    PIN (nadie lo conoce). Generada → Activa es automática (ATM-06 o plazo de crédito).
-    """
+    """Al aprobar una solicitud queda Generada. La activación exige entrega verificada."""
     return service.cambiar_estado(
-        conn, conn_seguridad, id_tarjeta, payload, usuario, _ip(request)
+        conn,
+        conn_seguridad,
+        id_tarjeta,
+        payload,
+        usuario,
+        _ip(request),
+        permisos=operador.permisos,
+    )
+
+
+@router.patch(
+    "/{idTarjeta}/envio",
+    operation_id="TAR08",
+    response_model=EnvioTarjeta,
+    dependencies=[Depends(require_permiso("tar-estado")), Depends(solo_parametros())],
+)
+def actualizar_envio(
+    id_tarjeta: IdTarjetaPath,
+    payload: EnvioTarjetaUpdate,
+    request: Request,
+    operador: UsuarioActual,
+    usuario: UsuarioAuditoria,
+    conn: Db,
+) -> EnvioTarjeta:
+    """Registra el despacho de una tarjeta generada y su código de seguimiento."""
+    return service.registrar_envio(
+        conn,
+        id_tarjeta,
+        payload.codigo_seguimiento,
+        operador.agencia(),
+        usuario,
+        _ip(request),
     )
 
 
@@ -209,7 +247,7 @@ def cambiar_estado(
 @router.post(
     "/{idTarjeta}/pin",
     status_code=204,
-    dependencies=[Depends(require_roles("ASESOR", "ADMIN")), Depends(_sin_body)],
+    dependencies=[Depends(require_permiso("tar-pin")), Depends(_sin_body)],
 )
 def regenerar_pin(
     id_tarjeta: IdTarjetaPath,
@@ -230,7 +268,7 @@ def regenerar_pin(
     response_class=Response,
     responses=respuestas_pdf("Sobre de PIN (PDF). Se entrega una sola vez."),
     dependencies=[
-        Depends(require_roles("ASESOR", "SUPERVISOR", "ADMIN")),
+        Depends(require_permiso("tar-pin:entregar")),
         Depends(solo_parametros()),
     ],
 )
@@ -253,7 +291,7 @@ def sobre_pin(
     response_model=PageTarjetaHistorial,
     response_model_exclude_none=True,
     dependencies=[
-        Depends(require_roles("SUPERVISOR", "AUDITOR", "ADMIN")),
+        Depends(require_permiso("tar-consultar:historial")),
         Depends(
             solo_parametros("fechaDesde", "fechaHasta", "page", "pageSize", "sort")
         ),

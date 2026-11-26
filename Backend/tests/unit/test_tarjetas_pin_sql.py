@@ -9,7 +9,7 @@ import pytest
 from fastapi import HTTPException
 from sqlalchemy.exc import DBAPIError, SQLAlchemyError
 
-from app.modules.tarjetas import service
+from app.modules.tarjetas import service, sobre_pin
 from app.modules.tarjetas.pin_sql import limitar_sql_pin
 from tests.pin_version import DriverLimitesSQL
 
@@ -22,6 +22,11 @@ def lab(monkeypatch):
     conn.invalidated = False
     hsm = MagicMock()
     hsm.generar_pin.return_value = ("0042", "LAB-PVK")
+    hsm.generar_pin_para_sobre.return_value = ("0042", "LAB-PVK", "2684")
+    servicio_sobre = SimpleNamespace(
+        preparar=lambda *_a: "sobre-prueba", descartar=lambda *_a: None
+    )
+    monkeypatch.setattr(sobre_pin, "obtener_servicio", lambda: servicio_sobre)
     monkeypatch.setattr(service, "pan_de_prueba", MagicMock(return_value="PAN-LAB"))
     save = MagicMock()
     monkeypatch.setattr(service.repository, "guardar_pin_generado", save)

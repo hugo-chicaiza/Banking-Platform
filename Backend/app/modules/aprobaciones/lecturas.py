@@ -190,15 +190,21 @@ def notificaciones(servicio: Servicio, actor: Actor, agencia: str | None) -> dic
 
 
 def solicitud_global_por_objetivo(
-    servicio: Servicio, actor: Actor, operacion: Operacion, id_objetivo: str
+    servicio: Servicio,
+    actor: Actor,
+    operacion: Operacion,
+    id_objetivo: str,
+    agencia: str | None = None,
 ) -> SolicitudResumen | None:
+    actor.alcance(agencia)
     with servicio.seguridad.connect() as seg:
         fila = (
             seg.execute(
                 consulta("""
                 SELECT TOP (1) * FROM Seguridad.SolicitudAprobacion
                 WHERE IdOrganizacion=:org AND CodigoTransaccion=:codigo
-                  AND TipoObjetivo=:tipo AND IdObjetivo=:objetivo AND IdAgencia IS NULL
+                  AND TipoObjetivo=:tipo AND IdObjetivo=:objetivo
+                  AND (IdAgencia=:agencia OR (IdAgencia IS NULL AND :agencia IS NULL))
                   AND (SolicitadoPor=:actor OR :puede_revisar=1)
                 ORDER BY IdSolicitud DESC
             """),
@@ -207,6 +213,7 @@ def solicitud_global_por_objetivo(
                     "codigo": operacion.codigo,
                     "tipo": operacion.tipo_objetivo,
                     "objetivo": id_objetivo,
+                    "agencia": agencia,
                     "actor": actor.sujeto,
                     "puede_revisar": int(
                         operacion.permiso_aprobacion in actor.permisos

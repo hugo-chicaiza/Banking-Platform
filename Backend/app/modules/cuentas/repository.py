@@ -38,6 +38,46 @@ def _one(
     return rows[0] if rows else None
 
 
+def limite_institucional(
+    conn: Connection,
+    id_canal: int,
+    fecha: date,
+    *,
+    tipo: str,
+    grupo: int | None,
+    agencia: str,
+) -> dict[str, Any] | None:
+    # El catálogo de E1-11 se despliega por separado y puede aún no existir.
+    if (
+        conn.exec_driver_sql(
+            "SELECT OBJECT_ID(N'Parametros.LimiteOperacion', N'U')"
+        ).scalar()
+        is None
+    ):
+        return None
+    return _one(
+        conn,
+        """
+        SELECT TOP (1) MontoMaximoOperacion, MontoMaximoDiario, MontoRequiereAprobacion
+        FROM Parametros.LimiteOperacion WITH (HOLDLOCK)
+        WHERE CodigoTipoTransaccion=:tipo AND IdCanal=:canal AND Estado='A'
+          AND (GrupoID IS NULL OR GrupoID=:grupo)
+          AND (IdAgencia IS NULL OR IdAgencia=:agencia)
+          AND VigenciaDesde<=:fecha AND (VigenciaHasta IS NULL OR VigenciaHasta>=:fecha)
+        ORDER BY CASE WHEN IdAgencia IS NULL THEN 0 ELSE 2 END
+               + CASE WHEN GrupoID IS NULL THEN 0 ELSE 1 END DESC,
+                 VigenciaDesde DESC, IdLimiteOperacion DESC
+        """,
+        {
+            "tipo": tipo,
+            "canal": id_canal,
+            "grupo": grupo,
+            "agencia": agencia,
+            "fecha": fecha,
+        },
+    )
+
+
 def consultar_cuentas(
     conn: Connection,
     *,

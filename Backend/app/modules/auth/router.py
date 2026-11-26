@@ -481,6 +481,7 @@ def cambiar_rol(
         if not (
             isinstance(detalle, dict)
             and detalle.get("code") == "APROBACION_REQUERIDA"
+            and get_settings().e104_politica_roles_activa
             and get_settings().e104_permiso_aprobar_roles.strip()
         ):
             raise

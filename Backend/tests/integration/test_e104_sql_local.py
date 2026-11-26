@@ -15,6 +15,7 @@ from sqlalchemy.exc import DBAPIError
 
 from app.core.security import auth as seguridad_auth
 from app.core.security.auth import ROLES
+from app.modules.aprobaciones import tareas
 from app.modules.aprobaciones.auditoria import ContextoAuditoria
 from app.modules.aprobaciones.identidad import Actor
 from app.modules.aprobaciones.registro import Objetivo, Registro
@@ -402,15 +403,13 @@ def test_roles_e008_resoluciones_y_recuperacion(laboratorio, monkeypatch):
             incompatibles=[],
         ),
     )
-    monkeypatch.setattr(
-        aprobacion_roles,
-        "get_settings",
-        lambda: SimpleNamespace(
-            e104_permiso_aprobar_roles="qa:roles",
-            e104_corte_asignacion_caja=False,
-            e104_recuperar_correo=False,
-        ),
+    opciones = SimpleNamespace(
+        e104_permiso_aprobar_roles="qa:roles",
+        e104_politica_roles_activa=True,
+        e104_corte_asignacion_caja=False,
+        e104_recuperar_correo=False,
     )
+    monkeypatch.setattr(aprobacion_roles, "get_settings", lambda: opciones)
     registro = Registro()
     operacion = aprobacion_roles.operacion()
     assert operacion is not None
@@ -444,9 +443,32 @@ def test_roles_e008_resoluciones_y_recuperacion(laboratorio, monkeypatch):
         == "Cancelada"
     )
     pendiente = solicitar()
+    opciones.e104_politica_roles_activa = False
+    assert aprobacion_roles.operacion() is None
+    monkeypatch.setattr(tareas, "get_settings", lambda: opciones)
+    suspendida = Servicio(
+        laboratorio, laboratorio, Registro(), lambda sujeto, _: actores[sujeto]
+    )
+    assert tareas.recuperar(suspendida, org) == tareas.Conteo()
+    assert escrituras == []
+    with laboratorio.connect() as conn:
+        assert (
+            conn.scalar(
+                text(
+                    "SELECT Estado FROM Seguridad.SolicitudAprobacion WHERE IdSolicitud=:id"
+                ),
+                {"id": pendiente},
+            )
+            == "Pendiente"
+        )
+    opciones.e104_politica_roles_activa = True
     with pytest.raises(HTTPException) as ambigua:
         cola.aprobar(aprobador, pendiente, None, contexto)
     assert ambigua.value.status_code == 503
+    opciones.e104_politica_roles_activa = False
+    assert tareas.recuperar(suspendida, org) == tareas.Conteo()
+    assert len(escrituras) == 1
+    opciones.e104_politica_roles_activa = True
     monkeypatch.setattr(seguridad_auth, "get_engine", lambda _: laboratorio)
     monkeypatch.setattr(
         seguridad_auth,
