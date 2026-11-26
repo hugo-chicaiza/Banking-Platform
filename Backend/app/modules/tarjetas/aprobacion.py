@@ -132,16 +132,12 @@ def programar(conn: Connection, id_tarjeta: int, actor: Actor, agencia: str) -> 
 
 
 def _cadena_solicitud(conn: Connection, id_tarjeta: int, *, bloquear: bool = False):
-    tabla = "Tarjeta.SolicitudAprobacionPendiente"
-    if bloquear:
-        tabla += " WITH (UPDLOCK,HOLDLOCK)"
-    return (
-        conn.execute(
-            text(f"SELECT * FROM {tabla} WHERE IdTarjeta=:id"), {"id": id_tarjeta}
-        )
-        .mappings()
-        .first()
+    consulta = (
+        "SELECT * FROM Tarjeta.SolicitudAprobacionPendiente WITH (UPDLOCK,HOLDLOCK) WHERE IdTarjeta=:id"
+        if bloquear
+        else "SELECT * FROM Tarjeta.SolicitudAprobacionPendiente WHERE IdTarjeta=:id"
     )
+    return conn.execute(text(consulta), {"id": id_tarjeta}).mappings().first()
 
 
 def id_solicitud(conn: Connection, id_tarjeta: int) -> int | None:
