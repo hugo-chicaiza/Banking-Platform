@@ -61,7 +61,12 @@ def test_catalogo_rechaza_inactivos_desconocidos_e_inyeccion(catalogo, codigo):
 @pytest.mark.parametrize("permite", [False, True])
 def test_no_eludir_permiso_en_respuestas_compartidas(monkeypatch, tipo, permite):
     cliente = Cliente.model_construct(
-        id_cliente=1, direcciones=[{"calleDireccion": "Privada"}]
+        id_cliente=1,
+        identificacion="1710034065",
+        email="m@x.ec",
+        telefono_celular="0991234567",
+        telefono_convencional=None,
+        direcciones=[{"calleDireccion": "Privada"}],
     )
     if tipo == "listado":
         resultado = PageCliente(items=[cliente], page=1, page_size=20, total=1)
@@ -94,8 +99,17 @@ def test_no_eludir_permiso_en_respuestas_compartidas(monkeypatch, tipo, permite)
 
 def test_control_apagado_conserva_contrato_anterior(monkeypatch):
     monkeypatch.setattr(funciones, "activa", lambda: False)
-    cliente = Cliente.model_construct(direcciones=[{"calleDireccion": "Conservada"}])
-    assert aplicar_visibilidad(cliente, usuario_con_roles("ASESOR")) is cliente
+    cliente = Cliente.model_construct(
+        identificacion="1710034065",
+        email="m@x.ec",
+        telefono_celular="0991234567",
+        telefono_convencional=None,
+        direcciones=[{"calleDireccion": "Conservada"}],
+    )
+    visto = aplicar_visibilidad(cliente, usuario_con_roles("ASESOR"))
+    assert visto.direcciones == cliente.direcciones
+    # E5-05: aun con el control apagado, los datos sensibles salen enmascarados.
+    assert visto.identificacion == "******4065"
 
 
 def test_consulta_sql_incluye_retiradas_sin_mezclar_clientes(catalogo):

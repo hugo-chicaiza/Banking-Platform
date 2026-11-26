@@ -89,12 +89,18 @@ class Settings(BaseSettings):
     limite_peticiones_activo: bool = True
     editor_accesos_activo: bool = False
     editor_funciones_activo: bool = False
+
+    # E5-05: código MFA (WorkOS TOTP) antes de mostrar datos completos del cliente.
+    # Pendiente: apagado hasta validarlo con usuarios; la revelación sigue auditada.
+    revelacion_exige_mfa: bool = False
+
     e104_politica_roles_activa: bool = False
     e104_politica_roles: str | None = None
     e104_permiso_aprobar_roles: str = ""
     e104_recuperar_correo: bool = False
     e104_verificar_asignacion_caja: bool = False
     e104_corte_asignacion_caja: bool = False
+
     limite_lectura_por_minuto: int = 300
     limite_escritura_por_minuto: int = 60
     limite_sensible_por_minuto: int = 5

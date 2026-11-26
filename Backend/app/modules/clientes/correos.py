@@ -29,6 +29,7 @@ from app.modules.clientes.schemas import (
     ClienteEmailNuevo,
     VerificacionEmail,
 )
+from app.modules.clientes.visibilidad import enmascarar_email
 from app.modules.parametros import general
 
 router = APIRouter(
@@ -427,6 +428,11 @@ def verificar_secundario(
     return resultado
 
 
+def _enmascarado(correo: ClienteEmail) -> ClienteEmail:
+    # E5-05: el valor completo solo sale por la revelación auditada con MFA.
+    return correo.model_copy(update={"email": enmascarar_email(correo.email)})
+
+
 # ---------------------------------------------------------------------------
 # Rutas (el llamador las incluye bajo /clientes)
 # ---------------------------------------------------------------------------
@@ -440,8 +446,8 @@ def verificar_secundario(
     openapi_extra={"x-roles": _ROLES_CONSULTA},
 )
 def listar(idCliente: IdCliente, conn: Db) -> list[ClienteEmail]:
-    """Correos secundarios activos del cliente, en orden de alta."""
-    return listar_emails(conn, idCliente)
+    """Correos secundarios activos del cliente, en orden de alta (enmascarados)."""
+    return [_enmascarado(c) for c in listar_emails(conn, idCliente)]
 
 
 @router.post(
@@ -460,7 +466,9 @@ def agregar(
     conn: Db,
 ) -> ClienteEmail:
     """Agrega un correo secundario (se guarda en minúsculas)."""
-    return agregar_email(conn, idCliente, payload, usuario, ip_cliente(request.scope))
+    return _enmascarado(
+        agregar_email(conn, idCliente, payload, usuario, ip_cliente(request.scope))
+    )
 
 
 @router.delete(
@@ -514,6 +522,8 @@ def verificar_correo_secundario(
     conn: Db,
 ) -> ClienteEmail:
     """Marca un correo secundario como verificado por el personal (sin envío)."""
-    return verificar_secundario(
-        conn, idCliente, idEmail, usuario, ip_cliente(request.scope)
+    return _enmascarado(
+        verificar_secundario(
+            conn, idCliente, idEmail, usuario, ip_cliente(request.scope)
+        )
     )

@@ -24,7 +24,15 @@ _VENTANA_SEGUNDOS = 60.0
 _MAX_CLAVES = 100_000
 _METODOS_LECTURA = {"GET", "HEAD", "OPTIONS"}
 # Rutas donde se prueban PIN o credenciales. Algunas son de módulos que aún no existen
-_SUFIJOS_SENSIBLES = ("/pin", "/auth/login", "/atm/auth", "/atm/cambio-pin")
+_SUFIJOS_SENSIBLES = (
+    "/pin",
+    "/auth/login",
+    "/atm/auth",
+    "/atm/cambio-pin",
+    # E5-05: código MFA y revelación de datos completos del cliente
+    "/revelacion",
+    "/revelacion/desafio",
+)
 
 
 class ContadorPeticiones:

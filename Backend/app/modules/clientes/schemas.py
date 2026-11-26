@@ -131,6 +131,8 @@ class Cliente(CamelModel):
     # E5-04: marca manual "verificado por el personal" del correo principal.
     email_verificado: bool = False
     fecha_email_verificado: datetime | None = None
+    # E5-05: agencia donde se registró (NULL en clientes anteriores sin dato).
+    id_agencia_registro: str | None = None
 
 
 Identificacion = Annotated[
@@ -363,6 +365,98 @@ class RiesgoRegistrado(Riesgo):
     """Evaluación y estado del cliente después del trigger (CLI-13)."""
 
     estado_cliente: EstadoCliente
+
+
+CodigoAgencia = Annotated[str, Field(pattern=r"^[0-9]{3}$")]
+TextoBusqueda = Annotated[
+    str,
+    StringConstraints(
+        strip_whitespace=True,
+        min_length=3,
+        max_length=100,
+        pattern=r"^[^\x00-\x1f\x7f]+$",
+    ),
+]
+OrdenCliente = Annotated[str, Field(max_length=40)]
+
+
+class ClienteBusqueda(CamelModel):
+    """E5-05 · Filtros en el cuerpo: documento, nombre y correo nunca van en la URL
+    ni en los registros (ASVS 14.2.1)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    identificacion: Identificacion | None = None
+    # Coincide con el inicio de cualquier palabra de nombres, apellidos o razón social.
+    nombre: TextoBusqueda | None = None
+    email: EmailCliente | None = None
+    estado: EstadoCliente | None = None
+    id_agencia_registro: CodigoAgencia | None = None
+    tipo_cliente: TipoCliente | None = None
+    page: int = Field(default=1, ge=1, le=10000)
+    page_size: int = Field(default=20, ge=1, le=100)
+    sort: OrdenCliente | None = None
+
+    @field_validator("email")
+    @classmethod
+    def email_minusculas(cls, valor: str | None) -> str | None:
+        return None if valor is None else valor.lower()
+
+    def tiene_filtro(self) -> bool:
+        # El tipo de cliente solo acota: por sí solo devolvería media cartera.
+        filtros = (
+            self.identificacion,
+            self.nombre,
+            self.email,
+            self.estado,
+            self.id_agencia_registro,
+        )
+        return any(f is not None for f in filtros)
+
+
+CampoRevelable = Literal[
+    "identificacion",
+    "email",
+    "telefonoCelular",
+    "telefonoConvencional",
+    "correosSecundarios",
+]
+
+
+class DesafioRevelacion(CamelModel):
+    """Desafío MFA de WorkOS para el factor TOTP del usuario de la sesión."""
+
+    id_desafio: str | None = None
+    expira_en: str | None = None  # ISO 8601 tal como lo da WorkOS
+    # False mientras REVELACION_EXIGE_MFA esté apagado: se revela sin código.
+    requiere_codigo: bool = True
+
+
+class SolicitudRevelacion(CamelModel):
+    model_config = ConfigDict(extra="forbid")
+
+    campos: list[CampoRevelable] = Field(min_length=1, max_length=5)
+    id_desafio: str | None = Field(
+        default=None, min_length=1, max_length=100, pattern=r"^[A-Za-z0-9_]+$"
+    )
+    codigo: str | None = Field(default=None, pattern=r"^[0-9]{6}$")
+
+    @field_validator("campos")
+    @classmethod
+    def sin_repetidos(cls, valor: list[str]) -> list[str]:
+        if len(set(valor)) != len(valor):
+            raise ValueError("Cada campo se pide una sola vez.")
+        return valor
+
+
+class Revelacion(CamelModel):
+    """Solo los campos pedidos; los demás quedan null."""
+
+    identificacion: str | None = None
+    email: str | None = None
+    telefono_celular: str | None = None
+    telefono_convencional: str | None = None
+    correos_secundarios: list[str] | None = None
 
 
 class PageCliente(CamelModel):

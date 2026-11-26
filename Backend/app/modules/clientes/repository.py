@@ -126,6 +126,7 @@ def crear_cliente(
     payload: ClienteCreate,
     creado_por: int,
     direccion_ip: str,
+    id_agencia: str | None = None,
 ) -> dict[str, Any]:
     """Inserta Cliente, Dirección principal y ClientesHis en una sola transacción."""
     ahora = datetime.now(UTC)
@@ -153,6 +154,7 @@ def crear_cliente(
         "estado": estado_inicial,
         "fecha_registro": ahora,
         "creado_por": creado_por,
+        "id_agencia_registro": id_agencia,
     }
 
     sql_cliente = """
@@ -164,7 +166,7 @@ def crear_cliente(
             RazonSocial, NombreComercial, IdActividadEconomica, FechaNacimiento,
             Genero, EstadoCivil, CodigoPaisNacionalidad, TelefonoConvencional,
             TelefonoCelular, Email, ConsentimientoDatos, FechaConsentimiento,
-            Estado, FechaRegistro, CreadoPor
+            Estado, FechaRegistro, CreadoPor, IdAgenciaRegistro
         )
         OUTPUT INSERTED.IdCliente INTO @TblCliente
         VALUES (
@@ -172,7 +174,7 @@ def crear_cliente(
             :razon_social, :nombre_comercial, :id_actividad_economica, :fecha_nacimiento,
             :genero, :estado_civil, :codigo_pais_nacionalidad, :telefono_convencional,
             :telefono_celular, :email, :consentimiento_datos, :fecha_consentimiento,
-            :estado, :fecha_registro, :creado_por
+            :estado, :fecha_registro, :creado_por, :id_agencia_registro
         );
 
         SELECT IdCliente AS id_cliente FROM @TblCliente;
@@ -394,8 +396,10 @@ def consultar_clientes(
     conn: Connection,
     *,
     id_cliente: int | None = None,
-    q: str | None = None,
+    nombre: str | None = None,
     identificacion: str | None = None,
+    email: str | None = None,
+    id_agencia_registro: str | None = None,
     tipo_cliente: str | None = None,
     estado: str | None = None,
     page: int = 1,
@@ -430,6 +434,7 @@ def consultar_clientes(
                    CAST(CASE WHEN EmailVerificadoPor IS NULL THEN 0 ELSE 1 END AS bit)
                        AS email_verificado,
                    FechaEmailVerificado AS fecha_email_verificado,
+                   IdAgenciaRegistro AS id_agencia_registro,
                    ROW_NUMBER() OVER (ORDER BY
                        CASE WHEN :campo = 'IdCliente' AND :direccion = 'asc'
                             THEN IdCliente END ASC,
@@ -468,12 +473,15 @@ def consultar_clientes(
             FROM Clientes.Cliente
             WHERE (:id_cliente IS NULL OR IdCliente = :id_cliente)
               AND (:identificacion IS NULL OR Identificacion = :identificacion)
+              AND (:email IS NULL OR Email = :email)
+              AND (:agencia IS NULL OR IdAgenciaRegistro = :agencia)
               AND (:tipo_cliente IS NULL OR TipoCliente = :tipo_cliente)
               AND (:estado IS NULL OR Estado = :estado)
-              AND (:q_like IS NULL OR (
-                  Identificacion LIKE :q_like OR Nombres LIKE :q_like
-                  OR Apellidos LIKE :q_like OR RazonSocial LIKE :q_like
-              ))
+              -- E5-05: inicio de cualquier palabra, sin acentos ni mayúsculas (columna
+              -- NombreBusqueda en Latin1_General_CI_AI); comodines escapados.
+              AND (:nombre_inicio IS NULL
+                   OR NombreBusqueda LIKE :nombre_inicio ESCAPE '\'
+                   OR NombreBusqueda LIKE :nombre_palabra ESCAPE '\')
         )
         SELECT p.*, t.total
         FROM (SELECT COUNT(*) AS total FROM Filtrados) AS t
@@ -483,8 +491,11 @@ def consultar_clientes(
         """,
         {
             "id_cliente": id_cliente,
-            "q_like": None if q is None else f"%{q}%",
+            "nombre_inicio": None if nombre is None else patron_inicio(nombre),
+            "nombre_palabra": None if nombre is None else "% " + patron_inicio(nombre),
             "identificacion": identificacion,
+            "email": email,
+            "agencia": id_agencia_registro,
             "tipo_cliente": tipo_cliente,
             "estado": estado,
             "campo": campo,
@@ -505,6 +516,18 @@ def consultar_clientes(
     for cliente in clientes:
         cliente["direcciones"] = direcciones.get(cliente["id_cliente"], [])
     return clientes, total
+
+
+def patron_inicio(texto: str) -> str:
+    """LIKE "empieza con": el texto del usuario nunca actúa como comodín (ASVS 1.2.x)."""
+    escapado = (
+        texto.upper()
+        .replace("\\", "\\\\")
+        .replace("%", "\\%")
+        .replace("_", "\\_")
+        .replace("[", "\\[")
+    )
+    return escapado + "%"
 
 
 def obtener_cliente_detalle(conn: Connection, id_cliente: int) -> dict[str, Any] | None:

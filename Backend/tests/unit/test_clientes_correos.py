@@ -145,7 +145,7 @@ def test_listar_solo_activos(entorno):
 def test_alta_ok_en_minusculas_con_historial_y_auditoria(entorno, eventos_auditados):
     respuesta = _llamar(entorno, "POST", "/10/emails", NUEVO)
     assert respuesta.status_code == 201
-    assert respuesta.json()["email"] == "nuevo.correo@example.com"
+    assert respuesta.json()["email"] == "n***@example.com"  # E5-05: enmascarado
     assert entorno.insertados == [
         (10, "nuevo.correo@example.com", "Personal", ID_AUDITORIA)
     ]

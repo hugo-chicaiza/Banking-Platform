@@ -20,6 +20,7 @@ from app.modules.clientes.schemas import (
     CAMPOS_SENSIBLES,
     CambiosSensibles,
     Cliente,
+    ClienteBusqueda,
     ClienteCreate,
     ClienteEstadoUpdate,
     ClienteHistorial,
@@ -31,14 +32,12 @@ from app.modules.clientes.schemas import (
     Direccion,
     DireccionNueva,
     DireccionUpdate,
-    EstadoCliente,
     PageCliente,
     PageClienteHistorial,
     Riesgo,
     RiesgoCreate,
     RiesgoRegistrado,
     TarjetaPerfil,
-    TipoCliente,
     TipoDocumento,
     ValidacionIdentificacion,
 )
@@ -564,34 +563,32 @@ def cambiar_estado_cliente(
         raise
 
 
-def listar_clientes(
-    conn: Connection,
-    *,
-    q: str | None = None,
-    identificacion: str | None = None,
-    tipo_cliente: TipoCliente | None = None,
-    estado: EstadoCliente | None = None,
-    page: int = 1,
-    page_size: int = 20,
-    sort: str | None = None,
-) -> PageCliente:
-    """Busca clientes con filtros combinados y ordenamiento permitido (CLI-03)."""
-    campo, direccion = _orden_clientes(sort)
+def listar_clientes(conn: Connection, filtros: ClienteBusqueda) -> PageCliente:
+    """E5-05 · búsqueda siempre filtrada y paginada (CLI-03)."""
+    if not filtros.tiene_filtro():
+        raise problema(
+            400,
+            "FILTRO_REQUERIDO",
+            "Indica documento, nombre, correo, estado o agencia para buscar.",
+        )
+    campo, direccion = _orden_clientes(filtros.sort)
     filas, total = repository.consultar_clientes(
         conn,
-        q=q,
-        identificacion=identificacion,
-        tipo_cliente=tipo_cliente,
-        estado=estado,
-        page=page,
-        page_size=page_size,
+        nombre=filtros.nombre,
+        identificacion=filtros.identificacion,
+        email=filtros.email,
+        id_agencia_registro=filtros.id_agencia_registro,
+        tipo_cliente=filtros.tipo_cliente,
+        estado=filtros.estado,
+        page=filtros.page,
+        page_size=filtros.page_size,
         campo=campo,
         direccion=direccion,
     )
     return PageCliente(
         items=[Cliente(**fila) for fila in filas],
-        page=page,
-        page_size=page_size,
+        page=filtros.page,
+        page_size=filtros.page_size,
         total=total,
     )
 
@@ -766,6 +763,7 @@ def registrar_cliente(
     payload: ClienteCreate,
     creado_por: int,
     direccion_ip: str,
+    id_agencia: str | None = None,
 ) -> Cliente:
     """Valida reglas de negocio e inserta el cliente en la base de datos (CLI-02).
 
@@ -877,6 +875,7 @@ def registrar_cliente(
             payload=payload,
             creado_por=creado_por,
             direccion_ip=direccion_ip,
+            id_agencia=id_agencia,
         )
         conn.commit()
     except Exception:
