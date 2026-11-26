@@ -69,7 +69,9 @@ def resumen(servicio: Servicio, actor: Actor, fila: dict[str, Any]) -> Solicitud
         and ajena
         and operacion is not None
         and operacion.permiso_aprobacion in actor.permisos,
-        puede_cancelar=pendiente and not ajena,
+        puede_cancelar=pendiente
+        and not ajena
+        and (operacion is None or operacion.cancelable_por_solicitante),
     )
 
 
