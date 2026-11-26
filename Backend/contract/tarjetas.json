@@ -218,6 +218,17 @@
             "title": "Idproducto",
             "type": "integer"
           },
+          "idSolicitudAprobacion": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Idsolicitudaprobacion"
+          },
           "idTarjeta": {
             "title": "Idtarjeta",
             "type": "integer"
@@ -1315,7 +1326,7 @@
         ]
       },
       "post": {
-        "description": "Registra la solicitud de tarjeta (estado Solicitada, sin PIN) para una cuenta\nActiva. El PIN se genera al aprobarla (TAR-04).\n\nEl PAN ficticio queda cifrado en el repositorio aislado de pruebas.",
+        "description": "Registra una tarjeta Solicitada para su aprobación por otro operador.\n\nRequiere confirmar la agencia operativa de la cuenta. Si la publicación en la\ncola se difiere, la respuesta devuelve idSolicitudAprobacion nulo y la recupera el ejecutor.",
         "operationId": "emitir_tarjeta_api_v1_tarjetas_post",
         "requestBody": {
           "content": {
@@ -3008,7 +3019,7 @@
     },
     "/api/v1/tarjetas/{idTarjeta}/estado": {
       "post": {
-        "description": "Al aprobar una solicitud queda Generada. La activación exige entrega verificada.",
+        "description": "Cambia el estado de la tarjeta. Las solicitudes inscritas se resuelven en Aprobaciones.",
         "operationId": "cambiar_estado_api_v1_tarjetas__idTarjeta__estado_post",
         "parameters": [
           {

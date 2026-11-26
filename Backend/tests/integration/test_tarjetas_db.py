@@ -6,6 +6,7 @@ base que se revierte al final; commit no hace nada.
 
 import re
 from collections.abc import Iterator
+from dataclasses import replace
 from datetime import date, timedelta
 from typing import Any
 
@@ -20,9 +21,11 @@ from app.core.database.db import cooperativa, get_engine
 from app.core.security import audit
 from app.core.security.hsm import es_pin_debil, obtener_hsm
 from app.main import app
-from app.modules.tarjetas import repository, router
+from app.modules.aprobaciones import router as aprobaciones
+from app.modules.aprobaciones.identidad import Actor
+from app.modules.tarjetas import aprobacion, repository, router
 from app.modules.tarjetas import service as tarjetas_service
-from tests.sesion import ID_AUDITORIA, simular_sesion
+from tests.sesion import ID_AUDITORIA, USUARIO, simular_sesion
 
 pytestmark = pytest.mark.skipif(
     not get_settings().cooperativa_db_server,
@@ -78,11 +81,31 @@ def bd() -> Iterator[tuple[Connection, Connection]]:
 
 
 @pytest.fixture()
-def client(bd) -> Iterator[TestClient]:
+def client(bd, datos, monkeypatch) -> Iterator[TestClient]:
     coop, seg = bd
+    agencia = coop.execute(
+        text("SELECT RTRIM(IdAgencia) FROM Cuentas.Cuenta WHERE IdCuenta=:id"),
+        {"id": datos["idCuenta"]},
+    ).scalar_one()
     app.dependency_overrides[cooperativa] = lambda: _SinCommit(coop)
     app.dependency_overrides[router.seguridad] = lambda: _SinCommit(seg)
-    simular_sesion(app)
+    app.dependency_overrides[aprobaciones.actual] = lambda: Actor(
+        USUARIO.id_usuario,
+        "org_tarjetas_sql",
+        "QA",
+        ID_AUDITORIA,
+        ("ASESOR",),
+        frozenset(),
+        (agencia,),
+    )
+    app.dependency_overrides[aprobaciones.servicio] = lambda: None
+    # Este laboratorio conserva transacciones sin confirmar. La cola usa sus
+    # propias conexiones y se verifica con ambas bases desechables en E610_LOCALDB.
+    monkeypatch.setattr(aprobacion, "programar", lambda *_: None)
+    monkeypatch.setattr(aprobacion, "publicar_al_solicitar", lambda *_: None)
+    monkeypatch.setattr(aprobacion, "id_solicitud", lambda *_: None)
+    monkeypatch.setattr(aprobacion, "gestionada", lambda *_: False)
+    simular_sesion(app, replace(USUARIO, id_agencia=agencia))
     yield TestClient(app)
     app.dependency_overrides.clear()
 

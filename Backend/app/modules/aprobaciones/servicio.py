@@ -212,6 +212,12 @@ class Servicio:
         except HTTPException as error:
             if error.status_code not in (403, 404):
                 raise
+            if not operacion.cancelar_por_revocacion:
+                raise problema(
+                    409,
+                    "SOLICITANTE_SIN_PERMISO",
+                    "El solicitante perdió acceso. Revise la solicitud o rechácela con un motivo.",
+                ) from None
             self.cancelar_sistema(
                 id_, actor.organizacion, "SOLICITANTE_SIN_PERMISO", contexto
             )
@@ -560,6 +566,13 @@ class Servicio:
             actor.alcance(fila["IdAgencia"])
             repo.pendiente(fila)
             if estado == "Cancelada":
+                operacion = self.registro.buscar(
+                    fila["CodigoTransaccion"], fila["TipoObjetivo"]
+                )
+                if operacion is not None and not operacion.cancelable_por_solicitante:
+                    raise problema(
+                        403, "SIN_PERMISO", "La solicitud debe resolverla otra persona."
+                    )
                 if actor.sujeto != fila["SolicitadoPor"]:
                     raise problema(
                         403, "SIN_PERMISO", "Solo el solicitante puede cancelar."
@@ -571,6 +584,7 @@ class Servicio:
                 )
                 if (
                     actor.sujeto == fila["SolicitadoPor"]
+                    or actor.id_interno == fila["IdInternoSolicitante"]
                     or operacion.permiso_aprobacion not in actor.permisos
                 ):
                     raise problema(
@@ -616,6 +630,24 @@ class Servicio:
                 contexto,
                 {"estado": estado},
             )
+        if operacion is not None and operacion.aplicar_descarte is not None:
+            try:
+                with self._motor(operacion).begin() as conn:
+                    operacion.aplicar_descarte(
+                        conn,
+                        {
+                            **fila,
+                            "Estado": estado,
+                            "Comentario": comentario,
+                            "IdInternoResolutor": actor.id_interno,
+                        },
+                    )
+            except (HTTPException, SQLAlchemyError):
+                raise problema(
+                    503,
+                    "RECHAZO_PENDIENTE_RECUPERACION",
+                    "La decisión quedó registrada y su aplicación continúa en segundo plano.",
+                ) from None
         return {"idSolicitud": id_, "estado": estado}
 
     def cancelar_sistema(

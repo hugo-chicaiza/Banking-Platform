@@ -180,6 +180,7 @@ class Tarjeta(TarjetaResumen):
     entrega_verificada_en: datetime | None = None
     sobre_descargado_en: datetime | None = None
     envio: EnvioTarjeta | None = None
+    id_solicitud_aprobacion: int | None = None
 
 
 class PageTarjeta(CamelModel):

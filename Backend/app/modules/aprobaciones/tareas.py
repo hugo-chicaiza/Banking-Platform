@@ -65,6 +65,8 @@ def recuperar(servicio: Servicio, org: str) -> Conteo:
             operacion = servicio.registro.obtener(
                 fila["CodigoTransaccion"], fila["TipoObjetivo"]
             )
+            if not operacion.cancelar_por_revocacion:
+                continue
             try:
                 solicitante = servicio.identidad_vigente(fila["SolicitadoPor"], org)
                 servicio.puede_solicitar(
@@ -80,6 +82,12 @@ def recuperar(servicio: Servicio, org: str) -> Conteo:
         except HTTPException:
             # Una indisponibilidad de WorkOS nunca se interpreta como revocacion.
             resultado.errores += 1
+    from app.modules.tarjetas import aprobacion as aprobacion_tarjetas
+
+    procesadas, modificadas, errores = aprobacion_tarjetas.reconciliar(servicio, org)
+    resultado.procesados += procesadas
+    resultado.modificados += modificadas
+    resultado.errores += errores
     if get_settings().e104_recuperar_correo:
         from app.modules.auth import recuperacion_correo
 
