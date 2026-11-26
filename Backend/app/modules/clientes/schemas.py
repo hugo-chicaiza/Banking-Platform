@@ -125,6 +125,7 @@ class Cliente(CamelModel):
     consentimiento_datos: bool
     fecha_consentimiento: datetime
     estado: str
+    motivo_estado: str | None = None
     fecha_registro: datetime
     creado_por: int
     direcciones: list[Direccion]
@@ -265,12 +266,12 @@ class ContenidoEdicion(CamelModel):
 
 
 class ClienteEstadoUpdate(CamelModel):
-    """Contrato CLI-06; Observaciones es VARCHAR(500) en SQL Server."""
+    """Contrato CLI-06; MotivoEstado es VARCHAR(300) en SQL Server."""
 
     model_config = ConfigDict(extra="forbid")
 
     estado: Literal["Activo", "Inactivo", "Suspendido", "Bloqueado", "Eliminado"]
-    motivo: str = Field(min_length=1, max_length=500)
+    motivo: str = Field(min_length=1, max_length=300)
 
     @field_validator("motivo")
     @classmethod

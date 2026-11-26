@@ -429,7 +429,8 @@ def consultar_clientes(
                    TelefonoCelular AS telefono_celular, Email AS email,
                    ConsentimientoDatos AS consentimiento_datos,
                    FechaConsentimiento AS fecha_consentimiento,
-                   Estado AS estado, FechaRegistro AS fecha_registro,
+                   Estado AS estado, MotivoEstado AS motivo_estado,
+                   FechaRegistro AS fecha_registro,
                    CreadoPor AS creado_por,
                    CAST(CASE WHEN EmailVerificadoPor IS NULL THEN 0 ELSE 1 END AS bit)
                        AS email_verificado,
@@ -679,12 +680,114 @@ def archivo_respaldo_valido(
     )
 
 
-def actualizar_estado_cliente(conn: Connection, id_cliente: int, estado: str) -> None:
+def actualizar_estado_cliente(
+    conn: Connection, id_cliente: int, estado: str, motivo: str | None = None
+) -> None:
     conn.execute(
         text("""
-        UPDATE Clientes.Cliente SET Estado = :estado WHERE IdCliente = :id_cliente
+        UPDATE Clientes.Cliente
+        SET Estado = :estado, MotivoEstado = :motivo
+        WHERE IdCliente = :id_cliente
     """),
-        {"id_cliente": id_cliente, "estado": estado},
+        {"id_cliente": id_cliente, "estado": estado, "motivo": motivo},
+    )
+
+
+SQL_ANONIMIZAR_NATURAL = """
+    UPDATE Clientes.Cliente
+    SET Nombres = 'CLIENTE ELIMINADO',
+        Apellidos = 'ELIMINADO',
+        NombreComercial = NULL,
+        Email = :email,
+        TelefonoCelular = '0000000000',
+        TelefonoConvencional = NULL,
+        FechaNacimiento = '1900-01-01',
+        EmailVerificadoPor = NULL,
+        FechaEmailVerificado = NULL
+    WHERE IdCliente = :id_cliente
+"""
+
+SQL_ANONIMIZAR_JURIDICO = """
+    UPDATE Clientes.Cliente
+    SET Nombres = 'CLIENTE ELIMINADO',
+        RazonSocial = 'CLIENTE ELIMINADO',
+        NombreComercial = NULL,
+        Email = :email,
+        TelefonoCelular = '0000000000',
+        TelefonoConvencional = NULL,
+        FechaNacimiento = '1900-01-01',
+        EmailVerificadoPor = NULL,
+        FechaEmailVerificado = NULL
+    WHERE IdCliente = :id_cliente
+"""
+
+SQL_ANONIMIZAR_DIRECCIONES = """
+    UPDATE Clientes.Direcciones
+    SET CalleDireccion = 'ANONIMIZADO',
+        ReferenciaUbicacion = 'ANONIMIZADO',
+        Sector = NULL,
+        CodigoPostal = NULL,
+        Estado = 'Eliminado'
+    WHERE IdCliente = :id_cliente
+"""
+
+SQL_ANONIMIZAR_EMAILS = """
+    UPDATE Clientes.ClienteEmail
+    SET Email = 'eliminado.' + CAST(:id_cliente AS varchar(20)) + '.' + CAST(IdClienteEmail AS varchar(20)) + '@anonimizado.invalid',
+        Estado = 'I',
+        VerificadoPor = NULL,
+        FechaVerificacion = NULL
+    WHERE IdCliente = :id_cliente
+"""
+
+
+def anonimizar_cliente(
+    conn: Connection,
+    id_cliente: int,
+    tipo_cliente: str,
+    *,
+    modificado_por: int,
+    direccion_ip: str,
+    id_solicitud: int | None = None,
+) -> None:
+    """Anonimiza los datos personales del cliente tras la aprobación de su eliminación.
+
+    Cumplimiento con la Ley Orgánica de Protección de Datos Personales (LOPDP):
+    aplica el derecho de supresión manteniendo la debida conservación legal.
+    El historial de auditoría (Clientes.ClientesHis, inmutable) y los productos
+    financieros cerrados (cuentas, créditos) se conservan por obligación legal
+    de conservación (artículos de conservación de la LOPDP y normativas de
+    organismos de control de la entidad financiera).
+    El documento de identificación (Identificacion) NO se modifica: queda
+    reservado para garantizar la unicidad e integridad referencial (decisión C-4).
+    """
+    email_anonimizado = f"eliminado.{id_cliente}@anonimizado.invalid"
+    sql_cliente = (
+        SQL_ANONIMIZAR_NATURAL if tipo_cliente == "Natural" else SQL_ANONIMIZAR_JURIDICO
+    )
+    conn.execute(
+        text(sql_cliente), {"id_cliente": id_cliente, "email": email_anonimizado}
+    )
+    conn.execute(text(SQL_ANONIMIZAR_DIRECCIONES), {"id_cliente": id_cliente})
+    conn.execute(text(SQL_ANONIMIZAR_EMAILS), {"id_cliente": id_cliente})
+
+    motivo = (
+        f"Anonimización por eliminación (solicitud {id_solicitud})"
+        if id_solicitud
+        else "Anonimización por eliminación"
+    )
+    observaciones = observaciones_cambio(None, "Datos personales anonimizados", motivo)
+    insertar_historial_cliente(
+        conn,
+        id_cliente=id_cliente,
+        tipo_operacion="D",
+        campo="ANONIMIZACION",
+        modificado_por=modificado_por,
+        direccion_ip=direccion_ip,
+        observaciones=observaciones,
+        valor_anterior=None,
+        valor_nuevo="Datos personales anonimizados",
+        id_solicitud=id_solicitud,
     )
 
 
