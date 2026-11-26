@@ -626,7 +626,9 @@
               "MORA",
               "SEGURO",
               "DIFERENCIA",
-              "TOTAL"
+              "TOTAL",
+              "PRIMA_FIJA",
+              "PRIMA_VARIABLE"
             ],
             "title": "Base",
             "type": "string"

@@ -22,11 +22,11 @@ from app.core.security.auth import (
     UsuarioActual,
     UsuarioAuditoria,
     require_auth,
-    require_permiso,
     require_roles,
 )
 from app.modules.aprobaciones import router as aprobaciones
-from app.modules.tarjetas import aprobacion, service
+from app.modules.seguridad.funciones_catalogo import POR_ID
+from app.modules.tarjetas import accesos, aprobacion, service
 from app.modules.tarjetas.schemas import (
     MAX_INT,
     MAX_PAGE_SIZE,
@@ -136,7 +136,7 @@ def _agencia_operativa(operador: UsuarioActual) -> str:
     "",
     response_model=Tarjeta,
     status_code=201,
-    dependencies=[Depends(require_permiso("tar-solicitar"))],
+    dependencies=[Depends(require_roles(*POR_ID["tarjetas.emitir"].roles_iniciales))],
 )
 def emitir_tarjeta(
     payload: TarjetaCreate,
@@ -181,7 +181,7 @@ def emitir_tarjeta(
     "",
     response_model=PageTarjeta,
     dependencies=[
-        Depends(require_permiso("tar-consultar")),
+        Depends(require_roles(*POR_ID["tarjetas.consultar"].roles_iniciales)),
         Depends(
             solo_parametros(
                 "idCliente",
@@ -219,7 +219,9 @@ def buscar_tarjetas(
 @router.get(
     "/{idTarjeta}",
     response_model=Tarjeta,
-    dependencies=[Depends(require_permiso("tar-consultar"))],
+    dependencies=[
+        Depends(require_roles(*POR_ID["tarjetas.consultar"].roles_iniciales))
+    ],
 )
 def detalle_tarjeta(id_tarjeta: IdTarjetaPath, conn: Db) -> Any:
     """Detalle de una tarjeta."""
@@ -233,7 +235,9 @@ def detalle_tarjeta(id_tarjeta: IdTarjetaPath, conn: Db) -> Any:
 @router.post(
     "/{idTarjeta}/estado",
     response_model=Tarjeta,
-    dependencies=[Depends(require_permiso("tar-estado"))],
+    dependencies=[
+        Depends(require_roles(*POR_ID["tarjetas.cambiarEstado"].roles_iniciales))
+    ],
 )
 def cambiar_estado(
     id_tarjeta: IdTarjetaPath,
@@ -252,7 +256,7 @@ def cambiar_estado(
         payload,
         usuario,
         _ip(request),
-        permisos=operador.permisos,
+        funciones=accesos.funciones_de_estado(operador.roles),
         tiene_solicitud=aprobacion.gestionada,
     )
 
@@ -261,7 +265,10 @@ def cambiar_estado(
     "/{idTarjeta}/envio",
     operation_id="TAR08",
     response_model=EnvioTarjeta,
-    dependencies=[Depends(require_permiso("tar-estado")), Depends(solo_parametros())],
+    dependencies=[
+        Depends(require_roles(*POR_ID["tarjetas.cambiarEstado"].roles_iniciales)),
+        Depends(solo_parametros()),
+    ],
 )
 def actualizar_envio(
     id_tarjeta: IdTarjetaPath,
@@ -286,7 +293,10 @@ def actualizar_envio(
 @router.post(
     "/{idTarjeta}/pin",
     status_code=204,
-    dependencies=[Depends(require_permiso("tar-pin")), Depends(_sin_body)],
+    dependencies=[
+        Depends(require_roles(*POR_ID["tarjetas.asignarPin"].roles_iniciales)),
+        Depends(_sin_body),
+    ],
 )
 def regenerar_pin(
     id_tarjeta: IdTarjetaPath,
@@ -307,7 +317,7 @@ def regenerar_pin(
     response_class=Response,
     responses=respuestas_pdf("Sobre de PIN (PDF). Se entrega una sola vez."),
     dependencies=[
-        Depends(require_permiso("tar-pin:entregar")),
+        Depends(require_roles(*POR_ID["tarjetas.verSobrePin"].roles_iniciales)),
         Depends(solo_parametros()),
     ],
 )
@@ -330,7 +340,7 @@ def sobre_pin(
     response_model=PageTarjetaHistorial,
     response_model_exclude_none=True,
     dependencies=[
-        Depends(require_permiso("tar-consultar:historial")),
+        Depends(require_roles(*POR_ID["tarjetas.verHistorial"].roles_iniciales)),
         Depends(
             solo_parametros("fechaDesde", "fechaHasta", "page", "pageSize", "sort")
         ),

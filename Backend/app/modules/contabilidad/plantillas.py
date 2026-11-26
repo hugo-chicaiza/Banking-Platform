@@ -54,6 +54,14 @@ _ORIGEN_NUEVA_FAMILIA = {
     "CUENTAS_INTERES_CAPITALIZACION": "CUENTAS",
     "CREDITO_INTERES_DEVENGO": "CREDITO",
     "CREDITO_SEGURO_COBRO_CUENTA": "CREDITO",
+    "APORTE_CERTIFICADO": "CAJA",
+    "APORTE_REDENCION_CAJA": "CAJA",
+    "APORTE_REDENCION_AHORRO": "CUENTAS",
+    "RED_COMISION_CAUSADA": "TARJETA",
+    "RED_INTERCHANGE_GANADO": "TARJETA",
+    "CON_PRIMA_SEGURO_DEPOSITOS": "CIERRE",
+    "CON_DEPOSITOS_NO_CUBIERTOS_ALTA": "CIERRE",
+    "CON_DEPOSITOS_NO_CUBIERTOS_BAJA": "CIERRE",
 }
 
 
@@ -71,6 +79,8 @@ class Linea(BaseModel):
         "SEGURO",
         "DIFERENCIA",
         "TOTAL",
+        "PRIMA_FIJA",
+        "PRIMA_VARIABLE",
     ]
     cuenta: IdCuenta | None = None
     rol: str | None = Field(default=None, min_length=1, max_length=30)

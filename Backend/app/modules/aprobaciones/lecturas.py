@@ -64,11 +64,11 @@ def resumen(servicio: Servicio, actor: Actor, fila: dict[str, Any]) -> Solicitud
         puede_aprobar=pendiente
         and ajena
         and operacion is not None
-        and operacion.permiso_aprobacion in actor.permisos,
+        and operacion.permite_aprobar(actor),
         puede_rechazar=pendiente
         and ajena
         and operacion is not None
-        and operacion.permiso_aprobacion in actor.permisos,
+        and operacion.permite_aprobar(actor),
         puede_cancelar=pendiente
         and not ajena
         and (operacion is None or operacion.cancelable_por_solicitante),
@@ -84,9 +84,7 @@ def listar(
     agencia: str | None = None,
 ) -> Bandeja:
     codigos = [
-        o.codigo
-        for o in servicio.registro.operaciones()
-        if o.permiso_aprobacion in actor.permisos
+        o.codigo for o in servicio.registro.operaciones() if o.permite_aprobar(actor)
     ]
     sql = consulta("""SELECT *,COUNT(*) OVER() AS TotalFiltrado FROM Seguridad.SolicitudAprobacion
         WHERE IdOrganizacion=:org
@@ -152,9 +150,7 @@ def listar(
 def notificaciones(servicio: Servicio, actor: Actor, agencia: str | None) -> dict:
     """Avisos reales de la cola, con el mismo alcance de sus bandejas."""
     codigos = [
-        o.codigo
-        for o in servicio.registro.operaciones()
-        if o.permiso_aprobacion in actor.permisos
+        o.codigo for o in servicio.registro.operaciones() if o.permite_aprobar(actor)
     ]
     sql = consulta("""SELECT TOP(50) *,COUNT(*) OVER() AS TotalFiltrado
         FROM Seguridad.SolicitudAprobacion
@@ -217,9 +213,7 @@ def solicitud_global_por_objetivo(
                     "objetivo": id_objetivo,
                     "agencia": agencia,
                     "actor": actor.sujeto,
-                    "puede_revisar": int(
-                        operacion.permiso_aprobacion in actor.permisos
-                    ),
+                    "puede_revisar": int(operacion.permite_aprobar(actor)),
                 },
             )
             .mappings()
@@ -236,7 +230,7 @@ def detalle(servicio: Servicio, actor: Actor, id_: int) -> SolicitudDetalle:
             operacion = servicio.registro.obtener(
                 fila["CodigoTransaccion"], fila["TipoObjetivo"]
             )
-            autorizado = operacion.permiso_aprobacion in actor.permisos
+            autorizado = operacion.permite_aprobar(actor)
         else:
             autorizado = True
         if not autorizado:

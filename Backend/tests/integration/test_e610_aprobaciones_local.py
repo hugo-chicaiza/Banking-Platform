@@ -141,7 +141,7 @@ def test_recupera_aprueba_y_rechaza_las_tarjetas_ficticias(bases, monkeypatch):
         "Supervisor QA",
         12,
         ("SUPERVISOR",),
-        frozenset({"tar-solicitar:aprobar"}),
+        frozenset(),
         ("001", "002"),
     )
     personas = {a.sujeto: a for a in (titular, supervisor)}
@@ -203,14 +203,30 @@ def test_recupera_aprueba_y_rechaza_las_tarjetas_ficticias(bases, monkeypatch):
             == "APROBADOR_ES_SOLICITANTE"
         )
 
+        iniciar(
+            replace(
+                supervisor,
+                roles=("ADMIN",),
+                permisos=frozenset({"tar-solicitar:aprobar"}),
+            )
+        )
+        assert client.get(ruta).json()["total"] == 0
+        assert client.get(f"{ruta}/{primera}").status_code == 404
+        assert client.post(f"{ruta}/{primera}/aprobar", json={}).status_code == 404
+        assert (
+            client.post(
+                f"{ruta}/{segunda}/rechazar", json={"comentario": "Sin función"}
+            ).status_code
+            == 404
+        )
+
         iniciar(supervisor, agencia="002")
         assert client.get(ruta).json()["total"] == 0
         assert client.post(f"{ruta}/{primera}/aprobar", json={}).status_code == 404
         iniciar(supervisor)
-        assert {f["idObjetivo"] for f in client.get(ruta).json()["items"]} == {
-            "321",
-            "322",
-        }
+        pendientes = client.get(ruta).json()["items"]
+        assert {f["idObjetivo"] for f in pendientes} == {"321", "322"}
+        assert all(f["puedeAprobar"] and f["puedeRechazar"] for f in pendientes)
         aceptada = client.post(f"{ruta}/{primera}/aprobar", json={})
         assert (aceptada.status_code, aceptada.json()) == (
             200,

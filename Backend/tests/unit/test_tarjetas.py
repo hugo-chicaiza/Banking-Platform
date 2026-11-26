@@ -867,6 +867,44 @@ def test_e610_impide_autoaprobacion(client, monkeypatch, seg):
     assert "estado" not in capturado and not seg.pines
 
 
+@pytest.mark.parametrize(
+    ("rol", "bloqueador", "codigo"),
+    [
+        ("ADMIN", 2, "SIN_PERMISO_APROBACION"),
+        ("SUPERVISOR", 1, "AUTOAPROBACION_NO_PERMITIDA"),
+        ("SUPERVISOR", 2, None),
+    ],
+)
+def test_desbloqueo_usa_funcion_y_segunda_persona(
+    client, monkeypatch, rol, bloqueador, codigo
+):
+    capturado = _estado(
+        monkeypatch,
+        {
+            **FILA,
+            "estado_actual": "Bloqueada",
+            "pin_asignado": True,
+            "motivo_estado": "PEDIDO_CLIENTE",
+        },
+    )
+    monkeypatch.setattr(
+        repository,
+        "ultimo_bloqueo",
+        lambda *_: {"realizado_por": bloqueador, "bloqueo_pin": False},
+    )
+    permisos = ("tar-estado:aprobar",) if rol == "ADMIN" else ()
+    simular_sesion(app, replace(usuario_con_roles(rol), permisos=permisos))
+    respuesta = client.post(
+        f"{BASE}/301/estado", json={"estado": "Activa", "motivo": "Revisión aprobada"}
+    )
+    if codigo:
+        assert respuesta.status_code == 403 and _code(respuesta) == codigo
+        assert "estado" not in capturado
+    else:
+        assert respuesta.status_code == 200, respuesta.text
+        assert capturado["estado"] == "Activa"
+
+
 def test_e610_cuenta_con_principal_viva_rechaza_otra(client, emision, monkeypatch):
     monkeypatch.setattr(repository, "principal_viva", lambda *_a: True)
 

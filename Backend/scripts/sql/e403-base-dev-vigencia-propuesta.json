@@ -1,0 +1,106 @@
+[
+  {
+    "idTipoAsiento": 6,
+    "borrador": {
+      "codigoPlantilla": "CAJA_FALTANTE",
+      "idConceptoContable": 9,
+      "vigenciaDesde": "2026-11-27",
+      "nombre": "Faltante aprobado de ventanilla",
+      "lineas": [
+        {
+          "lado": "DEBITO",
+          "base": "DIFERENCIA",
+          "origen": "FIJA",
+          "cuenta": 1194
+        },
+        {
+          "lado": "CREDITO",
+          "base": "DIFERENCIA",
+          "origen": "FIJA",
+          "cuenta": 1197
+        }
+      ]
+    }
+  },
+  {
+    "idTipoAsiento": 5,
+    "borrador": {
+      "codigoPlantilla": "CAJA_SOBRANTE",
+      "idConceptoContable": 8,
+      "vigenciaDesde": "2026-11-27",
+      "nombre": "Sobrante aprobado de ventanilla",
+      "lineas": [
+        {
+          "lado": "DEBITO",
+          "base": "DIFERENCIA",
+          "origen": "FIJA",
+          "cuenta": 1197
+        },
+        {
+          "lado": "CREDITO",
+          "base": "DIFERENCIA",
+          "origen": "FIJA",
+          "cuenta": 896
+        }
+      ]
+    }
+  },
+  {
+    "idTipoAsiento": 15,
+    "borrador": {
+      "codigoPlantilla": "CREDITO_PAGO_CUENTA",
+      "idConceptoContable": 6,
+      "vigenciaDesde": "2026-11-27",
+      "nombre": "Pago desde cuenta de principal e interÃ©s devengado",
+      "lineas": [
+        {
+          "lado": "DEBITO",
+          "base": "PRINCIPAL",
+          "origen": "CONTRAPRODUCTO",
+          "rol": "CAPITAL"
+        },
+        {
+          "lado": "CREDITO",
+          "base": "PRINCIPAL",
+          "origen": "PRODUCTO",
+          "rol": "CARTERA"
+        },
+        {
+          "lado": "DEBITO",
+          "base": "INTERES",
+          "origen": "CONTRAPRODUCTO",
+          "rol": "CAPITAL"
+        },
+        {
+          "lado": "CREDITO",
+          "base": "INTERES",
+          "origen": "PRODUCTO",
+          "rol": "INTERES_POR_COBRAR"
+        }
+      ]
+    }
+  },
+  {
+    "idTipoAsiento": 4,
+    "borrador": {
+      "codigoPlantilla": "RET_EFECTIVO_CAJA",
+      "idConceptoContable": 2,
+      "vigenciaDesde": "2026-11-27",
+      "nombre": "Retiro en efectivo en ventanilla",
+      "lineas": [
+        {
+          "lado": "DEBITO",
+          "base": "PRINCIPAL",
+          "origen": "PRODUCTO",
+          "rol": "CAPITAL"
+        },
+        {
+          "lado": "CREDITO",
+          "base": "PRINCIPAL",
+          "origen": "FIJA",
+          "cuenta": 1197
+        }
+      ]
+    }
+  }
+]
