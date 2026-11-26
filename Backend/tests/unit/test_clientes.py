@@ -29,6 +29,7 @@ def _catalogo_direcciones_aislado(monkeypatch):
     from app.modules.clientes import service
 
     monkeypatch.setattr(service, "validar_tipo_direccion", lambda conn, codigo: None)
+    monkeypatch.setattr(service, "activar_si_cumple", lambda *args, **kwargs: False)
 
 
 from fastapi import Response
@@ -48,6 +49,7 @@ from app.modules.clientes.schemas import (
     DireccionCreate,
     PageClienteHistorial,
     RiesgoCreate,
+    RiesgoRegistrado,
 )
 
 # Cédulas y RUCs válidos conocidos
@@ -873,8 +875,6 @@ class _RiesgoConn(_FakeConn):
     ("estado_inicial", "resultado", "estado_final"),
     [
         ("Pendiente", "Aprobado", "Activo"),
-        ("Pendiente", "Rechazado", "Bloqueado"),
-        ("Activo", "Rechazado", "Bloqueado"),
         ("Pendiente", "Observado", "Pendiente"),
         ("Activo", "Observado", "Activo"),
         ("Bloqueado", "Aprobado", "Bloqueado"),
@@ -902,6 +902,7 @@ def test_cli13_lee_vigencia_y_estado_posteriores_al_trigger(
         "192.0.2.10",
     )
 
+    assert isinstance(riesgo, RiesgoRegistrado)
     assert riesgo.estado_cliente == estado_final
     assert riesgo.es_vigente is True
     assert riesgo.id_evaluacion == 20
@@ -930,10 +931,10 @@ def test_cli13_lee_vigencia_y_estado_posteriores_al_trigger(
 def test_cli13_antecedente_activo_y_parametros_ligados(monkeypatch):
     parametro = MagicMock(return_value=12)
     monkeypatch.setattr(service.general, "valor", parametro)
-    observaciones = "Revisión 'PEP'; -- texto sin interpolar"
+    observaciones = "Revisión 'Observado'; -- texto sin interpolar"
     payload = _payload_riesgo_create(
-        nivel_riesgo_laft="Alto",
-        es_pep=True,
+        nivel_riesgo_laft="Medio",
+        es_pep=False,
         tiene_antecedentes=True,
         id_tipo_antecedente=2,
         observaciones=observaciones,
@@ -950,9 +951,10 @@ def test_cli13_antecedente_activo_y_parametros_ligados(monkeypatch):
     riesgo = service.registrar_evaluacion_riesgo(
         cast(Connection, db), 10, payload, 12, "192.0.2.10"
     )
+    assert isinstance(riesgo, RiesgoRegistrado)
     assert riesgo.tiene_antecedentes is True
     assert riesgo.id_tipo_antecedente == 2
-    assert riesgo.es_pep is True
+    assert riesgo.es_pep is False
     catalogo_sql, catalogo_params = db.consultas[1]
     assert "Estado = 'Activo'" in catalogo_sql
     assert catalogo_params == {"id_tipo_antecedente": 2}
@@ -962,7 +964,7 @@ def test_cli13_antecedente_activo_y_parametros_ligados(monkeypatch):
     assert insert_params["evaluador"] == 12
     assert insert_params["meses_vigencia"] == 12
     parametro.assert_called_once_with(
-        db, "CLI_RIESGO_VIGENCIA_ALTO_MESES", insert_params["fecha_operativa"]
+        db, "CLI_RIESGO_VIGENCIA_MEDIO_MESES", insert_params["fecha_operativa"]
     )
 
 
@@ -1199,8 +1201,13 @@ def test_cli13_router_propaga_evaluador_e_ip(monkeypatch):
     )
     conn = _fake_conn()
     payload = _payload_riesgo_create()
-    resultado = router.registrar_evaluacion_riesgo(10, payload, request, 7, conn)
-    registrar.assert_called_once_with(conn, 10, payload, 7, "198.51.100.4")
+    resultado = router.registrar_evaluacion_riesgo(
+        10, payload, request, Response(), _usuario_historial("ASESOR"), 7, conn
+    )
+    assert registrar.call_args.args == (conn, 10, payload, 7, "198.51.100.4")
+    # E5-06: solicitar a la cola CLI-RIESGO
+    assert callable(registrar.call_args.kwargs["solicitar"])
+    assert isinstance(resultado, RiesgoRegistrado)
     assert resultado.es_vigente is True
 
 

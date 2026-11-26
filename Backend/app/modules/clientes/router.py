@@ -18,6 +18,12 @@ from app.modules.aprobaciones import router as aprobaciones
 from app.modules.aprobaciones.contratos import SolicitudAceptada
 from app.modules.clientes import correos, revelacion, service
 from app.modules.clientes.aprobacion import CODIGO_EDICION, objetivo
+from app.modules.clientes.aprobacion_riesgo import (
+    CODIGO_RIESGO,
+)
+from app.modules.clientes.aprobacion_riesgo import (
+    objetivo as objetivo_riesgo,
+)
 from app.modules.clientes.habilitacion import HabilitacionCliente, cliente_habilitado
 from app.modules.clientes.schemas import (
     Cliente,
@@ -365,12 +371,54 @@ def _ip_cliente(request: Request) -> str:
 _riesgo_router = APIRouter(route_class=ProblemDetailsRoute)
 
 
+def _solicitar_riesgo(
+    request: Request, usuario: Usuario, id_cliente: int
+) -> service.SolicitarRiesgo:
+    def solicitar(contenido: dict[str, Any]) -> SolicitudAceptada:
+        actor = aprobaciones.actual(usuario)
+        try:
+            id_solicitud = aprobaciones.servicio().solicitar(
+                actor,
+                CODIGO_RIESGO,
+                objetivo_riesgo(id_cliente),
+                contenido,
+                hoy(),
+                aprobaciones.contexto(request, usuario),
+            )
+        except HTTPException as error:
+            detalle: Any = error.detail
+            if (
+                isinstance(detalle, dict)
+                and detalle.get("code") == "SOLICITUD_YA_PENDIENTE"
+            ):
+                raise problema(
+                    409,
+                    "EVALUACION_PENDIENTE",
+                    "El cliente ya tiene una evaluación de riesgo pendiente de aprobación.",
+                ) from None
+            raise
+        return SolicitudAceptada(id_solicitud=id_solicitud)
+
+    return solicitar
+
+
 @_riesgo_router.post(
     "/{idCliente}/evaluaciones-riesgo",
     operation_id="CLI13",
     response_model=RiesgoRegistrado,
     status_code=201,
-    responses=RESPUESTAS_ERROR,
+    responses={
+        **RESPUESTAS_ERROR,
+        202: {
+            "model": SolicitudAceptada,
+            "description": "Evaluación con PEP, riesgo Alto o Rechazada enviada a aprobación de otra persona.",
+        },
+        409: {
+            **RESPUESTAS_ERROR[500],
+            "description": "Evaluación pendiente de aprobación",
+        },
+        422: {**RESPUESTAS_ERROR[500], "description": "Datos de evaluación inválidos"},
+    },
     dependencies=[Depends(require_roles("ASESOR", "SUPERVISOR", "ADMIN"))],
     openapi_extra={"x-roles": ["ASESOR", "SUPERVISOR", "ADMIN"]},
 )
@@ -378,13 +426,27 @@ def registrar_evaluacion_riesgo(
     idCliente: int,
     payload: RiesgoCreate,
     request: Request,
+    response: Response,
+    usuario: Annotated[Usuario, Depends(require_auth)],
     evaluador: UsuarioAuditoria,
     conn: Db,
-) -> RiesgoRegistrado:
+) -> RiesgoRegistrado | Response:
     """Registra riesgo y devuelve el estado posterior al trigger (CLI-13 / C-08)."""
-    return service.registrar_evaluacion_riesgo(
-        conn, idCliente, payload, evaluador, _ip_cliente(request)
+    resultado = service.registrar_evaluacion_riesgo(
+        conn,
+        idCliente,
+        payload,
+        evaluador,
+        _ip_cliente(request),
+        solicitar=_solicitar_riesgo(request, usuario, idCliente),
     )
+    if isinstance(resultado, SolicitudAceptada):
+        return JSONResponse(
+            resultado.model_dump(mode="json", by_alias=True),
+            status_code=202,
+            headers=dict(response.headers),
+        )
+    return resultado
 
 
 @_riesgo_router.get(

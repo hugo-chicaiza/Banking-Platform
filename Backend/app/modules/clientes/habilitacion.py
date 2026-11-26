@@ -14,8 +14,17 @@ class HabilitacionCliente(CamelModel):
     motivos: list[str]
 
 
-def requisitos_cliente(conn: Connection, id_cliente: int, fecha: date) -> list[str]:
-    """Comprueba la evidencia de la fecha de consulta en la transacción del consumidor."""
+def requisitos_cliente(
+    conn: Connection,
+    id_cliente: int,
+    fecha: date,
+    solicitud_en_aplicacion: int | None = None,
+) -> list[str]:
+    """Comprueba la evidencia de la fecha de consulta en la transacción del consumidor.
+
+    `solicitud_en_aplicacion`: la cola E0-08 escribe AprobacionAplicada después de
+    aplicar, así que la solicitud que se está aplicando cuenta como aprobada.
+    """
     fila = (
         conn.execute(
             text("""
@@ -58,9 +67,9 @@ def requisitos_cliente(conn: Connection, id_cliente: int, fecha: date) -> list[s
     aprobada = fila["ResultadoEvaluacion"] == "Aprobado"
     if aprobada and (fila["EsPEP"] or fila["NivelRiesgoLAFT"] == "Alto"):
         solicitud = fila["IdSolicitud"]
-        aprobada = (
-            solicitud is not None
-            and conn.execute(
+        aprobada = solicitud is not None and (
+            solicitud == solicitud_en_aplicacion
+            or conn.execute(
                 text("""
                 SELECT 1 FROM Seguridad.AprobacionAplicada WITH (HOLDLOCK)
                 WHERE IdSolicitud=:solicitud AND CodigoTransaccion='CLI-RIESGO'
@@ -121,3 +130,66 @@ def cliente_habilitado(
         habilitado=all(m == "ARCHIVOS_NO_EXIGIDOS" for m in motivos),
         motivos=motivos,
     )
+
+
+def activar_si_cumple(
+    conn: Connection,
+    id_cliente: int,
+    fecha: date,
+    actor: int,
+    ip: str,
+    solicitud_en_aplicacion: int | None = None,
+) -> bool:
+    """Activa al cliente si está en estado Pendiente y cumple todos los requisitos.
+
+    E5-08 debe llamarla cuando un archivo obligatorio quede Limpio.
+    """
+    fila = (
+        conn.execute(
+            text("""
+            SELECT Estado FROM Clientes.Cliente WITH (UPDLOCK, HOLDLOCK)
+            WHERE IdCliente = :id
+        """),
+            {"id": id_cliente},
+        )
+        .mappings()
+        .first()
+    )
+    if fila is None or fila["Estado"] != "Pendiente":
+        return False
+
+    motivos = requisitos_cliente(conn, id_cliente, fecha, solicitud_en_aplicacion)
+    pendientes = [
+        m for m in motivos if m not in ("CLIENTE_NO_ACTIVO", "ARCHIVOS_NO_EXIGIDOS")
+    ]
+    if pendientes:
+        return False
+
+    resultado = conn.execute(
+        text("""
+        UPDATE Clientes.Cliente
+        SET Estado = 'Activo'
+        WHERE IdCliente = :id AND Estado = 'Pendiente'
+    """),
+        {"id": id_cliente},
+    )
+    if resultado.rowcount != 1:
+        return False
+
+    from app.modules.clientes import repository
+
+    observaciones = repository.observaciones_cambio(
+        "Pendiente", "Activo", "Habilitado: requisitos cumplidos"
+    )
+    repository.insertar_historial_cliente(
+        conn,
+        id_cliente=id_cliente,
+        tipo_operacion="U",
+        campo="Estado",
+        modificado_por=actor,
+        direccion_ip=ip,
+        observaciones=observaciones,
+        valor_anterior="Pendiente",
+        valor_nuevo="Activo",
+    )
+    return True
