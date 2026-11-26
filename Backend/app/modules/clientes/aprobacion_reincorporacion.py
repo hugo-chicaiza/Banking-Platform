@@ -51,38 +51,48 @@ def _leer(conn: Connection, objetivo: Objetivo) -> dict[str, Any]:
     return fila
 
 
+def _reincorporable(
+    conn: Connection, objetivo: Objetivo, datos: ContenidoReincorporacion
+) -> dict[str, Any]:
+    """Solo un cliente Eliminado, con los mismos tipos de cliente y documento."""
+    fila = _leer(conn, objetivo)
+    if fila["estado"] != "Eliminado":
+        raise problema(
+            409,
+            "CLIENTE_NO_ELIMINADO",
+            "El cliente no está en estado Eliminado.",
+        )
+    if (
+        datos.datos.tipo_cliente != fila["tipo_cliente"]
+        or datos.datos.tipo_documento != fila["tipo_documento"]
+    ):
+        raise problema(
+            422,
+            "DATOS_NO_COINCIDEN",
+            "El tipo de cliente y el tipo de documento deben coincidir con los registrados.",
+        )
+    return fila
+
+
+def _huella(fila: dict[str, Any]) -> str:
+    return hashlib.sha256(fila["estado"].encode()).hexdigest()
+
+
 class ManejadorReincorporacion:
     def preparar(
         self, conn: Connection, objetivo: Objetivo, contenido: dict[str, Any], hoy: date
     ) -> Plan:
         datos = _contenido(contenido)
-        fila = _leer(conn, objetivo)
-        if fila["estado"] != "Eliminado":
-            raise problema(
-                409,
-                "CLIENTE_NO_ELIMINADO",
-                "El cliente no está en estado Eliminado.",
-            )
-        cliente_datos = datos.datos
-        if (
-            cliente_datos.tipo_cliente != fila["tipo_cliente"]
-            or cliente_datos.tipo_documento != fila["tipo_documento"]
-        ):
-            raise problema(
-                422,
-                "DATOS_NO_COINCIDEN",
-                "El tipo de cliente y el tipo de documento deben coincidir con los registrados.",
-            )
+        fila = _reincorporable(conn, objetivo, datos)
         return Plan(
             datos.model_dump(mode="json", by_alias=True),
             {"estado": "Eliminado"},
             {"estado": "Pendiente"},
-            self.version(conn, objetivo),
+            _huella(fila),
         )
 
     def version(self, conn: Connection, objetivo: Objetivo) -> str:
-        fila = _leer(conn, objetivo)
-        return hashlib.sha256(fila["estado"].encode()).hexdigest()
+        return _huella(_leer(conn, objetivo))
 
     def aplicar(
         self,
@@ -93,23 +103,8 @@ class ManejadorReincorporacion:
         id_solicitud: int,
     ) -> None:
         datos = _contenido(contenido)
-        fila = _leer(conn, objetivo)
-        if fila["estado"] != "Eliminado":
-            raise problema(
-                409,
-                "CLIENTE_NO_ELIMINADO",
-                "El cliente no está en estado Eliminado.",
-            )
+        _reincorporable(conn, objetivo, datos)
         cliente_datos = datos.datos
-        if (
-            cliente_datos.tipo_cliente != fila["tipo_cliente"]
-            or cliente_datos.tipo_documento != fila["tipo_documento"]
-        ):
-            raise problema(
-                422,
-                "DATOS_NO_COINCIDEN",
-                "El tipo de cliente y el tipo de documento deben coincidir con los registrados.",
-            )
         id_cliente = int(objetivo.id)
 
         # 1. Actualización SQL de datos personales y estado a Pendiente
