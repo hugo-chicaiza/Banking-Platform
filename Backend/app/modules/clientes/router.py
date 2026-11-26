@@ -48,6 +48,7 @@ from app.modules.clientes.schemas import (
     Riesgo,
     RiesgoCreate,
     RiesgoRegistrado,
+    SolicitudDesafio,
     SolicitudRevelacion,
     TipoDocumento,
     ValidacionIdentificacion,
@@ -691,9 +692,11 @@ Revelador = Annotated[Usuario, Depends(require_roles(*_ROLES_REVELACION))]
     response_model=DesafioRevelacion,
     openapi_extra={"x-roles": _ROLES_REVELACION},
 )
-def pedir_desafio(idCliente: int, usuario: Revelador, conn: Db) -> DesafioRevelacion:
-    """Pide el segundo factor (TOTP de WorkOS) antes de mostrar un dato completo."""
-    return revelacion.desafiar(conn, idCliente, usuario)
+def pedir_desafio(
+    idCliente: int, solicitud: SolicitudDesafio, usuario: Revelador, conn: Db
+) -> DesafioRevelacion:
+    """Segundo factor para mostrar ESTOS campos de ESTE cliente (no sirve para otros)."""
+    return revelacion.desafiar(conn, idCliente, usuario, solicitud.campos)
 
 
 @_revelacion_router.post(

@@ -95,6 +95,10 @@ backend/
 > Rule: `core/` has no loose files. A new shared file goes in the folder of its concern (`config/`, `database/`,
 > `security/`, `api/`); create a new folder only for a new concern.
 >
+> Rule: an operation that must be confirmed with MFA uses `core/security/mfa.py` (`pedir_desafio` /
+> `verificar`) with its own action name and resource (e.g. `clientes.revelar`, `cliente:10|campos:email`). The
+> signed proof binds the code to that action, resource, user and session, so it cannot authorize another one.
+>
 > Rule: a value defined in one place only. Environment-dependent values (DB names, servers, ports, keys) go in
 > `.env` / `core/config/settings.py`; values shared by several modules (e.g. `/api/v1`, role names) go as constants
 > in the matching `core/` folder; values used by a single module stay in that module.
