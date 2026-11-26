@@ -40,6 +40,7 @@ from app.modules.catalogos.schemas import (
     TipoTasa,
 )
 from app.modules.catalogos.subproductos import TipoTarjeta
+from app.modules.clientes.relaciones import relacion_vigente
 
 # Catálogos de lectura para cualquier usuario autenticado. Solo las tasas de interés se
 # crean aquí (ADMIN); sus reglas están en service.py
@@ -280,10 +281,9 @@ def listar_productos(
         int | None, Query(alias="idCliente", ge=1, le=2_147_483_647)
     ] = None,
 ) -> Any:
-    """Productos activos con sus subproductos. tipoTarjeta (Debito/Credito) deja solo
-    los subproductos de tarjeta de ese tipo, para que la emisión sea congruente.
-    idCliente deja solo los subproductos para los que el cliente es elegible por edad
-    (E3-02 AC 6); un subproducto con límite de edad no se ofrece sin fecha de nacimiento.
+    """Productos activos con sus subproductos. tipoTarjeta filtra por Debito/Credito.
+    idCliente aplica la elegibilidad del cliente. Con tipo=Cuenta se comprueban
+    también la relación obligatoria para la apertura y las condiciones vigentes.
     """
     if tipo_tarjeta is not None and tipo not in (None, "Tarjeta"):
         raise problema(
@@ -291,26 +291,40 @@ def listar_productos(
             "PARAMETRO_INVALIDO",
             "tipoTarjeta solo aplica a productos de tipo Tarjeta.",
         )
-    edad: int | None = None
-    if id_cliente is not None:
-        existe, nacimiento = repository.fecha_nacimiento_cliente(conn, id_cliente)
-        if not existe:
-            raise problema(404, "CLIENTE_NO_ENCONTRADO", "El cliente no existe.")
-        edad = service.edad_en(nacimiento) if nacimiento else -1
-    productos = repository.listar_productos(conn, tipo, tipo_tarjeta, edad)
-    if id_cliente is not None:
-        from app.modules.productos.service import cliente_elegible
+    if id_cliente is None:
+        return repository.listar_productos(conn, tipo, tipo_tarjeta)
 
-        for producto in productos:
-            producto["subproductos"] = [
-                s
-                for s in producto["subproductos"]
-                if cliente_elegible(
-                    conn, id_cliente, s["id_sub_producto"], service.hoy()
-                )[0]
-            ]
-        productos = [p for p in productos if p["subproductos"]]
-    return productos
+    perfil = repository.perfil_cliente(conn, id_cliente)
+    if perfil is None:
+        raise problema(404, "CLIENTE_NO_ENCONTRADO", "El cliente no existe.")
+    tipo_cliente, nacimiento = perfil
+    fecha = service.hoy()
+    if tipo == "Cuenta" and tipo_cliente == "Juridico":
+        edad = None
+    else:
+        edad = service.edad_en(nacimiento, fecha) if nacimiento is not None else -1
+    productos = repository.listar_productos(conn, tipo, tipo_tarjeta, edad)
+    if tipo == "Cuenta" and productos:
+        from app.modules.cuentas.service import rol_para_apertura
+
+        rol = rol_para_apertura(conn, tipo_cliente, nacimiento, fecha)
+        if rol is not None and relacion_vigente(conn, id_cliente, rol, fecha) is None:
+            return []
+
+    from app.modules.productos.service import cliente_elegible, condiciones_vigentes
+
+    for producto in productos:
+        producto["subproductos"] = [
+            s
+            for s in producto["subproductos"]
+            if cliente_elegible(conn, id_cliente, s["id_sub_producto"], fecha)[0]
+            and (
+                tipo != "Cuenta"
+                or condiciones_vigentes(conn, s["id_sub_producto"], fecha, "FICHA")
+                is not None
+            )
+        ]
+    return [p for p in productos if p["subproductos"]]
 
 
 @router.get("/paises/{codigo_pais}/ciudades", response_model=list[Ciudad])

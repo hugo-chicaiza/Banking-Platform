@@ -1,6 +1,7 @@
 """SQL de Transacciones. Solo consultas parametrizadas con fragmentos fijos."""
 
-from datetime import datetime
+from datetime import date, datetime, timedelta
+from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import Connection, text
@@ -230,6 +231,27 @@ def saldo_disponible(
     ).scalar_one()
 
 
+def monto_diario_operaciones(
+    conn: Connection, id_cuenta: int, id_canal: int, tipo: str, fecha: date
+) -> Decimal:
+    return conn.execute(
+        text("""
+            SELECT COALESCE(SUM(Monto), 0)
+            FROM Transacciones.Transaccion
+            WHERE IdCuenta=:cuenta AND IdCanal=:canal AND TipoTransaccion=:tipo
+              AND Estado='Completada' AND TipoOperacion='Normal'
+              AND FechaHoraSistema>=:desde AND FechaHoraSistema<:hasta
+        """),
+        {
+            "cuenta": id_cuenta,
+            "canal": id_canal,
+            "tipo": tipo,
+            "desde": fecha,
+            "hasta": fecha + timedelta(days=1),
+        },
+    ).scalar_one()
+
+
 def autorizar_operacion(
     conn: Connection,
     id_cuenta: int,
@@ -249,12 +271,24 @@ def autorizar_operacion(
             @Mensaje nvarchar(400),
             @Comision decimal(18, 2),
             @Ahora datetime2 = ?;
+        DECLARE @Cuenta int = ?, @Canal int = ?, @Tipo varchar(30) = ?, @Importe decimal(18,2) = ?;
 
-        EXEC Transacciones.usp_AutorizarOperacion
-            @IdCuenta = ?,
-            @IdCanal = ?,
-            @TipoTransaccion = ?,
-            @Monto = ?,
+        IF EXISTS (
+            SELECT 1 FROM Cuentas.Cuenta c WITH (UPDLOCK, HOLDLOCK)
+            JOIN Clientes.Cliente cl WITH (HOLDLOCK) ON cl.IdCliente=c.IdCliente
+            JOIN Transacciones.TipoTransaccion t ON t.CodigoTipo=@Tipo AND t.Naturaleza='D'
+            WHERE c.IdCuenta=@Cuenta AND cl.Estado='Bloqueado'
+        )
+        BEGIN
+            SET @CodigoRespuesta='05';
+            SET @Mensaje=N'El cliente está bloqueado.';
+            SET @Comision=0;
+        END
+        ELSE EXEC Transacciones.usp_AutorizarOperacion
+            @IdCuenta = @Cuenta,
+            @IdCanal = @Canal,
+            @TipoTransaccion = @Tipo,
+            @Monto = @Importe,
             @FechaHora = @Ahora,
             @CodigoRespuesta = @CodigoRespuesta OUTPUT,
             @Mensaje = @Mensaje OUTPUT,

@@ -1,7 +1,7 @@
 """CAJ-11 · POST /api/v1/caja/jornadas/{idJornada}/retiros (pruebas sin BD)."""
 
 from collections.abc import Iterator
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from unittest.mock import Mock
 
@@ -9,6 +9,7 @@ import pytest
 
 from app.modules.caja import service
 from app.modules.caja.router import router
+from app.modules.cuentas import repository as cuentas_repo
 from app.modules.transacciones import repository as trx_repo
 from tests.caja_contexto import (
     BASE,
@@ -96,12 +97,67 @@ def test_caj11_rechazos_de_autorizacion(
     assert not ctx.llamadas["insertar_transaccion"]
 
 
+@pytest.mark.parametrize(
+    ("por_operacion", "por_dia", "usado", "estado"),
+    [(99, 200, 0, 422), (200, 150, 51, 422), (100, 150, 50, 201)],
+)
+def test_caj11_aplica_maximos_institucionales_antes_del_retiro(
+    ctx: Contexto,
+    monkeypatch: pytest.MonkeyPatch,
+    por_operacion,
+    por_dia,
+    usado,
+    estado,
+) -> None:
+    deps = preparar_retiro(ctx)
+    limite = Mock(
+        return_value={
+            "MontoMaximoOperacion": por_operacion,
+            "MontoMaximoDiario": por_dia,
+        }
+    )
+    monkeypatch.setattr(cuentas_repo, "limite_institucional", limite)
+    ctx.fake("monto_diario_operaciones", Decimal(usado), trx_repo)
+
+    r = ctx.cliente.post(f"{BASE}/jornadas/55/retiros", json=CUERPO_RETIRO)
+
+    assert r.status_code == estado, r.text
+    assert limite.call_args.kwargs == {
+        "tipo": "Retiro",
+        "agencia": "001",
+        "grupo": None,
+    }
+    if estado == 422:
+        assert code(r) == "LIMITE_INSTITUCIONAL_EXCEDIDO"
+        assert not ctx.llamadas["insertar_transaccion"] and not deps.asientos
+
+
 def test_caj11_efectivo_insuficiente_en_caja(ctx: Contexto) -> None:
     preparar_retiro(ctx)
     cuerpo = {k: v for k, v in CUERPO_RETIRO.items() if k != "desglose"}
     r = ctx.cliente.post(f"{BASE}/jornadas/55/retiros", json={**cuerpo, "monto": 200.0})
     assert r.status_code == 409
     assert code(r) == "EFECTIVO_INSUFICIENTE_EN_CAJA"
+
+
+def test_consumo_diario_de_retiro_usa_el_dia_operativo_y_solo_movimientos_normales():
+    conn = Mock()
+    conn.execute.return_value.scalar_one.return_value = Decimal("50.25")
+
+    assert trx_repo.monto_diario_operaciones(
+        conn, 501, 4, "Retiro", date(2026, 11, 30)
+    ) == Decimal("50.25")
+
+    sql, parametros = conn.execute.call_args.args
+    assert "Estado='Completada' AND TipoOperacion='Normal'" in str(sql)
+    assert "FechaHoraSistema>=:desde AND FechaHoraSistema<:hasta" in str(sql)
+    assert parametros == {
+        "cuenta": 501,
+        "canal": 4,
+        "tipo": "Retiro",
+        "desde": date(2026, 11, 30),
+        "hasta": date(2026, 12, 1),
+    }
 
 
 def test_caj11_solo_cajero(ctx: Contexto) -> None:

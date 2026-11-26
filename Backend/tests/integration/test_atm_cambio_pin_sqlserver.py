@@ -58,7 +58,7 @@ def sql(laboratorio_sql, monkeypatch):
     with engines["cooperativa"].begin() as c:
         c.execute(
             text(
-                "INSERT Tarjeta.Tarjeta VALUES(:id,1,1,'Cliente','Sintetico',1,'Debito','20260101','20990101','Activa',:hash)"
+                "INSERT Tarjeta.Tarjeta VALUES(:id,1,1,'Cliente','Sintetico',1,'Debito','20260101','20990101','Activa',:hash,0)"
             ),
             {"id": tarjeta, "hash": service.hash_pan(PAN)},
         )

@@ -9,6 +9,7 @@ from app.core.api.errors import problema
 from app.core.api.schemas import CamelModel
 from app.modules.aprobaciones.registro import Objetivo, Operacion, Plan, Registro
 from app.modules.contabilidad.cuentas_producto import operacion as operacion_mapeo
+from app.modules.cuentas.estado_operativo import OPERACION_DESBLOQUEO
 from app.modules.organizacion.aprobacion import OPERACION_BAJA
 from app.modules.parametros import general
 from app.modules.parametros.aprobacion_comision import OPERACION_TARIFA
@@ -115,6 +116,10 @@ def registro_inicial() -> Registro:
     from app.modules.auth.aprobacion_roles import operacion as operacion_roles
     from app.modules.clientes.aprobacion import OPERACION_EDICION
     from app.modules.contabilidad.plantillas import OPERACION_PLANTILLA
+    from app.modules.cuentas.cambio_subproducto import OPERACION as cambio_subproducto
+    from app.modules.cuentas.retenciones_aprobacion import (
+        operaciones as operaciones_retencion,
+    )
 
     registro = Registro()
     registro.agregar(
@@ -129,12 +134,16 @@ def registro_inicial() -> Registro:
     )
     registro.agregar(OPERACION_BAJA)
     registro.agregar(OPERACION_TARIFA)
+    registro.agregar(OPERACION_DESBLOQUEO)
     registro.agregar(operacion_productos())
     registro.agregar(operacion_numeracion())
     registro.agregar(OPERACION_PLANTILLA)
+    registro.agregar(cambio_subproducto)
     registro.agregar(operacion_mapeo())
     registro.agregar(OPERACION_EDICION)
     for operacion in operaciones_estado():
+        registro.agregar(operacion)
+    for operacion in operaciones_retencion():
         registro.agregar(operacion)
     if roles := operacion_roles():
         registro.agregar(roles)

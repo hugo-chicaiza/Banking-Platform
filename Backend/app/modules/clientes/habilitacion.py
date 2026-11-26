@@ -20,14 +20,20 @@ def requisitos_cliente(conn: Connection, id_cliente: int, fecha: date) -> list[s
         conn.execute(
             text("""
             SELECT c.Estado,c.ConsentimientoDatos,c.FechaConsentimiento,c.TipoCliente,
-                   r.IdEvaluacion,r.ResultadoEvaluacion,r.EsPEP,r.NivelRiesgoLAFT,r.IdSolicitud
+                   r.IdEvaluacion,r.ResultadoEvaluacion,r.EsPEP,r.NivelRiesgoLAFT,r.IdSolicitud,
+                   r.AntecedenteImpeditivo
             FROM Clientes.Cliente AS c WITH (HOLDLOCK)
             OUTER APPLY (
                 SELECT TOP (1) r.IdEvaluacion,r.ResultadoEvaluacion,r.EsPEP,
-                       r.NivelRiesgoLAFT,r.IdSolicitud
+                       r.NivelRiesgoLAFT,r.IdSolicitud,
+                       CASE WHEN r.TieneAntecedentes=1 AND a.PuedeImpedirVinculacion=1
+                            THEN 1 ELSE 0 END AS AntecedenteImpeditivo
                 FROM Clientes.RiesgoCliente AS r WITH (HOLDLOCK)
+                LEFT JOIN Catalogo.TipoAntecedente AS a WITH (HOLDLOCK)
+                    ON a.IdTipoAntecedente=r.IdTipoAntecedente
                 WHERE r.IdCliente=c.IdCliente AND r.EsVigente=1
-                  AND CONVERT(date,r.FechaEvaluacion)<=:fecha AND r.VigenteHasta>=:fecha
+                  AND CONVERT(date,r.FechaEvaluacion AT TIME ZONE 'UTC'
+                      AT TIME ZONE 'SA Pacific Standard Time')<=:fecha AND r.VigenteHasta>=:fecha
                 ORDER BY r.FechaEvaluacion DESC,r.IdEvaluacion DESC
             ) AS r
             WHERE c.IdCliente=:id
@@ -65,6 +71,8 @@ def requisitos_cliente(conn: Connection, id_cliente: int, fecha: date) -> list[s
         )
     if not aprobada:
         motivos.append("RIESGO_NO_APROBADO_VIGENTE")
+    if fila["AntecedenteImpeditivo"]:
+        motivos.append("ANTECEDENTE_IMPIDE_VINCULACION")
     exige_archivos = general.valor(conn, "CLI_EXIGE_ARCHIVOS", fecha)
     if type(exige_archivos) is not bool:
         raise problema(

@@ -10,6 +10,7 @@ from fastapi import HTTPException
 from sqlalchemy import create_engine, text
 
 from app.modules.contabilidad import plantillas, repository
+from tests.sesion import USUARIO
 
 
 def probar(database: str) -> None:
@@ -61,20 +62,26 @@ def probar(database: str) -> None:
         nueva = plantillas.crear(conn, 1001, datos, 101)["idPlantillaAsiento"]
         with conn.begin():
             historial = plantillas.listar_global(
-                conn, q="ensayo", codigo="DOT_CAJA", estado=0, id_tipo=1001
+                conn, USUARIO, q="ensayo", codigo="DOT_CAJA", estado=0, id_tipo=1001
             )
             assert historial[0]["IdPlantillaAsiento"] == nueva
             assert historial[0]["CodigoConcepto"] and historial[0]["NombreTipoAsiento"]
             assert all(f["CodigoPlantilla"] == "DOT_CAJA" for f in historial)
-            assert plantillas.listar_global(conn, q="%", codigo="DOT_CAJA") == []
             assert (
-                plantillas.listar_global(conn, codigo="DOT_CAJA", origen="ORIGEN_QA")
+                plantillas.listar_global(conn, USUARIO, q="%", codigo="DOT_CAJA") == []
+            )
+            assert (
+                plantillas.listar_global(
+                    conn, USUARIO, codigo="DOT_CAJA", origen="ORIGEN_QA"
+                )
                 == []
             )
-            detalle = plantillas.detalle(conn, nueva)
+            detalle = plantillas.detalle(conn, nueva, USUARIO)
             assert any(
                 f["IdPlantillaAsiento"] == nueva
-                for f in plantillas.listar_global(conn, origen=detalle["Origen"])
+                for f in plantillas.listar_global(
+                    conn, USUARIO, origen=detalle["Origen"]
+                )
             )
             assert detalle["VigenciaDesde"] == futuro
             assert [f["CodigoCuenta"] for f in detalle["lineas"]] == [

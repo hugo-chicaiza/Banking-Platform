@@ -1,5 +1,5 @@
 import json
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import Any
 
 from sqlalchemy import Connection, bindparam, text
@@ -1104,18 +1104,17 @@ def eliminar_direccion_logica(
     )
 
 
-def existe_tipo_antecedente_activo(conn: Connection, id_tipo_antecedente: int) -> bool:
-    return (
-        _one(
-            conn,
-            """
-            SELECT 1 AS existe
-            FROM Catalogo.TipoAntecedente
-            WHERE IdTipoAntecedente = :id_tipo_antecedente AND Estado = 'Activo'
-            """,
-            {"id_tipo_antecedente": id_tipo_antecedente},
-        )
-        is not None
+def tipo_antecedente_activo(
+    conn: Connection, id_tipo_antecedente: int
+) -> dict[str, Any] | None:
+    return _one(
+        conn,
+        """
+        SELECT PuedeImpedirVinculacion AS impide_vinculacion
+        FROM Catalogo.TipoAntecedente WITH (HOLDLOCK)
+        WHERE IdTipoAntecedente = :id_tipo_antecedente AND Estado = 'Activo'
+        """,
+        {"id_tipo_antecedente": id_tipo_antecedente},
     )
 
 
@@ -1164,6 +1163,9 @@ def insertar_evaluacion_riesgo(
     *,
     evaluador: int,
     direccion_ip: str,
+    fecha_evaluacion: datetime,
+    fecha_operativa: date,
+    meses_vigencia: int,
 ) -> dict[str, Any]:
     """Inserta con EsVigente=0; el trigger mantiene vigencia y estado del cliente.
 
@@ -1174,7 +1176,9 @@ def insertar_evaluacion_riesgo(
         **datos,
         "id_cliente": id_cliente,
         "evaluador": evaluador,
-        "fecha_evaluacion": datetime.now(UTC),
+        "fecha_evaluacion": fecha_evaluacion,
+        "fecha_operativa": fecha_operativa,
+        "meses_vigencia": meses_vigencia,
     }
     row = _one(
         conn,
@@ -1184,13 +1188,13 @@ def insertar_evaluacion_riesgo(
         INSERT INTO Clientes.RiesgoCliente (
             IdCliente, NivelRiesgoLAFT, EsPEP, ResultadoEvaluacion,
             FechaEvaluacion, Evaluador, TieneAntecedentes, IdTipoAntecedente,
-            Observaciones, EsVigente
+            Observaciones, EsVigente, VigenteHasta
         )
         OUTPUT INSERTED.IdEvaluacion INTO @Evaluacion
         VALUES (
             :id_cliente, :nivel_riesgo_laft, :es_pep, :resultado_evaluacion,
             :fecha_evaluacion, :evaluador, :tiene_antecedentes, :id_tipo_antecedente,
-            :observaciones, 0
+            :observaciones, 0, DATEADD(month, :meses_vigencia, CAST(:fecha_operativa AS date))
         );
         SELECT IdEvaluacion AS id_evaluacion FROM @Evaluacion;
         """,

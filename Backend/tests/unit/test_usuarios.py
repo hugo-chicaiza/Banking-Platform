@@ -539,6 +539,7 @@ def conn(base) -> _Conn:
 @pytest.fixture()
 def client(monkeypatch, conn, workos) -> Iterator[TestClient]:
     monkeypatch.setenv("WORKOS_ORGANIZATION_ID", ORG)
+    monkeypatch.setenv("E104_POLITICA_ROLES_ACTIVA", "false")
     monkeypatch.setenv(
         "E104_POLITICA_ROLES",
         '{"niveles":{"ADMIN":1,"ASESOR":1,"CAJERO":1,"SUPERVISOR":1,'
@@ -555,8 +556,8 @@ def client(monkeypatch, conn, workos) -> Iterator[TestClient]:
 
 
 @pytest.mark.parametrize("configuracion", [None, "json inválido", '{"niveles":{}}'])
-def test_cambio_de_roles_sin_politica_se_deniega(
-    client, monkeypatch, workos, configuracion
+def test_cambio_de_roles_con_politica_suspendida(
+    client, monkeypatch, base, workos, configuracion
 ):
     if configuracion is None:
         monkeypatch.delenv("E104_POLITICA_ROLES")
@@ -564,9 +565,9 @@ def test_cambio_de_roles_sin_politica_se_deniega(
         monkeypatch.setenv("E104_POLITICA_ROLES", configuracion)
     get_settings.cache_clear()
     r = client.put(f"{BASE}/2/roles", json={"roles": ["ASESOR"]})
-    assert r.status_code == 503
-    assert r.json()["code"] == "POLITICA_ROLES_NO_CONFIGURADA"
-    assert not any(operacion.startswith("update_") for operacion, _ in workos.llamadas)
+    assert r.status_code == 200, r.text
+    assert base.usuarios[2]["RolesWorkOS"] == "ASESOR"
+    assert service._slugs(workos.membresias["user_2"]) == {"org-asesor"}
 
 
 def test_sin_politica_sigue_disponible_la_edicion_de_perfil(
@@ -577,14 +578,52 @@ def test_sin_politica_sigue_disponible_la_edicion_de_perfil(
     assert client.get(f"{BASE}/2").status_code == 200
     assert client.patch(f"{BASE}/2", json={"nombres": "Ana"}).status_code == 200
     r = client.post(BASE, json=NUEVO)
-    assert r.status_code == 503
-    assert r.json()["code"] == "POLITICA_ROLES_NO_CONFIGURADA"
+    assert r.status_code == 201, r.text
+    assert "send_invitation" in workos.nombres()
+
+
+def test_politica_preparada_sin_activar_no_interviene(client, monkeypatch, workos):
+    monkeypatch.setenv("E104_PERMISO_APROBAR_ROLES", "qa:aprobar")
+    monkeypatch.setattr(
+        service.repository, "cambio_roles_en_recuperacion", lambda *_: False
+    )
+    politica = service.politica_roles.vigente().model_copy(
+        update={
+            "privilegiados": {"AUDITOR", "CAJERO"},
+            "incompatibles": [("CAJERO", "AUDITOR")],
+        }
+    )
+    monkeypatch.setenv("E104_POLITICA_ROLES", politica.model_dump_json())
+    get_settings.cache_clear()
+    alta = client.post(BASE, json=NUEVO)
+    assert alta.status_code == 201, alta.text
+    cambio = client.put(f"{BASE}/2/roles", json={"roles": ["CAJERO", "AUDITOR"]})
+    assert cambio.status_code == 200, cambio.text
+    assert service._slugs(workos.membresias["user_2"]) == {"org-cajero", "org-auditor"}
+
+
+@pytest.mark.parametrize("configuracion", ["", "{", '{"niveles":{}}'])
+def test_politica_activada_sin_configuracion_falla_cerrada(
+    client, monkeypatch, workos, configuracion
+):
+    monkeypatch.setenv("E104_POLITICA_ROLES_ACTIVA", "true")
+    monkeypatch.setenv("E104_POLITICA_ROLES", configuracion)
+    get_settings.cache_clear()
+    for r in (
+        client.post(BASE, json=NUEVO),
+        client.put(f"{BASE}/2/roles", json={"roles": ["ASESOR"]}),
+    ):
+        assert r.status_code == 503
+        assert r.json()["code"] == "POLITICA_ROLES_NO_CONFIGURADA"
     assert "send_invitation" not in workos.nombres()
+    assert "update_organization_membership" not in workos.nombres()
 
 
 def test_rol_privilegiado_ausente_en_workos_no_se_restaura_directamente(
     client, base, workos, monkeypatch
 ):
+    monkeypatch.setenv("E104_POLITICA_ROLES_ACTIVA", "true")
+    get_settings.cache_clear()
     base.usuarios[2]["RolesWorkOS"] = "CAJERO,AUDITOR"
     politica = service.politica_roles.vigente().model_copy(
         update={"privilegiados": {"AUDITOR"}}
@@ -604,6 +643,7 @@ def test_cambio_privilegiado_configurado_devuelve_solicitud_202(
     from app.modules.aprobaciones import router as aprobaciones
 
     monkeypatch.setenv("E104_PERMISO_APROBAR_ROLES", "qa:aprobar")
+    monkeypatch.setenv("E104_POLITICA_ROLES_ACTIVA", "true")
     get_settings.cache_clear()
     politica = service.politica_roles.vigente().model_copy(
         update={"privilegiados": {"AUDITOR"}}

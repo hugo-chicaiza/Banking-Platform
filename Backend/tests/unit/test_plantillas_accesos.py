@@ -18,6 +18,7 @@ EDICION = "contabilidad.plantillas.editar"
 LISTADO = "/api/v1/contabilidad/tipos-asiento/1/plantillas"
 GLOBAL = "/api/v1/contabilidad/plantillas"
 CATALOGOS = f"{GLOBAL}/catalogos"
+REGLAS = "/api/v1/contabilidad/reglas-contables"
 DETALLE = "/api/v1/contabilidad/plantillas/1"
 SIMULACION = "/api/v1/contabilidad/plantillas/simulaciones"
 
@@ -46,6 +47,7 @@ def test_cuatro_roles_consultan_sin_permiso_workos_equivalente(entorno, rol):
         assert cliente.get(DETALLE).status_code == 200
         assert cliente.get(GLOBAL).status_code == 200
         assert cliente.get(CATALOGOS).status_code == 200
+        assert cliente.get(REGLAS, params={"fecha": "2026-11-25"}).status_code == 200
 
 
 @pytest.mark.parametrize("rol", ["ADMIN", "SUPERVISOR", "AUDITOR"])
@@ -76,6 +78,7 @@ def test_retirar_y_restaurar_consulta_bloquea_api_incluso_con_permiso_remoto(ent
         assert cliente.get(DETALLE).status_code == 403
         assert cliente.get(GLOBAL).status_code == 403
         assert cliente.get(CATALOGOS).status_code == 403
+        assert cliente.get(REGLAS).status_code == 403
         assert cliente.get(f"{DETALLE}/solicitudes").status_code == 403
         ajustes[CONSULTA, "SUPERVISOR"] = True
         assert cliente.get(LISTADO).status_code == 200
@@ -105,6 +108,7 @@ def test_otros_roles_no_reciben_consulta_ni_edicion(entorno, rol):
     simular_sesion(app, usuario_con_roles(rol))
     with TestClient(app) as cliente:
         assert cliente.get(LISTADO).status_code == 403
+        assert cliente.get(REGLAS).status_code == 403
 
 
 def test_control_apagado_conserva_permiso_workos_anterior(entorno, monkeypatch):

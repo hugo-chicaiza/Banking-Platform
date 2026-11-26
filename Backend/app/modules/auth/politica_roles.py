@@ -19,8 +19,13 @@ class PoliticaRoles(BaseModel):
 
     @model_validator(mode="after")
     def politica_completa(self) -> "PoliticaRoles":
-        if set(self.niveles) != set(ROLES):
+        faltantes = set(ROLES) - set(self.niveles)
+        if faltantes - {"CUMPLIMIENTO"}:
             raise ValueError("La jerarquía debe cubrir todos los roles vigentes.")
+        if self.privilegiados.intersection(faltantes) or any(
+            set(par).intersection(faltantes) for par in self.incompatibles
+        ):
+            raise ValueError("La política menciona un rol sin nivel configurado.")
         pares = {frozenset(par) for par in self.incompatibles}
         if len(pares) != len(self.incompatibles) or any(len(par) != 2 for par in pares):
             raise ValueError("Cada incompatibilidad debe unir dos roles distintos.")
@@ -62,3 +67,8 @@ def vigente() -> PoliticaRoles:
             "POLITICA_ROLES_NO_CONFIGURADA",
             "La política de roles no está disponible.",
         ) from None
+
+
+def para_operaciones() -> PoliticaRoles | None:
+    """La configuración puede prepararse antes de la activación institucional."""
+    return vigente() if get_settings().e104_politica_roles_activa else None
