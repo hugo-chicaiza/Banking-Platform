@@ -16,6 +16,7 @@ from app.modules.aprobaciones.identidad import Actor
 from app.modules.aprobaciones.registro import Objetivo, Operacion, Plan
 from app.modules.aprobaciones.servicio import Servicio
 from app.modules.parametros.service import hoy
+from app.modules.seguridad.funciones_catalogo import APROBAR_SOLICITUD_TARJETA, POR_ID
 from app.modules.tarjetas import repository, service
 
 CODIGO = "TAR-SOLICITAR"
@@ -96,6 +97,7 @@ OPERACION = Operacion(
     TIPO,
     "cooperativa",
     frozenset({"ADMIN", "ASESOR"}),
+    # Identificador registrado en SeguridadDB por la migración de E6-10.
     "tar-solicitar:aprobar",
     SolicitudTarjeta(),
     tabla_auditada="Tarjeta.Tarjeta",
@@ -105,6 +107,7 @@ OPERACION = Operacion(
     cancelable_por_solicitante=False,
     cancelar_por_revocacion=False,
     aplicar_descarte=_descartar,
+    roles_aprobacion=frozenset(POR_ID[APROBAR_SOLICITUD_TARJETA].roles_iniciales),
 )
 
 
