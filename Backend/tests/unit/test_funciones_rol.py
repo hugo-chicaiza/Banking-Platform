@@ -18,6 +18,8 @@ from app.modules.auth import service as sesion_service
 from app.modules.productos import service as productos_service
 from app.modules.seguridad import funciones, service
 from app.modules.seguridad.funciones_catalogo import (
+    APROBAR_DESBLOQUEO_TARJETA,
+    APROBAR_SOLICITUD_TARJETA,
     FUNCIONES,
     POR_ID,
     SECCIONES_LEGADAS,
@@ -76,6 +78,48 @@ def test_catalogo_completo_y_sin_ambiguedades():
     }
     assert anteriores | plantillas == nuevas
     funciones._validar_dependencias({}, set(ROLES))
+
+
+@pytest.mark.parametrize("modelo_activo", [False, True])
+def test_perfil_tarjetas_independiente_de_permisos_workos(
+    entorno, monkeypatch, modelo_activo
+):
+    monkeypatch.setattr(funciones, "activa", lambda: modelo_activo)
+    supervisor = replace(usuario_con_roles("SUPERVISOR"), permisos=())
+    perfil = sesion_service.perfil(supervisor)
+    assert {"tar-solicitar:aprobar", "tar-estado:aprobar"} <= set(perfil.permisos)
+    if modelo_activo:
+        assert perfil.autorizacion is not None
+        assert {APROBAR_SOLICITUD_TARJETA, APROBAR_DESBLOQUEO_TARJETA} <= set(
+            perfil.autorizacion.funciones
+        )
+
+    admin = replace(
+        usuario_con_roles("ADMIN"),
+        permisos=("tar-solicitar:aprobar", "tar-estado:aprobar", "prd-estado"),
+    )
+    permisos = sesion_service.perfil(admin).permisos
+    assert "prd-estado" in permisos and "tar-estado" in permisos
+    assert "tar-solicitar:aprobar" not in permisos
+    assert "tar-estado:aprobar" not in permisos
+
+
+def test_auditor_no_adquiere_acciones_operativas_de_tarjetas(entorno):
+    funcion = "tarjetas.verSobrePin"
+    entorno[(funcion, "AUDITOR")] = True
+    auditor = usuario_con_roles("AUDITOR")
+    assert funcion not in funciones.efectivos(auditor).funciones
+    assert "tar-pin:entregar" not in sesion_service.perfil(auditor).permisos
+    datos = CambiosFunciones.model_validate(
+        {
+            "version": funciones.version(entorno),
+            "motivo": "Prueba de acceso al sobre",
+            "cambios": [{"funcion": funcion, "rol": "AUDITOR", "permitido": True}],
+        }
+    )
+    with pytest.raises(HTTPException) as error:
+        funciones._validar_cambios(datos)
+    assert error.value.status_code == 422
 
 
 def test_parametros_conserva_guardas_del_equipo(entorno, monkeypatch):

@@ -24,6 +24,10 @@ from app.core.security.hsm import (
 from app.core.security.pin_version import PinVersionNoDisponible
 from app.modules.catalogos.subproductos import tipo_tarjeta_de
 from app.modules.productos.service import cliente_elegible
+from app.modules.seguridad.funciones_catalogo import (
+    APROBAR_DESBLOQUEO_TARJETA,
+    APROBAR_SOLICITUD_TARJETA,
+)
 from app.modules.tarjetas import repository, sobre_pin
 from app.modules.tarjetas.identificacion import hash_pan
 from app.modules.tarjetas.pin_sql import (
@@ -690,7 +694,7 @@ def cambiar_estado(
     usuario: int,
     ip: str | None,
     *,
-    permisos: Collection[str],
+    funciones: Collection[str],
     tiene_solicitud: Callable[[Connection, int], bool] | None = None,
 ) -> Tarjeta:
     """Cambia el estado según Tarjeta.TransicionEstado (A-05).
@@ -721,7 +725,7 @@ def cambiar_estado(
             payload,
             usuario,
             ip,
-            permisos,
+            funciones,
             tiene_solicitud,
         )
 
@@ -741,7 +745,7 @@ def _cambiar_estado_en_transaccion(
     payload: TarjetaEstadoUpdate,
     usuario: int,
     ip: str | None,
-    permisos: Collection[str],
+    funciones: Collection[str],
     tiene_solicitud: Callable[[Connection, int], bool] | None = None,
 ) -> Tarjeta:
     actual = repository.obtener_tarjeta(conn, id_tarjeta, bloquear=True)
@@ -762,7 +766,7 @@ def _cambiar_estado_en_transaccion(
             409, "TRANSICION_INVALIDA", "El cambio de estado no está permitido."
         )
     entregar = anterior == "Generada" and destino == "Activa"
-    _validar_estado(conn, id_tarjeta, actual, payload, usuario, permisos)
+    _validar_estado(conn, id_tarjeta, actual, payload, usuario, funciones)
     if destino == "Activa" and not actual["pin_asignado"]:
         raise problema(
             409, "PIN_NO_ASIGNADO", "Asigne un PIN antes de activar la tarjeta."
@@ -830,7 +834,7 @@ def aprobar_solicitud_en_cola(
             ),
             aprobador,
             None,
-            ("tar-solicitar:aprobar",),
+            (APROBAR_SOLICITUD_TARJETA,),
         )
 
 
@@ -840,9 +844,7 @@ def descartar_solicitud_en_cola(
     actual = repository.obtener_tarjeta(conn, id_tarjeta, bloquear=True)
     if actual is None:
         raise _tarjeta_no_encontrada()
-    _exigir_aprobacion(
-        ("tar-solicitar:aprobar",), "tar-solicitar:aprobar", actor, actual["creado_por"]
-    )
+    _exigir_segunda_persona(actor, actual["creado_por"])
     if actual["estado_actual"] == "Anulada":
         return
     if actual["estado_actual"] != "Solicitada" or not repository.existe_transicion(
@@ -863,10 +865,14 @@ def descartar_solicitud_en_cola(
 
 
 def _exigir_aprobacion(
-    permisos: Collection[str], permiso: str, usuario: int, solicitante: int | None
+    funciones: Collection[str], funcion: str, usuario: int, solicitante: int | None
 ) -> None:
-    if permiso not in permisos:
+    if funcion not in funciones:
         raise problema(403, "SIN_PERMISO_APROBACION", "Falta el acceso de aprobación.")
+    _exigir_segunda_persona(usuario, solicitante)
+
+
+def _exigir_segunda_persona(usuario: int, solicitante: int | None) -> None:
     if solicitante is None or usuario == solicitante:
         raise problema(
             403, "AUTOAPROBACION_NO_PERMITIDA", "Debe resolver otra persona."
@@ -879,12 +885,12 @@ def _validar_estado(
     actual: dict[str, Any],
     datos: TarjetaEstadoUpdate,
     usuario: int,
-    permisos: Collection[str],
+    funciones: Collection[str],
 ) -> None:
     origen, destino = actual["estado_actual"], datos.estado
     if destino in {"Aprobada", "Anulada"}:
         _exigir_aprobacion(
-            permisos, "tar-solicitar:aprobar", usuario, actual["creado_por"]
+            funciones, APROBAR_SOLICITUD_TARJETA, usuario, actual["creado_por"]
         )
     if destino == "Aprobada" and (
         origen != "Solicitada"
@@ -914,8 +920,8 @@ def _validar_estado(
                 409, "DESBLOQUEO_NO_PERMITIDO", "El motivo impide el desbloqueo."
             )
         _exigir_aprobacion(
-            permisos,
-            "tar-estado:aprobar",
+            funciones,
+            APROBAR_DESBLOQUEO_TARJETA,
             usuario,
             ultimo["realizado_por"] if ultimo else None,
         )

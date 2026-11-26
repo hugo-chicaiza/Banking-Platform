@@ -545,7 +545,7 @@ def test_tar01_tar04_atm01_comparten_pan_y_pin_generado(api, monkeypatch, caplog
         TarjetaEstadoUpdate(estado="Aprobada", motivo="Prueba local"),
         901,
         None,
-        permisos={"tar-solicitar:aprobar"},
+        funciones={"tarjetas.aprobarSolicitud"},
     )
     assert fila["estado_actual"] == "Generada" and fila["pin_asignado"]
     assert memoria.pin(301)["requiere_cambio"] is True
@@ -568,7 +568,7 @@ def test_tar01_tar04_atm01_comparten_pan_y_pin_generado(api, monkeypatch, caplog
         ),
         900,
         None,
-        permisos={"tar-estado"},
+        funciones=set(),
     )
     respuesta = e.client.post("/api/v1/atm/auth", json=body, headers=e.headers)
 

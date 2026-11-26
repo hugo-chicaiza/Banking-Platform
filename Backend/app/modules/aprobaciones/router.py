@@ -101,9 +101,7 @@ def accesos(actor: Actual, cola: Cola, usuario: UsuarioActual) -> dict[str, Any]
     creador = any(
         set(actor.roles) & op.roles_ejecucion for op in cola.registro.operaciones()
     )
-    aprobador = any(
-        op.permiso_aprobacion in actor.permisos for op in cola.registro.operaciones()
-    )
+    aprobador = any(op.permite_aprobar(actor) for op in cola.registro.operaciones())
     return {
         "puedeVer": creador
         or aprobador

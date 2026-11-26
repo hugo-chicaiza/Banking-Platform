@@ -198,7 +198,7 @@ class Servicio:
         operacion = self.registro.obtener(
             fila["CodigoTransaccion"], fila["TipoObjetivo"]
         )
-        if operacion.permiso_aprobacion not in actor.permisos:
+        if not operacion.permite_aprobar(actor):
             raise problema(
                 403, "SIN_PERMISO", "Falta el permiso efectivo de aprobacion."
             )
@@ -323,7 +323,7 @@ class Servicio:
             if (
                 resolutor.sujeto == solicitante.sujeto
                 or resolutor.id_interno == solicitante.id_interno
-                or operacion.permiso_aprobacion not in resolutor.permisos
+                or not operacion.permite_aprobar(resolutor)
             ):
                 raise problema(
                     403, "SIN_PERMISO", "La aprobación ya no está autorizada."
@@ -585,7 +585,7 @@ class Servicio:
                 if (
                     actor.sujeto == fila["SolicitadoPor"]
                     or actor.id_interno == fila["IdInternoSolicitante"]
-                    or operacion.permiso_aprobacion not in actor.permisos
+                    or not operacion.permite_aprobar(actor)
                 ):
                     raise problema(
                         403,

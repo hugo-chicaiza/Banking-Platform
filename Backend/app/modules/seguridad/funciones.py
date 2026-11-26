@@ -15,6 +15,7 @@ from app.core.security.auth import ROLES, Usuario
 from app.modules.seguridad import funciones_repository as repo
 from app.modules.seguridad.funciones_catalogo import (
     FUNCIONES,
+    FUNCIONES_TARJETA_OPERATIVAS,
     POR_ID,
     SECCIONES_LEGADAS,
     funcion_api,
@@ -83,6 +84,8 @@ def _leer(conn: Connection) -> repo.Ajustes:
 
 
 def permitido(ajustes: repo.Ajustes, funcion: str, rol: str) -> bool:
+    if rol == "AUDITOR" and funcion in FUNCIONES_TARJETA_OPERATIVAS:
+        return False
     return ajustes.get((funcion, rol), rol in POR_ID[funcion].roles_iniciales)
 
 
@@ -101,7 +104,7 @@ def _configuracion(ajustes: repo.Ajustes) -> ConfiguracionFunciones:
                 delegable=f.delegable,
                 motivo_proteccion=None
                 if f.delegable
-                else "La administración de identidades permanece reservada a ADMIN.",
+                else "La asignación inicial de esta función está protegida.",
                 dependencias=list(f.dependencias),
             )
             for f in FUNCIONES
@@ -212,6 +215,16 @@ def _validar_cambios(datos: CambiosFunciones) -> None:
                 422,
                 "FUNCION_PROTEGIDA",
                 "Esta función administrativa no se puede delegar ni retirar.",
+            )
+        if (
+            cambio.rol == "AUDITOR"
+            and cambio.permitido is True
+            and cambio.funcion in FUNCIONES_TARJETA_OPERATIVAS
+        ):
+            raise problema(
+                422,
+                "FUNCION_PROTEGIDA",
+                "El rol Auditor es de solo lectura en Tarjetas.",
             )
 
 

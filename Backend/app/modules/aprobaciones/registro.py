@@ -9,6 +9,7 @@ from typing import Any, Literal, Protocol
 from sqlalchemy import Connection
 
 from app.core.api.errors import problema
+from app.modules.aprobaciones.identidad import Actor
 
 
 @dataclass(frozen=True)
@@ -63,6 +64,12 @@ class Operacion:
     cancelable_por_solicitante: bool = True
     cancelar_por_revocacion: bool = True
     aplicar_descarte: Callable[[Connection, dict[str, Any]], None] | None = None
+    roles_aprobacion: frozenset[str] | None = None
+
+    def permite_aprobar(self, actor: Actor) -> bool:
+        if self.roles_aprobacion is not None:
+            return not self.roles_aprobacion.isdisjoint(actor.roles)
+        return self.permiso_aprobacion in actor.permisos
 
 
 class Registro:

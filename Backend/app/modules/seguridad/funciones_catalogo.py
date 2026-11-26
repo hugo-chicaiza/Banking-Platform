@@ -11,6 +11,16 @@ GESTORES = ("ADMIN", "ASESOR", "SUPERVISOR")
 REGISTRO = ("ADMIN", "ASESOR")
 AUDITORIA = ("ADMIN", "SUPERVISOR", "AUDITOR")
 CONTABLES = ("ADMIN", "CONTADOR", "AUDITOR")
+APROBAR_SOLICITUD_TARJETA = "tarjetas.aprobarSolicitud"
+APROBAR_DESBLOQUEO_TARJETA = "tarjetas.aprobarDesbloqueo"
+FUNCIONES_TARJETA_OPERATIVAS = frozenset(
+    {
+        "tarjetas.emitir",
+        "tarjetas.cambiarEstado",
+        "tarjetas.asignarPin",
+        "tarjetas.verSobrePin",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -354,6 +364,25 @@ FUNCIONES = (
         AUDITORIA,
         (("GET", T + "/{idTarjeta}/historial"),),
         "/tarjetas",
+    ),
+    _f(
+        APROBAR_SOLICITUD_TARJETA,
+        "Resolver solicitudes de tarjeta",
+        "Tarjetas",
+        ("SUPERVISOR",),
+        (),
+        "/aprobaciones",
+        delegable=False,
+    ),
+    _f(
+        APROBAR_DESBLOQUEO_TARJETA,
+        "Autorizar desbloqueo de tarjeta",
+        "Tarjetas",
+        ("SUPERVISOR",),
+        (),
+        "/tarjetas",
+        ("tarjetas.cambiarEstado",),
+        delegable=False,
     ),
     _f(
         "entidad.consultar",
