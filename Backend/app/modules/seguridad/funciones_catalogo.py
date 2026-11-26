@@ -77,7 +77,11 @@ FUNCIONES = (
         "Consultar clientes",
         "Clientes",
         ATENCION,
-        (("POST", C + "/busqueda"), ("GET", C + "/{idCliente}")),
+        (
+            ("POST", C + "/busqueda"),
+            ("GET", C + "/{idCliente}"),
+            ("GET", C + "/{idCliente}/relaciones/firmantes"),
+        ),
         "/clientes-busqueda",
     ),
     _f(
@@ -106,7 +110,11 @@ FUNCIONES = (
         "Editar cliente",
         "Clientes",
         REGISTRO,
-        (("PATCH", C + "/{idCliente}"),),
+        (
+            ("PATCH", C + "/{idCliente}"),
+            ("POST", C + "/{idCliente}/relaciones/firmantes"),
+            ("POST", C + "/{idCliente}/relaciones/firmantes/{idRelacion}/fin"),
+        ),
         "/clientes-busqueda",
         ("clientes.consultar",),
     ),

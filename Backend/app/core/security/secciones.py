@@ -47,6 +47,9 @@ RUTAS_POR_SECCION: dict[str, tuple[tuple[str, str], ...]] = {
     ),
     "clientes.consultar": (
         ("POST", "/api/v1/clientes/busqueda"),
+        ("GET", "/api/v1/clientes/{idCliente}/relaciones/firmantes"),
+        ("POST", "/api/v1/clientes/{idCliente}/relaciones/firmantes"),
+        ("POST", "/api/v1/clientes/{idCliente}/relaciones/firmantes/{idRelacion}/fin"),
         ("POST", "/api/v1/clientes/busqueda/exportacion"),
         ("GET", "/api/v1/clientes/{idCliente}"),
         ("POST", "/api/v1/clientes/{idCliente}/revelacion/desafio"),

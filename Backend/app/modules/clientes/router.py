@@ -16,7 +16,7 @@ from app.core.security.auth import (
 )
 from app.modules.aprobaciones import router as aprobaciones
 from app.modules.aprobaciones.contratos import SolicitudAceptada
-from app.modules.clientes import correos, revelacion, service
+from app.modules.clientes import correos, firmantes, revelacion, service
 from app.modules.clientes.aprobacion import CODIGO_EDICION, objetivo
 from app.modules.clientes.aprobacion_estado import (
     CODIGO_ESTADO,
@@ -725,3 +725,4 @@ router.include_router(_riesgo_router, prefix="/clientes")
 router.include_router(_consultas_router, prefix="/clientes")
 router.include_router(_revelacion_router, prefix="/clientes")
 router.include_router(correos.router, prefix="/clientes")
+router.include_router(firmantes.router, prefix="/clientes")
