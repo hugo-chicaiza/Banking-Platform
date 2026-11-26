@@ -59,7 +59,11 @@ FUNCIONES = (
         "Registrar cliente",
         "Clientes",
         REGISTRO,
-        (("GET", C + "/validar-identificacion"), ("POST", C)),
+        (
+            ("POST", C + "/validaciones/documento"),
+            ("POST", C),
+            ("POST", C + "/reincorporaciones"),
+        ),
         "/registrar-cliente",
     ),
     _f(
