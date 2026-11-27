@@ -219,11 +219,13 @@ def test_alta_documento_y_direccion_en_misma_transaccion(monkeypatch):
         tipo_documento="C",
         tipo_cliente="Natural",
         identificacion="1712345675",
+        fecha_nacimiento=date(1990, 1, 1),
         fecha_emision=None,
         fecha_vencimiento=None,
     )
     body = ConsultaDocumentoBody(tipo_documento="CED", numero=payload.identificacion)
     monkeypatch.setattr(service, "_validar_datos_alta", lambda *_, **__: None)
+    monkeypatch.setattr(service, "edad_mayoria", lambda *_: 18)
     monkeypatch.setattr(service, "_validar_persona_y_catalogos", lambda *_: None)
     monkeypatch.setattr(documentos_identidad, "preparar_alta", lambda *_: body)
     monkeypatch.setattr(

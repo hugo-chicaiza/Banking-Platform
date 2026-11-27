@@ -14,8 +14,9 @@ from app.modules.aprobaciones.contratos import SolicitudAceptada
 from app.modules.catalogos.tipos_direccion import (
     validar_activo as validar_tipo_direccion,
 )
-from app.modules.clientes import repository
+from app.modules.clientes import repository, tutores
 from app.modules.clientes.habilitacion import activar_si_cumple
+from app.modules.clientes.relaciones import edad_en, edad_mayoria
 from app.modules.clientes.schemas import (
     CAMPOS_CON_RESPALDO,
     CAMPOS_SENSIBLES,
@@ -1023,8 +1024,10 @@ def registrar_cliente(
     """
     from app.modules.clientes import documentos_identidad
 
+    tutor = payload.tutor if isinstance(payload, tutores.ClienteAlta) else None
+    fecha = hoy()
     _validar_datos_alta(payload, validar_documento=False)
-    consulta = documentos_identidad.preparar_alta(conn, payload, hoy())
+    consulta = documentos_identidad.preparar_alta(conn, payload, fecha)
     payload = payload.model_copy(
         update={
             "identificacion": consulta.numero,
@@ -1036,7 +1039,17 @@ def registrar_cliente(
 
     _validar_persona_y_catalogos(conn, payload)
 
-    # 7. Inserción en Base de Datos
+    es_menor = payload.tipo_cliente == "Natural" and edad_en(
+        payload.fecha_nacimiento, fecha
+    ) < edad_mayoria(conn, fecha)
+    if es_menor and tutor is None:
+        raise _problema(422, "MENOR_SIN_TUTOR", "Selecciona al tutor del menor.")
+    if tutor is not None and not es_menor:
+        raise _problema(
+            422, "TUTOR_NO_APLICA", "El tutor solo se registra para un menor."
+        )
+
+    relacion = None
     try:
         cliente_dict: dict[str, Any] = repository.crear_cliente(
             conn,
@@ -1053,12 +1066,21 @@ def registrar_cliente(
             payload.fecha_vencimiento,
             principal=True,
         )
+        if tutor is not None:
+            relacion = tutores.registrar_tutor_inicial(
+                conn, cliente_dict["id_cliente"], tutor, creado_por, fecha
+            )
+        cliente = Cliente(**cliente_dict)
         conn.commit()
     except Exception:
         conn.rollback()
         raise
 
-    return Cliente(**cliente_dict)
+    if relacion is not None:
+        tutores.auditar_tutor(
+            "CLI_RELACION_INICIADA", relacion, creado_por, direccion_ip
+        )
+    return cliente
 
 
 # ---------------------------------------------------------------------------

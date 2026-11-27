@@ -19,6 +19,7 @@ from app.core.security.auth import (
     require_roles,
 )
 from app.modules.clientes.relaciones import edad_en, edad_mayoria
+from app.modules.clientes.schemas import ClienteCreate
 from app.modules.clientes.visibilidad import ficha_completa
 from app.modules.parametros.service import hoy
 
@@ -51,6 +52,15 @@ class AltaTutor(CamelModel):
 
 class RelevoTutor(AltaTutor):
     id_relacion_anterior: int = Field(gt=0)
+
+
+class ClienteAlta(ClienteCreate):
+    tutor: AltaTutor | None = None
+
+
+class RequisitosAlta(CamelModel):
+    edad_mayoria: int
+    fecha_actual: date
 
 
 class Tutor(CamelModel):
@@ -168,6 +178,38 @@ def _validar_persona(
         )
 
 
+def insertar_tutor(conn: Connection, titular: int, datos: AltaTutor, actor: int) -> int:
+    return conn.execute(
+        text("""
+            INSERT Clientes.ClienteRelacion
+                (IdCliente,IdClienteRelacionado,TipoRelacion,FechaInicio,
+                 TipoRespaldoAlta,RespaldoAlta,CreadoPor)
+            OUTPUT inserted.IdRelacion
+            VALUES (:id,:persona,'Tutor',:inicio,:tipo,:referencia,:actor)
+        """),
+        {
+            "id": titular,
+            "persona": datos.id_cliente_relacionado,
+            "inicio": datos.fecha_efectiva,
+            "tipo": datos.tipo_respaldo,
+            "referencia": datos.referencia_respaldo,
+            "actor": actor,
+        },
+    ).scalar_one()
+
+
+def registrar_tutor_inicial(
+    conn: Connection, titular: int, datos: AltaTutor, actor: int, fecha: date
+) -> int:
+    """La ficha es nueva. El llamador conserva la transacción de su alta."""
+    if not _titular(conn, titular, fecha, datos.fecha_efectiva):
+        raise problema(
+            422, "TUTOR_NO_APLICA", "El tutor se registra en la ficha de un menor."
+        )
+    _validar_persona(conn, titular, datos, fecha)
+    return insertar_tutor(conn, titular, datos, actor)
+
+
 def _guardar(
     conn: Connection,
     titular: int,
@@ -238,19 +280,10 @@ def _guardar(
                 """),
                 {**valores, "fin": datos.fecha_efectiva - timedelta(days=1)},
             )
-        return conn.execute(
-            text("""
-            INSERT Clientes.ClienteRelacion
-                (IdCliente,IdClienteRelacionado,TipoRelacion,FechaInicio,
-                 TipoRespaldoAlta,RespaldoAlta,CreadoPor)
-            OUTPUT inserted.IdRelacion
-            VALUES (:id,:persona,'Tutor',:inicio,:tipo,:referencia,:actor)
-            """),
-            valores,
-        ).scalar_one()
+        return insertar_tutor(conn, titular, datos, actor)
 
 
-def _auditar(accion: str, relacion: int, actor: int, request: Request) -> None:
+def auditar_tutor(accion: str, relacion: int, actor: int, direccion_ip: str) -> None:
     audit.registrar(
         audit.EventoAuditoria(
             accion=accion,
@@ -258,7 +291,7 @@ def _auditar(accion: str, relacion: int, actor: int, request: Request) -> None:
             id_registro=str(relacion),
             resultado="Exitoso",
             usuario=actor,
-            ip=ip_cliente(request.scope),
+            ip=direccion_ip,
             descripcion="Actualización del tutor del menor.",
         )
     )
@@ -273,7 +306,7 @@ def alta(
     request: Request,
 ) -> int:
     relacion = _guardar(conn, idCliente, datos, actor, None)
-    _auditar("CLI_RELACION_INICIADA", relacion, actor, request)
+    auditar_tutor("CLI_RELACION_INICIADA", relacion, actor, ip_cliente(request.scope))
     return relacion
 
 
@@ -289,6 +322,7 @@ def relevo(
 ) -> int:
     anterior = datos.id_relacion_anterior
     relacion = _guardar(conn, idCliente, datos, actor, anterior)
-    _auditar("CLI_RELACION_TERMINADA", anterior, actor, request)
-    _auditar("CLI_RELACION_INICIADA", relacion, actor, request)
+    direccion_ip = ip_cliente(request.scope)
+    auditar_tutor("CLI_RELACION_TERMINADA", anterior, actor, direccion_ip)
+    auditar_tutor("CLI_RELACION_INICIADA", relacion, actor, direccion_ip)
     return relacion
