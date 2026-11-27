@@ -682,6 +682,12 @@ def solicitar_reincorporacion(
 
     # 5. Tipos deben coincidir con los guardados
     id_cliente = existente["id_cliente"]
+    if not isinstance(id_cliente, int):
+        raise _problema(
+            404,
+            "CLIENTE_NO_ENCONTRADO",
+            "No se encontró un cliente con esa identificación.",
+        )
     tipo_cliente_guardado = existente.get("tipo_cliente")
     tipo_documento_guardado = existente.get("tipo_documento")
     if tipo_cliente_guardado is None or tipo_documento_guardado is None:
@@ -943,7 +949,7 @@ def validar_pasaporte(pasaporte: str) -> tuple[bool, str]:
 
 
 def validar_formato_documento(
-    tipo_documento: TipoDocumento, identificacion: str
+    tipo_documento: str, identificacion: str
 ) -> tuple[bool, str]:
     """Valida el formato offline del documento según su tipo."""
     doc = identificacion.strip()

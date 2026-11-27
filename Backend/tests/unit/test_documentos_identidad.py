@@ -1,4 +1,5 @@
 from datetime import date
+from typing import cast
 from unittest.mock import MagicMock
 
 import pytest
@@ -65,7 +66,9 @@ def test_cedula_invalida_no_busca_clientes(monkeypatch):
     with pytest.raises(HTTPException) as error:
         documentos_identidad.consultar(conn, body, HOY)
 
-    assert error.value.detail["code"] == "DOCUMENTO_INVALIDO"
+    detalle = cast(object, error.value.detail)
+    assert isinstance(detalle, dict)
+    assert detalle["code"] == "DOCUMENTO_INVALIDO"
     buscar.assert_not_called()
 
 
@@ -190,7 +193,9 @@ def test_revisar_principal_usa_reglas_y_fecha_vigentes(
             conn, 42, 79, datos, HOY, 1, "127.0.0.1", 2
         )
 
-    assert error.value.detail["code"] == "DOCUMENTO_NO_HABILITADO"
+    detalle = cast(object, error.value.detail)
+    assert isinstance(detalle, dict)
+    assert detalle["code"] == "DOCUMENTO_NO_HABILITADO"
     conn.execute.assert_not_called()
 
 

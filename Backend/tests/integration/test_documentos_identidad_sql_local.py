@@ -5,6 +5,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import date
 from pathlib import Path
 from threading import Barrier
+from typing import cast
 from uuid import uuid4
 
 import pyodbc
@@ -163,7 +164,9 @@ def test_altas_concurrentes_admiten_una_sola_ficha(bd, documentos):
                 _registrar(conn, *documento)
             return "REGISTRADO"
         except HTTPException as exc:
-            return exc.detail["code"]
+            detalle = cast(object, exc.detail)
+            assert isinstance(detalle, dict)
+            return detalle["code"]
 
     with ThreadPoolExecutor(max_workers=2) as hilos:
         assert sorted(hilos.map(registrar, documentos)) == [

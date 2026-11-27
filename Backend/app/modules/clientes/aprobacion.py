@@ -120,9 +120,16 @@ class EdicionCliente:
         motivo = f"Cambio aprobado (solicitud {id_solicitud})"
         if {"identificacion", "tipo_documento"} & cambios.keys():
             finales = fila | cambios
+            tipo_documento = finales["tipo_documento"]
+            if not isinstance(tipo_documento, str):
+                raise problema(
+                    409,
+                    "SOLICITUD_DESACTUALIZADA",
+                    "Revisa el tipo de documento desde la ficha.",
+                )
             consulta = ConsultaDocumentoBody(
                 tipo_documento=documentos_identidad.CODIGOS.get(
-                    finales["tipo_documento"], finales["tipo_documento"]
+                    tipo_documento, tipo_documento
                 ),
                 numero=finales["identificacion"].upper(),
             )
