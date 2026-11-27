@@ -189,7 +189,11 @@ def test_no_concede_edicion_al_conceder_consulta(entorno):
 
 def test_no_confunde_ruta_fija_con_id_variable():
     assert (
-        funcion_api("GET", "/api/v1/clientes/validar-identificacion")
+        funcion_api("POST", "/api/v1/clientes/validaciones/documento")
+        == "clientes.registrar"
+    )
+    assert (
+        funcion_api("POST", "/api/v1/clientes/reincorporaciones")
         == "clientes.registrar"
     )
     assert funcion_api("GET", "/api/v1/productos/tipos") == "productos.consultar"

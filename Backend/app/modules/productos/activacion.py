@@ -111,6 +111,7 @@ def lista(conn: Connection, id_sub: int, fecha: date) -> list[dict[str, Any]]:
                     conn,
                     """SELECT 1 FROM ProductosFinancieros.ProductoCanalCupo c JOIN Canal.Canal a ON a.IdCanal=c.IdCanal
                        WHERE c.IdSubProducto=:id AND c.EstadoCupo='A' AND a.Estado='A'
+                         AND c.VigenciaDesde <= :fecha
                          AND (c.VigenciaHasta IS NULL OR c.VigenciaHasta >= :fecha)""",
                     **vigente,
                 ),
@@ -131,8 +132,10 @@ def lista(conn: Connection, id_sub: int, fecha: date) -> list[dict[str, Any]]:
                 "NUMERACION",
                 _existe(
                     conn,
-                    "SELECT 1 FROM ProductosFinancieros.ReglaNumeracion WHERE IdSubProducto=:id AND Estado='A'",
-                    id=id_sub,
+                    """SELECT 1 FROM ProductosFinancieros.ReglaNumeracion
+                       WHERE IdSubProducto=:id AND Estado='A' AND VigenciaDesde <= :fecha
+                         AND (VigenciaHasta IS NULL OR VigenciaHasta >= :fecha)""",
+                    **vigente,
                 ),
                 None,
             )
@@ -185,13 +188,13 @@ _ABIERTOS = {
         SELECT TOP (1) 1 FROM Cuentas.Cuenta
         WHERE (IdSubProducto = :sub OR IdSubProducto IN (
                 SELECT IdSubProducto FROM ProductosFinancieros.SubProducto WHERE IdProducto = :prod))
-          AND Estado NOT IN ('Cerrada', 'Cancelada')
+          AND Estado NOT IN ('Cerrada', 'Cancelada', 'Anulada')
     """,
     "tarjetas": """
         SELECT TOP (1) 1 FROM Tarjeta.Tarjeta
         WHERE (IdSubProducto = :sub OR IdSubProducto IN (
                 SELECT IdSubProducto FROM ProductosFinancieros.SubProducto WHERE IdProducto = :prod))
-          AND Estado NOT IN ('Cancelada', 'Rechazada', 'Anulada')
+          AND Estado NOT IN ('Cancelada', 'Rechazada', 'Anulada', 'Vencida', 'Cerrada')
     """,
     "créditos": """
         SELECT TOP (1) 1 FROM Credito.CreditoSolicitud

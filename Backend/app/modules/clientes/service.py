@@ -46,6 +46,7 @@ from app.modules.clientes.schemas import (
 from app.modules.contabilidad.service import ZONA_ECUADOR
 from app.modules.cuentas.schemas import ID_MONEDA_USD
 from app.modules.parametros import general
+from app.modules.parametros.service import hoy
 
 _COEFICIENTES_MOD10 = [2, 1, 2, 1, 2, 1, 2, 1, 2]
 
@@ -532,6 +533,181 @@ def _validar_productos_cliente(conn: Connection, id_cliente: int) -> None:
 
 
 SolicitarEstado = Callable[[dict[str, Any]], SolicitudAceptada]
+SolicitarReincorporacion = Callable[[int, dict[str, Any]], SolicitudAceptada]
+
+
+def _validar_datos_alta(payload: ClienteCreate) -> str:
+    """Validaciones comunes del alta y la reincorporación; devuelve el documento."""
+    # 1. Consentimiento de datos debe ser True
+    if not payload.consentimiento_datos:
+        raise _problema(
+            422,
+            "CONSENTIMIENTO_REQUERIDO",
+            "El consentimiento para el tratamiento de datos personales es obligatorio.",
+        )
+
+    # 2. Fecha de nacimiento o constitución anterior a hoy (Ecuador)
+    if payload.fecha_nacimiento >= hoy():
+        raise _problema(
+            422,
+            "FECHA_NACIMIENTO_INVALIDA",
+            "La fecha de nacimiento o constitución debe ser anterior a la fecha actual.",
+        )
+
+    # 3. Validación de formato de documento
+    doc = payload.identificacion.strip()
+    valido_formato, motivo_doc = validar_formato_documento(payload.tipo_documento, doc)
+    if not valido_formato:
+        raise _problema(
+            422,
+            "DOCUMENTO_INVALIDO",
+            f"El documento de identificación no cumple el formato requerido: {motivo_doc}",
+        )
+    return doc
+
+
+def _validar_persona_y_catalogos(conn: Connection, payload: ClienteCreate) -> None:
+    """Tipo de persona y catálogos, iguales para el alta y la reincorporación."""
+    # 5. Validación de tipo de persona
+    if payload.tipo_cliente == "Natural":
+        if (
+            not payload.apellidos
+            or not payload.genero
+            or not payload.estado_civil
+            or payload.razon_social is not None
+        ):
+            raise _problema(
+                422,
+                "TIPO_PERSONA_INVALIDO",
+                "Cliente Natural exige 'apellidos', 'genero' y 'estadoCivil'; y no admite 'razonSocial'.",
+            )
+    elif payload.tipo_cliente == "Juridico" and (
+        not payload.razon_social
+        or payload.apellidos is not None
+        or payload.genero is not None
+        or payload.estado_civil is not None
+    ):
+        raise _problema(
+            422,
+            "TIPO_PERSONA_INVALIDO",
+            "Cliente Jurídico exige 'razonSocial'; y no admite 'apellidos', 'genero' ni 'estadoCivil'.",
+        )
+
+    # 6. Validación de Catálogos
+    if (
+        payload.id_actividad_economica is not None
+        and not repository.existe_actividad_economica(
+            conn, payload.id_actividad_economica
+        )
+    ):
+        raise _problema(
+            422,
+            "CATALOGO_INVALIDO",
+            f"La actividad económica con id {payload.id_actividad_economica} no existe en el catálogo.",
+        )
+
+    for codigo, etiqueta in (
+        (payload.codigo_pais_nacionalidad, "nacionalidad"),
+        (payload.direccion.codigo_pais, "la dirección"),
+    ):
+        if not repository.existe_pais(conn, codigo):
+            raise _problema(
+                422,
+                "CATALOGO_INVALIDO",
+                f"El país de {etiqueta} '{codigo}' no existe en el catálogo.",
+            )
+
+    direccion = payload.direccion
+    validar_tipo_direccion(conn, direccion.tipo_direccion)
+    if not repository.existe_ciudad(conn, direccion.id_ciudad, direccion.codigo_pais):
+        raise _problema(
+            422,
+            "CATALOGO_INVALIDO",
+            f"La ciudad con id {direccion.id_ciudad} no existe o no pertenece al país '{direccion.codigo_pais}'.",
+        )
+
+
+def solicitar_reincorporacion(
+    conn: Connection,
+    payload: ClienteCreate,
+    modificado_por: int,
+    direccion_ip: str,
+    id_agencia: str | None = None,
+    *,
+    solicitar: SolicitarReincorporacion | None = None,
+) -> SolicitudAceptada:
+    """E5-07: valida y envía la reincorporación a la cola de aprobación (202).
+
+    Raises:
+        HTTPException 422 CONSENTIMIENTO_REQUERIDO
+        HTTPException 422 FECHA_NACIMIENTO_INVALIDA
+        HTTPException 422 DOCUMENTO_INVALIDO
+        HTTPException 404 CLIENTE_NO_ENCONTRADO
+        HTTPException 409 CLIENTE_NO_ELIMINADO
+        HTTPException 422 DATOS_NO_COINCIDEN
+        HTTPException 422 TIPO_PERSONA_INVALIDO
+        HTTPException 422 CATALOGO_INVALIDO
+    """
+    doc = _validar_datos_alta(payload)
+
+    # 4. Buscar cliente existente
+    existente = repository.obtener_cliente_por_identificacion(conn, doc)
+    if existente is None:
+        raise _problema(
+            404,
+            "CLIENTE_NO_ENCONTRADO",
+            "No se encontró un cliente con esa identificación.",
+        )
+    if existente["estado"] != "Eliminado":
+        raise _problema(
+            409,
+            "CLIENTE_NO_ELIMINADO",
+            "El cliente no está en estado Eliminado.",
+        )
+
+    # 5. Tipos deben coincidir con los guardados
+    id_cliente = existente["id_cliente"]
+    tipo_cliente_guardado = existente.get("tipo_cliente")
+    tipo_documento_guardado = existente.get("tipo_documento")
+    if tipo_cliente_guardado is None or tipo_documento_guardado is None:
+        datos_guardados = repository.obtener_cliente_tipos(conn, id_cliente)
+        if datos_guardados is None:
+            raise _problema(
+                404,
+                "CLIENTE_NO_ENCONTRADO",
+                "No se encontró un cliente con esa identificación.",
+            )
+        tipo_cliente_guardado = datos_guardados.get("tipo_cliente")
+        tipo_documento_guardado = datos_guardados.get("tipo_documento")
+
+    if (
+        payload.tipo_cliente != tipo_cliente_guardado
+        or payload.tipo_documento != tipo_documento_guardado
+    ):
+        raise _problema(
+            422,
+            "DATOS_NO_COINCIDEN",
+            "El tipo de cliente y el tipo de documento deben coincidir con los registrados.",
+        )
+
+    _validar_persona_y_catalogos(conn, payload)
+
+    # 8. Enviar a cola de aprobación
+    if solicitar is None:
+        raise RuntimeError("Falta el servicio de aprobación de E0-08.")
+
+    from app.modules.clientes.aprobacion_reincorporacion import ContenidoReincorporacion
+
+    datos_payload = payload.model_dump(mode="json", by_alias=True)
+    contenido = ContenidoReincorporacion.model_validate(
+        {
+            "datos": datos_payload,
+            "modificado_por": modificado_por,
+            "direccion_ip": direccion_ip,
+            "id_agencia": id_agencia,
+        }
+    )
+    return solicitar(id_cliente, contenido.model_dump(mode="json", by_alias=True))
 
 
 def cambiar_estado_cliente(
@@ -781,11 +957,14 @@ def validar_identificacion(
 
     cliente = repository.obtener_cliente_por_identificacion(conn, doc)
     if cliente is not None:
+        estado = cliente["estado"]
         return ValidacionIdentificacion(
             valida=True,
             existe=True,
             id_cliente=cliente["id_cliente"],
             mensaje="Identificación ya registrada en el sistema.",
+            reincorporable=estado == "Eliminado",
+            estado=estado,
         )
 
     return ValidacionIdentificacion(
@@ -818,98 +997,24 @@ def registrar_cliente(
         HTTPException 422 TIPO_PERSONA_INVALIDO
         HTTPException 422 CATALOGO_INVALIDO
     """
-    # 1. Consentimiento de datos debe ser True
-    if not payload.consentimiento_datos:
-        raise _problema(
-            422,
-            "CONSENTIMIENTO_REQUERIDO",
-            "El consentimiento para el tratamiento de datos personales es obligatorio.",
-        )
-
-    # 2. Fecha de nacimiento o constitución anterior a hoy
-    if payload.fecha_nacimiento >= date.today():
-        raise _problema(
-            422,
-            "FECHA_NACIMIENTO_INVALIDA",
-            "La fecha de nacimiento o constitución debe ser anterior a la fecha actual.",
-        )
-
-    # 3. Validación de formato de documento
-    doc = payload.identificacion.strip()
-    valido_formato, motivo_doc = validar_formato_documento(payload.tipo_documento, doc)
-    if not valido_formato:
-        raise _problema(
-            422,
-            "DOCUMENTO_INVALIDO",
-            f"El documento de identificación no cumple el formato requerido: {motivo_doc}",
-        )
+    doc = _validar_datos_alta(payload)
 
     # 4. Identificación única (duplicados)
     existente = repository.obtener_cliente_por_identificacion(conn, doc)
     if existente is not None:
+        if existente.get("estado") == "Eliminado":
+            raise _problema(
+                409,
+                "CLIENTE_ELIMINADO",
+                "La persona fue cliente y está eliminada; puede solicitar su reincorporación.",
+            )
         raise _problema(
             409,
             "CLIENTE_DUPLICADO",
             "Ya existe un cliente registrado con esa identificación.",
         )
 
-    # 5. Validación de tipo de persona
-    if payload.tipo_cliente == "Natural":
-        if (
-            not payload.apellidos
-            or not payload.genero
-            or not payload.estado_civil
-            or payload.razon_social is not None
-        ):
-            raise _problema(
-                422,
-                "TIPO_PERSONA_INVALIDO",
-                "Cliente Natural exige 'apellidos', 'genero' y 'estadoCivil'; y no admite 'razonSocial'.",
-            )
-    elif payload.tipo_cliente == "Juridico" and (
-        not payload.razon_social
-        or payload.apellidos is not None
-        or payload.genero is not None
-        or payload.estado_civil is not None
-    ):
-        raise _problema(
-            422,
-            "TIPO_PERSONA_INVALIDO",
-            "Cliente Jurídico exige 'razonSocial'; y no admite 'apellidos', 'genero' ni 'estadoCivil'.",
-        )
-
-    # 6. Validación de Catálogos
-    if (
-        payload.id_actividad_economica is not None
-        and not repository.existe_actividad_economica(
-            conn, payload.id_actividad_economica
-        )
-    ):
-        raise _problema(
-            422,
-            "CATALOGO_INVALIDO",
-            f"La actividad económica con id {payload.id_actividad_economica} no existe en el catálogo.",
-        )
-
-    for codigo, etiqueta in (
-        (payload.codigo_pais_nacionalidad, "nacionalidad"),
-        (payload.direccion.codigo_pais, "la dirección"),
-    ):
-        if not repository.existe_pais(conn, codigo):
-            raise _problema(
-                422,
-                "CATALOGO_INVALIDO",
-                f"El país de {etiqueta} '{codigo}' no existe en el catálogo.",
-            )
-
-    direccion = payload.direccion
-    validar_tipo_direccion(conn, direccion.tipo_direccion)
-    if not repository.existe_ciudad(conn, direccion.id_ciudad, direccion.codigo_pais):
-        raise _problema(
-            422,
-            "CATALOGO_INVALIDO",
-            f"La ciudad con id {direccion.id_ciudad} no existe o no pertenece al país '{direccion.codigo_pais}'.",
-        )
+    _validar_persona_y_catalogos(conn, payload)
 
     # 7. Inserción en Base de Datos
     try:

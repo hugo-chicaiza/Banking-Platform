@@ -116,6 +116,9 @@ def registro_inicial() -> Registro:
     from app.modules.auth.aprobacion_roles import operacion as operacion_roles
     from app.modules.clientes.aprobacion import OPERACION_EDICION
     from app.modules.clientes.aprobacion_estado import OPERACION_ESTADO
+    from app.modules.clientes.aprobacion_reincorporacion import (
+        OPERACION_REINCORPORACION,
+    )
     from app.modules.clientes.aprobacion_riesgo import OPERACION_RIESGO
     from app.modules.contabilidad.plantillas import OPERACION_PLANTILLA
     from app.modules.cuentas.cambio_subproducto import OPERACION as cambio_subproducto
@@ -146,6 +149,7 @@ def registro_inicial() -> Registro:
     registro.agregar(OPERACION_EDICION)
     registro.agregar(OPERACION_RIESGO)
     registro.agregar(OPERACION_ESTADO)
+    registro.agregar(OPERACION_REINCORPORACION)
     registro.agregar(solicitud_tarjeta)
     for operacion in operaciones_estado():
         registro.agregar(operacion)

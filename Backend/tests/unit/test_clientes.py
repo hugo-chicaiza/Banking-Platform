@@ -2,7 +2,7 @@ from dataclasses import replace
 
 """Pruebas unitarias de:
 
-- CLI-01 · GET /api/v1/clientes/validar-identificacion
+- CLI-01 · POST /api/v1/clientes/validaciones/documento
 - CLI-02 · POST /api/v1/clientes
 - CLI-03 / CLI-04 / CLI-08 · Listado, detalle y perfil del cliente
 - CLI-09 · GET /api/v1/clientes/{idCliente}/direcciones

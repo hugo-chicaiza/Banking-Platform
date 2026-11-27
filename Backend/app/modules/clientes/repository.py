@@ -59,17 +59,34 @@ def obtener_cliente_por_identificacion(
 ) -> dict[str, Any] | None:
     """Busca un cliente por su número de identificación.
 
-    Devuelve {id_cliente, estado} o None si no existe.
+    Devuelve {id_cliente, estado, tipo_cliente, tipo_documento} o None si no existe.
     """
     return _one(
         conn,
         """
-        SELECT IdCliente AS id_cliente,
-               Estado    AS estado
+        SELECT IdCliente     AS id_cliente,
+               Estado        AS estado,
+               TipoCliente   AS tipo_cliente,
+               TipoDocumento AS tipo_documento
         FROM Clientes.Cliente
         WHERE Identificacion = :identificacion
         """,
         {"identificacion": identificacion},
+    )
+
+
+def obtener_cliente_tipos(conn: Connection, id_cliente: int) -> dict[str, Any] | None:
+    """Retorna TipoCliente y TipoDocumento de un cliente."""
+    return _one(
+        conn,
+        """
+        SELECT TipoCliente   AS tipo_cliente,
+               TipoDocumento AS tipo_documento,
+               Estado        AS estado
+        FROM Clientes.Cliente
+        WHERE IdCliente = :id_cliente
+        """,
+        {"id_cliente": id_cliente},
     )
 
 
@@ -544,6 +561,7 @@ def bloquear_cliente(conn: Connection, id_cliente: int) -> dict[str, Any] | None
         conn,
         """
         SELECT IdCliente AS id_cliente, Estado AS estado, TipoCliente AS tipo_cliente,
+               TipoDocumento AS tipo_documento,
                FechaNacimiento AS fecha_nacimiento
         FROM Clientes.Cliente WITH (UPDLOCK, HOLDLOCK)
         WHERE IdCliente = :id_cliente
@@ -788,6 +806,78 @@ def anonimizar_cliente(
         valor_anterior=None,
         valor_nuevo="Datos personales anonimizados",
         id_solicitud=id_solicitud,
+    )
+
+
+def reincorporar_cliente(
+    conn: Connection,
+    id_cliente: int,
+    datos: ClienteCreate,
+    *,
+    id_agencia: str | None = None,
+    id_solicitud: int,
+) -> None:
+    """Actualiza datos personales de un cliente eliminado a estado Pendiente.
+
+    WHERE IdCliente = :id_cliente AND Estado = 'Eliminado'.
+    No modifica Identificacion, TipoDocumento, TipoCliente, CreadoPor ni FechaRegistro.
+    """
+    motivo_estado = f"Reincorporación (solicitud {id_solicitud})"
+    resultado = conn.execute(
+        text("""
+        UPDATE Clientes.Cliente
+        SET Nombres = :nombres,
+            Apellidos = :apellidos,
+            RazonSocial = :razon_social,
+            NombreComercial = :nombre_comercial,
+            IdActividadEconomica = :id_actividad_economica,
+            FechaNacimiento = :fecha_nacimiento,
+            Genero = :genero,
+            EstadoCivil = :estado_civil,
+            CodigoPaisNacionalidad = :codigo_pais_nacionalidad,
+            TelefonoConvencional = :telefono_convencional,
+            TelefonoCelular = :telefono_celular,
+            Email = :email,
+            ConsentimientoDatos = 1,
+            FechaConsentimiento = SYSUTCDATETIME(),
+            EmailVerificadoPor = NULL,
+            FechaEmailVerificado = NULL,
+            Estado = 'Pendiente',
+            MotivoEstado = :motivo_estado,
+            IdAgenciaRegistro = CASE WHEN :id_agencia IS NOT NULL THEN :id_agencia ELSE IdAgenciaRegistro END
+        WHERE IdCliente = :id_cliente AND Estado = 'Eliminado'
+        """),
+        {
+            "id_cliente": id_cliente,
+            "nombres": datos.nombres,
+            "apellidos": datos.apellidos,
+            "razon_social": datos.razon_social,
+            "nombre_comercial": datos.nombre_comercial,
+            "id_actividad_economica": datos.id_actividad_economica,
+            "fecha_nacimiento": datos.fecha_nacimiento,
+            "genero": datos.genero,
+            "estado_civil": datos.estado_civil,
+            "codigo_pais_nacionalidad": datos.codigo_pais_nacionalidad,
+            "telefono_convencional": datos.telefono_convencional,
+            "telefono_celular": datos.telefono_celular,
+            "email": datos.email.lower(),
+            "motivo_estado": motivo_estado,
+            "id_agencia": id_agencia,
+        },
+    )
+    if resultado.rowcount != 1:
+        raise RuntimeError("La reincorporación no afectó una sola fila.")
+
+
+def invalidar_riesgos_cliente(conn: Connection, id_cliente: int) -> None:
+    """Marca no vigentes todas las evaluaciones de riesgo anteriores."""
+    conn.execute(
+        text("""
+        UPDATE Clientes.RiesgoCliente
+        SET EsVigente = 0
+        WHERE IdCliente = :id_cliente
+        """),
+        {"id_cliente": id_cliente},
     )
 
 

@@ -42,8 +42,9 @@ RUTAS_POR_SECCION: dict[str, tuple[tuple[str, str], ...]] = {
         ("PATCH", "/api/v1/parametros/{clave}/valores/{id_valor}"),
     ),
     "clientes.registrar": (
-        ("GET", "/api/v1/clientes/validar-identificacion"),
+        ("POST", "/api/v1/clientes/validaciones/documento"),
         ("POST", "/api/v1/clientes"),
+        ("POST", "/api/v1/clientes/reincorporaciones"),
     ),
     "clientes.consultar": (
         ("POST", "/api/v1/clientes/busqueda"),
