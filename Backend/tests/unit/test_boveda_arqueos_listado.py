@@ -28,8 +28,8 @@ def test_lista_vacia_boveda_inactiva_y_no_encontrada(ctx):
 
 
 def test_historial_paginado_orden_estable_y_sin_escrituras(ctx):
-    for i in range(3):
-        assert ctx.registrar_conteo(9 + i).status_code == 201
+    for i, cantidad in enumerate((10, 10, 11)):
+        assert ctx.registrar_conteo(cantidad).status_code == 201
         ctx.state["arqueos"][i + 1]["fecha_hora_arqueo"] = datetime(2026, 11, 17, 10)
     antes = deepcopy(ctx.state)
     pagina = ctx.client.get(RUTA, params={"pageSize": 2}).json()
@@ -61,7 +61,7 @@ def test_filtros_combinados_y_fechas_inclusivas(ctx):
     filtro = {"desde": "2026-11-17", "hasta": "2026-11-17", "tipoArqueo": "Programado"}
     pagina = ctx.client.get(RUTA, params=filtro).json()
     assert [a["idArqueoBoveda"] for a in pagina["items"]] == [4, 2]
-    pagina = ctx.client.get(RUTA, params={**filtro, "estado": "REGISTRADO"}).json()
+    pagina = ctx.client.get(RUTA, params={**filtro, "estado": "CUADRADO"}).json()
     assert [a["idArqueoBoveda"] for a in pagina["items"]] == [4]
     assert ctx.client.get(RUTA, params={"estado": "APROBADO"}).json()["total"] == 0
 
@@ -86,14 +86,15 @@ def test_supervisor_no_consulta_historial_de_otra_agencia(ctx):
 
 def test_lista_solo_arqueos_de_la_boveda_indicada(ctx):
     ctx.registrar_conteo()
-    ctx.como("ADMIN")
+    ctx.como("SUPERVISOR", agencia="002")
     assert (
         ctx.client.post(f"{BASE}/bovedas/2/arqueos", json=ctx.arqueo()).status_code
         == 201
     )
-    assert ctx.client.get(RUTA).json()["total"] == 1
     segunda = ctx.client.get(f"{BASE}/bovedas/2/arqueos").json()
     assert [a["idArqueoBoveda"] for a in segunda["items"]] == [2]
+    ctx.como("SUPERVISOR", agencia="001")
+    assert ctx.client.get(RUTA).json()["total"] == 1
 
 
 def test_historico_sin_referencia_no_inventa_saldos_ni_diferencias(ctx):
@@ -116,21 +117,19 @@ def test_ajuste_historico_con_vinculo_solo_desde_la_cabecera(ctx):
     assert item["idsMovimientosAjuste"] == [42]
 
 
-def test_lista_aprobacion_y_todos_los_ajustes_del_arqueo(ctx):
-    ctx.registrar_conteo(
+def test_lista_cierre_y_todos_los_ajustes_del_arqueo(ctx):
+    cerrado = ctx.registrar_conteo(
         desglose=[
             {"idDenominacion": 1, "cantidad": 9},
             {"idDenominacion": 2, "cantidad": 2},
         ]
     )
-    ctx.como("ADMIN", actor=9)
-    aprobada = ctx.client.post(f"{BASE}/arqueos/1/aprobacion")
-    assert aprobada.status_code == 200
-    item = ctx.client.get(RUTA, params={"estado": "APROBADO"}).json()["items"][0]
-    assert item["idsMovimientosAjuste"] == aprobada.json()["idsMovimientosAjuste"]
+    assert cerrado.status_code == 201
+    item = ctx.client.get(RUTA, params={"estado": "CUADRADO"}).json()["items"][0]
+    assert item["idsMovimientosAjuste"] == cerrado.json()["idsMovimientosAjuste"]
     assert len(item["idsMovimientosAjuste"]) == 2
-    assert item["idUsuarioAprobador"] == 9
-    assert item["fechaHoraAprobacion"] is not None
+    assert item["idUsuarioAprobador"] is None
+    assert item["fechaHoraAprobacion"] is None
     assert item["diferencia"] == 0
 
 

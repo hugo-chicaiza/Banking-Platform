@@ -9,7 +9,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from app.core.api.errors import problema
 from app.core.database.db import get_engine
-from app.core.security.auth import codigo_agencia, normalizar_roles
+from app.core.security.auth import UsuarioActual, codigo_agencia, normalizar_roles
 from app.core.security.operador import auditar, exigir_id_interno
 from app.modules.auth import agencias_repository as repo
 from app.modules.auth import repository as usuarios
@@ -332,16 +332,41 @@ def contexto_usuario(actor: "Usuario") -> ContextoAgencias:
         global_admin = "ADMIN" in actor.roles and not (set(actor.roles) & UNICA)
         global_actual = bool(global_admin)
         permitidas = _operativas(coop, ids, actor.roles)
-        activas = {a["id_agencia"] for a in repo.agencias(coop) if a["estado"] == "A"}
-        todas = bool(activas) and activas.issubset({a.id_agencia for a in permitidas})
+        activas = {
+            a["id_agencia"]: a.get("tipo_agencia")
+            for a in repo.agencias(coop)
+            if a["estado"] == "A"
+        }
+        todas = bool(activas) and activas.keys() <= {a.id_agencia for a in permitidas}
         return ContextoAgencias(
             id_agencia=activa,
+            agencia_es_matriz=activa is not None and activas.get(activa) == "Matriz",
             id_agencia_principal=estado.id_agencia_principal,
             agencias_asignadas=estado.agencias,
             agencias_permitidas=permitidas,
             requiere_seleccion_agencia=activa is None and not global_actual,
             alcance_global=global_actual,
             acceso_todas_agencias=todas,
+        )
+
+
+def es_matriz_activa(agencia: str) -> bool:
+    try:
+        with get_engine("cooperativa").connect() as conn:
+            return repo.es_matriz(conn, agencia)
+    except SQLAlchemyError:
+        raise problema(
+            503,
+            "CONTEXTO_AGENCIA_NO_DISPONIBLE",
+            "No se pudo verificar la agencia matriz.",
+        ) from None
+
+
+def exigir_matriz(actor: UsuarioActual) -> None:
+    agencia = actor.agencia()
+    if agencia is None or not es_matriz_activa(agencia):
+        raise problema(
+            403, "ACCESO_EXCLUSIVO_MATRIZ", "Seleccione la agencia matriz para acceder."
         )
 
 

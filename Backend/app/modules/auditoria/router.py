@@ -30,6 +30,7 @@ from app.modules.auditoria.schemas import (
     TipoEvento,
     Verificacion,
 )
+from app.modules.auth.agencias import exigir_matriz
 
 _LECTURA = ("ADMIN", "SUPERVISOR", "AUDITOR")
 _EXPORTACION = ("ADMIN", "AUDITOR")
@@ -46,7 +47,7 @@ router = APIRouter(
     tags=["auditoria"],
     route_class=ProblemDetailsRoute,
     responses=RESPUESTAS_ERROR,
-    dependencies=[Depends(require_auth), Depends(_sin_cache)],
+    dependencies=[Depends(require_auth), Depends(exigir_matriz), Depends(_sin_cache)],
 )
 Seg = Annotated[Connection, Depends(seguridad)]
 Coop = Annotated[Connection, Depends(cooperativa)]

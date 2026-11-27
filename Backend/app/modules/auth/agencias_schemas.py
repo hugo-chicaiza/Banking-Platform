@@ -43,6 +43,7 @@ class TrasladoUsuario(CamelModel):
 
 class ContextoAgencias(CamelModel):
     id_agencia: str | None
+    agencia_es_matriz: bool = False
     id_agencia_principal: str | None
     agencias_asignadas: list[AgenciaAsignada]
     agencias_permitidas: list[AgenciaAsignada]

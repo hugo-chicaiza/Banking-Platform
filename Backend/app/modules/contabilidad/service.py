@@ -475,9 +475,10 @@ def contabilizar_boveda(
     monto: Decimal,
     fecha_contable: int,
     actor: int,
-    movimiento: int,
+    movimiento: int | None,
     ahora: datetime,
     usar_version: bool | None = None,
+    novedad: int | None = None,
 ) -> int:
     """Asiento real de BOV-04/06 en la misma transacción que el efectivo.
 
@@ -486,6 +487,16 @@ def contabilizar_boveda(
     """
     if not conn.in_transaction():
         raise RuntimeError("La contabilización de bóveda requiere una transacción")
+    if (movimiento is None) == (novedad is None):
+        raise RuntimeError(
+            "Se requiere un movimiento o una novedad contable de referencia"
+        )
+    referencia = (
+        f"NOVEDAD:{novedad}" if novedad is not None else f"MOVIMIENTO:{movimiento}"
+    )
+    detalle = (
+        f"novedad {novedad}" if novedad is not None else f"movimiento {movimiento}"
+    )
     repository.bloquear_contabilizacion(conn)
     from .asientos import OperacionContable, generar_asiento
     from .boveda_versionada import codigo_boveda
@@ -506,7 +517,7 @@ def contabilizar_boveda(
             conn,
             OperacionContable(
                 codigo_plantilla=codigo,
-                clave_evento=f"BOVEDA:MOVIMIENTO:{movimiento}",
+                clave_evento=f"BOVEDA:{referencia}",
                 id_agencia=agencia,
                 id_fecha_contable=fecha_contable,
                 id_usuario=actor,
@@ -538,7 +549,7 @@ def contabilizar_boveda(
             "tipo_asiento": plantilla["tipo_asiento"],
             "actor": actor,
             "fecha_contable": fecha_contable,
-            "concepto": f"Bóveda: {tipo}; movimiento {movimiento}",
+            "concepto": f"Bóveda: {tipo}; {detalle}",
         },
     )
     for campo, lado in (("debito", "DEBITO"), ("credito", "CREDITO")):

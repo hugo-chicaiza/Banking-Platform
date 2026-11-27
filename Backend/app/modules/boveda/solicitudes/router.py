@@ -10,12 +10,17 @@ from app.core.api.middleware import ip_cliente
 from app.core.database.db import cooperativa
 from app.core.security.auth import Usuario, require_roles
 from app.core.security.operador import IdInterno
-from app.modules.boveda.schemas import INT32_MAX, INT64_MAX, MovimientoBoveda
+from app.modules.boveda.schemas import INT32_MAX, INT64_MAX
 from app.modules.boveda.solicitudes import service
 from app.modules.boveda.solicitudes.schemas import (
+    CierreRequest,
     ConfirmacionRequest,
+    DespachoRequest,
+    DestinoBoveda,
+    DevolucionRequest,
     EstadoSolicitud,
     PageSolicitudMovimiento,
+    RecepcionRequest,
     ResolucionRequest,
     SolicitudMovimiento,
     SolicitudMovimientoRequest,
@@ -23,12 +28,28 @@ from app.modules.boveda.solicitudes.schemas import (
 
 router = APIRouter(route_class=ProblemDetailsRoute, responses=RESPUESTAS_ERROR)
 Conexion = Annotated[Connection, Depends(cooperativa)]
-Operador = Annotated[Usuario, Depends(require_roles("SUPERVISOR", "ADMIN"))]
+Operador = Annotated[Usuario, Depends(require_roles("SUPERVISOR", "CAJERO"))]
+Jefe = Annotated[Usuario, Depends(require_roles("SUPERVISOR"))]
 Lector = Annotated[
-    Usuario, Depends(require_roles("SUPERVISOR", "CONTADOR", "AUDITOR", "ADMIN"))
+    Usuario,
+    Depends(require_roles("SUPERVISOR", "CAJERO", "CONTADOR", "AUDITOR", "ADMIN")),
 ]
 IdSolicitud = Annotated[int, Path(alias="idSolicitudMovimiento", gt=0, le=INT64_MAX)]
 SinParametros = Annotated[None, Depends(solo_parametros())]
+
+
+@router.get(
+    "/bovedas/{idBoveda}/destinos",
+    response_model=list[DestinoBoveda],
+    operation_id="BOV04Destinos",
+)
+def destinos(
+    id_boveda: Annotated[int, Path(alias="idBoveda", gt=0, le=INT32_MAX)],
+    usuario: Operador,
+    conn: Conexion,
+    _: SinParametros,
+) -> list[DestinoBoveda]:
+    return service.destinos(conn, usuario, id_boveda)
 
 
 @router.post(
@@ -94,21 +115,102 @@ def obtener(
 
 @router.post(
     "/solicitudes-movimiento/{idSolicitudMovimiento}/aprobacion",
-    status_code=201,
-    response_model=list[MovimientoBoveda],
+    response_model=SolicitudMovimiento,
     operation_id="BOV04SolicitudAprobacion",
 )
 def aprobar(
     id_solicitud: IdSolicitud,
     request: Request,
-    usuario: Operador,
+    usuario: Jefe,
     id_interno: IdInterno,
     conn: Conexion,
     _: SinParametros,
     confirmacion: Annotated[ConfirmacionRequest | None, Body()] = None,
-) -> list[MovimientoBoveda]:
+) -> SolicitudMovimiento:
     return service.aprobar(
         conn, usuario, id_interno, id_solicitud, ip_cliente(request.scope)
+    )
+
+
+@router.post(
+    "/solicitudes-movimiento/{idSolicitudMovimiento}/despacho",
+    response_model=SolicitudMovimiento,
+    operation_id="BOV04SolicitudDespacho",
+)
+def despachar(
+    id_solicitud: IdSolicitud,
+    datos: DespachoRequest,
+    request: Request,
+    usuario: Jefe,
+    id_interno: IdInterno,
+    conn: Conexion,
+    _: SinParametros,
+) -> SolicitudMovimiento:
+    return service.despachar(
+        conn, usuario, id_interno, id_solicitud, datos, ip_cliente(request.scope)
+    )
+
+
+@router.post(
+    "/solicitudes-movimiento/{idSolicitudMovimiento}/recepcion",
+    response_model=SolicitudMovimiento,
+    operation_id="BOV04SolicitudRecepcion",
+)
+def recibir(
+    id_solicitud: IdSolicitud,
+    datos: RecepcionRequest,
+    request: Request,
+    usuario: Jefe,
+    id_interno: IdInterno,
+    conn: Conexion,
+    _: SinParametros,
+) -> SolicitudMovimiento:
+    return service.recibir(
+        conn, usuario, id_interno, id_solicitud, datos, ip_cliente(request.scope)
+    )
+
+
+@router.post(
+    "/solicitudes-movimiento/{idSolicitudMovimiento}/devolucion",
+    response_model=SolicitudMovimiento,
+    operation_id="BOV04SolicitudDevolucion",
+)
+def devolver(
+    id_solicitud: IdSolicitud,
+    datos: DevolucionRequest,
+    request: Request,
+    usuario: Jefe,
+    id_interno: IdInterno,
+    conn: Conexion,
+    _: SinParametros,
+) -> SolicitudMovimiento:
+    return service.recibir(
+        conn,
+        usuario,
+        id_interno,
+        id_solicitud,
+        datos,
+        ip_cliente(request.scope),
+        devolver=True,
+    )
+
+
+@router.post(
+    "/solicitudes-movimiento/{idSolicitudMovimiento}/cierre",
+    response_model=SolicitudMovimiento,
+    operation_id="BOV04SolicitudCierre",
+)
+def cerrar(
+    id_solicitud: IdSolicitud,
+    datos: CierreRequest,
+    request: Request,
+    usuario: Jefe,
+    id_interno: IdInterno,
+    conn: Conexion,
+    _: SinParametros,
+) -> SolicitudMovimiento:
+    return service.cerrar_excedente(
+        conn, usuario, id_interno, id_solicitud, datos, ip_cliente(request.scope)
     )
 
 
@@ -121,7 +223,7 @@ def rechazar(
     id_solicitud: IdSolicitud,
     datos: ResolucionRequest,
     request: Request,
-    usuario: Operador,
+    usuario: Jefe,
     id_interno: IdInterno,
     conn: Conexion,
     _: SinParametros,
