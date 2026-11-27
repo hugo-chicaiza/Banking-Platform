@@ -28,7 +28,7 @@ from app.modules.seguridad.funciones_catalogo import (
     APROBAR_DESBLOQUEO_TARJETA,
     APROBAR_SOLICITUD_TARJETA,
 )
-from app.modules.tarjetas import repository, sobre_pin
+from app.modules.tarjetas import ciclo, repository, sobre_pin
 from app.modules.tarjetas.identificacion import hash_pan
 from app.modules.tarjetas.pin_sql import (
     ERRORES_SQL,
@@ -44,11 +44,13 @@ from app.modules.tarjetas.schemas import (
     EnvioTarjeta,
     PageTarjeta,
     PageTarjetaHistorial,
+    PageTarjetaPorRenovar,
     PinBlockPrueba,
     Tarjeta,
     TarjetaCreate,
     TarjetaEstadoUpdate,
     TarjetaHistorial,
+    TarjetaPorRenovar,
     TarjetaResumen,
 )
 
@@ -95,6 +97,7 @@ def _transaccion(
 @dataclass
 class _Auditado:
     id_registro: int | None
+    descripcion: str
 
 
 @contextmanager
@@ -107,7 +110,7 @@ def _auditado(
     ip: str | None,
 ) -> Iterator[_Auditado]:
     """Registra el resultado de una escritura cuando ya terminó su transacción."""
-    operacion = _Auditado(id_registro)
+    operacion = _Auditado(id_registro, descripcion)
 
     def registrar(resultado: audit.Resultado, texto: str) -> None:
         audit.registrar(
@@ -130,12 +133,15 @@ def _auditado(
         yield operacion
     except HTTPException as exc:
         detalle = exc.detail if isinstance(exc.detail, dict) else {}
-        registrar("Fallido", f"{descripcion}: {detalle.get('code', exc.status_code)}")
+        registrar(
+            "Fallido",
+            f"{operacion.descripcion}: {detalle.get('code', exc.status_code)}",
+        )
         raise
     except Exception:
-        registrar("Fallido", f"{descripcion}: ERROR_INTERNO")
+        registrar("Fallido", f"{operacion.descripcion}: ERROR_INTERNO")
         raise
-    registrar("Exitoso", descripcion)
+    registrar("Exitoso", operacion.descripcion)
 
 
 def _ordenamiento(
@@ -279,7 +285,6 @@ def crear_tarjeta(
     usuario: int,
     ip: str | None,
     *,
-    agencia_operativa: str | None = None,
     registrar_solicitud: Callable[[Connection, int], None] | None = None,
 ) -> Tarjeta:
     """Emite la tarjeta y custodia su PAN ficticio cifrado (repositorio de pruebas).
@@ -303,7 +308,6 @@ def crear_tarjeta(
             ip,
             hsm,
             custodiado,
-            agencia_operativa,
             registrar_solicitud,
         )
     except BaseException:
@@ -334,7 +338,6 @@ def _emitir(
     ip: str | None,
     hsm: Hsm,
     custodiado: list[int],
-    agencia_operativa: str | None,
     registrar_solicitud: Callable[[Connection, int], None] | None,
 ) -> Tarjeta:
     with (
@@ -348,12 +351,6 @@ def _emitir(
         cuenta = repository.obtener_cuenta(conn, payload.id_cuenta)
         if cuenta is None:
             raise problema(422, "CUENTA_NO_ENCONTRADA", "La cuenta no existe.")
-        if agencia_operativa is not None and cuenta["id_agencia"] != agencia_operativa:
-            raise problema(
-                403,
-                "AGENCIA_NO_COINCIDE",
-                "Seleccione la agencia de la cuenta para solicitar su tarjeta.",
-            )
         if cuenta["estado"] != "Activa":
             raise problema(409, "CUENTA_NO_ACTIVA", "La cuenta no está Activa.")
         if cuenta.get("tipo_cuenta") == "CERTIFICADO_APORTACION":
@@ -403,8 +400,10 @@ def _emitir(
                 "El cliente no es elegible.",
                 bloqueos=bloqueos,
             )
+        reemision = ciclo.validar_reemision(conn, payload, cuenta["id_cliente"])
+        anteriores = (payload.id_tarjeta_reemplazada,) if reemision else ()
         if not payload.es_extension and repository.principal_viva(
-            conn, payload.id_cuenta
+            conn, payload.id_cuenta, *anteriores
         ):
             raise problema(
                 409,
@@ -413,6 +412,13 @@ def _emitir(
             )
         _validar_extension(conn, payload)
         _validar_envio(conn, payload)
+        if reemision:
+            tipo, anterior = reemision
+            operacion.descripcion = (
+                "TAR_REPOSICION" if tipo == "Reposicion" else "TAR_RENOVACION"
+            )
+            if tipo == "Reposicion":
+                ciclo.cancelar_anterior(conn, anterior, tipo, usuario, ip)
 
         # El PAN en claro solo vive aquí: se custodia cifrado por el HSM
         pan = _generar_pan(subproducto["codigo_bin"])
@@ -435,6 +441,7 @@ def _emitir(
                 "creado_por": usuario,
                 "id_bin": subproducto["id_bin"],
                 "id_sub_producto": subproducto["id_sub_producto"],
+                "id_reemplazada": payload.id_tarjeta_reemplazada,
             },
         )
         try:
@@ -459,10 +466,10 @@ def _emitir(
         repository.insertar_historial(
             conn,
             id_tarjeta,
-            "CambioEstado",
+            reemision[0] if reemision else "CambioEstado",
             None,
             "Solicitada",
-            "Solicitud de tarjeta",
+            operacion.descripcion if reemision else "Solicitud de tarjeta",
             usuario,
             ip,
         )
@@ -519,12 +526,37 @@ def _tarjeta_no_encontrada() -> HTTPException:
     return problema(404, "TARJETA_NO_ENCONTRADA", "La tarjeta no existe.")
 
 
+def listar_por_renovar(
+    conn: Connection, agencia: str, page: int, page_size: int
+) -> PageTarjetaPorRenovar:
+    fecha = ciclo.hoy()
+    filas, total = repository.listar_por_renovar(
+        conn, fecha, ciclo.hasta_renovacion(conn, fecha), agencia, page, page_size
+    )
+    return PageTarjetaPorRenovar(
+        items=[TarjetaPorRenovar(**fila) for fila in filas],
+        page=page,
+        page_size=page_size,
+        total=total,
+    )
+
+
 def obtener_tarjeta(conn: Connection, id_tarjeta: int) -> Tarjeta:
     with _transaccion(conn):
         fila = repository.obtener_tarjeta(conn, id_tarjeta)
         if fila is None:
             raise _tarjeta_no_encontrada()
-        return Tarjeta(**fila, envio=_envio(conn, id_tarjeta, fila))
+        renovable = ciclo.en_ventana(conn, fila)
+        reponible = ciclo.perdida_o_robo(fila)
+        en_curso = (renovable or reponible) and repository.reemision_vigente(
+            conn, id_tarjeta
+        )
+        return Tarjeta(
+            **fila,
+            envio=_envio(conn, id_tarjeta, fila),
+            renovable=renovable and not en_curso,
+            reponible=reponible and not en_curso,
+        )
 
 
 def _envio(
@@ -568,7 +600,10 @@ def registrar_envio(
         _transaccion(conn),
     ):
         tarjeta = repository.obtener_tarjeta(conn, id_tarjeta, bloquear=True)
-        if tarjeta is None or tarjeta["id_agencia"] != agencia:
+        if tarjeta is None:
+            raise _tarjeta_no_encontrada()
+        agencia_solicitud = repository.agencia_solicitud(conn, id_tarjeta)
+        if (agencia_solicitud or tarjeta["id_agencia"]) != agencia:
             raise _tarjeta_no_encontrada()
         actual = _envio(conn, id_tarjeta, tarjeta)
         if (
@@ -771,6 +806,20 @@ def _cambiar_estado_en_transaccion(
         raise problema(
             409, "PIN_NO_ASIGNADO", "Asigne un PIN antes de activar la tarjeta."
         )
+    if entregar and (id_anterior := actual.get("id_tarjeta_reemplazada")) is not None:
+        anterior_vinculada = repository.obtener_tarjeta(
+            conn, id_anterior, bloquear=True
+        )
+        if (
+            anterior_vinculada is None
+            or anterior_vinculada["id_cuenta"] != actual["id_cuenta"]
+        ):
+            raise problema(
+                409,
+                "TARJETA_REEMISION_INCOMPATIBLE",
+                "Revise el vínculo de la tarjeta anterior.",
+            )
+        ciclo.cancelar_anterior(conn, anterior_vinculada, "Renovacion", usuario, ip)
     aprobar = destino == "Aprobada"
     if aprobar:
         _generar_pin(

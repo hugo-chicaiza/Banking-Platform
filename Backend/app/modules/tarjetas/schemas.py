@@ -85,6 +85,7 @@ class TarjetaCreate(_Entrada):
     ]
     es_extension: StrictBool = False
     id_tarjeta_titular: IdEntero | None = None
+    id_tarjeta_reemplazada: IdEntero | None = None
     requiere_envio: StrictBool = False
     direccion_envio: (
         Annotated[
@@ -181,10 +182,24 @@ class Tarjeta(TarjetaResumen):
     sobre_descargado_en: datetime | None = None
     envio: EnvioTarjeta | None = None
     id_solicitud_aprobacion: int | None = None
+    id_tarjeta_reemplazada: int | None = None
+    renovable: bool = False
+    reponible: bool = False
 
 
 class PageTarjeta(CamelModel):
     items: list[TarjetaResumen]
+    page: int
+    page_size: int
+    total: int
+
+
+class TarjetaPorRenovar(TarjetaResumen):
+    fecha_expiracion: date
+
+
+class PageTarjetaPorRenovar(CamelModel):
+    items: list[TarjetaPorRenovar]
     page: int
     page_size: int
     total: int

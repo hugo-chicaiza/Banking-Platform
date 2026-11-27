@@ -22,7 +22,7 @@ from app.core.security.hsm import HsmNoDisponible, es_pin_debil
 from app.main import app
 from app.modules.aprobaciones import router as aprobaciones
 from app.modules.aprobaciones.identidad import Actor
-from app.modules.tarjetas import aprobacion, repository, router, schemas, service
+from app.modules.tarjetas import aprobacion, ciclo, repository, router, schemas, service
 from tests.pin_version import DriverLimitesSQL
 from tests.sesion import USUARIO, simular_sesion, usuario_con_roles
 from tests.tarjetas_hsm import HSM, PAN, instalar, pin_generado, pin_valido
@@ -118,6 +118,7 @@ def seg(monkeypatch):
 @pytest.fixture(autouse=True)
 def dependencias_e610(monkeypatch):
     monkeypatch.setattr(repository, "obtener_envio", lambda *_a: None)
+    monkeypatch.setattr(repository, "agencia_solicitud", lambda *_a: None)
     monkeypatch.setattr(
         repository, "motivo_estado", lambda *_a: {"permite_desbloqueo": True}
     )
@@ -219,20 +220,133 @@ def test_emitir_201_nace_solicitada_sin_pin_pan_ni_hash(client, conns, emision):
     assert r.headers["cache-control"] == "no-store"
 
 
-@pytest.mark.parametrize(
-    "agencia,codigo", [(None, "AGENCIA_REQUERIDA"), ("001", "AGENCIA_NO_COINCIDE")]
-)
-def test_emitir_exige_la_agencia_confirmada(
-    client, conns, emision, monkeypatch, agencia, codigo
-):
-    simular_sesion(app, replace(USUARIO, id_agencia=agencia))
+def test_emitir_exige_la_agencia_confirmada(client, conns, emision):
+    simular_sesion(app, replace(USUARIO, id_agencia=None))
     app.dependency_overrides[aprobaciones.actual] = lambda: Actor(
         "user_prueba", "org_prueba", "QA", 1, ("ADMIN",), frozenset(), ("001", "002")
     )
     respuesta = client.post(BASE, json=PAYLOAD)
 
-    assert (respuesta.status_code, _code(respuesta)) == (403, codigo)
+    assert (respuesta.status_code, _code(respuesta)) == (403, "AGENCIA_REQUERIDA")
     assert not conns.inscripciones and not emision and conns.coop.commits == 0
+
+
+def test_emitir_desde_otra_agencia_conserva_agencia_de_la_cuenta(
+    client, conns, emision
+):
+    simular_sesion(app, replace(USUARIO, id_agencia="001"))
+    app.dependency_overrides[aprobaciones.actual] = lambda: Actor(
+        "user_prueba", "org_prueba", "QA", 1, ("ASESOR",), frozenset(), ("001",)
+    )
+    respuesta = client.post(BASE, json=PAYLOAD)
+
+    assert respuesta.status_code == 201, respuesta.text
+    assert emision["tarjeta"]["id_agencia"] == "002"
+    assert conns.inscripciones[0][-1] == "001"
+
+
+@pytest.mark.parametrize(
+    ("estado", "motivo", "evento"),
+    [
+        ("Bloqueada", "ROBO", "Reposicion"),
+        ("Activa", None, "Renovacion"),
+    ],
+)
+def test_reemision_vincula_nueva_y_solo_cancela_reposicion_al_solicitar(
+    client, conns, emision, monkeypatch, estado, motivo, evento
+):
+    anterior = {
+        **FILA,
+        "id_tarjeta": 300,
+        "estado_actual": estado,
+        "motivo_estado": motivo,
+        "fecha_expiracion": date(2026, 12, 1),
+    }
+    cancelar = []
+    monkeypatch.setattr(
+        repository,
+        "obtener_tarjeta",
+        lambda conn, id_, **_: (
+            anterior if id_ == 300 else {**FILA, "id_tarjeta_reemplazada": 300}
+        ),
+    )
+    monkeypatch.setattr(
+        repository,
+        "actualizar_estado",
+        lambda _, id_, nuevo, **_kw: cancelar.append((id_, nuevo)),
+    )
+    monkeypatch.setattr(repository, "existe_transicion", lambda *_: True)
+    monkeypatch.setattr(
+        repository, "principal_viva", lambda _c, _cuenta, excluir: excluir != 300
+    )
+    monkeypatch.setattr(repository, "reemision_vigente", lambda *_: False)
+    monkeypatch.setattr(ciclo, "hoy", lambda: date(2026, 11, 27))
+    monkeypatch.setattr(ciclo, "dias", lambda *_: 30)
+
+    respuesta = client.post(BASE, json={**PAYLOAD, "idTarjetaReemplazada": 300})
+
+    assert respuesta.status_code == 201, respuesta.text
+    assert respuesta.json()["idTarjetaReemplazada"] == 300
+    assert emision["tarjeta"]["id_reemplazada"] == 300
+    assert emision["historial"][2] == evento
+    assert cancelar == ([(300, "Cancelada")] if evento == "Reposicion" else [])
+    assert conns.inscripciones[0][1] == 301
+
+
+@pytest.mark.parametrize(
+    ("cuenta", "en_curso", "codigo"),
+    [
+        (99, False, "TARJETA_NO_ENCONTRADA"),
+        (4, True, "TARJETA_REEMISION_VIGENTE"),
+        (4, False, "TARJETA_NO_REEMITIBLE"),
+    ],
+)
+def test_reemision_rechaza_cuenta_ajena_reintento_y_fuera_de_plazo(
+    client, conns, emision, monkeypatch, cuenta, en_curso, codigo
+):
+    anterior = {
+        **FILA,
+        "id_tarjeta": 300,
+        "id_cuenta": cuenta,
+        "estado_actual": "Activa",
+    }
+    monkeypatch.setattr(repository, "obtener_tarjeta", lambda *_a, **_kw: anterior)
+    monkeypatch.setattr(repository, "reemision_vigente", lambda *_: en_curso)
+    monkeypatch.setattr(ciclo, "hoy", lambda: date(2026, 11, 27))
+    respuesta = client.post(BASE, json={**PAYLOAD, "idTarjetaReemplazada": 300})
+    assert _code(respuesta) == codigo
+    assert not conns.inscripciones and not emision and conns.coop.commits == 0
+
+
+def test_entrega_de_renovacion_cancela_la_anterior(client, monkeypatch):
+    capturado = _estado(
+        monkeypatch,
+        {
+            **FILA,
+            "estado_actual": "Generada",
+            "pin_asignado": True,
+            "id_tarjeta_reemplazada": 300,
+            "sobre_descargado_en": datetime(2026, 11, 27),
+        },
+    )
+    obtener = repository.obtener_tarjeta
+    anterior = {**FILA, "id_tarjeta": 300, "estado_actual": "Activa"}
+    monkeypatch.setattr(
+        repository,
+        "obtener_tarjeta",
+        lambda conn, id_, **kw: anterior if id_ == 300 else obtener(conn, id_, **kw),
+    )
+    respuesta = client.post(
+        f"{BASE}/301/estado",
+        json={"estado": "Activa", "motivo": "Entrega", "documentoVerificado": True},
+    )
+
+    assert respuesta.status_code == 200, respuesta.text
+    assert [fila[0] for fila in capturado["transiciones"]] == ["Cancelada", "Activa"]
+    assert [(hist[1], hist[2]) for hist in capturado["historiales"]] == [
+        (300, "Renovacion"),
+        (301, "Activacion"),
+    ]
 
 
 def test_cambio_directo_no_resuelve_tarjeta_inscrita(client, monkeypatch):

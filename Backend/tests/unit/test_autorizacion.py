@@ -228,6 +228,16 @@ ROLES_POR_RUTA: dict[tuple[str, str], tuple[str, ...]] = {
         "ASESOR",
         "ADMIN",
     ),
+    ("GET", "/api/v1/clientes/{idCliente}/relaciones/firmantes"): (
+        "ASESOR",
+        "SUPERVISOR",
+        "ADMIN",
+    ),
+    ("POST", "/api/v1/clientes/{idCliente}/relaciones/firmantes"): ("ASESOR", "ADMIN"),
+    ("POST", "/api/v1/clientes/{idCliente}/relaciones/firmantes/{idRelacion}/fin"): (
+        "ASESOR",
+        "ADMIN",
+    ),
     ("GET", "/api/v1/clientes/{idCliente}/direcciones"): ("ASESOR", "ADMIN"),
     ("POST", "/api/v1/clientes/{idCliente}/direcciones"): ("ASESOR", "ADMIN"),
     ("PATCH", "/api/v1/clientes/{idCliente}/direcciones/{idDireccion}"): (
@@ -349,6 +359,7 @@ ROLES_POR_RUTA: dict[tuple[str, str], tuple[str, ...]] = {
     ("POST", "/api/v1/tarjetas"): ("ASESOR", "ADMIN"),
     ("GET", "/api/v1/tarjetas"): ("ASESOR", "SUPERVISOR", "ADMIN"),
     ("GET", "/api/v1/tarjetas/{idTarjeta}"): ("ASESOR", "SUPERVISOR", "ADMIN"),
+    ("GET", "/api/v1/tarjetas/por-renovar"): ("ASESOR", "SUPERVISOR", "ADMIN"),
     ("POST", "/api/v1/tarjetas/{idTarjeta}/estado"): ("ASESOR", "SUPERVISOR", "ADMIN"),
     ("POST", "/api/v1/tarjetas/{idTarjeta}/pin"): ("ASESOR", "ADMIN"),
     ("PATCH", "/api/v1/tarjetas/{idTarjeta}/envio"): ("ASESOR", "SUPERVISOR", "ADMIN"),
@@ -845,6 +856,8 @@ def test_roles_de_la_tarea_pasan_el_control(client, ruta, monkeypatch):
         ("POST", "/api/v1/caja/depositos/{idTransaccion}/series"),
         ("POST", "/api/v1/caja/jornadas/{idJornada}/retiros"),
         ("POST", "/api/v1/transacciones/{idTransaccion}/reverso"),
+        ("POST", "/api/v1/clientes/{idCliente}/relaciones/firmantes"),
+        ("POST", "/api/v1/clientes/{idCliente}/relaciones/firmantes/{idRelacion}/fin"),
     }
 
     if ruta in rutas_con_vinculacion and r.status_code == 403:

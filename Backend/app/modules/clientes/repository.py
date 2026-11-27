@@ -507,8 +507,8 @@ def consultar_clientes(
               -- E5-05: inicio de cualquier palabra, sin acentos ni mayúsculas (columna
               -- NombreBusqueda en Latin1_General_CI_AI); comodines escapados.
               AND (:nombre_inicio IS NULL
-                   OR NombreBusqueda LIKE :nombre_inicio ESCAPE '\'
-                   OR NombreBusqueda LIKE :nombre_palabra ESCAPE '\')
+                   OR NombreBusqueda LIKE :nombre_inicio ESCAPE '\\'
+                   OR NombreBusqueda LIKE :nombre_palabra ESCAPE '\\')
         )
         SELECT p.*, t.total
         FROM (SELECT COUNT(*) AS total FROM Filtrados) AS t

@@ -20,6 +20,7 @@ from app.modules.aprobaciones.registro import Objetivo
 from app.modules.clientes import (
     correos,
     documentos_identidad,
+    firmantes,
     gestion_documentos,
     revelacion,
     service,
@@ -902,3 +903,4 @@ router.include_router(_riesgo_router, prefix="/clientes")
 router.include_router(_consultas_router, prefix="/clientes")
 router.include_router(_revelacion_router, prefix="/clientes")
 router.include_router(correos.router, prefix="/clientes")
+router.include_router(firmantes.router, prefix="/clientes")
