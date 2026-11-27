@@ -371,10 +371,10 @@ def crear_arqueo(conn: Connection, datos: Fila, detalle: list[Fila]) -> int:
         conn.execute(
             text("""
         INSERT INTO Boveda.ArqueoBoveda (IdBoveda, FechaHoraArqueo, TipoArqueo,
-            IdUsuarioArqueador, IdUsuarioTestigo, Estado, Observaciones,
+            IdUsuarioArqueador, Estado, Observaciones,
             SaldoTeorico, SaldoFisico, IdMovimientoCorte)
         OUTPUT INSERTED.IdArqueoBoveda
-        VALUES (:id_boveda, :ahora, :tipo, :actor, :testigo, 'REGISTRADO',
+        VALUES (:id_boveda, :ahora, :tipo, :actor, :estado,
                 :observaciones, :teorico, :fisico, :corte)
     """),
             datos,
@@ -402,4 +402,64 @@ def aprobar_arqueo(
         WHERE IdArqueoBoveda = :id AND Estado = 'REGISTRADO'
     """),
         {"id": id_arqueo, "actor": actor, "ahora": ahora, "ajuste": ajuste},
+    )
+
+
+def vincular_ajuste_arqueo(conn: Connection, id_arqueo: int, ajuste: int) -> None:
+    conn.execute(
+        text("""
+        UPDATE Boveda.ArqueoBoveda SET IdMovimientoAjuste = :ajuste
+        WHERE IdArqueoBoveda = :id
+        """),
+        {"id": id_arqueo, "ajuste": ajuste},
+    )
+
+
+def novedades_arqueos(
+    conn: Connection, ids: list[int], ahora: datetime
+) -> dict[int, Fila]:
+    if not ids:
+        return {}
+    consulta = text("""
+        SELECT IdArqueoBoveda AS id_arqueo, IdNovedad AS id_novedad,
+               IdUsuarioResponsable AS id_usuario_responsable, Monto AS monto,
+               FechaVencimiento AS fecha_vencimiento, IdAsientoContable AS id_asiento_contable,
+               CASE WHEN FechaResolucion IS NOT NULL THEN 'RESUELTA'
+                    WHEN FechaVencimiento <= :ahora THEN 'VENCIDA'
+                    ELSE 'PENDIENTE' END AS estado,
+               TipoResolucion AS tipo_resolucion, FechaResolucion AS fecha_resolucion,
+               IdUsuarioResolucion AS id_usuario_resolucion,
+               ReferenciaResolucion AS referencia_resolucion,
+               ObservacionesResolucion AS observaciones_resolucion,
+               IdAsientoResolucion AS id_asiento_resolucion,
+               IdMovimientoReposicion AS id_movimiento_reposicion
+        FROM Boveda.NovedadCajero WHERE IdArqueoBoveda IN :ids
+        """).bindparams(bindparam("ids", expanding=True))
+    return {
+        fila["id_arqueo"]: dict(fila)
+        for fila in conn.execute(consulta, {"ids": ids, "ahora": ahora}).mappings()
+    }
+
+
+def crear_novedad(conn: Connection, datos: Fila) -> None:
+    conn.execute(
+        text("""
+        INSERT INTO Boveda.NovedadCajero (IdArqueoBoveda, IdUsuarioResponsable, Monto,
+             FechaVencimiento, IdAsientoContable)
+        VALUES (:arqueo, :responsable, :monto, :vence, :asiento)
+        """),
+        datos,
+    )
+
+
+def resolver_novedad(conn: Connection, datos: Fila) -> None:
+    conn.execute(
+        text("""
+        UPDATE Boveda.NovedadCajero
+        SET TipoResolucion = :tipo, FechaResolucion = :ahora, IdUsuarioResolucion = :actor,
+            ReferenciaResolucion = :referencia, ObservacionesResolucion = :observaciones,
+            IdAsientoResolucion = :asiento, IdMovimientoReposicion = :movimiento
+        WHERE IdNovedad = :id AND FechaResolucion IS NULL
+        """),
+        datos,
     )

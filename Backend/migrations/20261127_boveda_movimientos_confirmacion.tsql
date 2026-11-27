@@ -1,0 +1,234 @@
+/* CooperativaDB. Después de 20261117_boveda_solicitudes_autorizacion.tsql.
+   El historial se conserva y las cuentas las configura Contabilidad. */
+SET XACT_ABORT ON;
+BEGIN TRANSACTION;
+GO
+
+IF COL_LENGTH('Boveda.SolicitudMovimientoBoveda', 'IdAgenciaDestino') IS NULL
+BEGIN
+    ALTER TABLE Boveda.SolicitudMovimientoBoveda ADD
+        IdAgenciaDestino char(3) NULL,
+        IdCuentaTransito int NULL,
+        UsaPlantillaVersionada bit NULL,
+        IdUsuarioDespacho int NULL,
+        FechaDespacho datetime2(7) NULL,
+        NumeroGuia nvarchar(100) NULL,
+        Precinto nvarchar(100) NULL,
+        IdUsuarioConfirmacion int NULL,
+        FechaConfirmacion datetime2(7) NULL,
+        MontoConfirmado decimal(18,2) NULL,
+        ActaNovedad nvarchar(100) NULL,
+        ComprobanteBanco nvarchar(100) NULL,
+        IdAsientoDespacho int NULL,
+        IdAsientoConfirmacion int NULL,
+        IdAsientoNovedad int NULL,
+        IdUsuarioAnulacion int NULL,
+        FechaAnulacion datetime2(7) NULL,
+        MotivoAnulacion nvarchar(500) NULL;
+    ALTER TABLE Boveda.SolicitudMovimientoBoveda DROP CONSTRAINT CK_SolicitudMovimientoBoveda_Resolucion;
+END;
+GO
+
+IF OBJECT_ID('Boveda.CupoSolicitudMovimiento', 'U') IS NULL
+BEGIN
+    DISABLE TRIGGER Boveda.trg_SolicitudMovimientoBoveda_Inmutable ON Boveda.SolicitudMovimientoBoveda;
+    UPDATE s SET IdAgenciaDestino = b.IdAgencia
+    FROM Boveda.SolicitudMovimientoBoveda s
+    JOIN Boveda.Boveda b ON b.IdBoveda = s.IdBovedaContraparte;
+    ENABLE TRIGGER Boveda.trg_SolicitudMovimientoBoveda_Inmutable ON Boveda.SolicitudMovimientoBoveda;
+
+    IF EXISTS (
+        SELECT IdAgencia
+        FROM (
+            SELECT IdAgencia, IdSolicitudMovimiento FROM Boveda.SolicitudMovimientoBoveda WHERE Estado = 'PENDIENTE'
+            UNION
+            SELECT IdAgenciaDestino, IdSolicitudMovimiento FROM Boveda.SolicitudMovimientoBoveda
+            WHERE Estado = 'PENDIENTE' AND IdAgenciaDestino IS NOT NULL
+        ) pendientes
+        GROUP BY IdAgencia HAVING COUNT_BIG(*) > 1
+    )
+        THROW 59020, N'Hay agencias con varias solicitudes pendientes. Resuelva las pendientes duplicadas antes de migrar.', 1;
+
+    CREATE TABLE Boveda.CupoSolicitudMovimiento (
+        IdAgencia char(3) NOT NULL,
+        IdSolicitudMovimiento bigint NOT NULL,
+        CONSTRAINT PK_CupoSolicitudMovimiento PRIMARY KEY (IdAgencia),
+        CONSTRAINT FK_CupoSolicitudMovimiento_Agencia FOREIGN KEY (IdAgencia)
+            REFERENCES Organizacion.Agencia(IdAgencia),
+        CONSTRAINT FK_CupoSolicitudMovimiento_Solicitud FOREIGN KEY (IdSolicitudMovimiento)
+            REFERENCES Boveda.SolicitudMovimientoBoveda(IdSolicitudMovimiento)
+    );
+    CREATE INDEX IX_CupoSolicitudMovimiento_Solicitud
+        ON Boveda.CupoSolicitudMovimiento(IdSolicitudMovimiento);
+    INSERT INTO Boveda.CupoSolicitudMovimiento(IdAgencia, IdSolicitudMovimiento)
+        SELECT IdAgencia, IdSolicitudMovimiento FROM Boveda.SolicitudMovimientoBoveda WHERE Estado = 'PENDIENTE'
+        UNION
+        SELECT IdAgenciaDestino, IdSolicitudMovimiento FROM Boveda.SolicitudMovimientoBoveda
+        WHERE Estado = 'PENDIENTE' AND IdAgenciaDestino IS NOT NULL;
+
+    CREATE TABLE Boveda.SolicitudMovimientoBovedaConteo (
+        IdSolicitudMovimiento bigint NOT NULL,
+        IdDenominacion int NOT NULL,
+        Cantidad int NOT NULL,
+        ValorUnitario decimal(10,2) NOT NULL,
+        CONSTRAINT PK_SolicitudMovimientoBovedaConteo PRIMARY KEY (IdSolicitudMovimiento, IdDenominacion),
+        CONSTRAINT FK_SolicitudMovimientoBovedaConteo_Solicitud FOREIGN KEY (IdSolicitudMovimiento)
+            REFERENCES Boveda.SolicitudMovimientoBoveda(IdSolicitudMovimiento),
+        CONSTRAINT FK_SolicitudMovimientoBovedaConteo_Denominacion FOREIGN KEY (IdDenominacion)
+            REFERENCES Catalogo.Denominacion(IdDenominacion),
+        CONSTRAINT CK_SolicitudMovimientoBovedaConteo_Valores CHECK (Cantidad > 0 AND ValorUnitario > 0)
+    );
+
+    ALTER TABLE Boveda.SolicitudMovimientoBoveda WITH CHECK ADD
+        CONSTRAINT FK_SolicitudMovimientoBoveda_AgenciaDestino FOREIGN KEY (IdAgenciaDestino)
+            REFERENCES Organizacion.Agencia(IdAgencia),
+        CONSTRAINT FK_SolicitudMovimientoBoveda_CuentaTransito FOREIGN KEY (IdCuentaTransito)
+            REFERENCES Contabilidad.CuentasContables(IdCuentaContable),
+        CONSTRAINT FK_SolicitudMovimientoBoveda_AsientoDespacho FOREIGN KEY (IdAsientoDespacho)
+            REFERENCES Contabilidad.AsientoContable(IdAsientoContable),
+        CONSTRAINT FK_SolicitudMovimientoBoveda_AsientoConfirmacion FOREIGN KEY (IdAsientoConfirmacion)
+            REFERENCES Contabilidad.AsientoContable(IdAsientoContable),
+        CONSTRAINT FK_SolicitudMovimientoBoveda_AsientoNovedad FOREIGN KEY (IdAsientoNovedad)
+            REFERENCES Contabilidad.AsientoContable(IdAsientoContable),
+        CONSTRAINT CK_SolicitudMovimientoBoveda_Destino CHECK (
+            (TipoMovimiento = 'Traslado' AND IdAgenciaDestino IS NOT NULL)
+            OR (TipoMovimiento <> 'Traslado' AND IdAgenciaDestino IS NULL)
+        ),
+        CONSTRAINT CK_SolicitudMovimientoBoveda_Resolucion CHECK (
+            (Estado = 'PENDIENTE' AND IdUsuarioResolucion IS NULL AND FechaResolucion IS NULL AND MotivoResolucion IS NULL)
+            OR (Estado IN ('EJECUTADA','APROBADO','DESPACHADO','RECIBIDO','DEVUELTO','ANULADA')
+                AND IdUsuarioResolucion IS NOT NULL AND IdUsuarioResolucion <> IdUsuarioSolicitante
+                AND FechaResolucion IS NOT NULL AND MotivoResolucion IS NULL)
+            OR (Estado IN ('RECHAZADA','CANCELADA') AND IdUsuarioResolucion IS NOT NULL
+                AND FechaResolucion IS NOT NULL AND MotivoResolucion IS NOT NULL
+                AND LEN(LTRIM(RTRIM(MotivoResolucion))) > 0
+                AND ((Estado = 'RECHAZADA' AND IdUsuarioResolucion <> IdUsuarioSolicitante)
+                    OR (Estado = 'CANCELADA' AND IdUsuarioResolucion = IdUsuarioSolicitante)))
+        ),
+        CONSTRAINT CK_SolicitudMovimientoBoveda_Etapas CHECK (
+            (Estado IN ('APROBADO','DESPACHADO','RECIBIDO','DEVUELTO','ANULADA')
+                AND TipoMovimiento IN ('Traslado','EnvioExcedente','ProvisionExterna')
+                AND UsaPlantillaVersionada IS NOT NULL
+                AND ((TipoMovimiento = 'ProvisionExterna' AND IdCuentaTransito IS NULL)
+                     OR (TipoMovimiento IN ('Traslado','EnvioExcedente') AND IdCuentaTransito IS NOT NULL)))
+            OR (Estado IN ('PENDIENTE','EJECUTADA','RECHAZADA','CANCELADA')
+                AND IdCuentaTransito IS NULL AND UsaPlantillaVersionada IS NULL)
+        ),
+        CONSTRAINT CK_SolicitudMovimientoBoveda_Despacho CHECK (
+            (Estado IN ('DESPACHADO','RECIBIDO','DEVUELTO') AND TipoMovimiento IN ('Traslado','EnvioExcedente')
+                AND IdUsuarioDespacho IS NOT NULL AND IdUsuarioDespacho <> IdUsuarioSolicitante
+                AND FechaDespacho IS NOT NULL AND FechaDespacho >= FechaResolucion AND IdAsientoDespacho IS NOT NULL)
+            OR ((Estado NOT IN ('DESPACHADO','RECIBIDO','DEVUELTO') OR TipoMovimiento = 'ProvisionExterna')
+                AND IdUsuarioDespacho IS NULL AND FechaDespacho IS NULL AND IdAsientoDespacho IS NULL)
+        ),
+        CONSTRAINT CK_SolicitudMovimientoBoveda_Documentos CHECK (
+            ((NumeroGuia IS NULL AND Precinto IS NULL)
+                OR (NumeroGuia IS NOT NULL AND Precinto IS NOT NULL))
+            AND (Estado NOT IN ('DESPACHADO','RECIBIDO','DEVUELTO')
+                OR TipoMovimiento NOT IN ('EnvioExcedente','ProvisionExterna') OR NumeroGuia IS NOT NULL)
+        ),
+        CONSTRAINT CK_SolicitudMovimientoBoveda_Confirmacion CHECK (
+            (Estado IN ('RECIBIDO','DEVUELTO') AND IdUsuarioConfirmacion IS NOT NULL
+                AND FechaConfirmacion IS NOT NULL AND FechaConfirmacion >= COALESCE(FechaDespacho, FechaResolucion)
+                AND MontoConfirmado IS NOT NULL AND MontoConfirmado >= 0
+                AND ((MontoConfirmado > 0 AND IdAsientoConfirmacion IS NOT NULL)
+                    OR (MontoConfirmado = 0 AND IdAsientoConfirmacion IS NULL))
+                AND ((MontoConfirmado = Monto AND IdAsientoNovedad IS NULL)
+                    OR (MontoConfirmado <> Monto AND IdAsientoNovedad IS NOT NULL AND ActaNovedad IS NOT NULL))
+                AND ((Estado = 'DEVUELTO' AND TipoMovimiento = 'Traslado' AND ActaNovedad IS NOT NULL)
+                    OR Estado = 'RECIBIDO')
+                AND ((TipoMovimiento = 'EnvioExcedente' AND ComprobanteBanco IS NOT NULL AND MontoConfirmado = Monto)
+                    OR (TipoMovimiento <> 'EnvioExcedente' AND ComprobanteBanco IS NULL)))
+            OR (Estado NOT IN ('RECIBIDO','DEVUELTO') AND IdUsuarioConfirmacion IS NULL AND FechaConfirmacion IS NULL
+                AND MontoConfirmado IS NULL AND IdAsientoConfirmacion IS NULL AND IdAsientoNovedad IS NULL
+                AND ActaNovedad IS NULL AND ComprobanteBanco IS NULL)
+        ),
+        CONSTRAINT CK_SolicitudMovimientoBoveda_Anulacion CHECK (
+            (Estado = 'ANULADA' AND IdUsuarioAnulacion IS NOT NULL AND FechaAnulacion IS NOT NULL
+                AND FechaAnulacion >= FechaResolucion AND MotivoAnulacion IS NOT NULL)
+            OR (Estado <> 'ANULADA' AND IdUsuarioAnulacion IS NULL AND FechaAnulacion IS NULL AND MotivoAnulacion IS NULL)
+        );
+
+    DROP INDEX UX_MovimientoBoveda_SolicitudBoveda ON Boveda.MovimientoBoveda;
+    CREATE UNIQUE INDEX UX_MovimientoBoveda_SolicitudBoveda
+        ON Boveda.MovimientoBoveda(IdSolicitudMovimiento, IdBoveda, Naturaleza)
+        WHERE IdSolicitudMovimiento IS NOT NULL;
+
+    ALTER TABLE Boveda.MovimientoBoveda DROP CONSTRAINT CK_MovimientoBoveda_Tipo, CK_MovimientoBoveda_TipoNaturaleza;
+    ALTER TABLE Boveda.MovimientoBoveda WITH CHECK ADD
+        CONSTRAINT CK_MovimientoBoveda_Tipo CHECK (
+            TipoMovimiento IN ('AjusteFaltante','AjusteSobrante','Traslado','RemanenteATM','AbastecimientoATM',
+                               'DevolucionCaja','DotacionCaja','EnvioExcedente','ProvisionExterna','RetornoRemesa')
+        ),
+        CONSTRAINT CK_MovimientoBoveda_TipoNaturaleza CHECK (
+            (TipoMovimiento IN ('AjusteFaltante','EnvioExcedente','AbastecimientoATM','DotacionCaja') AND Naturaleza = 'E')
+            OR (TipoMovimiento IN ('AjusteSobrante','RemanenteATM','DevolucionCaja','ProvisionExterna','RetornoRemesa') AND Naturaleza = 'I')
+            OR TipoMovimiento = 'Traslado'
+        );
+
+    ALTER TABLE Contabilidad.PlantillaBoveda DROP CONSTRAINT CK_PlantillaBoveda_TipoNaturaleza;
+    ALTER TABLE Contabilidad.PlantillaBoveda WITH CHECK ADD
+        CONSTRAINT CK_PlantillaBoveda_TipoNaturaleza CHECK (
+            (TipoMovimiento IN ('ProvisionExterna','AjusteSobrante','RetornoRemesa','CierreExcedente','SobranteTransito') AND Naturaleza = 'I')
+            OR (TipoMovimiento IN ('EnvioExcedente','AjusteFaltante','DespachoExcedente','FaltanteTransito') AND Naturaleza = 'E')
+            OR (TipoMovimiento = 'Traslado' AND Naturaleza IN ('I','E'))
+        );
+END;
+GO
+
+CREATE OR ALTER TRIGGER Boveda.trg_SolicitudMovimientoBoveda_Inmutable
+ON Boveda.SolicitudMovimientoBoveda AFTER UPDATE, DELETE AS
+BEGIN
+    SET NOCOUNT ON;
+    IF EXISTS (
+        SELECT IdSolicitudMovimiento, IdBoveda, IdBovedaContraparte, IdAgencia, IdAgenciaDestino,
+               TipoMovimiento, Monto, IdUsuarioSolicitante, FechaSolicitud, Observaciones, ClaveIdempotencia, HuellaPeticion
+        FROM deleted
+        EXCEPT
+        SELECT IdSolicitudMovimiento, IdBoveda, IdBovedaContraparte, IdAgencia, IdAgenciaDestino,
+               TipoMovimiento, Monto, IdUsuarioSolicitante, FechaSolicitud, Observaciones, ClaveIdempotencia, HuellaPeticion
+        FROM inserted
+    ) OR EXISTS (
+        SELECT 1 FROM deleted d JOIN inserted i ON i.IdSolicitudMovimiento = d.IdSolicitudMovimiento
+        WHERE NOT (
+            (d.Estado = 'PENDIENTE' AND i.Estado IN ('APROBADO','RECHAZADA','CANCELADA'))
+            OR (d.Estado = 'APROBADO' AND (
+                (i.Estado = 'DESPACHADO' AND d.TipoMovimiento IN ('Traslado','EnvioExcedente'))
+                OR (i.Estado = 'RECIBIDO' AND d.TipoMovimiento = 'ProvisionExterna')
+                OR i.Estado = 'ANULADA'))
+            OR (d.Estado = 'DESPACHADO' AND i.Estado IN ('RECIBIDO','DEVUELTO'))
+        )
+    ) OR EXISTS (
+        SELECT IdSolicitudMovimiento, IdUsuarioResolucion, FechaResolucion, MotivoResolucion,
+               IdCuentaTransito, UsaPlantillaVersionada
+        FROM deleted WHERE Estado IN ('APROBADO','DESPACHADO')
+        EXCEPT
+        SELECT IdSolicitudMovimiento, IdUsuarioResolucion, FechaResolucion, MotivoResolucion,
+               IdCuentaTransito, UsaPlantillaVersionada FROM inserted
+    ) OR EXISTS (
+        SELECT IdSolicitudMovimiento, IdUsuarioDespacho, FechaDespacho, NumeroGuia, Precinto, IdAsientoDespacho
+        FROM deleted WHERE Estado = 'DESPACHADO'
+        EXCEPT
+        SELECT IdSolicitudMovimiento, IdUsuarioDespacho, FechaDespacho, NumeroGuia, Precinto, IdAsientoDespacho
+        FROM inserted
+    )
+        THROW 59010, N'No se puede modificar la propuesta, su historial o el flujo de confirmación.', 1;
+END;
+GO
+
+CREATE OR ALTER TRIGGER Boveda.trg_SolicitudMovimientoBovedaConteo_Inmutable
+ON Boveda.SolicitudMovimientoBovedaConteo AFTER INSERT, UPDATE, DELETE AS
+BEGIN
+    SET NOCOUNT ON;
+    IF EXISTS (SELECT 1 FROM deleted)
+        OR EXISTS (
+            SELECT 1 FROM inserted d JOIN Boveda.SolicitudMovimientoBoveda s ON s.IdSolicitudMovimiento = d.IdSolicitudMovimiento
+            WHERE s.Estado NOT IN ('APROBADO','DESPACHADO')
+        )
+        THROW 59010, N'El conteo de la solicitud es inmutable.', 1;
+END;
+GO
+
+COMMIT TRANSACTION;
+GO
+

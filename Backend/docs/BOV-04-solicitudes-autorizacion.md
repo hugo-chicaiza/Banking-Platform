@@ -1,149 +1,117 @@
-# BOV-04 — Solicitud y autorización independiente
+# BOV-04 · Solicitudes y confirmaciones físicas
 
-BOV-04 registra primero una solicitud pendiente. Un segundo usuario confirma la
-aprobación desde su propia sesión y ejecuta los movimientos guardados. El
-autorizador se obtiene de esa sesión y queda registrado con fecha de resolución.
+El **CAJERO** o **SUPERVISOR** registra una solicitud para una bóveda de su
+agencia operativa. Un **SUPERVISOR** distinto del solicitante la aprueba o
+rechaza desde la agencia de origen. La aprobación reserva el efectivo y la
+capacidad para el movimiento. El inventario y la contabilidad se actualizan
+al confirmar cada etapa física.
 
-## Contrato y adaptación de clientes
+Cada agencia participante tiene un solo cupo de solicitud activa. El cupo
+se ocupa al solicitar, tanto en origen como en destino, y se libera al
+confirmar, devolver, rechazar, cancelar o anular. En un traslado interno,
+las dos bóvedas comparten un cupo. El control de efectivo y capacidad
+comienza en APROBADO. La capacidad de destino de un traslado sigue
+reservada en DESPACHADO.
 
-Prefijo `/api/v1/boveda`.
+## API
 
-| Método | Ruta | Respuesta |
+Todas las rutas tienen prefijo **/api/v1/boveda**. Las identidades y la
+agencia operativa provienen de la sesión. La API calcula los importes a
+partir de los valores del catálogo y el desglose.
+
+| Método | Ruta | Resultado |
 |---|---|---|
-| POST | `/bovedas/{idBoveda}/solicitudes-movimiento` | 201 SolicitudMovimiento |
-| GET | `/solicitudes-movimiento` | 200 página de solicitudes |
-| GET | `/solicitudes-movimiento/{idSolicitudMovimiento}` | 200 SolicitudMovimiento |
-| POST | `/solicitudes-movimiento/{idSolicitudMovimiento}/aprobacion` | 201 movimientos ejecutados |
-| POST | `/solicitudes-movimiento/{idSolicitudMovimiento}/rechazo` | 200 solicitud rechazada |
-| POST | `/solicitudes-movimiento/{idSolicitudMovimiento}/cancelacion` | 200 solicitud cancelada |
+| GET | /bovedas/{idBoveda}/destinos | Identificador, código y agencia de las bóvedas activas disponibles para solicitar un traslado |
+| POST | /bovedas/{idBoveda}/solicitudes-movimiento | 201, PENDIENTE |
+| GET | /solicitudes-movimiento | Página de solicitudes con filtros idAgencia, estado, page y pageSize |
+| GET | /solicitudes-movimiento/{id} | Solicitud con las partes, conteos, movimientos y asientos relacionados |
+| POST | /solicitudes-movimiento/{id}/aprobacion | 200, APROBADO |
+| POST | /solicitudes-movimiento/{id}/despacho | 200, DESPACHADO |
+| POST | /solicitudes-movimiento/{id}/recepcion | 200, RECIBIDO |
+| POST | /solicitudes-movimiento/{id}/devolucion | 200, DEVUELTO |
+| POST | /solicitudes-movimiento/{id}/cierre | 200, RECIBIDO |
+| POST | /solicitudes-movimiento/{id}/rechazo | 200, RECHAZADA si era PENDIENTE, ANULADA si era APROBADO |
+| POST | /solicitudes-movimiento/{id}/cancelacion | 200, CANCELADA por el solicitante mientras está PENDIENTE |
 
-La antigua ruta `POST /bovedas/{idBoveda}/movimientos` queda obsoleta y responde
-**410 SOLICITUD_AUTORIZACION_REQUERIDA**. Este cambio exige adaptar el frontend y
-los consumidores de esa operación. El resto de BOV-01..06 conserva sus rutas.
+La creación admite Traslado, ProvisionExterna y EnvioExcedente. Para el
+traslado se requiere idBovedaContraparte. Los ajustes de caja se realizan
+mediante el arqueo. Las solicitudes EJECUTADA del flujo anterior se mantienen
+en el historial. La ejecución directa de movimientos responde 410.
 
-Las escrituras exigen el rol SUPERVISOR o ADMIN (no hay un permiso de WorkOS propio).
-Las consultas admiten SUPERVISOR, CONTADOR, AUDITOR y ADMIN. Supervisor
-consulta su agencia. Los roles globales pueden consultar las otras agencias.
-Las escrituras exigen pertenecer a la agencia de origen, incluso para usuarios
-con roles globales adicionales. No se crean roles ni permisos nuevos en WorkOS.
+Cuando el cliente envía una **Idempotency-Key** de 1 a 64 caracteres al
+crear, puede repetir la misma solicitud con el mismo usuario, clave y
+datos aunque la solicitud ya se haya cerrado. La misma clave con otra
+propuesta devuelve 409. Al recibir un conflicto en una confirmación,
+consultar el detalle de la solicitud para recuperar su estado persistido.
 
-### Crear y revisar
+### Traslados y retornos
 
-```http
-POST /api/v1/boveda/bovedas/1/solicitudes-movimiento
-Idempotency-Key: traslado-20261117-001
-Content-Type: application/json
+El jefe de origen confirma el despacho con un objeto JSON. numeroGuia y
+precinto se pueden incluir juntos. El despacho descuenta las denominaciones
+autorizadas de origen y contabiliza el efectivo en tránsito.
 
-{
-  "tipoMovimiento": "Traslado",
-  "idBovedaContraparte": 2,
-  "desglose": [{"idDenominacion": 1, "cantidad": 50}],
-  "observaciones": "Entrega acordada entre agencias"
-}
-```
+El jefe de destino, distinto de quien despachó, confirma la recepción con el
+desglose contado. Si difiere el importe o el desglose, debe incluir
+actaNovedad. La diferencia monetaria genera un asiento adicional con cargo a
+faltantes o con abono a sobrantes en tránsito. Si no llegó efectivo, el
+desglose vacío registra un faltante por todo el envío. El cupo se libera al
+cerrar la recepción.
 
-Se conserva el tipo, origen/destino, agencia, solicitante, fecha, motivo, monto,
-desglose y valores unitarios. El monto se calcula en el servidor. Identidades,
-estado, monto y `autorizadoPor` enviados por el cliente se rechazan.
+En una devolución, el jefe de origen confirma la re-recepción con el
+desglose y actaNovedad. RetornoRemesa crea un movimiento de ingreso y
+conserva el despacho original. Una diferencia se contabiliza en el mismo
+acto.
 
-Crear valida bóvedas activas, alcance de agencia y denominaciones activas, sin
-reservar efectivo. Las existencias y la contabilidad se validan de nuevo al
-ejecutar. Crear no requiere una plantilla contable cargada ni genera asientos.
-El solicitante se obtiene del usuario interno vinculado a la sesión.
+### Provisión externa y excedentes
 
-`Idempotency-Key` es opcional y distingue mayúsculas, con 1..64 caracteres
-`[A-Za-z0-9_-]`. El cliente debe conservarla al reintentar la creación. La misma
-clave del solicitante con los mismos datos devuelve la misma solicitud, cualquiera
-que sea su estado. Usarla para otros datos responde 409 IDEMPOTENCIA_CONFLICTO.
-Sin clave, dos creaciones son dos solicitudes distintas.
+Tras aprobar la provisión, otro supervisor de origen confirma la recepción
+con el desglose físico, numeroGuia y precinto. El importe debe corresponder
+a la provisión autorizada. Si cambian las denominaciones para el mismo
+importe, se registra el conteo real y se exige actaNovedad. El inventario
+aumenta y se contabiliza la entrada
+contra banco.
 
-El listado admite `idAgencia`, `estado`, `page` y `pageSize` (máximo 100), ordenado
-por identificador descendente. La consulta devuelve detalle y `idsMovimientos`.
-El solicitante y aprobador pueden revisar exactamente la operación guardada.
-Para corregir una solicitud se cancela y se crea otra.
+El despacho de excedente requiere numeroGuia y precinto y mueve el importe
+de bóveda a Remesas en Tránsito. Un supervisor de origen registra el
+comprobanteBanco para liquidar la remesa hacia banco. El cierre agrega el
+asiento bancario y mantiene el movimiento físico de despacho.
 
-### Aprobar
+## Plantillas de Contabilidad
 
-La aprobación se envía sin cuerpo o con `{}`. Campos como monto, contraparte y
-autorizador se rechazan. Solo puede aprobar otro usuario con el permiso requerido,
-agencia de origen e identidad interna vigente.
+Configurar las cuentas reales de la entidad y un tipo de asiento automático
+activo en Contabilidad.PlantillaBoveda. Todo asiento registra debe y haber por
+el mismo importe. Los asientos de las etapas de una solicitud usan la misma
+cuenta imputable de efectivo en tránsito. El sistema valida esa cuenta al
+aprobar y en cada etapa que la afecta.
 
-Al aprobar se bloquean las bóvedas por id ascendente y luego la solicitud. Se
-verifican estado pendiente, agencia, huella de datos, valores de denominación,
-bóvedas activas, inventario coherente, piezas disponibles, límites numéricos,
-calendario, período y plantillas contables. Los límites mínimo/máximo de bóveda
-mantienen la política anterior de referencias operativas.
+| Tipo y naturaleza de la plantilla | Agencia | Debe | Haber |
+|---|---|---|---|
+| Traslado E | Origen | Efectivo en Tránsito | Bóveda |
+| Traslado I | Destino | Bóveda | Efectivo en Tránsito |
+| RetornoRemesa I | Origen | Bóveda | Efectivo en Tránsito |
+| FaltanteTransito E | Origen y destino | Faltante en Tránsito | Efectivo en Tránsito |
+| SobranteTransito I | Origen y destino | Efectivo en Tránsito | Sobrante en Tránsito |
+| ProvisionExterna I | Origen | Bóveda | Banco |
+| DespachoExcedente E | Origen | Remesas en Tránsito | Bóveda |
+| CierreExcedente I | Origen | Banco | Remesas en Tránsito |
 
-La transacción crea movimientos, actualiza inventario y saldo, genera los asientos,
-vincula los movimientos con la solicitud y la resuelve como EJECUTADA. Un fallo
-revierte toda la aprobación y conserva la solicitud PENDIENTE. `IdUsuarioMovimiento`
-conserva al solicitante y `AutorizadoPor` se completa con el aprobador autenticado.
-Los movimientos devueltos y BOV-03 incluyen `idSolicitudMovimiento`.
+Para Traslado y ProvisionExterna se reutilizan las plantillas versionadas
+vigentes del módulo. Para Traslado se seleccionan en conjunto para salida
+y entrada. La fuente elegida queda registrada en la aprobación. Las
+plantillas de retorno, novedades en tránsito y excedentes se configuran
+mediante la tabla anterior.
 
-Un traslado produce dos movimientos asociados a la misma solicitud. El envío y la
-recepción se registran juntos, como en el contrato anterior. Esta autorización
-no incorpora una etapa de transporte o recepción física independiente.
+## SQL Server
 
-Un reintento de aprobación por el mismo aprobador devuelve los movimientos ya
-ejecutados. Otro aprobador recibe 409. El bloqueo y la unicidad por solicitud/bóveda
-evitan ejecuciones duplicadas, también con peticiones simultáneas.
+Aplicar en CooperativaDB y en orden:
+1. migrations/20261114_boveda_bov01_06.tsql.
+2. migrations/20261117_boveda_solicitudes_autorizacion.tsql.
+3. migrations/20261127_boveda_movimientos_confirmacion.tsql.
+4. migrations/20261127_boveda_reservas_operativas.tsql.
+5. migrations/20261127_boveda_arqueos_novedades.tsql.
 
-### Rechazar y cancelar
-
-Ambas operaciones exigen un cuerpo como `{"motivo":"Entrega cancelada"}`.
-El rechazo lo realiza otro usuario autorizado. La cancelación la realiza el
-solicitante. Solo se resuelven solicitudes PENDIENTE. Se guardan actor, fecha y
-motivo y se conserva el historial, sin cambios de efectivo o contabilidad.
-
-Estados públicos y transiciones permitidas:
-
-```text
-PENDIENTE -> EJECUTADA   aprobación y ejecución atómica
-PENDIENTE -> RECHAZADA  decisión de otro usuario
-PENDIENTE -> CANCELADA  decisión del solicitante
-```
-
-## Migración
-
-Aplicar `migrations/20261117_boveda_solicitudes_autorizacion.tsql` con un ejecutor
-compatible con GO y que detenga errores, antes de desplegar el backend.
-Requiere `20261114_boveda_bov01_06.tsql`. No se aplicó a bases de negocio durante
-el desarrollo. El despliegue debe coordinarse con la adaptación del frontend.
-
-- `Boveda.SolicitudMovimientoBoveda` guarda propuesta, identidad, estado y resolución.
-- `Boveda.SolicitudMovimientoBovedaDenominacion` guarda cantidades y valores propuestos.
-- `Boveda.MovimientoBoveda.IdSolicitudMovimiento` es nullable para movimientos
-  históricos, Caja, ATM y ajustes de arqueos, que conservan sus propios flujos.
-- FK, CHECK e índices validan relaciones, estados, fechas, montos e idempotencia.
-- Un índice único evita más de un movimiento por solicitud y bóveda.
-- Triggers impiden editar/borrar propuestas, detalles y resoluciones, y añadir
-  detalle a solicitudes resueltas. La huella y el monto también se verifican antes
-  de ejecutar.
-
-La migración puede repetirse y no modifica saldos ni autoriza movimientos antiguos.
-Las cuentas contables se configuran en PlantillaBoveda como antes.
-
-## Errores adicionales
-
-| HTTP | Código | Causa |
-|---|---|---|
-| 410 | SOLICITUD_AUTORIZACION_REQUERIDA | Uso de la antigua ejecución directa |
-| 404 | SOLICITUD_MOVIMIENTO_NO_ENCONTRADA | Identificador inexistente |
-| 409 | APROBADOR_IGUAL_SOLICITANTE | Autoaprobación o autorrechazo |
-| 409 | SOLICITUD_MOVIMIENTO_RESUELTA | Solicitud finalizada o aprobación de otro usuario |
-| 409 | SOLICITUD_MOVIMIENTO_DESACTUALIZADA | Cambio de agencia, datos o valores de referencia |
-| 409 | SOLICITUD_MOVIMIENTO_INMUTABLE | Edición/borrado rechazado por la base |
-| 403 | SOLO_SOLICITANTE_CANCELA | Cancelación por otro usuario |
-
-También se conservan los errores de sesión, permisos, agencia, validación, efectivo,
-calendario y contabilidad. La auditoría identifica solicitante y revisor y registra
-éxitos y fallos.
-
-## Pruebas
-
-Se adaptaron las pruebas de movimientos para recorrer creación y aprobación.
-Se añadieron pruebas HTTP de permisos, estados, identidades, inmutabilidad del
-contenido, rechazo/cancelación, reintentos, disponibilidad y rollback.
-El laboratorio opt-in SQL Server aplica ambas migraciones dos veces y verifica
-persistencia, triggers, concurrencia y fallos posteriores a la contabilización.
-Solo utiliza bases locales ficticias con nombre aleatorio y eliminación al terminar.
+En instalaciones parcialmente migradas, continuar desde la primera
+migración pendiente. Una migración que detecte solicitudes pendientes
+duplicadas para una agencia aborta con error 59020. Resolver las
+solicitudes excedentes con el flujo previo y reintentar. La configuración
+contable de las nuevas etapas se carga antes de habilitar las operaciones.

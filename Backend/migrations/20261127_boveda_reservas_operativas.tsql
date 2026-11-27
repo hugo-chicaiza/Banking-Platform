@@ -1,0 +1,59 @@
+/* SQL Server. Aplicar tras 20261127_boveda_movimientos_confirmacion.tsql.
+   Protege las reservas también al operar desde Caja, ATM u otros procedimientos. */
+SET XACT_ABORT ON;
+BEGIN TRANSACTION;
+GO
+CREATE OR ALTER TRIGGER Boveda.trg_BovedaDenominacion_ReservaMovimiento
+ON Boveda.BovedaDenominacion AFTER UPDATE, DELETE AS
+BEGIN
+    SET NOCOUNT ON;
+
+    IF SESSION_CONTEXT(N'BovedaArqueo') IS NULL AND EXISTS (
+        SELECT 1
+        FROM deleted d
+        LEFT JOIN inserted i ON i.IdBoveda = d.IdBoveda AND i.IdDenominacion = d.IdDenominacion
+        JOIN Boveda.Boveda b ON b.IdBoveda = d.IdBoveda
+        JOIN Boveda.CupoSolicitudMovimiento c ON c.IdAgencia = b.IdAgencia
+        JOIN Boveda.SolicitudMovimientoBoveda s ON s.IdSolicitudMovimiento = c.IdSolicitudMovimiento
+        JOIN Boveda.SolicitudMovimientoBovedaDenominacion p
+            ON p.IdSolicitudMovimiento = s.IdSolicitudMovimiento AND p.IdDenominacion = d.IdDenominacion
+        WHERE s.IdBoveda = d.IdBoveda AND s.Estado = 'APROBADO'
+          AND s.TipoMovimiento IN ('Traslado', 'EnvioExcedente')
+          AND (SESSION_CONTEXT(N'BovedaSolicitudMovimiento') IS NULL
+               OR TRY_CONVERT(bigint, SESSION_CONTEXT(N'BovedaSolicitudMovimiento')) <> s.IdSolicitudMovimiento)
+          AND ISNULL(i.CantidadActual, 0) < d.CantidadActual
+          AND ISNULL(i.CantidadActual, 0) < p.Cantidad
+    )
+        THROW 59021, N'La operación consume efectivo reservado.', 1;
+END;
+GO
+CREATE OR ALTER TRIGGER Boveda.trg_Boveda_CupoMovimiento
+ON Boveda.Boveda AFTER UPDATE AS
+BEGIN
+    SET NOCOUNT ON;
+
+    IF SESSION_CONTEXT(N'BovedaArqueo') IS NULL AND EXISTS (
+        SELECT 1
+        FROM inserted i
+        JOIN deleted d ON d.IdBoveda = i.IdBoveda
+        JOIN Boveda.CupoSolicitudMovimiento c ON c.IdAgencia = d.IdAgencia
+        JOIN Boveda.SolicitudMovimientoBoveda s ON s.IdSolicitudMovimiento = c.IdSolicitudMovimiento
+        WHERE s.Estado IN ('APROBADO', 'DESPACHADO')
+          AND (s.IdBoveda = i.IdBoveda OR s.IdBovedaContraparte = i.IdBoveda)
+          AND (SESSION_CONTEXT(N'BovedaSolicitudMovimiento') IS NULL
+               OR TRY_CONVERT(bigint, SESSION_CONTEXT(N'BovedaSolicitudMovimiento')) <> s.IdSolicitudMovimiento)
+          AND (
+              i.IdAgencia <> d.IdAgencia OR (i.Estado <> d.Estado AND i.Estado <> 'A')
+              OR (s.Estado = 'APROBADO' AND s.TipoMovimiento IN ('Traslado', 'EnvioExcedente')
+                  AND s.IdBoveda = i.IdBoveda AND i.SaldoActual < d.SaldoActual AND i.SaldoActual < s.Monto)
+              OR ((s.TipoMovimiento = 'Traslado' AND s.IdBovedaContraparte = i.IdBoveda)
+                  OR (s.TipoMovimiento = 'ProvisionExterna' AND s.IdBoveda = i.IdBoveda))
+                 AND (i.SaldoActual > d.SaldoActual OR i.LimiteMaximo < d.LimiteMaximo)
+                 AND i.SaldoActual + s.Monto > i.LimiteMaximo
+          )
+    )
+        THROW 59022, N'La operación afecta la capacidad de bóveda reservada.', 1;
+END;
+GO
+COMMIT TRANSACTION;
+GO

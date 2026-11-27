@@ -1,10 +1,11 @@
 """BOV-01..06. Inventario e historial siempre se confirman junto con el asiento."""
 
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 from typing import Never
 
-from sqlalchemy import Connection
+from sqlalchemy import Connection, text
+from sqlalchemy.exc import SQLAlchemyError
 
 from app.core.api.errors import problema
 from app.core.security.auth import Usuario
@@ -28,17 +29,18 @@ from app.modules.boveda.schemas import (
     DiferenciaDenominacion,
     EstadoArqueo,
     MovimientoBoveda,
+    NovedadCajero,
     PageArqueoBoveda,
     PageMovimientoBoveda,
+    ResolucionNovedadRequest,
     ResumenArqueoBoveda,
     TipoArqueo,
 )
 from app.modules.contabilidad import repository as repo_contable
 from app.modules.contabilidad import service as contabilidad
-from app.modules.contabilidad.boveda_versionada import codigo_boveda
 
 _GLOBALES = frozenset({"ADMIN", "CONTADOR", "AUDITOR"})
-_TESTIGOS = frozenset({"SUPERVISOR", "AUDITOR", "ADMIN"})
+_CAJERO = frozenset({"CAJERO"})
 _MAX_DINERO = Decimal("9999999999999999.99")
 
 
@@ -188,6 +190,7 @@ def _aplicar(
     clave: str | None = None,
     huella: str | None = None,
     usar_version: bool | None = None,
+    contabilizar: bool = True,
 ) -> int:
     inventario = _inventario_valido(conn, boveda)
     monto = sum((valores[i] * n for i, n in piezas.items()), Decimal(0))
@@ -237,23 +240,41 @@ def _aplicar(
             "huella": huella,
         },
     )
-    repo.actualizar_inventario(
-        conn, boveda["id_boveda"], movimiento, piezas, ingreso, ahora, saldo
+    contexto = (
+        text("EXEC sys.sp_set_session_context @key=N'BovedaArqueo', @value=:id")
+        if arqueo is not None
+        else None
     )
-    opciones_contables = {} if usar_version is None else {"usar_version": usar_version}
-    asiento = contabilidad.contabilizar_boveda(
-        conn,
-        agencia=boveda["id_agencia"],
-        tipo=tipo,
-        naturaleza="I" if ingreso else "E",
-        monto=monto,
-        fecha_contable=fecha_contable,
-        actor=actor,
-        movimiento=movimiento,
-        ahora=ahora,
-        **opciones_contables,
-    )
-    repo.vincular_asiento(conn, movimiento, asiento)
+    if contexto is not None:
+        conn.execute(contexto, {"id": arqueo})
+    try:
+        repo.actualizar_inventario(
+            conn, boveda["id_boveda"], movimiento, piezas, ingreso, ahora, saldo
+        )
+    finally:
+        if contexto is not None:
+            try:
+                conn.execute(contexto, {"id": None})
+            except SQLAlchemyError:
+                conn.invalidate()
+                raise
+    if contabilizar:
+        opciones_contables = (
+            {} if usar_version is None else {"usar_version": usar_version}
+        )
+        asiento = contabilidad.contabilizar_boveda(
+            conn,
+            agencia=boveda["id_agencia"],
+            tipo=tipo,
+            naturaleza="I" if ingreso else "E",
+            monto=monto,
+            fecha_contable=fecha_contable,
+            actor=actor,
+            movimiento=movimiento,
+            ahora=ahora,
+            **opciones_contables,
+        )
+        repo.vincular_asiento(conn, movimiento, asiento)
     boveda["saldo_actual"] = saldo
     return movimiento
 
@@ -265,70 +286,6 @@ def registrar_movimiento() -> Never:
         "SOLICITUD_AUTORIZACION_REQUERIDA",
         "Registre una solicitud de movimiento y solicite su aprobación independiente.",
     )
-
-
-def ejecutar_movimiento_autorizado(
-    conn: Connection,
-    bovedas: dict[int, Fila],
-    solicitud: Fila,
-    autorizador: int,
-    piezas: dict[int, int],
-    valores: dict[int, Decimal],
-) -> list[MovimientoBoveda]:
-    """Ejecución compartida, dentro de la transacción de aprobación."""
-    if not conn.in_transaction():
-        raise RuntimeError("La ejecución requiere una transacción")
-    origen = bovedas[solicitud["id_boveda"]]
-    destino = solicitud["id_boveda_contraparte"]
-    tipo = solicitud["tipo_movimiento"]
-    fecha = contabilidad.resolver_id_fecha_contable(conn, contabilidad.ahora_ecuador())
-    usar_version = None
-    if tipo == "Traslado":
-        repo_contable.bloquear_contabilizacion(conn)
-        dia = repo_contable.obtener_por_id(conn, fecha)
-        usar_version = dia is not None and all(
-            repo_contable.obtener_plantilla(
-                conn,
-                codigo_boveda(boveda["id_agencia"], tipo, naturaleza),
-                dia["fecha"],
-            )
-            is not None
-            for boveda, naturaleza in ((origen, "E"), (bovedas[destino], "I"))
-        )
-    id_origen = _aplicar(
-        conn,
-        origen,
-        tipo,
-        tipo in {"ProvisionExterna", "AjusteSobrante"},
-        piezas,
-        valores,
-        solicitud["id_usuario_solicitante"],
-        autorizador,
-        fecha,
-        solicitud["observaciones"],
-        contraparte=destino,
-        usar_version=usar_version,
-    )
-    movimientos = [id_origen]
-    if tipo == "Traslado":
-        id_destino = _aplicar(
-            conn,
-            bovedas[destino],
-            tipo,
-            True,
-            piezas,
-            valores,
-            solicitud["id_usuario_solicitante"],
-            autorizador,
-            fecha,
-            solicitud["observaciones"],
-            contraparte=origen["id_boveda"],
-            relacionado=id_origen,
-            usar_version=usar_version,
-        )
-        repo.relacionar_movimiento(conn, id_origen, id_destino)
-        movimientos.append(id_destino)
-    return _movimientos(conn, [repo.obtener_movimiento(conn, i) for i in movimientos])
 
 
 def listar_arqueos(
@@ -357,7 +314,9 @@ def listar_arqueos(
         filas, total = repo.listar_arqueos(
             conn, id_boveda, desde, hasta, estado, tipo, page, page_size
         )
-        ajustes = repo.ajustes_arqueos(conn, [f["id_arqueo_boveda"] for f in filas])
+        ids = [f["id_arqueo_boveda"] for f in filas]
+        ajustes = repo.ajustes_arqueos(conn, ids)
+        novedades = repo.novedades_arqueos(conn, ids, contabilidad.ahora_ecuador())
         items = []
         for fila in filas:
             teorico, fisico = fila["saldo_teorico"], fila["saldo_fisico"]
@@ -377,6 +336,7 @@ def listar_arqueos(
                     if fisico is not None and teorico is not None
                     else None,
                     ids_movimientos_ajuste=sorted(vinculados),
+                    novedad=_novedad(novedades.get(fila["id_arqueo_boveda"])),
                 )
             )
         return PageArqueoBoveda(
@@ -384,8 +344,14 @@ def listar_arqueos(
         )
 
 
+def _novedad(fila: Fila | None) -> NovedadCajero | None:
+    return NovedadCajero(**fila) if fila is not None else None
+
+
 def _arqueo(conn: Connection, fila: Fila) -> ArqueoBoveda:
-    detalle = repo.detalle_arqueo(conn, fila["id_arqueo_boveda"])
+    id_arqueo = fila["id_arqueo_boveda"]
+    detalle = repo.detalle_arqueo(conn, id_arqueo)
+    novedades = repo.novedades_arqueos(conn, [id_arqueo], contabilidad.ahora_ecuador())
     datos = {k: v for k, v in fila.items() if k != "id_movimiento_corte"}
     return ArqueoBoveda(
         **datos,
@@ -397,8 +363,99 @@ def _arqueo(conn: Connection, fila: Fila) -> ArqueoBoveda:
             )
             for d in detalle
         ],
-        ids_movimientos_ajuste=repo.ajustes_arqueo(conn, fila["id_arqueo_boveda"]),
+        ids_movimientos_ajuste=repo.ajustes_arqueo(conn, id_arqueo),
+        novedad=_novedad(novedades.get(id_arqueo)),
     )
+
+
+def _agencia_arqueo(usuario: Usuario, boveda: Fila) -> str:
+    agencia = exigir_agencia(usuario)
+    if agencia != boveda["id_agencia"]:
+        raise problema(403, "SIN_ACCESO_AGENCIA", "No tiene acceso a esa agencia.")
+    return agencia
+
+
+def _cuenta_neta(
+    conn: Connection, asiento: int, lado: str, monto: Decimal, elemento: str = "1"
+) -> int:
+    lineas = [
+        linea
+        for linea in repo_contable.movimientos_asiento(conn, asiento)
+        if linea["tipo_movimiento"] == lado
+    ]
+    if (
+        len(lineas) != 1
+        or lineas[0]["monto"] != monto
+        or not lineas[0]["codigo_cuenta"].startswith(elemento)
+    ):
+        raise problema(
+            409,
+            "CUENTA_ARQUEO_INVALIDA",
+            "La cuenta contable del arqueo no corresponde a la operación.",
+        )
+    return lineas[0]["id_cuenta_contable"]
+
+
+def _ajustar_conteo(
+    conn: Connection,
+    boveda: Fila,
+    id_arqueo: int,
+    detalle: list[Fila],
+    diferencia: Decimal,
+    actor: int,
+) -> tuple[list[int], int | None]:
+    cambios = {
+        d["id_denominacion"]: d["cantidad"] - d["cantidad_esperada"] for d in detalle
+    }
+    if not any(cambios.values()):
+        return [], None
+
+    valores = {d["id_denominacion"]: d["valor"] for d in detalle}
+    ahora = contabilidad.ahora_ecuador()
+    fecha = contabilidad.resolver_id_fecha_contable(conn, ahora)
+    ajustes = []
+    for ingreso, tipo in ((False, "AjusteFaltante"), (True, "AjusteSobrante")):
+        piezas = {i: abs(n) for i, n in cambios.items() if n and (n > 0) == ingreso}
+        if piezas:
+            ajustes.append(
+                _aplicar(
+                    conn,
+                    boveda,
+                    tipo,
+                    ingreso,
+                    piezas,
+                    valores,
+                    actor,
+                    actor,
+                    fecha,
+                    f"Conteo del arqueo {id_arqueo}",
+                    arqueo=id_arqueo,
+                    contabilizar=False,
+                )
+            )
+    repo.vincular_ajuste_arqueo(conn, id_arqueo, ajustes[0])
+    if not diferencia:
+        return ajustes, None
+
+    falta = diferencia < 0
+    monto = abs(diferencia)
+    asiento = contabilidad.contabilizar_boveda(
+        conn,
+        agencia=boveda["id_agencia"],
+        tipo="AjusteFaltante" if falta else "AjusteSobrante",
+        naturaleza="E" if falta else "I",
+        monto=monto,
+        fecha_contable=fecha,
+        actor=actor,
+        movimiento=ajustes[0] if falta else ajustes[-1],
+        ahora=ahora,
+    )
+    _cuenta_neta(
+        conn, asiento, "DEBITO" if falta else "CREDITO", monto, "1" if falta else "2"
+    )
+    for ajuste in ajustes:
+        repo.vincular_asiento(conn, ajuste, asiento)
+    return ajustes, asiento
 
 
 def registrar_arqueo(
@@ -413,20 +470,11 @@ def registrar_arqueo(
         "ARQUEO_BOVEDA", "Boveda.ArqueoBoveda", usuario, ip, f"boveda={id_boveda}"
     ) as auditado:
         actor = exigir_id_interno(id_interno)
-        if actor == datos.id_usuario_testigo:
-            raise problema(
-                409,
-                "ARQUEADOR_IGUAL_TESTIGO",
-                "El arqueador y el testigo deben ser distintos.",
-            )
         with conn.begin():
             boveda = _exigir_boveda(
                 repo.obtener_boveda(conn, id_boveda, bloquear=True), estado=True
             )
-            _alcance(usuario, boveda["id_agencia"])
-            validar_participante_boveda(
-                datos.id_usuario_testigo, boveda["id_agencia"], _TESTIGOS
-            )
+            agencia = _agencia_arqueo(usuario, boveda)
             esperado = _inventario_valido(conn, boveda)
             contado = {d.id_denominacion: d.cantidad for d in datos.desglose}
             ids = sorted(set(esperado) | set(contado))
@@ -455,14 +503,35 @@ def registrar_arqueo(
                 raise problema(
                     422, "MONTO_FUERA_RANGO", "El conteo excede el rango permitido."
                 )
+            diferencia = fisico - boveda["saldo_actual"]
+            responsable = datos.id_usuario_responsable
+            estado = "CUADRADO"
+            if diferencia < 0:
+                estado = "FALTANTE"
+                if responsable is None or responsable == actor:
+                    raise problema(
+                        422,
+                        "CAJERO_RESPONSABLE_REQUERIDO",
+                        "Indique el cajero responsable del faltante, distinto del arqueador.",
+                    )
+                validar_participante_boveda(responsable, agencia, _CAJERO)
+            elif responsable is not None:
+                raise problema(
+                    422,
+                    "CAJERO_RESPONSABLE_NO_APLICA",
+                    "Solo un arqueo con faltante requiere un cajero responsable.",
+                )
+            elif diferencia > 0:
+                estado = "SOBRANTE"
+            ahora = contabilidad.ahora_ecuador()
             id_arqueo = repo.crear_arqueo(
                 conn,
                 {
                     "id_boveda": id_boveda,
-                    "ahora": contabilidad.ahora_ecuador(),
+                    "ahora": ahora,
                     "tipo": datos.tipo_arqueo,
                     "actor": actor,
-                    "testigo": datos.id_usuario_testigo,
+                    "estado": estado,
                     "observaciones": datos.observaciones,
                     "teorico": boveda["saldo_actual"],
                     "fisico": fisico,
@@ -470,11 +539,34 @@ def registrar_arqueo(
                 },
                 detalle,
             )
+            ajustes, asiento = _ajustar_conteo(
+                conn, boveda, id_arqueo, detalle, diferencia, actor
+            )
+            if responsable is not None:
+                repo.crear_novedad(
+                    conn,
+                    {
+                        "arqueo": id_arqueo,
+                        "responsable": responsable,
+                        "monto": -diferencia,
+                        "vence": ahora + timedelta(hours=48),
+                        "asiento": asiento,
+                    },
+                )
             fila = repo.obtener_arqueo(conn, id_arqueo)
             if fila is None:
                 raise RuntimeError("No se encontró el arqueo recién registrado")
             auditado.id_registro = str(id_arqueo)
-            auditado.confirmar(conn)
+            auditado.confirmar(
+                conn,
+                cambios={
+                    "estado": estado,
+                    "diferencia": str(diferencia),
+                    "idUsuarioResponsable": responsable,
+                    "idsMovimientos": ajustes,
+                    "idAsientoContable": asiento,
+                },
+            )
             return _arqueo(conn, fila)
 
 
@@ -614,3 +706,160 @@ def aprobar_arqueo(
             else:
                 registro.confirmar(conn)
             return _arqueo(conn, aprobada)
+
+
+def _resolucion_contable(
+    conn: Connection,
+    boveda: Fila,
+    novedad: Fila,
+    datos: ResolucionNovedadRequest,
+    actor: int,
+) -> tuple[int, int | None]:
+    ahora = contabilidad.ahora_ecuador()
+    fecha = contabilidad.resolver_id_fecha_contable(conn, ahora)
+    monto = novedad["monto"]
+    cuenta_por_cobrar = _cuenta_neta(
+        conn, novedad["id_asiento_contable"], "DEBITO", monto
+    )
+    tipo = {
+        "REPOSICION": "ReposicionFaltante",
+        "JUSTIFICACION": "JustificaFaltante",
+        "DESCUENTO_ROL": "DescuentoFaltante",
+    }[datos.tipo_resolucion]
+    movimiento = None
+    if datos.tipo_resolucion == "REPOSICION":
+        piezas = {d.id_denominacion: d.cantidad for d in datos.desglose}
+        catalogo = repo.denominaciones(conn, list(piezas))
+        if len(catalogo) != len(piezas) or any(
+            d["estado"] != "A" for d in catalogo.values()
+        ):
+            raise problema(
+                422,
+                "DENOMINACION_NO_HABILITADA",
+                "Una denominación no está habilitada.",
+            )
+        valores = {i: d["valor"] for i, d in catalogo.items()}
+        if sum((n * valores[i] for i, n in piezas.items()), Decimal(0)) != monto:
+            raise problema(
+                422,
+                "MONTO_REPOSICION_INCORRECTO",
+                "El efectivo de reposición debe cubrir exactamente el faltante.",
+            )
+        movimiento = _aplicar(
+            conn,
+            boveda,
+            tipo,
+            True,
+            piezas,
+            valores,
+            novedad["id_usuario_responsable"],
+            actor,
+            fecha,
+            f"Reposición de la novedad {novedad['id_novedad']}",
+            contabilizar=False,
+        )
+    asiento = contabilidad.contabilizar_boveda(
+        conn,
+        agencia=boveda["id_agencia"],
+        tipo=tipo,
+        naturaleza="I" if movimiento else "E",
+        monto=monto,
+        fecha_contable=fecha,
+        actor=actor,
+        movimiento=movimiento,
+        ahora=ahora,
+        novedad=novedad["id_novedad"] if movimiento is None else None,
+    )
+    if _cuenta_neta(conn, asiento, "CREDITO", monto) != cuenta_por_cobrar:
+        raise problema(
+            409,
+            "CUENTA_POR_COBRAR_NO_COMPENSADA",
+            "La resolución debe compensar la cuenta por cobrar del faltante.",
+        )
+    if datos.tipo_resolucion == "DESCUENTO_ROL":
+        _cuenta_neta(conn, asiento, "DEBITO", monto, "2")
+    if movimiento is not None:
+        if _cuenta_neta(conn, asiento, "DEBITO", monto) != _cuenta_neta(
+            conn, novedad["id_asiento_contable"], "CREDITO", monto
+        ):
+            raise problema(
+                409,
+                "CUENTA_ARQUEO_INVALIDA",
+                "La reposición debe ingresar a la cuenta de bóveda.",
+            )
+        repo.vincular_asiento(conn, movimiento, asiento)
+    return asiento, movimiento
+
+
+def resolver_novedad(
+    conn: Connection,
+    usuario: Usuario,
+    id_interno: int | None,
+    id_arqueo: int,
+    datos: ResolucionNovedadRequest,
+    ip: str,
+) -> ArqueoBoveda:
+    with auditar(
+        "RESOLVER_NOVEDAD_CAJERO",
+        "Boveda.NovedadCajero",
+        usuario,
+        ip,
+        f"arqueo={id_arqueo}",
+    ) as registro:
+        actor = exigir_id_interno(id_interno)
+        with conn.begin():
+            fila = repo.obtener_arqueo(conn, id_arqueo)
+            if fila is None:
+                raise problema(404, "ARQUEO_NO_ENCONTRADO", "El arqueo no existe.")
+            # La misma fila de bóveda serializa el cierre, la reposición y sus reintentos.
+            boveda = _exigir_boveda(
+                repo.obtener_boveda(conn, fila["id_boveda"], bloquear=True)
+            )
+            _agencia_arqueo(usuario, boveda)
+            ahora = contabilidad.ahora_ecuador()
+            novedad = repo.novedades_arqueos(conn, [id_arqueo], ahora).get(id_arqueo)
+            if novedad is None:
+                raise problema(
+                    404,
+                    "NOVEDAD_NO_ENCONTRADA",
+                    "El arqueo no tiene novedad de cajero.",
+                )
+            if actor == novedad["id_usuario_responsable"]:
+                raise problema(
+                    403,
+                    "RESPONSABLE_NO_RESUELVE_NOVEDAD",
+                    "El responsable no puede resolver su novedad.",
+                )
+            if novedad["estado"] == "RESUELTA":
+                raise problema(
+                    409, "NOVEDAD_YA_RESUELTA", "La novedad ya fue resuelta."
+                )
+            if datos.tipo_resolucion == "REPOSICION":
+                _exigir_boveda(boveda, estado=True)
+            asiento, movimiento = _resolucion_contable(
+                conn, boveda, novedad, datos, actor
+            )
+            repo.resolver_novedad(
+                conn,
+                {
+                    "id": novedad["id_novedad"],
+                    "tipo": datos.tipo_resolucion,
+                    "ahora": ahora,
+                    "actor": actor,
+                    "referencia": datos.referencia_resolucion,
+                    "observaciones": datos.observaciones,
+                    "asiento": asiento,
+                    "movimiento": movimiento,
+                },
+            )
+            registro.id_registro = str(novedad["id_novedad"])
+            registro.confirmar(
+                conn,
+                cambios={
+                    "idArqueoBoveda": id_arqueo,
+                    "tipoResolucion": datos.tipo_resolucion,
+                    "idAsientoContable": asiento,
+                    "idMovimientoReposicion": movimiento,
+                },
+            )
+            return _arqueo(conn, fila)

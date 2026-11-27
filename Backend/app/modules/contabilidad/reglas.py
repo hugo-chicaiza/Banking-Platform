@@ -91,8 +91,19 @@ _FLUJOS_BOVEDA = {
     ("Traslado", "I"): ("EFECTIVO_EN_TRANSITO", "BOVEDA", "BOV-04"),
     ("ProvisionExterna", "I"): ("EXTERNO", "BOVEDA", "BOV-04"),
     ("EnvioExcedente", "E"): ("BOVEDA", "EXTERNO", "BOV-04"),
-    ("AjusteFaltante", "E"): ("BOVEDA", "DIFERENCIA_ARQUEO", "BOV-06"),
-    ("AjusteSobrante", "I"): ("DIFERENCIA_ARQUEO", "BOVEDA", "BOV-06"),
+    ("AjusteFaltante", "E"): ("BOVEDA", "CUENTAS_POR_COBRAR_CAJERO", "BOV-05"),
+    ("AjusteSobrante", "I"): ("SOBRANTES_POR_REGULARIZAR", "BOVEDA", "BOV-05"),
+    ("ReposicionFaltante", "I"): ("CUENTAS_POR_COBRAR_CAJERO", "BOVEDA", "BOV-05"),
+    ("JustificaFaltante", "E"): (
+        "CUENTAS_POR_COBRAR_CAJERO",
+        "REGULARIZACION_FALTANTE",
+        "BOV-05",
+    ),
+    ("DescuentoFaltante", "E"): (
+        "CUENTAS_POR_COBRAR_CAJERO",
+        "NOMINA_POR_PAGAR",
+        "BOV-05",
+    ),
 }
 
 

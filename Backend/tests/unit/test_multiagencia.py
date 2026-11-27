@@ -439,8 +439,8 @@ def test_usuario_opera_en_tres_agencias_y_se_cambia_su_principal(
         assert r.json()["idAgenciaPrincipal"] == "003"
         simular_sesion(app, actor_contador(base))
         r = client.get(f"/api/v1/contabilidad/asientos?idAgencia={agencia}")
-        assert r.status_code == 200, r.text
-    assert recibidas == ["001", "002", "003"]
+        assert r.status_code == (200 if agencia == "001" else 403), r.text
+    assert recibidas == ["001"]
     assert sorted(base.multi[2]) == ["001", "002", "003"]
 
 
@@ -499,5 +499,5 @@ def test_asientos_parametro_no_cambia_agencia_operativa(client, base, monkeypatc
     )
     simular_sesion(app, actor_contador(base))
     assert client.get("/api/v1/contabilidad/asientos?idAgencia=001").status_code == 403
-    assert client.get("/api/v1/contabilidad/asientos?idAgencia=002").status_code == 200
-    assert recibidos[-1] == "002"
+    assert client.get("/api/v1/contabilidad/asientos?idAgencia=002").status_code == 403
+    assert recibidos == ["001"]
