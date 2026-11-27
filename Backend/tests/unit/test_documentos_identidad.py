@@ -10,6 +10,27 @@ from app.modules.clientes.schemas import ConsultaDocumentoBody
 HOY = date(2026, 11, 26)
 
 
+def test_documento_anterior_distingue_emisor_faltante_o_discrepante(monkeypatch):
+    consulta = ConsultaDocumentoBody(
+        tipo_documento="NUEVO", numero="SINTETICO", codigo_pais_emision="ECU"
+    )
+    for emisor, estado in [
+        (None, "POR_COMPLETAR"),
+        ("COL", "POR_COMPLETAR"),
+        ("ECU", "VIGENTE"),
+    ]:
+        monkeypatch.setattr(
+            documentos_identidad,
+            "_buscar",
+            lambda *_, emisor=emisor: _ficha(emisor=emisor),
+        )
+        resultado = documentos_identidad.buscar(
+            MagicMock(), consulta, HOY, requiere_pais=True, requiere_vencimiento=False
+        )
+        assert resultado.id_cliente == 42
+        assert resultado.estado_documento == estado
+
+
 def _conexion(algoritmo, patron, minimo, maximo, requiere_pais=False):
     conn = MagicMock()
     conn.execute.return_value.mappings.return_value.first.return_value = {

@@ -40,7 +40,11 @@ def consultar(
 ) -> ValidacionIdentificacion:
     regla = validar(conn, payload)
     resultado = buscar(
-        conn, payload, fecha, requiere_vencimiento=regla["RequiereVencimiento"]
+        conn,
+        payload,
+        fecha,
+        requiere_vencimiento=regla["RequiereVencimiento"],
+        requiere_pais=regla.get("RequierePais", False),
     )
     return resultado.model_copy(
         update={
@@ -93,8 +97,8 @@ def validar(conn: Connection, payload: ConsultaDocumentoBody):
                 advertencias.append(motivo)
             else:
                 raise problema(422, "DOCUMENTO_INVALIDO", motivo)
-    if regla["RequierePais"] and (
-        not emisor or not repository.existe_pais(conn, emisor)
+    if (regla["RequierePais"] and not emisor) or (
+        emisor is not None and not repository.existe_pais(conn, emisor)
     ):
         raise problema(422, "DOCUMENTO_INVALIDO", "Indica un país emisor del catálogo.")
 
@@ -107,6 +111,7 @@ def buscar(
     fecha: date,
     *,
     requiere_vencimiento: bool,
+    requiere_pais: bool = False,
 ) -> ValidacionIdentificacion:
     tipo = payload.tipo_documento
     numero = payload.numero.upper()
@@ -147,7 +152,12 @@ def buscar(
     if exacta:
         if vencimiento is not None and vencimiento < fecha:
             estado_documento = "VENCIDO"
-        elif vencimiento is None and requiere_vencimiento:
+        elif (
+            requiere_pais
+            and fila["emisor"] != emisor
+            or vencimiento is None
+            and requiere_vencimiento
+        ):
             estado_documento = "POR_COMPLETAR"
         else:
             estado_documento = "VIGENTE"
