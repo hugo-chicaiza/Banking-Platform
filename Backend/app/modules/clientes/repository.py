@@ -61,18 +61,27 @@ def obtener_cliente_por_identificacion(
 
     Devuelve {id_cliente, estado, tipo_cliente, tipo_documento} o None si no existe.
     """
-    return _one(
-        conn,
-        """
-        SELECT IdCliente     AS id_cliente,
-               Estado        AS estado,
-               TipoCliente   AS tipo_cliente,
-               TipoDocumento AS tipo_documento
+    resultado = conn.execute(
+        text("""
+        SELECT IdCliente AS id_cliente, Estado AS estado,
+               TipoCliente AS tipo_cliente, TipoDocumento AS tipo_documento
         FROM Clientes.Cliente
         WHERE Identificacion = :identificacion
-        """,
+        ORDER BY IdCliente
+        """),
         {"identificacion": identificacion},
     )
+    with resultado:
+        filas = resultado.mappings().fetchmany(2)
+    if len(filas) > 1:
+        from app.core.api.errors import problema
+
+        raise problema(
+            409,
+            "DOCUMENTO_AMBIGUO",
+            "Usa el tipo y el país emisor para consultar el documento.",
+        )
+    return dict(filas[0]) if filas else None
 
 
 def obtener_cliente_tipos(conn: Connection, id_cliente: int) -> dict[str, Any] | None:
@@ -498,8 +507,8 @@ def consultar_clientes(
               -- E5-05: inicio de cualquier palabra, sin acentos ni mayúsculas (columna
               -- NombreBusqueda en Latin1_General_CI_AI); comodines escapados.
               AND (:nombre_inicio IS NULL
-                   OR NombreBusqueda LIKE :nombre_inicio ESCAPE '\'
-                   OR NombreBusqueda LIKE :nombre_palabra ESCAPE '\')
+                   OR NombreBusqueda LIKE :nombre_inicio ESCAPE '\\'
+                   OR NombreBusqueda LIKE :nombre_palabra ESCAPE '\\')
         )
         SELECT p.*, t.total
         FROM (SELECT COUNT(*) AS total FROM Filtrados) AS t

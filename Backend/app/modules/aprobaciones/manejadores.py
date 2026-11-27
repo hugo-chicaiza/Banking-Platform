@@ -115,6 +115,10 @@ class Parametro:
 def registro_inicial() -> Registro:
     from app.modules.auth.aprobacion_roles import operacion as operacion_roles
     from app.modules.clientes.aprobacion import OPERACION_EDICION
+    from app.modules.clientes.aprobacion_documentos import (
+        OPERACION_CATALOGO_DOCUMENTOS,
+        OPERACION_DOCUMENTOS,
+    )
     from app.modules.clientes.aprobacion_estado import OPERACION_ESTADO
     from app.modules.clientes.aprobacion_reincorporacion import (
         OPERACION_REINCORPORACION,
@@ -147,6 +151,8 @@ def registro_inicial() -> Registro:
     registro.agregar(cambio_subproducto)
     registro.agregar(operacion_mapeo())
     registro.agregar(OPERACION_EDICION)
+    registro.agregar(OPERACION_DOCUMENTOS)
+    registro.agregar(OPERACION_CATALOGO_DOCUMENTOS)
     registro.agregar(OPERACION_RIESGO)
     registro.agregar(OPERACION_ESTADO)
     registro.agregar(OPERACION_REINCORPORACION)

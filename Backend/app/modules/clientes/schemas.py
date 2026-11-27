@@ -53,6 +53,97 @@ class ValidacionIdentificacion(CamelModel):
     mensaje: str
     reincorporable: bool = False
     estado: str | None = None
+    advertencias: list[str] = Field(default_factory=list)
+    version_reglas: str | None = None
+    tipo_coincidencia: Literal["EXACTA", "EQUIVALENCIA"] | None = None
+    estado_documento: (
+        Literal["VIGENTE", "VENCIDO", "POR_COMPLETAR", "POR_CORREGIR", "ANULADO"] | None
+    ) = None
+
+
+class ConsultaDocumentoBody(CamelModel):
+    model_config = ConfigDict(extra="forbid")
+
+    tipo_documento: Annotated[str, Field(pattern=r"^[A-Z0-9]{1,10}$")]
+    numero: Annotated[
+        str, StringConstraints(strip_whitespace=True, min_length=1, max_length=20)
+    ]
+    codigo_pais_emision: Annotated[str, Field(pattern=r"^[A-Z]{3}$")] | None = None
+
+
+class TipoDocumentoIdentidad(CamelModel):
+    codigo: str
+    nombre: str
+    algoritmo: Literal["EC_CEDULA", "EC_RUC", "NINGUNO"]
+    patron_caracteres: Literal["DIGITOS", "ALFANUMERICO"]
+    longitud_minima: int
+    longitud_maxima: int
+    aplica_natural: bool
+    aplica_juridico: bool
+    requiere_pais: bool
+    requiere_vencimiento: bool
+    digito_verificador_bloquea: bool = True
+    permite_principal: bool
+    accion_al_vencer: Literal["Avisar", "Suspender"]
+    activo: bool
+    version: str
+
+
+MotivoDocumento = Annotated[
+    str, StringConstraints(strip_whitespace=True, min_length=1, max_length=300)
+]
+VersionDocumento = Annotated[str, Field(pattern=r"^[0-9A-Fa-f]{16}$")]
+
+
+class DocumentoNuevo(ConsultaDocumentoBody):
+    fecha_emision: date | None = None
+    fecha_vencimiento: date | None = None
+    motivo: MotivoDocumento
+
+
+class DocumentoCambio(CamelModel):
+    model_config = ConfigDict(extra="forbid")
+
+    version: VersionDocumento
+    motivo: MotivoDocumento
+    accion: Literal["RENOVAR", "ANULAR", "MARCAR_ERROR"]
+    fecha_emision: date | None = None
+    fecha_vencimiento: date | None = None
+    codigo_pais_emision: Annotated[str, Field(pattern=r"^[A-Z]{3}$")] | None = None
+
+
+class DocumentoPrincipal(CamelModel):
+    model_config = ConfigDict(extra="forbid")
+
+    version: VersionDocumento
+    motivo: MotivoDocumento
+    anular_anterior: bool = False
+
+
+class TipoDocumentoEscritura(CamelModel):
+    model_config = ConfigDict(extra="forbid")
+
+    nombre: Annotated[
+        str, StringConstraints(strip_whitespace=True, min_length=1, max_length=80)
+    ]
+    algoritmo: Literal["EC_CEDULA", "EC_RUC", "NINGUNO"]
+    patron_caracteres: Literal["DIGITOS", "ALFANUMERICO"]
+    longitud_minima: Annotated[int, Field(ge=1, le=20)]
+    longitud_maxima: Annotated[int, Field(ge=1, le=20)]
+    aplica_natural: bool
+    aplica_juridico: bool
+    requiere_pais: bool
+    requiere_vencimiento: bool
+    digito_verificador_bloquea: bool = True
+    permite_principal: bool
+    accion_al_vencer: Literal["Avisar", "Suspender"]
+    activo: bool
+    motivo: MotivoDocumento
+    version: VersionDocumento | None = None
+
+
+class TipoDocumentoNuevo(TipoDocumentoEscritura):
+    codigo: Annotated[str, Field(pattern=r"^[A-Z0-9]{1,10}$")]
 
 
 # ---------------------------------------------------------------------------
@@ -96,9 +187,12 @@ class ClienteCreate(CamelModel):
     model_config = ConfigDict(extra="forbid")
 
     identificacion: Annotated[
-        str, StringConstraints(strip_whitespace=True, min_length=1, max_length=13)
+        str, StringConstraints(strip_whitespace=True, min_length=1, max_length=20)
     ]
-    tipo_documento: TipoDocumento
+    tipo_documento: Annotated[str, Field(pattern=r"^[A-Z0-9]{1,10}$")]
+    codigo_pais_emision: Annotated[str, Field(pattern=r"^[A-Z]{3}$")] | None = None
+    fecha_emision: date | None = None
+    fecha_vencimiento: date | None = None
     tipo_cliente: TipoCliente
     nombres: TextoCliente
     apellidos: TextoCliente | None = None
@@ -121,7 +215,7 @@ class Cliente(CamelModel):
 
     id_cliente: int
     identificacion: str
-    tipo_documento: TipoDocumento
+    tipo_documento: str
     tipo_cliente: TipoCliente
     nombres: str
     apellidos: str | None = None

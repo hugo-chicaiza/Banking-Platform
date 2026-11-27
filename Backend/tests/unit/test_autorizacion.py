@@ -157,6 +157,7 @@ ROLES_POR_RUTA: dict[tuple[str, str], tuple[str, ...]] = {
             "actividades-economicas",
             "tipos-antecedente",
             "tipos-direccion",
+            "tipos-documento",
             "denominaciones",
             "agencias",
             "productos",
@@ -225,6 +226,31 @@ ROLES_POR_RUTA: dict[tuple[str, str], tuple[str, ...]] = {
         "ADMIN",
     ),
     ("GET", "/api/v1/clientes/{idCliente}/perfil"): ("ASESOR", "SUPERVISOR", "ADMIN"),
+    ("GET", "/api/v1/clientes/{idCliente}/documentos"): (
+        "ASESOR",
+        "CAJERO",
+        "SUPERVISOR",
+        "ADMIN",
+    ),
+    ("POST", "/api/v1/clientes/{idCliente}/documentos"): ("ASESOR", "ADMIN"),
+    ("PATCH", "/api/v1/clientes/{idCliente}/documentos/{idDocumento}"): (
+        "ASESOR",
+        "ADMIN",
+    ),
+    ("PUT", "/api/v1/clientes/{idCliente}/documentos/{idDocumento}/principal"): (
+        "ASESOR",
+        "ADMIN",
+    ),
+    ("GET", "/api/v1/clientes/{idCliente}/relaciones/firmantes"): (
+        "ASESOR",
+        "SUPERVISOR",
+        "ADMIN",
+    ),
+    ("POST", "/api/v1/clientes/{idCliente}/relaciones/firmantes"): ("ASESOR", "ADMIN"),
+    ("POST", "/api/v1/clientes/{idCliente}/relaciones/firmantes/{idRelacion}/fin"): (
+        "ASESOR",
+        "ADMIN",
+    ),
     ("GET", "/api/v1/clientes/{idCliente}/direcciones"): ("ASESOR", "ADMIN"),
     ("POST", "/api/v1/clientes/{idCliente}/direcciones"): ("ASESOR", "ADMIN"),
     ("PATCH", "/api/v1/clientes/{idCliente}/direcciones/{idDireccion}"): (
@@ -542,6 +568,8 @@ ROLES_POR_RUTA: dict[tuple[str, str], tuple[str, ...]] = {
         "ADMIN",
     ),
     ("POST", "/api/v1/catalogos/tasas-interes"): ("ADMIN",),
+    ("POST", "/api/v1/catalogos/tipos-documento"): ("ADMIN",),
+    ("PATCH", "/api/v1/catalogos/tipos-documento/{codigo}"): ("ADMIN",),
     ("GET", "/api/v1/catalogos/administracion"): ("ADMIN", "SUPERVISOR", "ASESOR"),
     ("GET", "/api/v1/catalogos/administracion/{clave}"): (
         "ADMIN",
@@ -854,6 +882,8 @@ def test_roles_de_la_tarea_pasan_el_control(client, ruta, monkeypatch):
         ("POST", "/api/v1/caja/depositos/{idTransaccion}/series"),
         ("POST", "/api/v1/caja/jornadas/{idJornada}/retiros"),
         ("POST", "/api/v1/transacciones/{idTransaccion}/reverso"),
+        ("POST", "/api/v1/clientes/{idCliente}/relaciones/firmantes"),
+        ("POST", "/api/v1/clientes/{idCliente}/relaciones/firmantes/{idRelacion}/fin"),
     }
 
     if ruta in rutas_con_vinculacion and r.status_code == 403:
