@@ -1,10 +1,11 @@
-"""E8-01 · Consultar la bitácora de auditoría (#412).
+"""E8-01 · Consultar la bitácora de auditoría (#412) · E8-02 · Verificar su integridad (#413).
 
 Lectura: ADMIN, SUPERVISOR y AUDITOR; exportación: ADMIN y AUDITOR con el permiso de
 exportar. El 403 queda registrado por AccesoDenegadoMiddleware (ASVS 16.3.2) y cada
 lectura exitosa como AUD_LECTURA. Los filtros van en el cuerpo, nunca en la URL.
 """
 
+from dataclasses import asdict
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Path, Query, Request, Response
@@ -12,18 +13,22 @@ from sqlalchemy import Connection
 
 from app.core import csv as csv_tool
 from app.core import pdf as pdf_tool
-from app.core.api.errors import RESPUESTAS_ERROR, ProblemDetailsRoute
+from app.core.api.errors import RESPUESTAS_ERROR, ProblemDetailsRoute, problema
 from app.core.api.middleware import ip_cliente
 from app.core.database.db import cooperativa, get_engine, seguridad
 from app.core.security import audit
 from app.core.security.auth import Usuario, require_auth, require_roles
-from app.modules.auditoria import service
+from app.core.security.operador import exigir_id_interno
+from app.modules.auditoria import integridad, service
 from app.modules.auditoria.schemas import (
     EventoDetalle,
     FiltrosBusqueda,
     FiltrosExportacion,
     PageEventos,
+    PageVerificaciones,
+    RangoVerificacion,
     TipoEvento,
+    Verificacion,
 )
 
 _LECTURA = ("ADMIN", "SUPERVISOR", "AUDITOR")
@@ -288,3 +293,77 @@ def exportar_eventos(
             ),
         )
     return pdf_tool.respuesta_pdf(contenido, "bitacora-auditoria")
+
+
+# E8-02 · Integridad de la bitácora
+MAX_DIAS_VERIFICACION = 366
+
+
+@router.post(
+    "/verificaciones",
+    operation_id="AUDVerificarIntegridad",
+    status_code=201,
+    response_model=Verificacion,
+    dependencies=_ROL_LECTURA,
+    openapi_extra=_X_LECTURA,
+)
+def verificar_integridad(rango: RangoVerificacion, usuario: Lector) -> Verificacion:
+    """Recalcula la cadena del rango: `Integra` o `Rota` con la primera secuencia rota (que además
+    deja AUD_INTEGRIDAD_ROTA). El resultado queda en Auditoria.VerificacionIntegridad."""
+    if rango.desde is None or rango.hasta is None:
+        raise problema(
+            400, "RANGO_REQUERIDO", "Indique el rango de fechas (desde y hasta)."
+        )
+    if rango.hasta < rango.desde:
+        raise problema(
+            422, "RANGO_INVALIDO", "La fecha hasta no puede ser anterior a desde."
+        )
+    if (rango.hasta - rango.desde).days + 1 > MAX_DIAS_VERIFICACION:
+        raise problema(
+            422,
+            "RANGO_EXCEDIDO",
+            f"El rango no puede superar {MAX_DIAS_VERIFICACION} días.",
+        )
+    resultado = integridad.verificar(
+        rango.desde, rango.hasta, exigir_id_interno(usuario.interno())
+    )
+    if resultado is None:
+        raise problema(
+            422,
+            "RANGO_SIN_REGISTROS",
+            "No hay registros encadenados en ese rango.",
+        )
+    return Verificacion.model_validate(asdict(resultado))
+
+
+@router.get(
+    "/verificaciones",
+    operation_id="AUDListarVerificaciones",
+    response_model=PageVerificaciones,
+    dependencies=_ROL_LECTURA,
+    openapi_extra=_X_LECTURA,
+)
+def listar_verificaciones(
+    request: Request,
+    usuario: Lector,
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(alias="pageSize", ge=1, le=100)] = 20,
+) -> PageVerificaciones:
+    """Últimas verificaciones, nocturnas (`ejecutadaPor` nulo) y manuales."""
+    items, total = integridad.listar(page, page_size)
+    audit.registrar(
+        _evento(
+            usuario,
+            request,
+            "AUD_LECTURA",
+            "verificaciones",
+            {"page": page},
+            None,
+        )
+    )
+    return PageVerificaciones(
+        items=[Verificacion.model_validate(asdict(v)) for v in items],
+        total=total,
+        page=page,
+        page_size=page_size,
+    )

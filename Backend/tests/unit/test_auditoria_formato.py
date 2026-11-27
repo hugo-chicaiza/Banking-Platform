@@ -151,11 +151,8 @@ def test_el_escritor_llena_el_formato_nuevo():
         )
     finally:
         trace_id_actual.reset(token)
-    assert (
-        "IdEvento" in conn.sql
-        and "SYSUTCDATETIME()" in conn.sql
-        and "NEWID()" in conn.sql
-    )
+    # E8-02: el procedimiento encadenado pone IdEvento, la hora UTC, la secuencia y el hash
+    assert "EXEC Auditoria.usp_RegistrarEvento" in conn.sql
     p = conn.params
     assert (
         p["correlacion"] == "traza-123"
