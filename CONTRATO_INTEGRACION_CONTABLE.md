@@ -63,7 +63,11 @@ with engine.begin() as conn:
     # Guardar vínculo y confirmar cambios de saldo e inventario en este commit.
 ```
 
-Para A04, el mapa contiene CAPITAL del origen como PRODUCTO y CAPITAL del destino como CONTRAPRODUCTO. El productor conserva ambos IDs de cuenta cliente y bloquea en orden consistente. Para C02, resuelve CARTERA con situación, condición y tramo, y CAPITAL de destino con el subproducto de la cuenta de abono. La familia C02 sigue sin alta en Azure Dev. El ejemplo de bruto, neto e impuesto es una regla candidata cuya distribución por bandas sigue pendiente.
+Para A04, el mapa contiene CAPITAL del origen como PRODUCTO y CAPITAL del destino como CONTRAPRODUCTO. El productor conserva ambos IDs de cuenta cliente y bloquea en orden consistente. Para C02, resuelve CARTERA con situación, condición y tramo, y CAPITAL de destino con el subproducto de la cuenta de abono. La familia C02 v1, ID 36, está aprobada y seleccionable en Azure Dev desde el 30/11/2026 para una sola banda. En esta versión, PRINCIPAL es el neto e IMPUESTO es SOLCA. El productor debe validar bruto = neto + SOLCA y rechazar antes del motor cualquier reparto con más de una banda positiva. El motor recibe una cuenta por rol y no detecta un reparto multibanda que el consumidor haya reducido a una sola cuenta. El productor real y el contrato multibanda siguen pendientes.
+
+### Faltante de custodia ATM
+
+`ATM_CUADRE` aprobado con un faltante efectivo positivo usa la familia `ATM_FALTANTE`, componente `DIFERENCIA`. En Azure Dev la configuración está completa: la v1, ID 37, aprobada y seleccionable desde el 30/11/2026, debita `19902515` y acredita `11010515`. El productor de ATM debe persistir la terminal, agencia y cuadre, usar una clave de evento estable por cuadre y confirmar ajuste y asiento en la misma transacción. El productor sigue pendiente. [Configuración y evidencia](Backend/docs/E4-01-atm-faltante.md)
 
 ### Reversiones y compensaciones
 
