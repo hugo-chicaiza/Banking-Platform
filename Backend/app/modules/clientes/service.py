@@ -27,6 +27,7 @@ from app.modules.clientes.schemas import (
     ClienteHistorial,
     ClientePerfil,
     ClienteUpdate,
+    ConsultaDocumentoBody,
     ContenidoEdicion,
     ContenidoRiesgo,
     CreditoPerfil,
@@ -276,14 +277,6 @@ def validar_cambios_sensibles(
                 422,
                 "DOCUMENTO_INVALIDO",
                 f"El documento de identificación no cumple el formato requerido: {motivo}",
-            )
-        if repository.otro_cliente_con_identificacion(
-            conn, finales["identificacion"], actual["id_cliente"]
-        ):
-            raise problema(
-                409,
-                "CLIENTE_DUPLICADO",
-                "Ya existe un cliente registrado con esa identificación.",
             )
 
 
@@ -536,7 +529,9 @@ SolicitarEstado = Callable[[dict[str, Any]], SolicitudAceptada]
 SolicitarReincorporacion = Callable[[int, dict[str, Any]], SolicitudAceptada]
 
 
-def _validar_datos_alta(payload: ClienteCreate) -> str:
+def _validar_datos_alta(
+    payload: ClienteCreate, *, validar_documento: bool = True
+) -> str:
     """Validaciones comunes del alta y la reincorporación; devuelve el documento."""
     # 1. Consentimiento de datos debe ser True
     if not payload.consentimiento_datos:
@@ -556,6 +551,8 @@ def _validar_datos_alta(payload: ClienteCreate) -> str:
 
     # 3. Validación de formato de documento
     doc = payload.identificacion.strip()
+    if not validar_documento:
+        return doc
     valido_formato, motivo_doc = validar_formato_documento(payload.tipo_documento, doc)
     if not valido_formato:
         raise _problema(
@@ -648,10 +645,28 @@ def solicitar_reincorporacion(
         HTTPException 422 TIPO_PERSONA_INVALIDO
         HTTPException 422 CATALOGO_INVALIDO
     """
-    doc = _validar_datos_alta(payload)
+    from app.modules.clientes import documentos_identidad
 
-    # 4. Buscar cliente existente
-    existente = repository.obtener_cliente_por_identificacion(conn, doc)
+    doc = _validar_datos_alta(payload)
+    if payload.tipo_documento == "P":
+        consulta = documentos_identidad.consultar(
+            conn,
+            ConsultaDocumentoBody(
+                tipo_documento="PAS",
+                numero=doc,
+                codigo_pais_emision=payload.codigo_pais_emision,
+            ),
+            hoy(),
+        )
+        existente = (
+            repository.obtener_cliente_tipos(conn, consulta.id_cliente)
+            if consulta.id_cliente
+            else None
+        )
+        if existente is not None:
+            existente["id_cliente"] = consulta.id_cliente
+    else:
+        existente = repository.obtener_cliente_por_identificacion(conn, doc)
     if existente is None:
         raise _problema(
             404,
@@ -851,6 +866,9 @@ def obtener_perfil_cliente(conn: Connection, id_cliente: int) -> ClientePerfil:
 # ---------------------------------------------------------------------------
 
 
+ERROR_DIGITO_CEDULA = "Dígito verificador de la cédula no coincide."
+
+
 def validar_cedula_ecuatoriana(cedula: str) -> tuple[bool, str]:
     """Valida una cédula ecuatoriana con el algoritmo Módulo 10"""
 
@@ -882,7 +900,7 @@ def validar_cedula_ecuatoriana(cedula: str) -> tuple[bool, str]:
     digito_verificador_real = int(cedula[9])
 
     if digito_verificador_calculado != digito_verificador_real:
-        return False, "Dígito verificador de la cédula no coincide."
+        return False, ERROR_DIGITO_CEDULA
 
     return True, "Cédula válida."
 
@@ -997,22 +1015,18 @@ def registrar_cliente(
         HTTPException 422 TIPO_PERSONA_INVALIDO
         HTTPException 422 CATALOGO_INVALIDO
     """
-    doc = _validar_datos_alta(payload)
+    from app.modules.clientes import documentos_identidad
 
-    # 4. Identificación única (duplicados)
-    existente = repository.obtener_cliente_por_identificacion(conn, doc)
-    if existente is not None:
-        if existente.get("estado") == "Eliminado":
-            raise _problema(
-                409,
-                "CLIENTE_ELIMINADO",
-                "La persona fue cliente y está eliminada; puede solicitar su reincorporación.",
-            )
-        raise _problema(
-            409,
-            "CLIENTE_DUPLICADO",
-            "Ya existe un cliente registrado con esa identificación.",
-        )
+    _validar_datos_alta(payload, validar_documento=False)
+    consulta = documentos_identidad.preparar_alta(conn, payload, hoy())
+    payload = payload.model_copy(
+        update={
+            "identificacion": consulta.numero,
+            "tipo_documento": documentos_identidad.ANTERIORES.get(
+                consulta.tipo_documento, consulta.tipo_documento
+            ),
+        }
+    )
 
     _validar_persona_y_catalogos(conn, payload)
 
@@ -1024,6 +1038,14 @@ def registrar_cliente(
             creado_por=creado_por,
             direccion_ip=direccion_ip,
             id_agencia=id_agencia,
+        )
+        documentos_identidad.insertar(
+            conn,
+            cliente_dict["id_cliente"],
+            consulta,
+            payload.fecha_emision,
+            payload.fecha_vencimiento,
+            principal=True,
         )
         conn.commit()
     except Exception:

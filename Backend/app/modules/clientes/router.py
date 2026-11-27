@@ -16,8 +16,16 @@ from app.core.security.auth import (
 )
 from app.modules.aprobaciones import router as aprobaciones
 from app.modules.aprobaciones.contratos import SolicitudAceptada
-from app.modules.clientes import correos, revelacion, service
+from app.modules.aprobaciones.registro import Objetivo
+from app.modules.clientes import (
+    correos,
+    documentos_identidad,
+    gestion_documentos,
+    revelacion,
+    service,
+)
 from app.modules.clientes.aprobacion import CODIGO_EDICION, objetivo
+from app.modules.clientes.aprobacion_documentos import CLI as CODIGO_DOCUMENTOS
 from app.modules.clientes.aprobacion_estado import (
     CODIGO_ESTADO,
 )
@@ -44,10 +52,14 @@ from app.modules.clientes.schemas import (
     ClienteEstadoUpdate,
     ClientePerfil,
     ClienteUpdate,
+    ConsultaDocumentoBody,
     DesafioRevelacion,
     Direccion,
     DireccionNueva,
     DireccionUpdate,
+    DocumentoCambio,
+    DocumentoNuevo,
+    DocumentoPrincipal,
     PageCliente,
     PageClienteHistorial,
     Revelacion,
@@ -212,10 +224,12 @@ def obtener_perfil_cliente(
     dependencies=_ASESOR_ADMIN,
 )
 def validar_identificacion(
-    payload: ValidacionDocumentoBody,
+    payload: ConsultaDocumentoBody | ValidacionDocumentoBody,
     conn: Db,
 ) -> Any:
     """Valida formato del documento (Módulo 10 para Cédula/RUC) y si ya existe (CLI-01 / C-02)."""
+    if isinstance(payload, ConsultaDocumentoBody):
+        return documentos_identidad.consultar(conn, payload, hoy())
     return service.validar_identificacion(
         conn, payload.tipo_documento, payload.identificacion
     )
@@ -345,6 +359,86 @@ def registrar_cliente(
         usuario,
         permitido=visibles,
     )
+
+
+@_gestion_router.get(
+    "/{idCliente}/documentos",
+    dependencies=[Depends(require_roles(*_ROLES_CONSULTA))],
+)
+def listar_documentos(
+    idCliente: int, conn: Db
+) -> list[gestion_documentos.DocumentoFicha]:
+    return gestion_documentos.listar(conn, idCliente, hoy())
+
+
+@_gestion_router.post(
+    "/{idCliente}/documentos", status_code=201, dependencies=_EDITAR_CLIENTE
+)
+def agregar_documento(
+    idCliente: int,
+    payload: DocumentoNuevo,
+    conn: Db,
+    request: Request,
+    actor: UsuarioAuditoria,
+) -> gestion_documentos.DocumentoFicha:
+    resultado = gestion_documentos.agregar(
+        conn, idCliente, payload, hoy(), actor, _ip_cliente(request)
+    )
+    conn.commit()
+    return resultado
+
+
+@_gestion_router.patch(
+    "/{idCliente}/documentos/{idDocumento}", dependencies=_EDITAR_CLIENTE
+)
+def actualizar_documento(
+    idCliente: int,
+    idDocumento: int,
+    payload: DocumentoCambio,
+    conn: Db,
+    request: Request,
+    actor: UsuarioAuditoria,
+) -> gestion_documentos.DocumentoFicha:
+    resultado = gestion_documentos.actualizar(
+        conn,
+        idCliente,
+        idDocumento,
+        payload,
+        hoy(),
+        actor,
+        _ip_cliente(request),
+    )
+    conn.commit()
+    return resultado
+
+
+@_gestion_router.put(
+    "/{idCliente}/documentos/{idDocumento}/principal",
+    status_code=202,
+    dependencies=_EDITAR_CLIENTE,
+)
+def solicitar_documento_principal(
+    idCliente: int,
+    idDocumento: int,
+    payload: DocumentoPrincipal,
+    request: Request,
+    actor: UsuarioAuditoria,
+    usuario: Annotated[Usuario, Depends(require_auth)],
+) -> SolicitudAceptada:
+    solicitud = aprobaciones.servicio().solicitar(
+        aprobaciones.actual(usuario),
+        CODIGO_DOCUMENTOS,
+        Objetivo("ClienteDocumento", str(idCliente), None),
+        {
+            "documento": idDocumento,
+            "cambio": payload.model_dump(mode="json"),
+            "actor": actor,
+            "ip": _ip_cliente(request),
+        },
+        hoy(),
+        aprobaciones.contexto(request, usuario),
+    )
+    return SolicitudAceptada(id_solicitud=solicitud)
 
 
 # ---------------------------------------------------------------------------

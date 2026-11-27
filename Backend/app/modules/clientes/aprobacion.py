@@ -10,8 +10,18 @@ from sqlalchemy import Connection
 
 from app.core.api.errors import problema
 from app.modules.aprobaciones.registro import Objetivo, Operacion, Plan
-from app.modules.clientes import repository, service
-from app.modules.clientes.schemas import CAMPOS_SENSIBLES, ContenidoEdicion
+from app.modules.clientes import (
+    documentos_identidad,
+    gestion_documentos,
+    repository,
+    service,
+)
+from app.modules.clientes.schemas import (
+    CAMPOS_SENSIBLES,
+    ConsultaDocumentoBody,
+    ContenidoEdicion,
+    DocumentoPrincipal,
+)
 from app.modules.parametros.service import hoy
 
 CODIGO_EDICION = "CLI-EDITAR"
@@ -68,6 +78,12 @@ class EdicionCliente:
                 409, "SOLICITUD_DESACTUALIZADA", "Los datos ya tienen esos valores."
             )
         service.validar_cambios_sensibles(conn, fila, cambios, hoy)
+        if {"identificacion", "tipo_documento"} & cambios.keys():
+            raise problema(
+                409,
+                "USAR_GESTION_DOCUMENTOS",
+                "Corrige la identificación desde Documentos.",
+            )
         service.verificar_respaldo(
             conn, fila["id_cliente"], cambios, datos.id_archivo_respaldo, hoy
         )
@@ -102,6 +118,84 @@ class EdicionCliente:
             )
         service.validar_cambios_sensibles(conn, fila, cambios, hoy())
         motivo = f"Cambio aprobado (solicitud {id_solicitud})"
+        if {"identificacion", "tipo_documento"} & cambios.keys():
+            finales = fila | cambios
+            consulta = ConsultaDocumentoBody(
+                tipo_documento=documentos_identidad.CODIGOS.get(
+                    finales["tipo_documento"], finales["tipo_documento"]
+                ),
+                numero=finales["identificacion"].upper(),
+            )
+            if consulta.tipo_documento == "PAS":
+                raise problema(
+                    409,
+                    "SOLICITUD_DESACTUALIZADA",
+                    "Registra el pasaporte con emisor y vencimiento desde Documentos.",
+                )
+            regla = documentos_identidad.validar(conn, consulta)
+            if (
+                not regla["Activo"]
+                or not regla["PermitePrincipal"]
+                or regla["RequiereVencimiento"]
+            ):
+                raise problema(
+                    409,
+                    "SOLICITUD_DESACTUALIZADA",
+                    "Revisa las reglas actuales del documento.",
+                )
+            documentos_identidad.bloquear_identidad(conn, consulta)
+            candidato = documentos_identidad.buscar(
+                conn,
+                consulta,
+                hoy(),
+                requiere_vencimiento=regla["RequiereVencimiento"],
+            )
+            if candidato.existe and candidato.id_cliente != fila["id_cliente"]:
+                raise problema(
+                    409, "DOCUMENTO_DUPLICADO", "El documento requiere revisión."
+                )
+            disponible = next(
+                (
+                    item
+                    for item in gestion_documentos._documentos(conn, fila["id_cliente"])
+                    if item["tipo_documento"] == consulta.tipo_documento
+                    and item["numero"] == consulta.numero
+                ),
+                None,
+            )
+            id_documento = (
+                disponible["id_documento"]
+                if disponible
+                else documentos_identidad.insertar(
+                    conn,
+                    fila["id_cliente"],
+                    consulta,
+                    None,
+                    None,
+                    principal=False,
+                )
+            )
+            destino = gestion_documentos._leer(conn, fila["id_cliente"], id_documento)
+            gestion_documentos.aplicar_principal(
+                conn,
+                fila["id_cliente"],
+                id_documento,
+                DocumentoPrincipal(
+                    version=destino["version"], motivo=motivo, anular_anterior=True
+                ),
+                hoy(),
+                datos.modificado_por,
+                datos.direccion_ip,
+                id_solicitud,
+            )
+            cambios = {
+                k: v
+                for k, v in cambios.items()
+                if k not in {"identificacion", "tipo_documento"}
+            }
+            if not cambios:
+                return
+
         historial = [
             (
                 repository.CAMPOS_SENSIBLES_CLIENTE[campo],
