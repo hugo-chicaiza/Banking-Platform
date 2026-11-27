@@ -34,7 +34,7 @@ def relacion_vigente(
     filas = (
         conn.execute(
             text("""
-            SELECT TOP (2) r.IdRelacion, r.IdClienteRelacionado, r.FechaFin,
+            SELECT TOP (2) r.IdRelacion, r.IdClienteRelacionado, r.FechaFin, r.IdArchivoSoporte,
                    c.FechaNacimiento
             FROM Clientes.ClienteRelacion AS r WITH (HOLDLOCK)
             JOIN Catalogo.TipoRelacionCliente AS t WITH (HOLDLOCK)

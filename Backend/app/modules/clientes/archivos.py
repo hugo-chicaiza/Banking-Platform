@@ -30,6 +30,7 @@ from app.core.documentos.clamav import AnalisisNoDisponible, analizar_clamav
 from app.core.security import audit
 from app.core.security.auth import Usuario, require_permiso
 from app.modules.clientes import repository
+from app.modules.clientes.habilitacion import activar_si_cumple
 from app.modules.parametros import general
 from app.modules.parametros.service import hoy
 
@@ -443,6 +444,18 @@ def subir(
             },
         ).scalar_one()
         archivo = Archivo.model_validate(_archivo(conn, idCliente, id_archivo))
+        fecha_aplicacion = hoy()
+        if general.valor(conn, "CLI_EXIGE_ARCHIVOS", fecha_aplicacion) is True:
+            id_actor = usuario.interno()
+            if id_actor is None:
+                raise problema(
+                    403,
+                    "USUARIO_SIN_VINCULO_AUDITORIA",
+                    "El usuario no tiene un vínculo de auditoría.",
+                )
+            activar_si_cumple(
+                conn, idCliente, fecha_aplicacion, id_actor, ip_cliente(request.scope)
+            )
     except Exception:
         try:
             conn.rollback()

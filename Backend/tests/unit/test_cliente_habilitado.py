@@ -20,6 +20,8 @@ def _cliente(**cambios):
         "ConsentimientoDatos": True,
         "FechaConsentimiento": datetime(2026, 11, 23),
         "TipoCliente": "Natural",
+        "TipoDocumento": "C",
+        "FechaNacimiento": date(1990, 1, 1),
         "ResultadoEvaluacion": "Aprobado",
         "EsPEP": False,
         "NivelRiesgoLAFT": "Bajo",
@@ -96,7 +98,11 @@ def test_pep_exige_comprobante_de_aprobacion(monkeypatch, aplicada):
 
 @pytest.mark.parametrize("faltantes", [[], ["IDENTIDAD"]])
 def test_archivos_activos_exigen_evidencia_limpia(monkeypatch, faltantes):
-    monkeypatch.setattr(habilitacion.general, "valor", lambda *_: True)
+    monkeypatch.setattr(
+        habilitacion.general,
+        "valor",
+        lambda _conn, clave, *_args: True if clave == "CLI_EXIGE_ARCHIVOS" else 18,
+    )
     conn, catalogo, archivos = MagicMock(), MagicMock(), MagicMock()
     catalogo.scalar_one.return_value = 1
     archivos.scalars.return_value = faltantes
@@ -104,6 +110,82 @@ def test_archivos_activos_exigen_evidencia_limpia(monkeypatch, faltantes):
     resultado = habilitacion.cliente_habilitado(conn, 3, FECHA)
     assert resultado.habilitado is (not faltantes)
     assert resultado.motivos == [f"ARCHIVO_OBLIGATORIO_FALTANTE:{c}" for c in faltantes]
+
+
+@pytest.mark.parametrize("tipo", ["P", "PAS", "C"])
+@pytest.mark.parametrize("tiene_pasaporte", [False, True])
+def test_pasaporte_principal_reemplaza_las_dos_caras(
+    monkeypatch, tipo, tiene_pasaporte
+):
+    monkeypatch.setattr(
+        habilitacion.general,
+        "valor",
+        lambda _conn, clave, *_args: True if clave == "CLI_EXIGE_ARCHIVOS" else 18,
+    )
+    conn, catalogo, archivos, pasaporte = (MagicMock() for _ in range(4))
+    catalogo.scalar_one.return_value = 1
+    archivos.scalars.return_value = ["CONSENTIMIENTO"]
+    pasaporte.first.return_value = (1,) if tiene_pasaporte else None
+    conn.execute.side_effect = [
+        _cliente(TipoDocumento=tipo),
+        catalogo,
+        archivos,
+        pasaporte,
+    ]
+
+    resultado = habilitacion.cliente_habilitado(conn, 3, FECHA)
+
+    es_pasaporte = tipo in ("P", "PAS")
+    assert conn.execute.call_args_list[2].args[1]["pasaporte"] is es_pasaporte
+    assert "ARCHIVO_OBLIGATORIO_FALTANTE:CONSENTIMIENTO" in resultado.motivos
+    assert ("ARCHIVO_OBLIGATORIO_FALTANTE:PASAPORTE_DATOS" in resultado.motivos) is (
+        es_pasaporte and not tiene_pasaporte
+    )
+    assert conn.execute.call_count == (4 if es_pasaporte else 3)
+
+
+@pytest.mark.parametrize(
+    ("tutor", "limpio", "motivos"),
+    [
+        (None, False, ["TUTOR_VIGENTE_REQUERIDO"]),
+        (
+            {"IdArchivoSoporte": None},
+            False,
+            ["ARCHIVO_OBLIGATORIO_FALTANTE:RESPALDO_TUTOR"],
+        ),
+        (
+            {"IdArchivoSoporte": 9},
+            False,
+            ["ARCHIVO_OBLIGATORIO_FALTANTE:RESPALDO_TUTOR"],
+        ),
+        ({"IdArchivoSoporte": 9}, True, []),
+    ],
+)
+def test_menor_exige_respaldo_limpio_del_tutor_vigente(
+    monkeypatch, tutor, limpio, motivos
+):
+    monkeypatch.setattr(
+        habilitacion.general,
+        "valor",
+        lambda _conn, clave, *_args: True if clave == "CLI_EXIGE_ARCHIVOS" else 18,
+    )
+    relacion = MagicMock(return_value=tutor)
+    monkeypatch.setattr(habilitacion.relaciones, "relacion_vigente", relacion)
+    conn, catalogo, archivos, respaldo = (MagicMock() for _ in range(4))
+    catalogo.scalar_one.return_value = 1
+    archivos.scalars.return_value = []
+    respaldo.first.return_value = (1,) if limpio else None
+    conn.execute.side_effect = [
+        _cliente(FechaNacimiento=date(2015, 5, 1)),
+        catalogo,
+        archivos,
+        respaldo,
+    ]
+
+    assert habilitacion.cliente_habilitado(conn, 3, FECHA).motivos == motivos
+    relacion.assert_called_once_with(conn, 3, "Tutor", FECHA)
+    if tutor and tutor["IdArchivoSoporte"]:
+        assert conn.execute.call_args.args[1] == {"cliente": 3, "archivo": 9}
 
 
 def test_archivos_activos_sin_catalogo_fallan_cerrado(monkeypatch):

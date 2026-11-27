@@ -6,6 +6,7 @@ from sqlalchemy import Connection, text
 
 from app.core.api.errors import problema
 from app.core.api.schemas import CamelModel
+from app.modules.clientes import relaciones
 from app.modules.parametros import general
 
 
@@ -29,6 +30,7 @@ def requisitos_cliente(
         conn.execute(
             text("""
             SELECT c.Estado,c.ConsentimientoDatos,c.FechaConsentimiento,c.TipoCliente,
+                   c.TipoDocumento,c.FechaNacimiento,
                    r.IdEvaluacion,r.ResultadoEvaluacion,r.EsPEP,r.NivelRiesgoLAFT,r.IdSolicitud,
                    r.AntecedenteImpeditivo
             FROM Clientes.Cliente AS c WITH (HOLDLOCK)
@@ -88,6 +90,10 @@ def requisitos_cliente(
             503, "PARAMETRO_INVALIDO", "No se pudo verificar la regla de archivos."
         )
     if exige_archivos:
+        es_pasaporte = fila["TipoCliente"] == "Natural" and fila["TipoDocumento"] in (
+            "P",
+            "PAS",
+        )
         catalogo_evidencia = conn.execute(
             text("""
                 SELECT CASE WHEN OBJECT_ID('Catalogo.ClaseDocumentoCliente','U') IS NOT NULL
@@ -106,7 +112,8 @@ def requisitos_cliente(
                 SELECT clase.Codigo
                 FROM Catalogo.ClaseDocumentoCliente AS clase WITH (HOLDLOCK)
                 WHERE clase.Estado='A'
-                  AND ((:tipo='Natural' AND clase.ObligatorioNatural=1)
+                  AND ((:tipo='Natural' AND clase.ObligatorioNatural=1
+                        AND (:pasaporte=0 OR clase.Codigo NOT IN ('IDENTIDAD_ANVERSO','IDENTIDAD_REVERSO')))
                     OR (:tipo='Juridico' AND clase.ObligatorioJuridico=1))
                   AND NOT EXISTS (
                     SELECT 1 FROM Clientes.ClienteArchivo AS archivo WITH (HOLDLOCK)
@@ -114,12 +121,58 @@ def requisitos_cliente(
                       AND archivo.Reemplazado=0 AND archivo.EstadoAnalisis='Limpio')
                 ORDER BY clase.Codigo
             """),
-            {"tipo": fila["TipoCliente"], "id": id_cliente},
+            {"tipo": fila["TipoCliente"], "id": id_cliente, "pasaporte": es_pasaporte},
         ).scalars()
         motivos.extend(f"ARCHIVO_OBLIGATORIO_FALTANTE:{codigo}" for codigo in faltantes)
+        if es_pasaporte and not _pasaporte_digital(conn, id_cliente):
+            motivos.append("ARCHIVO_OBLIGATORIO_FALTANTE:PASAPORTE_DATOS")
+        nacimiento = fila["FechaNacimiento"]
+        if fila["TipoCliente"] == "Natural" and nacimiento is None:
+            motivos.append("FECHA_NACIMIENTO_PENDIENTE")
+        elif fila["TipoCliente"] == "Natural" and relaciones.edad_en(
+            nacimiento, fecha
+        ) < relaciones.edad_mayoria(conn, fecha):
+            tutor = relaciones.relacion_vigente(conn, id_cliente, "Tutor", fecha)
+            if tutor is None:
+                motivos.append("TUTOR_VIGENTE_REQUERIDO")
+            elif not respaldo_limpio(conn, id_cliente, tutor["IdArchivoSoporte"]):
+                motivos.append("ARCHIVO_OBLIGATORIO_FALTANTE:RESPALDO_TUTOR")
     else:
         motivos.append("ARCHIVOS_NO_EXIGIDOS")
     return motivos
+
+
+def _pasaporte_digital(conn: Connection, cliente: int) -> bool:
+    return (
+        conn.execute(
+            text("""
+            SELECT TOP (1) 1
+            FROM Clientes.ClienteArchivo AS a WITH (HOLDLOCK)
+            JOIN Catalogo.ClaseDocumentoCliente AS c WITH (HOLDLOCK)
+              ON c.Codigo=a.ClaseDocumento AND c.Estado='A'
+            WHERE a.IdCliente=:cliente AND a.ClaseDocumento='PASAPORTE_DATOS'
+              AND a.Reemplazado=0 AND a.EstadoAnalisis='Limpio'
+        """),
+            {"cliente": cliente},
+        ).first()
+        is not None
+    )
+
+
+def respaldo_limpio(conn: Connection, cliente: int, archivo: int | None) -> bool:
+    """Valida la versión exacta de una evidencia vinculada a un acto."""
+    if archivo is None:
+        return False
+    return (
+        conn.execute(
+            text("""
+            SELECT 1 FROM Clientes.ClienteArchivo WITH (HOLDLOCK)
+            WHERE IdCliente=:cliente AND IdArchivo=:archivo AND EstadoAnalisis='Limpio'
+        """),
+            {"cliente": cliente, "archivo": archivo},
+        ).first()
+        is not None
+    )
 
 
 def cliente_habilitado(
