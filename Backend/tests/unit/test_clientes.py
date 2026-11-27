@@ -286,8 +286,37 @@ def _patch_repo_catalogos_ok(monkeypatch):
     )
 
 
+def _mock_documentos_alta(monkeypatch):
+    from app.modules.clientes import documentos_identidad
+
+    def validar(conn, consulta):
+        anterior = documentos_identidad.ANTERIORES[consulta.tipo_documento]
+        ok, motivo = service.validar_formato_documento(anterior, consulta.numero)
+        if not ok:
+            raise service.problema(422, "DOCUMENTO_INVALIDO", motivo)
+        return {
+            "Activo": True,
+            "PermitePrincipal": True,
+            "AplicaNatural": True,
+            "AplicaJuridico": True,
+            "RequiereVencimiento": False,
+        }
+
+    monkeypatch.setattr(documentos_identidad, "validar", validar)
+    monkeypatch.setattr(documentos_identidad, "bloquear_identidad", lambda *_: None)
+    monkeypatch.setattr(
+        documentos_identidad,
+        "buscar",
+        lambda *_, **__: service.ValidacionIdentificacion(
+            valida=True, existe=False, mensaje="Disponible"
+        ),
+    )
+    monkeypatch.setattr(documentos_identidad, "insertar", lambda *_, **__: 1)
+
+
 def test_registrar_cliente_natural_exitoso(monkeypatch):
     conn = _fake_conn()
+    _mock_documentos_alta(monkeypatch)
     payload = _payload_natural_valido()
 
     _patch_repo_catalogos_ok(monkeypatch)
@@ -348,6 +377,7 @@ def test_registrar_cliente_natural_exitoso(monkeypatch):
 
 def test_registrar_cliente_juridico_exitoso(monkeypatch):
     conn = _fake_conn()
+    _mock_documentos_alta(monkeypatch)
     payload = _payload_natural_valido()
     payload.tipo_cliente = "Juridico"
     payload.identificacion = RUC_VALIDO
@@ -400,6 +430,7 @@ def test_registrar_cliente_juridico_exitoso(monkeypatch):
 
 def test_registrar_cliente_validaciones_negocio_422(monkeypatch):
     conn = _fake_conn()
+    _mock_documentos_alta(monkeypatch)
     _patch_repo_catalogos_ok(monkeypatch)
     monkeypatch.setattr(
         repository, "obtener_cliente_por_identificacion", lambda c, doc: None
@@ -447,20 +478,26 @@ def test_registrar_cliente_validaciones_negocio_422(monkeypatch):
 
 def test_registrar_cliente_duplicado_409(monkeypatch):
     conn = _fake_conn()
+    _mock_documentos_alta(monkeypatch)
+    from app.modules.clientes import documentos_identidad
+
     monkeypatch.setattr(
-        repository,
-        "obtener_cliente_por_identificacion",
-        lambda c, doc: {"id_cliente": 99},
+        documentos_identidad,
+        "buscar",
+        lambda *_, **__: service.ValidacionIdentificacion(
+            valida=True, existe=True, id_cliente=99, mensaje="Encontrado"
+        ),
     )
 
     with pytest.raises(service.HTTPException) as exc:
         service.registrar_cliente(conn, _payload_natural_valido(), 1, "127.0.0.1")
 
-    _assert_http_error(exc, 409, "CLIENTE_DUPLICADO")
+    _assert_http_error(exc, 409, "DOCUMENTO_DUPLICADO")
 
 
 def test_registrar_cliente_catalogos_invalidos_422(monkeypatch):
     conn = _fake_conn()
+    _mock_documentos_alta(monkeypatch)
     _patch_repo_catalogos_ok(monkeypatch)
     monkeypatch.setattr(
         repository, "obtener_cliente_por_identificacion", lambda c, doc: None

@@ -144,6 +144,7 @@ ROLES_POR_RUTA: dict[tuple[str, str], tuple[str, ...]] = {
             "actividades-economicas",
             "tipos-antecedente",
             "tipos-direccion",
+            "tipos-documento",
             "denominaciones",
             "agencias",
             "productos",
@@ -218,6 +219,31 @@ ROLES_POR_RUTA: dict[tuple[str, str], tuple[str, ...]] = {
     ("GET", "/api/v1/clientes/{idCliente}/archivos/{idArchivo}/contenido"): (
         "ASESOR",
         "SUPERVISOR",
+        "ADMIN",
+    ),
+    ("GET", "/api/v1/clientes/{idCliente}/documentos"): (
+        "ASESOR",
+        "CAJERO",
+        "SUPERVISOR",
+        "ADMIN",
+    ),
+    ("POST", "/api/v1/clientes/{idCliente}/documentos"): ("ASESOR", "ADMIN"),
+    ("PATCH", "/api/v1/clientes/{idCliente}/documentos/{idDocumento}"): (
+        "ASESOR",
+        "ADMIN",
+    ),
+    ("PUT", "/api/v1/clientes/{idCliente}/documentos/{idDocumento}/principal"): (
+        "ASESOR",
+        "ADMIN",
+    ),
+    ("GET", "/api/v1/clientes/{idCliente}/relaciones/firmantes"): (
+        "ASESOR",
+        "SUPERVISOR",
+        "ADMIN",
+    ),
+    ("POST", "/api/v1/clientes/{idCliente}/relaciones/firmantes"): ("ASESOR", "ADMIN"),
+    ("POST", "/api/v1/clientes/{idCliente}/relaciones/firmantes/{idRelacion}/fin"): (
+        "ASESOR",
         "ADMIN",
     ),
     ("GET", "/api/v1/clientes/{idCliente}/direcciones"): ("ASESOR", "ADMIN"),
@@ -341,6 +367,7 @@ ROLES_POR_RUTA: dict[tuple[str, str], tuple[str, ...]] = {
     ("POST", "/api/v1/tarjetas"): ("ASESOR", "ADMIN"),
     ("GET", "/api/v1/tarjetas"): ("ASESOR", "SUPERVISOR", "ADMIN"),
     ("GET", "/api/v1/tarjetas/{idTarjeta}"): ("ASESOR", "SUPERVISOR", "ADMIN"),
+    ("GET", "/api/v1/tarjetas/por-renovar"): ("ASESOR", "SUPERVISOR", "ADMIN"),
     ("POST", "/api/v1/tarjetas/{idTarjeta}/estado"): ("ASESOR", "SUPERVISOR", "ADMIN"),
     ("POST", "/api/v1/tarjetas/{idTarjeta}/pin"): ("ASESOR", "ADMIN"),
     ("PATCH", "/api/v1/tarjetas/{idTarjeta}/envio"): ("ASESOR", "SUPERVISOR", "ADMIN"),
@@ -536,6 +563,8 @@ ROLES_POR_RUTA: dict[tuple[str, str], tuple[str, ...]] = {
         "ADMIN",
     ),
     ("POST", "/api/v1/catalogos/tasas-interes"): ("ADMIN",),
+    ("POST", "/api/v1/catalogos/tipos-documento"): ("ADMIN",),
+    ("PATCH", "/api/v1/catalogos/tipos-documento/{codigo}"): ("ADMIN",),
     ("GET", "/api/v1/catalogos/administracion"): ("ADMIN", "SUPERVISOR", "ASESOR"),
     ("GET", "/api/v1/catalogos/administracion/{clave}"): (
         "ADMIN",
@@ -552,6 +581,31 @@ ROLES_POR_RUTA: dict[tuple[str, str], tuple[str, ...]] = {
 # Cobertura de las rutas aditivas y de los contratos incorporados desde develop.
 ROLES_POR_RUTA.update(
     {
+        # E8-01: bitácora de auditoría
+        ("POST", "/api/v1/auditoria/eventos/busqueda"): (
+            "ADMIN",
+            "SUPERVISOR",
+            "AUDITOR",
+        ),
+        ("GET", "/api/v1/auditoria/eventos/{idEvento}"): (
+            "ADMIN",
+            "SUPERVISOR",
+            "AUDITOR",
+        ),
+        ("GET", "/api/v1/auditoria/tipos-evento"): ("ADMIN", "SUPERVISOR", "AUDITOR"),
+        ("GET", "/api/v1/auditoria/objetivos/{tipo}/{id}/eventos"): (
+            "ADMIN",
+            "SUPERVISOR",
+            "AUDITOR",
+        ),
+        ("POST", "/api/v1/auditoria/eventos/exportacion"): ("ADMIN", "AUDITOR"),
+        # E8-02: integridad de la bitácora
+        ("POST", "/api/v1/auditoria/verificaciones"): (
+            "ADMIN",
+            "SUPERVISOR",
+            "AUDITOR",
+        ),
+        ("GET", "/api/v1/auditoria/verificaciones"): ("ADMIN", "SUPERVISOR", "AUDITOR"),
         # Seguridad: permisos de roles (WorkOS) y pestañas por rol
         ("GET", "/api/v1/seguridad/permisos"): ("ADMIN",),
         ("PATCH", "/api/v1/seguridad/permisos/{slug}"): ("ADMIN",),
@@ -810,6 +864,8 @@ def test_roles_de_la_tarea_pasan_el_control(client, ruta, monkeypatch):
         ("POST", "/api/v1/caja/depositos/{idTransaccion}/series"),
         ("POST", "/api/v1/caja/jornadas/{idJornada}/retiros"),
         ("POST", "/api/v1/transacciones/{idTransaccion}/reverso"),
+        ("POST", "/api/v1/clientes/{idCliente}/relaciones/firmantes"),
+        ("POST", "/api/v1/clientes/{idCliente}/relaciones/firmantes/{idRelacion}/fin"),
     }
 
     if ruta in rutas_con_vinculacion and r.status_code == 403:

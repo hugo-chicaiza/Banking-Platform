@@ -1,0 +1,25 @@
+[
+  {
+    "idTipoAsiento": 17,
+    "borrador": {
+      "codigoPlantilla": "ATM_FALTANTE",
+      "idConceptoContable": 9,
+      "vigenciaDesde": "2026-11-30",
+      "nombre": "Faltante aprobado de ATM",
+      "lineas": [
+        {
+          "lado": "DEBITO",
+          "base": "DIFERENCIA",
+          "origen": "FIJA",
+          "cuenta": 1224
+        },
+        {
+          "lado": "CREDITO",
+          "base": "DIFERENCIA",
+          "origen": "FIJA",
+          "cuenta": 1198
+        }
+      ]
+    }
+  }
+]

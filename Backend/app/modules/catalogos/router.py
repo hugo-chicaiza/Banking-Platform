@@ -12,6 +12,9 @@ from app.core.api.errors import (
 from app.core.api.middleware import ip_cliente
 from app.core.database.db import cooperativa
 from app.core.security.auth import Usuario, require_auth, require_roles
+from app.modules.aprobaciones import router as aprobaciones
+from app.modules.aprobaciones.contratos import SolicitudAceptada
+from app.modules.aprobaciones.registro import Objetivo
 from app.modules.catalogos import (
     administracion,
     confirmacion,
@@ -40,7 +43,15 @@ from app.modules.catalogos.schemas import (
     TipoTasa,
 )
 from app.modules.catalogos.subproductos import TipoTarjeta
+from app.modules.clientes.aprobacion_documentos import CAT as CODIGO_CATALOGO_DOCUMENTOS
+from app.modules.clientes.documentos_identidad import listar_tipos
 from app.modules.clientes.relaciones import relacion_vigente
+from app.modules.clientes.schemas import (
+    TipoDocumentoEscritura,
+    TipoDocumentoIdentidad,
+    TipoDocumentoNuevo,
+)
+from app.modules.parametros.service import hoy
 
 # Catálogos de lectura para cualquier usuario autenticado. Solo las tasas de interés se
 # crean aquí (ADMIN); sus reglas están en service.py
@@ -57,6 +68,51 @@ Db = Annotated[Connection, Depends(cooperativa)]
 @router.get("/paises", response_model=list[Pais])
 def listar_paises(conn: Db) -> Any:
     return repository.listar_paises(conn)
+
+
+@router.get("/tipos-documento", response_model=list[TipoDocumentoIdentidad])
+def listar_tipos_documento(conn: Db) -> list[TipoDocumentoIdentidad]:
+    return listar_tipos(conn)
+
+
+def _solicitar_tipo_documento(
+    codigo: str,
+    payload: TipoDocumentoEscritura,
+    request: Request,
+    usuario: Usuario,
+) -> SolicitudAceptada:
+    id_solicitud = aprobaciones.servicio().solicitar(
+        aprobaciones.actual(usuario),
+        CODIGO_CATALOGO_DOCUMENTOS,
+        Objetivo("TipoDocumentoIdentidad", codigo, None),
+        payload.model_dump(mode="json", exclude={"codigo"}),
+        hoy(),
+        aprobaciones.contexto(request, usuario),
+    )
+    return SolicitudAceptada(id_solicitud=id_solicitud)
+
+
+@router.post("/tipos-documento", status_code=202)
+def crear_tipo_documento(
+    payload: TipoDocumentoNuevo,
+    request: Request,
+    usuario: Annotated[Usuario, Depends(require_roles("ADMIN"))],
+) -> SolicitudAceptada:
+    if payload.version is not None:
+        raise problema(422, "REGLAS_INVALIDAS", "Un tipo nuevo no tiene versión.")
+    return _solicitar_tipo_documento(payload.codigo, payload, request, usuario)
+
+
+@router.patch("/tipos-documento/{codigo}", status_code=202)
+def editar_tipo_documento(
+    codigo: str,
+    payload: TipoDocumentoEscritura,
+    request: Request,
+    usuario: Annotated[Usuario, Depends(require_roles("ADMIN"))],
+) -> SolicitudAceptada:
+    if payload.version is None:
+        raise problema(422, "REGLAS_INVALIDAS", "Indica la versión del tipo actual.")
+    return _solicitar_tipo_documento(codigo, payload, request, usuario)
 
 
 @router.get("/denominaciones", response_model=list[Denominacion])

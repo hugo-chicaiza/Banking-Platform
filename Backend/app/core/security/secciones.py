@@ -48,6 +48,9 @@ RUTAS_POR_SECCION: dict[str, tuple[tuple[str, str], ...]] = {
     ),
     "clientes.consultar": (
         ("POST", "/api/v1/clientes/busqueda"),
+        ("GET", "/api/v1/clientes/{idCliente}/relaciones/firmantes"),
+        ("POST", "/api/v1/clientes/{idCliente}/relaciones/firmantes"),
+        ("POST", "/api/v1/clientes/{idCliente}/relaciones/firmantes/{idRelacion}/fin"),
         ("POST", "/api/v1/clientes/busqueda/exportacion"),
         ("GET", "/api/v1/clientes/{idCliente}"),
         ("POST", "/api/v1/clientes/{idCliente}/revelacion/desafio"),
@@ -60,6 +63,10 @@ RUTAS_POR_SECCION: dict[str, tuple[tuple[str, str], ...]] = {
         ("GET", "/api/v1/clientes/{idCliente}/archivos/clases"),
         ("POST", "/api/v1/clientes/{idCliente}/archivos"),
         ("GET", "/api/v1/clientes/{idCliente}/archivos/{idArchivo}/contenido"),
+        ("GET", "/api/v1/clientes/{idCliente}/documentos"),
+        ("POST", "/api/v1/clientes/{idCliente}/documentos"),
+        ("PATCH", "/api/v1/clientes/{idCliente}/documentos/{idDocumento}"),
+        ("PUT", "/api/v1/clientes/{idCliente}/documentos/{idDocumento}/principal"),
         ("GET", "/api/v1/clientes/{idCliente}/direcciones"),
         ("POST", "/api/v1/clientes/{idCliente}/direcciones"),
         ("PATCH", "/api/v1/clientes/{idCliente}/direcciones/{idDireccion}"),
@@ -101,6 +108,7 @@ RUTAS_POR_SECCION: dict[str, tuple[tuple[str, str], ...]] = {
     "tarjetas.emitir": (("POST", "/api/v1/tarjetas"),),
     "tarjetas.consultar": (
         ("GET", "/api/v1/tarjetas"),
+        ("GET", "/api/v1/tarjetas/por-renovar"),
         ("GET", "/api/v1/tarjetas/{idTarjeta}"),
         ("POST", "/api/v1/tarjetas/{idTarjeta}/estado"),
         ("PATCH", "/api/v1/tarjetas/{idTarjeta}/envio"),
@@ -175,6 +183,8 @@ RUTAS_POR_SECCION: dict[str, tuple[tuple[str, str], ...]] = {
         ("PUT", "/api/v1/productos/subproductos/{id_sub_producto}/restricciones"),
     ),
     "catalogos.consultar": (
+        ("POST", "/api/v1/catalogos/tipos-documento"),
+        ("PATCH", "/api/v1/catalogos/tipos-documento/{codigo}"),
         ("GET", "/api/v1/catalogos/administracion"),
         ("GET", "/api/v1/catalogos/administracion/{clave}"),
         ("POST", "/api/v1/catalogos/administracion/{clave}"),
@@ -238,6 +248,7 @@ COMPARTIDAS = tuple(
         "actividades-economicas",
         "tipos-antecedente",
         "tipos-direccion",
+        "tipos-documento",
         "productos",
     )
 )

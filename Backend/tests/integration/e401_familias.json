@@ -1,0 +1,298 @@
+[
+  {
+    "familia": "APORTE_CERTIFICADO",
+    "tipo": "APORTE_CERTIFICADO",
+    "concepto": "APORTE_CERTIFICADO",
+    "lineas": [
+      ["DEBITO","PRINCIPAL","FIJA",null,"11010510"],
+      ["CREDITO","PRINCIPAL","PRODUCTO","CAPITAL","3103"]
+    ]
+  },
+  {
+    "familia": "APORTE_REDENCION_AHORRO",
+    "tipo": "APORTE_REDENCION",
+    "concepto": "APORTE_REDENCION",
+    "lineas": [
+      ["DEBITO","PRINCIPAL","PRODUCTO","CAPITAL","3103"],
+      ["CREDITO","PRINCIPAL","CONTRAPRODUCTO","CAPITAL","21013505"]
+    ]
+  },
+  {
+    "familia": "APORTE_REDENCION_CAJA",
+    "tipo": "APORTE_REDENCION",
+    "concepto": "APORTE_REDENCION",
+    "lineas": [
+      ["DEBITO","PRINCIPAL","PRODUCTO","CAPITAL","3103"],
+      ["CREDITO","PRINCIPAL","FIJA",null,"11010510"]
+    ]
+  },
+  {
+    "familia": "ATM_SOBRANTE",
+    "tipo": "ATM_SOBRANTE",
+    "concepto": "AJUSTE_SOBRANTE",
+    "lineas": [
+      ["DEBITO","DIFERENCIA","FIJA",null,"11010515"],
+      ["CREDITO","DIFERENCIA","FIJA",null,"299005"]
+    ]
+  },
+  {
+    "familia": "BOV_001_AJUSTEFALTANTE_E",
+    "tipo": "BOVEDA_FALTANTE",
+    "concepto": "AJUSTE_FALTANTE",
+    "lineas": [
+      ["DEBITO","DIFERENCIA","FIJA",null,"19902505"],
+      ["CREDITO","DIFERENCIA","FIJA",null,"11010505"]
+    ]
+  },
+  {
+    "familia": "BOV_001_AJUSTESOBRANTE_I",
+    "tipo": "BOVEDA_SOBRANTE",
+    "concepto": "AJUSTE_SOBRANTE",
+    "lineas": [
+      ["DEBITO","DIFERENCIA","FIJA",null,"11010505"],
+      ["CREDITO","DIFERENCIA","FIJA",null,"299005"]
+    ]
+  },
+  {
+    "familia": "BOV_002_AJUSTEFALTANTE_E",
+    "tipo": "BOVEDA_FALTANTE",
+    "concepto": "AJUSTE_FALTANTE",
+    "lineas": [
+      ["DEBITO","DIFERENCIA","FIJA",null,"19902505"],
+      ["CREDITO","DIFERENCIA","FIJA",null,"11010505"]
+    ]
+  },
+  {
+    "familia": "BOV_002_AJUSTESOBRANTE_I",
+    "tipo": "BOVEDA_SOBRANTE",
+    "concepto": "AJUSTE_SOBRANTE",
+    "lineas": [
+      ["DEBITO","DIFERENCIA","FIJA",null,"11010505"],
+      ["CREDITO","DIFERENCIA","FIJA",null,"299005"]
+    ]
+  },
+  {
+    "familia": "CAJA_DEPOSITO",
+    "tipo": "CAJA_DEPOSITO",
+    "concepto": "DEP_EFECTIVO",
+    "lineas": [
+      ["DEBITO","PRINCIPAL","FIJA",null,"11010510"],
+      ["CREDITO","PRINCIPAL","PRODUCTO","CAPITAL","21013505"],
+      ["DEBITO","COMISION","PRODUCTO","CAPITAL","21013505"],
+      ["CREDITO","COMISION","COMISION",null,"5290"]
+    ]
+  },
+  {
+    "familia": "CAJA_FALTANTE",
+    "tipo": "CAJA_FALTANTE",
+    "concepto": "AJUSTE_FALTANTE",
+    "lineas": [
+      ["DEBITO","DIFERENCIA","FIJA",null,"19902505"],
+      ["CREDITO","DIFERENCIA","FIJA",null,"11010510"]
+    ]
+  },
+  {
+    "familia": "CAJA_SOBRANTE",
+    "tipo": "CAJA_SOBRANTE",
+    "concepto": "AJUSTE_SOBRANTE",
+    "lineas": [
+      ["DEBITO","DIFERENCIA","FIJA",null,"11010510"],
+      ["CREDITO","DIFERENCIA","FIJA",null,"299005"]
+    ]
+  },
+  {
+    "familia": "CON_DEPOSITOS_NO_CUBIERTOS_ALTA",
+    "tipo": "CON_DEPOSITOS_NO_CUBIERTOS",
+    "concepto": "CON_DEPOSITOS_NO_CUBIERTOS",
+    "lineas": [
+      ["DEBITO","DIFERENCIA","PRODUCTO","CONTRA_DEPOSITO_NO_CUBIERTO","7304"],
+      ["CREDITO","DIFERENCIA","PRODUCTO","DEPOSITO_NO_CUBIERTO","740405"]
+    ]
+  },
+  {
+    "familia": "CON_DEPOSITOS_NO_CUBIERTOS_BAJA",
+    "tipo": "CON_DEPOSITOS_NO_CUBIERTOS",
+    "concepto": "CON_DEPOSITOS_NO_CUBIERTOS",
+    "lineas": [
+      ["DEBITO","DIFERENCIA","PRODUCTO","DEPOSITO_NO_CUBIERTO","740405"],
+      ["CREDITO","DIFERENCIA","PRODUCTO","CONTRA_DEPOSITO_NO_CUBIERTO","7304"]
+    ]
+  },
+  {
+    "familia": "CON_PRIMA_SEGURO_DEPOSITOS",
+    "tipo": "CON_PRIMA_SEGURO_DEPOSITOS",
+    "concepto": "CON_PRIMA_SEGURO_DEPOSITOS",
+    "lineas": [
+      ["DEBITO","PRIMA_FIJA","FIJA",null,"450420"],
+      ["CREDITO","PRIMA_FIJA","FIJA",null,"25059015"],
+      ["DEBITO","PRIMA_VARIABLE","FIJA",null,"450421"],
+      ["CREDITO","PRIMA_VARIABLE","FIJA",null,"25059015"]
+    ]
+  },
+  {
+    "familia": "CREDITO_INTERES_DEVENGO",
+    "tipo": "CREDITO_INTERES_DEVENGO",
+    "concepto": "CREDITO_INTERES_DEVENGO",
+    "lineas": [
+      ["DEBITO","INTERES","PRODUCTO","INTERES_POR_COBRAR","160310"],
+      ["CREDITO","INTERES","PRODUCTO","INTERES_GANADO","510410"]
+    ]
+  },
+  {
+    "familia": "CREDITO_PAGO_CUENTA",
+    "tipo": "CREDITO_PAGO",
+    "concepto": "PAGO_CREDITO",
+    "lineas": [
+      ["DEBITO","PRINCIPAL","CONTRAPRODUCTO","CAPITAL","21013505"],
+      ["CREDITO","PRINCIPAL","PRODUCTO","CARTERA","140205"],
+      ["DEBITO","INTERES","CONTRAPRODUCTO","CAPITAL","21013505"],
+      ["CREDITO","INTERES","PRODUCTO","INTERES_POR_COBRAR","160310"]
+    ]
+  },
+  {
+    "familia": "CREDITO_SEGURO_COBRO_CUENTA",
+    "tipo": "CREDITO_SEGURO_COBRO_CUENTA",
+    "concepto": "CREDITO_SEGURO_COBRO_CUENTA",
+    "lineas": [
+      ["DEBITO","SEGURO","CONTRAPRODUCTO","CAPITAL","21013505"],
+      ["CREDITO","SEGURO","FIJA",null,"25909005"]
+    ]
+  },
+  {
+    "familia": "CUENTAS_COMISION",
+    "tipo": "CUENTAS_COMISION",
+    "concepto": "CUENTAS_COMISION",
+    "lineas": [
+      ["DEBITO","COMISION","PRODUCTO","CAPITAL","21013505"],
+      ["CREDITO","COMISION","COMISION",null,"5290"]
+    ]
+  },
+  {
+    "familia": "CUENTAS_INTERES_CAPITALIZACION",
+    "tipo": "CUENTAS_INTERES_CAPITALIZACION",
+    "concepto": "CUENTAS_INTERES_CAPITALIZACION",
+    "lineas": [
+      ["DEBITO","INTERES","PRODUCTO","INTERES_POR_PAGAR","250105"],
+      ["CREDITO","INTERES","PRODUCTO","CAPITAL","21013505"]
+    ]
+  },
+  {
+    "familia": "CUENTAS_INTERES_DEVENGO",
+    "tipo": "CUENTAS_INTERES_DEVENGO",
+    "concepto": "CUENTAS_INTERES_DEVENGO",
+    "lineas": [
+      ["DEBITO","INTERES","PRODUCTO","INTERES_GASTO","410105"],
+      ["CREDITO","INTERES","PRODUCTO","INTERES_POR_PAGAR","250105"]
+    ]
+  },
+  {
+    "familia": "CUENTAS_LIBERACION",
+    "tipo": "CUENTAS_LIBERACION",
+    "concepto": "CTA_LIBERACION",
+    "lineas": [
+      ["DEBITO","PRINCIPAL","PRODUCTO","RESTRINGIDO","2105"],
+      ["CREDITO","PRINCIPAL","PRODUCTO","CAPITAL","21013505"]
+    ]
+  },
+  {
+    "familia": "CUENTAS_RECLASIFICACION",
+    "tipo": "CUENTAS_RECLASIFICACION",
+    "concepto": "CTA_RECLASIFICACION",
+    "lineas": [
+      ["DEBITO","PRINCIPAL","PRODUCTO","CAPITAL","21013505"],
+      ["CREDITO","PRINCIPAL","CONTRAPRODUCTO","CAPITAL","21013510"],
+      ["DEBITO","RETENIDO","PRODUCTO","RESTRINGIDO","2105"],
+      ["CREDITO","RETENIDO","CONTRAPRODUCTO","RESTRINGIDO","2105"]
+    ]
+  },
+  {
+    "familia": "CUENTAS_RETENCION",
+    "tipo": "CUENTAS_RETENCION",
+    "concepto": "CTA_RETENCION",
+    "lineas": [
+      ["DEBITO","PRINCIPAL","PRODUCTO","CAPITAL","21013505"],
+      ["CREDITO","PRINCIPAL","PRODUCTO","RESTRINGIDO","2105"]
+    ]
+  },
+  {
+    "familia": "CUENTAS_TRANSFERENCIA_INTERNA",
+    "tipo": "CUENTAS_TRANSFERENCIA",
+    "concepto": "CUENTAS_TRANSFERENCIA",
+    "lineas": [
+      ["DEBITO","PRINCIPAL","PRODUCTO","CAPITAL","21013505"],
+      ["CREDITO","PRINCIPAL","CONTRAPRODUCTO","CAPITAL","21013510"]
+    ]
+  },
+  {
+    "familia": "DEV_ATM",
+    "tipo": "DEV_ATM",
+    "concepto": "DEV_ATM",
+    "lineas": [
+      ["DEBITO","PRINCIPAL","FIJA",null,"11010505"],
+      ["CREDITO","PRINCIPAL","FIJA",null,"11010515"]
+    ]
+  },
+  {
+    "familia": "DEV_CAJA",
+    "tipo": "CAJA_DEVOLUCION",
+    "concepto": "DEV_CAJA",
+    "lineas": [
+      ["DEBITO","PRINCIPAL","FIJA",null,"11010505"],
+      ["CREDITO","PRINCIPAL","FIJA",null,"11010510"]
+    ]
+  },
+  {
+    "familia": "DOT_ATM",
+    "tipo": "ATM_DOTACION",
+    "concepto": "DOT_ATM",
+    "lineas": [
+      ["DEBITO","PRINCIPAL","FIJA",null,"11010515"],
+      ["CREDITO","PRINCIPAL","FIJA",null,"11010505"]
+    ]
+  },
+  {
+    "familia": "DOT_CAJA",
+    "tipo": "CAJA_DOTACION",
+    "concepto": "DOT_CAJA",
+    "lineas": [
+      ["DEBITO","PRINCIPAL","FIJA",null,"11010510"],
+      ["CREDITO","PRINCIPAL","FIJA",null,"11010505"]
+    ]
+  },
+  {
+    "familia": "RED_COMISION_CAUSADA",
+    "tipo": "RED_COMISION",
+    "concepto": "RED_COMISION_CAUSADA",
+    "lineas": [
+      ["DEBITO","COMISION","FIJA",null,"4290"],
+      ["CREDITO","COMISION","FIJA",null,"25909010"]
+    ]
+  },
+  {
+    "familia": "RED_INTERCHANGE_GANADO",
+    "tipo": "RED_COMISION",
+    "concepto": "RED_INTERCHANGE_GANADO",
+    "lineas": [
+      ["DEBITO","COMISION","FIJA",null,"16909005"],
+      ["CREDITO","COMISION","FIJA",null,"5290"]
+    ]
+  },
+  {
+    "familia": "RET_EFECTIVO_ATM",
+    "tipo": "ATM_RETIRO",
+    "concepto": "RET_EFECTIVO_ATM",
+    "lineas": [
+      ["DEBITO","PRINCIPAL","PRODUCTO","CAPITAL","21013505"],
+      ["CREDITO","PRINCIPAL","FIJA",null,"11010515"]
+    ]
+  },
+  {
+    "familia": "RET_EFECTIVO_CAJA",
+    "tipo": "CAJA_RETIRO",
+    "concepto": "RET_EFECTIVO",
+    "lineas": [
+      ["DEBITO","PRINCIPAL","PRODUCTO","CAPITAL","21013505"],
+      ["CREDITO","PRINCIPAL","FIJA",null,"11010510"]
+    ]
+  }
+]

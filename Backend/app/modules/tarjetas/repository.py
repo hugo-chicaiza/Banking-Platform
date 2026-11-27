@@ -98,18 +98,90 @@ def obtener_cuenta(conn: Connection, id_cuenta: int) -> dict[str, Any] | None:
     )
 
 
-def principal_viva(conn: Connection, id_cuenta: int) -> bool:
+def agencia_solicitud(conn: Connection, id_tarjeta: int) -> str | None:
+    """Agencia operativa guardada al inscribir la solicitud en Aprobaciones."""
+    return conn.execute(
+        text(
+            "SELECT RTRIM(IdAgencia) FROM Tarjeta.SolicitudAprobacionPendiente WHERE IdTarjeta=:id"
+        ),
+        {"id": id_tarjeta},
+    ).scalar_one_or_none()
+
+
+def principal_viva(
+    conn: Connection, id_cuenta: int, excluir: int | None = None
+) -> bool:
     return (
         _one(
             conn,
             """
         SELECT TOP (1) IdTarjeta FROM Tarjeta.Tarjeta
         WHERE IdCuenta = :id_cuenta AND EsExtension = 0
+          AND (CAST(:excluir AS int) IS NULL OR IdTarjeta <> :excluir)
           AND Estado NOT IN ('Cancelada', 'Anulada', 'Vencida', 'Cerrada')
         """,
-            {"id_cuenta": id_cuenta},
+            {"id_cuenta": id_cuenta, "excluir": excluir},
         )
         is not None
+    )
+
+
+def reemision_vigente(conn: Connection, id_anterior: int) -> bool:
+    return (
+        conn.execute(
+            text("""
+            SELECT TOP (1) IdTarjeta FROM Tarjeta.Tarjeta
+            WHERE IdTarjetaReemplazada=:id
+                AND Estado NOT IN ('Cancelada','Anulada','Vencida','Cerrada')
+        """),
+            {"id": id_anterior},
+        ).scalar_one_or_none()
+        is not None
+    )
+
+
+def listar_por_renovar(
+    conn: Connection, hoy: date, hasta: date, agencia: str, page: int, page_size: int
+) -> tuple[list[dict[str, Any]], int]:
+    # SQL fijo: la misma selección se usa para el total y la página.
+    datos = {
+        "hoy": hoy,
+        "hasta": hasta,
+        "agencia": agencia,
+        "offset": (page - 1) * page_size,
+        "limite": page_size,
+    }
+    filas = _rows(
+        conn,
+        """
+        WITH opciones AS (
+            SELECT t.IdTarjeta AS id_tarjeta, t.IdCuenta AS id_cuenta,
+                   t.IdCliente AS id_cliente, t.IdProducto AS id_producto,
+                   t.TipoTarjeta AS tipo_tarjeta, t.NombreTarjeta AS nombre_tarjeta,
+                   RTRIM(t.NumeroEnmascarado) AS numero_enmascarado,
+                   t.Estado AS estado_actual, t.FechaEmision AS fecha_emision,
+                   t.EsExtension AS es_extension, t.IdTarjetaTitular AS id_tarjeta_titular,
+                   t.FechaExpiracion AS fecha_expiracion,
+                   ROW_NUMBER() OVER (ORDER BY t.FechaExpiracion,t.IdTarjeta) AS orden
+            FROM Tarjeta.Tarjeta t
+            WHERE t.TipoTarjeta='Debito' AND t.Estado IN ('Activa','Inactiva')
+              AND t.IdAgencia=:agencia
+              AND t.FechaExpiracion BETWEEN :hoy AND :hasta
+              AND NOT EXISTS (
+                SELECT 1 FROM Tarjeta.Tarjeta nueva
+                WHERE nueva.IdTarjetaReemplazada=t.IdTarjeta
+                  AND nueva.Estado NOT IN ('Cancelada','Anulada','Vencida','Cerrada')
+              )
+        )
+        SELECT o.*, c.total
+        FROM (SELECT COUNT(*) AS total FROM opciones) c
+        LEFT JOIN opciones o ON o.orden>:offset AND o.orden<=:offset+:limite
+        ORDER BY o.orden
+    """,
+        datos,
+    )
+    return [f for f in filas if f["id_tarjeta"] is not None], (
+        filas[0]["total"] if filas else 0
     )
 
 
@@ -183,7 +255,7 @@ def insertar_tarjeta(conn: Connection, datos: dict[str, Any]) -> int:
                 TipoTarjeta, NombresTitular, ApellidosTitular, IdCliente, IdCuenta,
                 IdProducto, IdAgencia, EsExtension, IdTarjetaTitular, FechaSolicitud,
                 FechaEmision, FechaExpiracion, PinAsignado, CreadoPor, IdBIN,
-                IdSubProducto, Estado, RequiereEntregaVerificada
+                IdSubProducto, Estado, RequiereEntregaVerificada, IdTarjetaReemplazada
             )
             OUTPUT INSERTED.IdTarjeta INTO @nuevas
             VALUES (
@@ -192,7 +264,7 @@ def insertar_tarjeta(conn: Connection, datos: dict[str, Any]) -> int:
                 :id_producto, :id_agencia, :es_extension, :id_titular, @hoy,
                 -- FechaEmision es obligatoria: provisional hasta pasar a Generada
                 @hoy, DATEADD(year, 5, @hoy), 0, :creado_por, :id_bin,
-                :id_sub_producto, 'Solicitada', 1
+                :id_sub_producto, 'Solicitada', 1, :id_reemplazada
             );
             SELECT IdTarjeta FROM @nuevas;
             """
@@ -313,6 +385,7 @@ def obtener_tarjeta(
         + _COLUMNAS_TARJETA
         + """, RTRIM(IdAgencia) AS id_agencia, CreadoPor AS creado_por,
         MotivoEstado AS motivo_estado, EntregaVerificadaEn AS entrega_verificada_en,
+        IdTarjetaReemplazada AS id_tarjeta_reemplazada,
         SobreDescargadoEn AS sobre_descargado_en"""
         + desde
         + " WHERE IdTarjeta = :id_tarjeta",
