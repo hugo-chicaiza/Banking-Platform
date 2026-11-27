@@ -171,3 +171,49 @@ def test_revisar_principal_usa_reglas_y_fecha_vigentes(
 
     assert error.value.detail["code"] == "DOCUMENTO_NO_HABILITADO"
     conn.execute.assert_not_called()
+
+
+def test_selector_enruta_consulta_y_declara_documento_solo_en_cuerpo(monkeypatch):
+    from fastapi import FastAPI
+
+    from app.modules.clientes.router import router, validar_identificacion
+
+    app = FastAPI()
+    app.include_router(router, prefix="/api/v1")
+    ruta = app.openapi()["paths"]["/api/v1/clientes/validaciones/documento"]["post"]
+    assert "requestBody" in ruta
+    assert not ruta.get("parameters")
+    monkeypatch.setattr(
+        documentos_identidad,
+        "validar",
+        lambda *_: {
+            "Advertencias": [],
+            "RequiereVencimiento": True,
+        },
+    )
+    monkeypatch.setattr(
+        documentos_identidad,
+        "_buscar",
+        lambda _, tipo, numero, emisor: (
+            None
+            if numero == "NOENCONTRADO"
+            else _ficha(
+                emisor=emisor, vencimiento=date(2000, 1, 1) if tipo == "PAS" else None
+            )
+        ),
+    )
+    conn = MagicMock()
+    pasaporte = ConsultaDocumentoBody(
+        tipo_documento="PAS",
+        numero="AB012345",
+        codigo_pais_emision="COL",
+    )
+    cedula = ConsultaDocumentoBody(tipo_documento="CED", numero="1712345675")
+    resultado = validar_identificacion(pasaporte, conn)
+    assert resultado.estado_documento == "VENCIDO"
+    assert resultado.id_cliente == validar_identificacion(cedula, conn).id_cliente == 42
+    ausente = validar_identificacion(
+        pasaporte.model_copy(update={"numero": "NOENCONTRADO"}), conn
+    )
+    assert not ausente.existe
+    assert ausente.id_cliente is None
