@@ -109,36 +109,44 @@ def test_alta_con_documento_eliminado_409_y_activo_duplicado(
     _patch_catalogos_ok(monkeypatch)
     payload = _payload_reincorporacion()
 
-    # Caso 1: Cliente existe y está Eliminado -> 409 CLIENTE_ELIMINADO
+    from app.modules.clientes import documentos_identidad
+
     monkeypatch.setattr(
-        repository,
-        "obtener_cliente_por_identificacion",
-        lambda _c, _doc: {
-            "id_cliente": 10,
-            "estado": "Eliminado",
-            "tipo_cliente": "Natural",
-            "tipo_documento": "C",
+        documentos_identidad,
+        "validar",
+        lambda *_: {
+            "Activo": True,
+            "PermitePrincipal": True,
+            "AplicaNatural": True,
+            "RequiereVencimiento": False,
         },
+    )
+    monkeypatch.setattr(documentos_identidad, "bloquear_identidad", lambda *_: None)
+    monkeypatch.setattr(
+        documentos_identidad,
+        "buscar",
+        MagicMock(
+            side_effect=[
+                ValidacionIdentificacion(
+                    valida=True,
+                    existe=True,
+                    id_cliente=10,
+                    mensaje="Encontrado",
+                    reincorporable=True,
+                ),
+                ValidacionIdentificacion(
+                    valida=True, existe=True, id_cliente=10, mensaje="Encontrado"
+                ),
+            ]
+        ),
     )
     with pytest.raises(HTTPException) as exc1:
         service.registrar_cliente(conn, payload, 1, "192.0.2.10")
     _assert_problema(exc1, 409, "CLIENTE_ELIMINADO")
-    assert "puede solicitar su reincorporación" in str(exc1.value.detail)
 
-    # Caso 2: Cliente existe y está Activo -> 409 CLIENTE_DUPLICADO
-    monkeypatch.setattr(
-        repository,
-        "obtener_cliente_por_identificacion",
-        lambda _c, _doc: {
-            "id_cliente": 10,
-            "estado": "Activo",
-            "tipo_cliente": "Natural",
-            "tipo_documento": "C",
-        },
-    )
     with pytest.raises(HTTPException) as exc2:
         service.registrar_cliente(conn, payload, 1, "192.0.2.10")
-    _assert_problema(exc2, 409, "CLIENTE_DUPLICADO")
+    _assert_problema(exc2, 409, "DOCUMENTO_DUPLICADO")
 
 
 # ---------------------------------------------------------------------------

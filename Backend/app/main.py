@@ -15,6 +15,7 @@ from app.core.config.settings import get_settings
 from app.core.security.audit import AccesoDenegadoMiddleware
 from app.modules.aprobaciones.router import router as aprobaciones_router
 from app.modules.atm.router import router as atm_router
+from app.modules.auditoria.router import router as auditoria_router
 from app.modules.auth.router import directorio_router, router_usuarios
 from app.modules.auth.router import router as auth_router
 from app.modules.boveda.router import router as boveda_router
@@ -90,6 +91,7 @@ app.include_router(caja_router, prefix=API_V1)
 app.include_router(boveda_router, prefix=API_V1)
 app.include_router(transacciones_router, prefix=API_V1)
 app.include_router(atm_router, prefix=API_V1)
+app.include_router(auditoria_router, prefix=API_V1)
 # PIN pad simulado para probar TAR-05 y ATM-01: responde 404 en producción
 # (su dependencia _solo_fuera_de_produccion; tests/unit/test_registros.py lo verifica)
 app.include_router(tarjetas_pruebas_router, prefix=API_V1)

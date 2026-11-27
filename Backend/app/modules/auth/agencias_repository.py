@@ -70,10 +70,25 @@ def agencias(conn: Connection) -> list[dict[str, Any]]:
         dict(r)
         for r in conn.execute(
             text(
-                "SELECT RTRIM(IdAgencia) AS id_agencia, Codigo AS codigo, Estado AS estado FROM Organizacion.Agencia ORDER BY IdAgencia"
+                "SELECT RTRIM(IdAgencia) AS id_agencia, Codigo AS codigo, "
+                "Estado AS estado, TipoAgencia AS tipo_agencia "
+                "FROM Organizacion.Agencia ORDER BY IdAgencia"
             )
         ).mappings()
     ]
+
+
+def es_matriz(conn: Connection, agencia: str) -> bool:
+    return (
+        conn.scalar(
+            text("""
+            SELECT 1 FROM Organizacion.Agencia
+            WHERE IdAgencia = :agencia AND Estado = 'A' AND TipoAgencia = 'Matriz'
+        """),
+            {"agencia": agencia},
+        )
+        == 1
+    )
 
 
 def version(conn: Connection, usuario: int) -> int:

@@ -389,13 +389,12 @@ def test_preparar_rechaza(bd, fila, cambios, status, code):
     _assert_problema(exc, status, code)
 
 
-def test_preparar_rechaza_documento_de_otro_cliente(bd):
-    bd["duplicado"] = True
+def test_preparar_redirige_correccion_a_documentos(bd):
     with pytest.raises(HTTPException) as exc:
         MANEJADOR.preparar(
             MagicMock(), OBJETIVO, _contenido(identificacion="1713175071"), HOY
         )
-    _assert_problema(exc, 409, "CLIENTE_DUPLICADO")
+    _assert_problema(exc, 409, "USAR_GESTION_DOCUMENTOS")
 
 
 def test_cliente_inexistente(bd):

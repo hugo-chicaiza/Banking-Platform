@@ -36,6 +36,7 @@ from app.modules.tarjetas.schemas import (
     EstadoTarjeta,
     PageTarjeta,
     PageTarjetaHistorial,
+    PageTarjetaPorRenovar,
     PinBlockPrueba,
     PinBlockPruebaEntrada,
     Tarjeta,
@@ -126,7 +127,7 @@ def _agencia_operativa(operador: UsuarioActual) -> str:
         raise problema(
             403,
             "AGENCIA_REQUERIDA",
-            "Seleccione una agencia operativa para solicitar la tarjeta.",
+            "Seleccione una agencia operativa para continuar.",
         )
     return agencia
 
@@ -167,7 +168,6 @@ def emitir_tarjeta(
         payload,
         usuario,
         _ip(request),
-        agencia_operativa=agencia,
         registrar_solicitud=registrar,
     )
     tarjeta.id_solicitud_aprobacion = aprobacion.publicar_al_solicitar(
@@ -213,6 +213,25 @@ def buscar_tarjetas(
     return service.buscar_tarjetas(
         conn, id_cliente, id_cuenta, estado, page, page_size, sort, es_extension
     )
+
+
+@router.get(
+    "/por-renovar",
+    operation_id="TARPorRenovar",
+    response_model=PageTarjetaPorRenovar,
+    dependencies=[
+        Depends(require_roles(*POR_ID["tarjetas.consultar"].roles_iniciales)),
+        Depends(solo_parametros("page", "pageSize")),
+    ],
+)
+def por_renovar(
+    conn: Db,
+    agencia: Annotated[str, Depends(_agencia_operativa)],
+    page: Page = 1,
+    page_size: PageSize = 20,
+) -> PageTarjetaPorRenovar:
+    """Tarjetas de débito por vencer en la agencia operativa y sin reemisión vigente."""
+    return service.listar_por_renovar(conn, agencia, page, page_size)
 
 
 # TAR-03. Roles: ASESOR, SUPERVISOR, ADMIN

@@ -1,0 +1,93 @@
+/* CooperativaDB. Ejecutar después de 20261127_boveda_movimientos_confirmacion.tsql.
+   Conserva identidades y saldos históricos. Las cuentas se configuran en Contabilidad. */
+SET XACT_ABORT ON;
+BEGIN TRANSACTION;
+
+ALTER TABLE Boveda.ArqueoBoveda DROP CONSTRAINT CK_ArqueoBoveda_Estado, CK_ArqueoBoveda_Usuarios;
+ALTER TABLE Boveda.ArqueoBoveda ALTER COLUMN IdUsuarioTestigo int NULL;
+ALTER TABLE Boveda.ArqueoBoveda WITH CHECK ADD CONSTRAINT CK_ArqueoBoveda_Usuarios CHECK (
+    (Estado IN ('REGISTRADO', 'APROBADO', 'ANULADO')
+        AND IdUsuarioTestigo IS NOT NULL AND IdUsuarioArqueador <> IdUsuarioTestigo)
+    OR (Estado IN ('CUADRADO', 'FALTANTE', 'SOBRANTE') AND IdUsuarioTestigo IS NULL)
+);
+ALTER TABLE Boveda.ArqueoBoveda WITH CHECK ADD CONSTRAINT CK_ArqueoBoveda_Estado CHECK (
+    Estado IN ('REGISTRADO', 'APROBADO', 'ANULADO')
+    OR (SaldoTeorico IS NOT NULL AND SaldoFisico IS NOT NULL AND IdMovimientoCorte IS NOT NULL
+        AND ((Estado = 'CUADRADO' AND SaldoFisico = SaldoTeorico)
+            OR (Estado = 'FALTANTE' AND SaldoFisico < SaldoTeorico)
+            OR (Estado = 'SOBRANTE' AND SaldoFisico > SaldoTeorico)))
+);
+
+ALTER TABLE Boveda.MovimientoBoveda DROP CONSTRAINT CK_MovimientoBoveda_UsuariosDistintos,
+    CK_MovimientoBoveda_Tipo, CK_MovimientoBoveda_TipoNaturaleza;
+ALTER TABLE Boveda.MovimientoBoveda WITH CHECK ADD CONSTRAINT CK_MovimientoBoveda_UsuariosDistintos CHECK (
+    AutorizadoPor <> IdUsuarioMovimiento
+    OR (IdArqueoBoveda IS NOT NULL AND IdSolicitudMovimiento IS NULL
+        AND TipoMovimiento IN ('AjusteFaltante', 'AjusteSobrante'))
+);
+ALTER TABLE Boveda.MovimientoBoveda WITH CHECK ADD CONSTRAINT CK_MovimientoBoveda_Tipo CHECK (
+    TipoMovimiento IN ('AjusteFaltante', 'AjusteSobrante', 'Traslado', 'RemanenteATM',
+        'AbastecimientoATM', 'DevolucionCaja', 'DotacionCaja', 'EnvioExcedente',
+        'ProvisionExterna', 'RetornoRemesa', 'ReposicionFaltante')
+);
+ALTER TABLE Boveda.MovimientoBoveda WITH CHECK ADD CONSTRAINT CK_MovimientoBoveda_TipoNaturaleza CHECK (
+    (TipoMovimiento IN ('AjusteFaltante', 'EnvioExcedente', 'AbastecimientoATM', 'DotacionCaja') AND Naturaleza = 'E')
+    OR (TipoMovimiento IN ('AjusteSobrante', 'RemanenteATM', 'DevolucionCaja', 'ProvisionExterna',
+        'RetornoRemesa', 'ReposicionFaltante') AND Naturaleza = 'I')
+    OR TipoMovimiento = 'Traslado'
+);
+
+ALTER TABLE Contabilidad.PlantillaBoveda DROP CONSTRAINT CK_PlantillaBoveda_TipoNaturaleza;
+ALTER TABLE Contabilidad.PlantillaBoveda WITH CHECK ADD CONSTRAINT CK_PlantillaBoveda_TipoNaturaleza CHECK (
+    (TipoMovimiento IN ('ProvisionExterna', 'AjusteSobrante', 'RetornoRemesa', 'SobranteTransito', 'CierreExcedente',
+        'ReposicionFaltante') AND Naturaleza = 'I')
+    OR (TipoMovimiento IN ('EnvioExcedente', 'AjusteFaltante', 'DespachoExcedente',
+        'FaltanteTransito', 'JustificaFaltante', 'DescuentoFaltante') AND Naturaleza = 'E')
+    OR (TipoMovimiento = 'Traslado' AND Naturaleza IN ('I', 'E'))
+);
+
+IF OBJECT_ID('Boveda.NovedadCajero', 'U') IS NULL
+BEGIN
+    CREATE TABLE Boveda.NovedadCajero (
+        IdNovedad bigint IDENTITY(1,1) NOT NULL CONSTRAINT PK_NovedadCajero PRIMARY KEY,
+        IdArqueoBoveda bigint NOT NULL,
+        IdUsuarioResponsable int NOT NULL,
+        Monto decimal(18,2) NOT NULL,
+        FechaVencimiento datetime2(7) NOT NULL,
+        IdAsientoContable int NOT NULL,
+        TipoResolucion varchar(15) NULL,
+        FechaResolucion datetime2(7) NULL,
+        IdUsuarioResolucion int NULL,
+        ReferenciaResolucion varchar(120) NULL,
+        ObservacionesResolucion varchar(500) NULL,
+        IdAsientoResolucion int NULL,
+        IdMovimientoReposicion bigint NULL,
+        CONSTRAINT UQ_NovedadCajero_Arqueo UNIQUE (IdArqueoBoveda),
+        CONSTRAINT FK_NovedadCajero_Arqueo FOREIGN KEY (IdArqueoBoveda)
+            REFERENCES Boveda.ArqueoBoveda(IdArqueoBoveda),
+        CONSTRAINT FK_NovedadCajero_Asiento FOREIGN KEY (IdAsientoContable)
+            REFERENCES Contabilidad.AsientoContable(IdAsientoContable),
+        CONSTRAINT FK_NovedadCajero_AsientoResolucion FOREIGN KEY (IdAsientoResolucion)
+            REFERENCES Contabilidad.AsientoContable(IdAsientoContable),
+        CONSTRAINT FK_NovedadCajero_Reposicion FOREIGN KEY (IdMovimientoReposicion)
+            REFERENCES Boveda.MovimientoBoveda(IdMovimiento),
+        CONSTRAINT CK_NovedadCajero_Importe CHECK (Monto > 0 AND IdUsuarioResponsable > 0),
+        CONSTRAINT CK_NovedadCajero_Resolucion CHECK (
+            (TipoResolucion IS NULL AND FechaResolucion IS NULL AND IdUsuarioResolucion IS NULL
+                AND ReferenciaResolucion IS NULL AND ObservacionesResolucion IS NULL
+                AND IdAsientoResolucion IS NULL AND IdMovimientoReposicion IS NULL)
+            OR (TipoResolucion IS NOT NULL AND FechaResolucion IS NOT NULL
+                AND IdUsuarioResolucion > 0 AND IdUsuarioResolucion IS NOT NULL
+                AND IdUsuarioResolucion <> IdUsuarioResponsable
+                AND ObservacionesResolucion IS NOT NULL AND LEN(TRIM(ObservacionesResolucion)) > 0
+                AND IdAsientoResolucion IS NOT NULL AND IdAsientoResolucion <> IdAsientoContable
+                AND ((TipoResolucion = 'REPOSICION' AND IdMovimientoReposicion IS NOT NULL)
+                    OR (TipoResolucion IN ('JUSTIFICACION', 'DESCUENTO_ROL')
+                        AND IdMovimientoReposicion IS NULL AND ReferenciaResolucion IS NOT NULL
+                        AND LEN(TRIM(ReferenciaResolucion)) > 0)))
+        )
+    );
+END;
+
+COMMIT TRANSACTION;
+GO

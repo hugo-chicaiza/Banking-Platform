@@ -3,7 +3,13 @@
 from datetime import datetime
 from typing import Annotated, Literal
 
-from pydantic import AfterValidator, ConfigDict, Field, model_validator
+from pydantic import (
+    AfterValidator,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    model_validator,
+)
 
 from app.core.api.schemas import CamelModel, Money
 from app.modules.contabilidad.service import ZONA_ECUADOR
@@ -14,7 +20,10 @@ IdInt = Annotated[int, Field(strict=True, gt=0, le=INT32_MAX)]
 Cantidad = Annotated[int, Field(strict=True, ge=0, le=INT32_MAX)]
 TipoBoveda = Literal["General", "Mayor", "Menor"]
 TipoArqueo = Literal["Sorpresivo", "Programado"]
-EstadoArqueo = Literal["REGISTRADO", "APROBADO", "ANULADO"]
+EstadoArqueo = Literal[
+    "REGISTRADO", "APROBADO", "ANULADO", "CUADRADO", "FALTANTE", "SOBRANTE"
+]
+TipoResolucionNovedad = Literal["JUSTIFICACION", "REPOSICION", "DESCUENTO_ROL"]
 TipoOperacion = Literal[
     "Traslado", "ProvisionExterna", "EnvioExcedente", "AjusteFaltante", "AjusteSobrante"
 ]
@@ -22,12 +31,14 @@ TipoMovimiento = Literal[
     "Traslado",
     "ProvisionExterna",
     "EnvioExcedente",
+    "RetornoRemesa",
     "AjusteFaltante",
     "AjusteSobrante",
     "DotacionCaja",
     "DevolucionCaja",
     "AbastecimientoATM",
     "RemanenteATM",
+    "ReposicionFaltante",
 ]
 
 
@@ -122,8 +133,54 @@ class PageMovimientoBoveda(CamelModel):
 
 class ArqueoBovedaRequest(EntradaDesglose):
     tipo_arqueo: TipoArqueo
-    id_usuario_testigo: IdInt
+    desglose: Annotated[list[Desglose], Field(max_length=100)]
+    id_usuario_responsable: IdInt | None = None
     observaciones: Annotated[str, Field(max_length=500)] | None = None
+
+
+class ResolucionNovedadRequest(EntradaDesglose):
+    tipo_resolucion: TipoResolucionNovedad
+    observaciones: Annotated[
+        str, StringConstraints(strip_whitespace=True, min_length=1, max_length=500)
+    ]
+    referencia_resolucion: (
+        Annotated[
+            str, StringConstraints(strip_whitespace=True, min_length=1, max_length=120)
+        ]
+        | None
+    ) = None
+    desglose: Annotated[list[Desglose], Field(max_length=100)] = Field(
+        default_factory=list
+    )
+
+    @model_validator(mode="after")
+    def validar_resolucion(self):
+        if self.tipo_resolucion == "REPOSICION":
+            if not self.desglose or any(d.cantidad == 0 for d in self.desglose):
+                raise ValueError(
+                    "La reposición requiere denominaciones con cantidades positivas."
+                )
+        elif self.desglose or self.referencia_resolucion is None:
+            raise ValueError(
+                "La resolución requiere una referencia documental y ningún efectivo."
+            )
+        return self
+
+
+class NovedadCajero(CamelModel):
+    id_novedad: int
+    id_usuario_responsable: int
+    monto: Money
+    fecha_vencimiento: FechaEc
+    estado: Literal["PENDIENTE", "VENCIDA", "RESUELTA"]
+    id_asiento_contable: int
+    tipo_resolucion: TipoResolucionNovedad | None
+    fecha_resolucion: FechaEc | None
+    id_usuario_resolucion: int | None
+    referencia_resolucion: str | None
+    observaciones_resolucion: str | None
+    id_asiento_resolucion: int | None
+    id_movimiento_reposicion: int | None
 
 
 class DiferenciaDenominacion(CamelModel):
@@ -137,7 +194,7 @@ class ArqueoBoveda(CamelModel):
     fecha_hora_arqueo: FechaEc
     tipo_arqueo: TipoArqueo
     id_usuario_arqueador: int
-    id_usuario_testigo: int
+    id_usuario_testigo: int | None
     estado: EstadoArqueo
     id_movimiento_ajuste: int | None
     ids_movimientos_ajuste: list[int] = Field(default_factory=list)
@@ -148,6 +205,7 @@ class ArqueoBoveda(CamelModel):
     diferencia: Money
     id_usuario_aprobador: int | None = None
     fecha_hora_aprobacion: FechaEc | None = None
+    novedad: NovedadCajero | None = None
 
 
 class ResumenArqueoBoveda(CamelModel):
@@ -158,7 +216,7 @@ class ResumenArqueoBoveda(CamelModel):
     fecha_hora_arqueo: FechaEc
     tipo_arqueo: TipoArqueo
     id_usuario_arqueador: int
-    id_usuario_testigo: int
+    id_usuario_testigo: int | None
     estado: EstadoArqueo
     observaciones: str | None
     saldo_teorico: Money | None
@@ -168,6 +226,7 @@ class ResumenArqueoBoveda(CamelModel):
     ids_movimientos_ajuste: list[int]
     id_usuario_aprobador: int | None
     fecha_hora_aprobacion: FechaEc | None
+    novedad: NovedadCajero | None = None
 
 
 class PageArqueoBoveda(CamelModel):

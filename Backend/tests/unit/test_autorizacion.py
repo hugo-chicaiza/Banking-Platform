@@ -63,16 +63,19 @@ ROLES_POR_RUTA: dict[tuple[str, str], tuple[str, ...]] = {
     ("POST", "/api/v1/aprobaciones/{idSolicitud}/cancelar"): AUTH,
     ("POST", "/api/v1/boveda/bovedas/{idBoveda}/solicitudes-movimiento"): (
         "SUPERVISOR",
-        "ADMIN",
+        "CAJERO",
     ),
+    ("GET", "/api/v1/boveda/bovedas/{idBoveda}/destinos"): ("SUPERVISOR", "CAJERO"),
     ("GET", "/api/v1/boveda/solicitudes-movimiento"): (
         "SUPERVISOR",
+        "CAJERO",
         "CONTADOR",
         "AUDITOR",
         "ADMIN",
     ),
     ("GET", "/api/v1/boveda/solicitudes-movimiento/{idSolicitudMovimiento}"): (
         "SUPERVISOR",
+        "CAJERO",
         "CONTADOR",
         "AUDITOR",
         "ADMIN",
@@ -80,15 +83,21 @@ ROLES_POR_RUTA: dict[tuple[str, str], tuple[str, ...]] = {
     (
         "POST",
         "/api/v1/boveda/solicitudes-movimiento/{idSolicitudMovimiento}/aprobacion",
-    ): ("SUPERVISOR", "ADMIN"),
+    ): ("SUPERVISOR",),
     ("POST", "/api/v1/boveda/solicitudes-movimiento/{idSolicitudMovimiento}/rechazo"): (
         "SUPERVISOR",
-        "ADMIN",
     ),
     (
         "POST",
         "/api/v1/boveda/solicitudes-movimiento/{idSolicitudMovimiento}/cancelacion",
-    ): ("SUPERVISOR", "ADMIN"),
+    ): ("SUPERVISOR", "CAJERO"),
+    **{
+        (
+            "POST",
+            f"/api/v1/boveda/solicitudes-movimiento/{{idSolicitudMovimiento}}/{etapa}",
+        ): ("SUPERVISOR",)
+        for etapa in ("despacho", "recepcion", "devolucion", "cierre")
+    },
     ("GET", "/api/v1/parametros/comisiones"): ("ADMIN", "SUPERVISOR", "ASESOR"),
     ("GET", "/api/v1/parametros/comisiones/{idComision}/tarifa"): (
         "ADMIN",
@@ -100,8 +109,13 @@ ROLES_POR_RUTA: dict[tuple[str, str], tuple[str, ...]] = {
     ("GET", "/api/v1/parametros/exoneraciones"): ("ADMIN", "SUPERVISOR", "ASESOR"),
     ("POST", "/api/v1/parametros/exoneraciones"): ("ADMIN",),
     ("PATCH", "/api/v1/parametros/exoneraciones/{idExoneracion}"): ("ADMIN",),
-    ("GET", "/api/v1/boveda/bovedas"): ("SUPERVISOR", "CONTADOR", "ADMIN"),
-    ("GET", "/api/v1/boveda/bovedas/{idBoveda}"): ("SUPERVISOR", "CONTADOR", "ADMIN"),
+    ("GET", "/api/v1/boveda/bovedas"): ("CAJERO", "SUPERVISOR", "CONTADOR", "ADMIN"),
+    ("GET", "/api/v1/boveda/bovedas/{idBoveda}"): (
+        "CAJERO",
+        "SUPERVISOR",
+        "CONTADOR",
+        "ADMIN",
+    ),
     ("GET", "/api/v1/boveda/bovedas/{idBoveda}/movimientos"): (
         "SUPERVISOR",
         "CONTADOR",
@@ -109,10 +123,9 @@ ROLES_POR_RUTA: dict[tuple[str, str], tuple[str, ...]] = {
         "ADMIN",
     ),
     ("POST", "/api/v1/boveda/bovedas/{idBoveda}/movimientos"): ("SUPERVISOR", "ADMIN"),
-    ("POST", "/api/v1/boveda/bovedas/{idBoveda}/arqueos"): (
+    ("POST", "/api/v1/boveda/bovedas/{idBoveda}/arqueos"): ("SUPERVISOR",),
+    ("POST", "/api/v1/boveda/arqueos/{idArqueoBoveda}/resolucion-novedad"): (
         "SUPERVISOR",
-        "AUDITOR",
-        "ADMIN",
     ),
     ("GET", "/api/v1/boveda/bovedas/{idBoveda}/arqueos"): (
         "SUPERVISOR",
@@ -144,6 +157,7 @@ ROLES_POR_RUTA: dict[tuple[str, str], tuple[str, ...]] = {
             "actividades-economicas",
             "tipos-antecedente",
             "tipos-direccion",
+            "tipos-documento",
             "denominaciones",
             "agencias",
             "productos",
@@ -218,6 +232,31 @@ ROLES_POR_RUTA: dict[tuple[str, str], tuple[str, ...]] = {
         "ADMIN",
     ),
     ("GET", "/api/v1/clientes/{idCliente}/perfil"): ("ASESOR", "SUPERVISOR", "ADMIN"),
+    ("GET", "/api/v1/clientes/{idCliente}/documentos"): (
+        "ASESOR",
+        "CAJERO",
+        "SUPERVISOR",
+        "ADMIN",
+    ),
+    ("POST", "/api/v1/clientes/{idCliente}/documentos"): ("ASESOR", "ADMIN"),
+    ("PATCH", "/api/v1/clientes/{idCliente}/documentos/{idDocumento}"): (
+        "ASESOR",
+        "ADMIN",
+    ),
+    ("PUT", "/api/v1/clientes/{idCliente}/documentos/{idDocumento}/principal"): (
+        "ASESOR",
+        "ADMIN",
+    ),
+    ("GET", "/api/v1/clientes/{idCliente}/relaciones/firmantes"): (
+        "ASESOR",
+        "SUPERVISOR",
+        "ADMIN",
+    ),
+    ("POST", "/api/v1/clientes/{idCliente}/relaciones/firmantes"): ("ASESOR", "ADMIN"),
+    ("POST", "/api/v1/clientes/{idCliente}/relaciones/firmantes/{idRelacion}/fin"): (
+        "ASESOR",
+        "ADMIN",
+    ),
     ("GET", "/api/v1/clientes/{idCliente}/direcciones"): ("ASESOR", "ADMIN"),
     ("POST", "/api/v1/clientes/{idCliente}/direcciones"): ("ASESOR", "ADMIN"),
     ("PATCH", "/api/v1/clientes/{idCliente}/direcciones/{idDireccion}"): (
@@ -339,6 +378,7 @@ ROLES_POR_RUTA: dict[tuple[str, str], tuple[str, ...]] = {
     ("POST", "/api/v1/tarjetas"): ("ASESOR", "ADMIN"),
     ("GET", "/api/v1/tarjetas"): ("ASESOR", "SUPERVISOR", "ADMIN"),
     ("GET", "/api/v1/tarjetas/{idTarjeta}"): ("ASESOR", "SUPERVISOR", "ADMIN"),
+    ("GET", "/api/v1/tarjetas/por-renovar"): ("ASESOR", "SUPERVISOR", "ADMIN"),
     ("POST", "/api/v1/tarjetas/{idTarjeta}/estado"): ("ASESOR", "SUPERVISOR", "ADMIN"),
     ("POST", "/api/v1/tarjetas/{idTarjeta}/pin"): ("ASESOR", "ADMIN"),
     ("PATCH", "/api/v1/tarjetas/{idTarjeta}/envio"): ("ASESOR", "SUPERVISOR", "ADMIN"),
@@ -534,6 +574,8 @@ ROLES_POR_RUTA: dict[tuple[str, str], tuple[str, ...]] = {
         "ADMIN",
     ),
     ("POST", "/api/v1/catalogos/tasas-interes"): ("ADMIN",),
+    ("POST", "/api/v1/catalogos/tipos-documento"): ("ADMIN",),
+    ("PATCH", "/api/v1/catalogos/tipos-documento/{codigo}"): ("ADMIN",),
     ("GET", "/api/v1/catalogos/administracion"): ("ADMIN", "SUPERVISOR", "ASESOR"),
     ("GET", "/api/v1/catalogos/administracion/{clave}"): (
         "ADMIN",
@@ -550,6 +592,31 @@ ROLES_POR_RUTA: dict[tuple[str, str], tuple[str, ...]] = {
 # Cobertura de las rutas aditivas y de los contratos incorporados desde develop.
 ROLES_POR_RUTA.update(
     {
+        # E8-01: bitácora de auditoría
+        ("POST", "/api/v1/auditoria/eventos/busqueda"): (
+            "ADMIN",
+            "SUPERVISOR",
+            "AUDITOR",
+        ),
+        ("GET", "/api/v1/auditoria/eventos/{idEvento}"): (
+            "ADMIN",
+            "SUPERVISOR",
+            "AUDITOR",
+        ),
+        ("GET", "/api/v1/auditoria/tipos-evento"): ("ADMIN", "SUPERVISOR", "AUDITOR"),
+        ("GET", "/api/v1/auditoria/objetivos/{tipo}/{id}/eventos"): (
+            "ADMIN",
+            "SUPERVISOR",
+            "AUDITOR",
+        ),
+        ("POST", "/api/v1/auditoria/eventos/exportacion"): ("ADMIN", "AUDITOR"),
+        # E8-02: integridad de la bitácora
+        ("POST", "/api/v1/auditoria/verificaciones"): (
+            "ADMIN",
+            "SUPERVISOR",
+            "AUDITOR",
+        ),
+        ("GET", "/api/v1/auditoria/verificaciones"): ("ADMIN", "SUPERVISOR", "AUDITOR"),
         # Seguridad: permisos de roles (WorkOS) y pestañas por rol
         ("GET", "/api/v1/seguridad/permisos"): ("ADMIN",),
         ("PATCH", "/api/v1/seguridad/permisos/{slug}"): ("ADMIN",),
@@ -652,6 +719,19 @@ def test_tabla_de_roles_cubre_todas_las_rutas_protegidas():
         set(_rutas_api()) - _PUBLICAS - _TERMINALES - {("POST", "/api/v1/auth/refresh")}
     )
     assert protegidas == set(ROLES_POR_RUTA)
+
+
+@pytest.mark.parametrize("agencia", ["002", None])
+@pytest.mark.parametrize(
+    "ruta", ["/api/v1/auditoria/tipos-evento", "/api/v1/contabilidad/cuentas-contables"]
+)
+def test_modulos_centrales_exigen_sesion_en_matriz(client, ruta, agencia):
+    simular_sesion(app, replace(usuario_con_roles("ADMIN"), id_agencia=agencia))
+
+    respuesta = client.get(ruta)
+
+    assert respuesta.status_code == 403
+    assert _code(respuesta) == "ACCESO_EXCLUSIVO_MATRIZ"
 
 
 @pytest.mark.parametrize("ruta", sorted(set(_rutas_api()) - _PUBLICAS - _TERMINALES))
@@ -808,6 +888,8 @@ def test_roles_de_la_tarea_pasan_el_control(client, ruta, monkeypatch):
         ("POST", "/api/v1/caja/depositos/{idTransaccion}/series"),
         ("POST", "/api/v1/caja/jornadas/{idJornada}/retiros"),
         ("POST", "/api/v1/transacciones/{idTransaccion}/reverso"),
+        ("POST", "/api/v1/clientes/{idCliente}/relaciones/firmantes"),
+        ("POST", "/api/v1/clientes/{idCliente}/relaciones/firmantes/{idRelacion}/fin"),
     }
 
     if ruta in rutas_con_vinculacion and r.status_code == 403:
@@ -822,12 +904,16 @@ def test_roles_de_la_tarea_pasan_el_control(client, ruta, monkeypatch):
     [r for r in ROLES_POR_RUTA if r[1].startswith("/api/v1/boveda/")],
     ids=" ".join,
 )
-def test_admin_pasa_control_de_todas_las_rutas_de_boveda(client, ruta):
+def test_admin_respeta_roles_de_las_rutas_de_boveda(client, ruta):
     simular_sesion(app, usuario_con_roles("ADMIN"))
 
     respuesta = _llamar(client, *ruta)
 
-    assert respuesta.status_code not in {401, 403}
+    if "ADMIN" in ROLES_POR_RUTA[ruta]:
+        assert respuesta.status_code not in {401, 403}
+    else:
+        assert respuesta.status_code == 403
+        assert _code(respuesta) == "SIN_PERMISO"
 
 
 def test_require_auth_entrega_el_usuario_de_la_sesion():

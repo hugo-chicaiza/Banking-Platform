@@ -21,6 +21,7 @@ from app.modules.boveda.schemas import (
     EstadoArqueo,
     PageArqueoBoveda,
     PageMovimientoBoveda,
+    ResolucionNovedadRequest,
     TipoArqueo,
     TipoBoveda,
     TipoMovimiento,
@@ -47,7 +48,7 @@ IdBoveda = Annotated[int, Path(alias="idBoveda", gt=0, le=INT32_MAX)]
 @router.get("/bovedas", response_model=list[Boveda], operation_id="BOV01")
 def listar_bovedas(
     usuario: Annotated[
-        Usuario, Depends(require_roles("SUPERVISOR", "CONTADOR", "ADMIN"))
+        Usuario, Depends(require_roles("CAJERO", "SUPERVISOR", "CONTADOR", "ADMIN"))
     ],
     conn: Conexion,
     _: Annotated[None, Depends(solo_parametros("idAgencia", "tipo"))],
@@ -63,7 +64,7 @@ def listar_bovedas(
 def obtener_boveda(
     id_boveda: IdBoveda,
     usuario: Annotated[
-        Usuario, Depends(require_roles("SUPERVISOR", "CONTADOR", "ADMIN"))
+        Usuario, Depends(require_roles("CAJERO", "SUPERVISOR", "CONTADOR", "ADMIN"))
     ],
     conn: Conexion,
     _: Annotated[None, Depends(solo_parametros())],
@@ -167,9 +168,7 @@ def registrar_arqueo(
     id_boveda: IdBoveda,
     datos: ArqueoBovedaRequest,
     request: Request,
-    usuario: Annotated[
-        Usuario, Depends(require_roles("SUPERVISOR", "AUDITOR", "ADMIN"))
-    ],
+    usuario: Annotated[Usuario, Depends(require_roles("SUPERVISOR"))],
     id_interno: IdInterno,
     conn: Conexion,
     _: Annotated[None, Depends(solo_parametros())],
@@ -183,6 +182,7 @@ def registrar_arqueo(
     "/arqueos/{idArqueoBoveda}/aprobacion",
     response_model=ArqueoBoveda,
     operation_id="BOV06",
+    deprecated=True,
 )
 def aprobar_arqueo(
     id_arqueo: Annotated[int, Path(alias="idArqueoBoveda", gt=0, le=INT64_MAX)],
@@ -194,6 +194,25 @@ def aprobar_arqueo(
 ) -> ArqueoBoveda:
     return service.aprobar_arqueo(
         conn, usuario, id_interno, id_arqueo, ip_cliente(request.scope)
+    )
+
+
+@router.post(
+    "/arqueos/{idArqueoBoveda}/resolucion-novedad",
+    response_model=ArqueoBoveda,
+    operation_id="BOVResolverNovedadCajero",
+)
+def resolver_novedad(
+    id_arqueo: Annotated[int, Path(alias="idArqueoBoveda", gt=0, le=INT64_MAX)],
+    datos: ResolucionNovedadRequest,
+    request: Request,
+    usuario: Annotated[Usuario, Depends(require_roles("SUPERVISOR"))],
+    id_interno: IdInterno,
+    conn: Conexion,
+    _: Annotated[None, Depends(solo_parametros())],
+) -> ArqueoBoveda:
+    return service.resolver_novedad(
+        conn, usuario, id_interno, id_arqueo, datos, ip_cliente(request.scope)
     )
 
 

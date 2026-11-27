@@ -37,6 +37,16 @@ _DB_ERRORES: dict[int, tuple[int, str, str]] = {
         "SOLICITUD_MOVIMIENTO_INMUTABLE",
         "La solicitud y sus datos no se pueden modificar ni eliminar.",
     ),
+    59021: (
+        409,
+        "EFECTIVO_RESERVADO_BOVEDA",
+        "La operación consumiría efectivo reservado para una solicitud de bóveda.",
+    ),
+    59022: (
+        409,
+        "CUPO_RESERVADO_BOVEDA",
+        "La operación afectaría la capacidad de bóveda reservada para una solicitud.",
+    ),
     # Contabilidad responde lo mismo cuando lo detecta en Python (CON-02)
     51016: (
         500,

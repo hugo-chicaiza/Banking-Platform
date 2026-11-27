@@ -229,7 +229,8 @@ def test_sql_de_nombre_busca_inicio_de_palabra_sin_concatenar_texto():
     repository.consultar_clientes(cast(Connection, conn), nombre="lop", estado="Activo")
     sql = str(conn.execute.call_args.args[0])
     params = conn.execute.call_args.args[1]
-    assert "NombreBusqueda LIKE :nombre_inicio ESCAPE" in sql
+    assert r"NombreBusqueda LIKE :nombre_inicio ESCAPE '\'" in sql
+    assert r"NombreBusqueda LIKE :nombre_palabra ESCAPE '\'" in sql
     assert params["nombre_inicio"] == "LOP%"
     assert params["nombre_palabra"] == "% LOP%"
     assert "lop" not in sql.lower().replace(":nombre", "")
