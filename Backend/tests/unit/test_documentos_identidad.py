@@ -11,6 +11,93 @@ from app.modules.clientes.schemas import ConsultaDocumentoBody
 HOY = date(2026, 11, 26)
 
 
+@pytest.fixture
+def gestion_pasaporte(monkeypatch):
+    from app.modules.clientes import gestion_documentos
+
+    ficha = {
+        "id_documento": 79,
+        "tipo_documento": "PAS",
+        "nombre_tipo": "Pasaporte",
+        "numero": "QA387ROSA27",
+        "codigo_pais_emision": "ECU",
+        "fecha_emision": date(2020, 1, 1),
+        "fecha_vencimiento": date(2025, 1, 1),
+        "principal": False,
+        "tipo_activo": True,
+        "permite_principal": True,
+        "requiere_vencimiento": True,
+        "requiere_pais": True,
+        "estado": "REGISTRADO",
+        "version": "0000000000000001",
+    }
+    monkeypatch.setattr(
+        gestion_documentos, "_cliente_editable", lambda *_: {"tipo_cliente": "Natural"}
+    )
+    monkeypatch.setattr(gestion_documentos, "_leer", lambda *_: ficha)
+    monkeypatch.setattr(
+        documentos_identidad,
+        "validar",
+        lambda *_: {"Activo": True, "AplicaNatural": True, "RequiereVencimiento": True},
+    )
+    historial = MagicMock()
+    monkeypatch.setattr(
+        gestion_documentos.repository, "insertar_historial_cliente", historial
+    )
+    return gestion_documentos, ficha, historial
+
+
+def test_alta_doc_secundario_conserva_identidad_y_audita(
+    gestion_pasaporte, monkeypatch
+):
+    from types import SimpleNamespace
+
+    from app.modules.clientes.schemas import DocumentoNuevo
+
+    gestion, ficha, historial = gestion_pasaporte
+    monkeypatch.setattr(documentos_identidad, "bloquear_identidad", MagicMock())
+    monkeypatch.setattr(
+        documentos_identidad, "buscar", lambda *_, **__: SimpleNamespace(existe=False)
+    )
+    insertar = MagicMock(return_value=79)
+    monkeypatch.setattr(documentos_identidad, "insertar", insertar)
+    datos = DocumentoNuevo(
+        tipo_documento="PAS",
+        numero=ficha["numero"],
+        codigo_pais_emision="ECU",
+        fecha_emision=date(2025, 1, 1),
+        fecha_vencimiento=date(2030, 1, 1),
+        motivo="Pasaporte secundario verificado",
+    )
+    respuesta = gestion.agregar(MagicMock(), 42, datos, HOY, 1, "127.0.0.1")
+    assert respuesta.id_documento == 79
+    assert respuesta.numero != ficha["numero"]
+    assert insertar.call_args.kwargs["principal"] is False
+    assert historial.call_args.kwargs["valor_nuevo"] == "79"
+    assert historial.call_args.kwargs["modificado_por"] == 1
+
+
+def test_renovar_doc_conserva_emisor_y_audita_vigencia_anterior(gestion_pasaporte):
+    from app.modules.clientes.schemas import DocumentoCambio
+
+    gestion, ficha, historial = gestion_pasaporte
+    conn = MagicMock()
+    nuevo_fin = date(2030, 1, 1)
+    datos = DocumentoCambio(
+        version=ficha["version"],
+        motivo="Renovación verificada",
+        accion="RENOVAR",
+        codigo_pais_emision="ECU",
+        fecha_emision=date(2025, 1, 1),
+        fecha_vencimiento=nuevo_fin,
+    )
+    gestion.actualizar(conn, 42, 79, datos, HOY, 1, "127.0.0.1")
+    assert conn.execute.call_args.args[1]["CodigoPaisEmision"] == "ECU"
+    assert conn.execute.call_args.args[1]["FechaVencimiento"] == nuevo_fin
+    assert "2025-01-01" in historial.call_args.kwargs["valor_anterior"]
+    assert "2030-01-01" in historial.call_args.kwargs["valor_nuevo"]
+
+
 def test_documento_anterior_distingue_emisor_faltante_o_discrepante(monkeypatch):
     consulta = ConsultaDocumentoBody(
         tipo_documento="NUEVO", numero="SINTETICO", codigo_pais_emision="ECU"

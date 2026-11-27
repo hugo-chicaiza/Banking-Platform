@@ -240,6 +240,7 @@ COMPARTIDAS = tuple(
         "actividades-economicas",
         "tipos-antecedente",
         "tipos-direccion",
+        "tipos-documento",
         "productos",
     )
 )
