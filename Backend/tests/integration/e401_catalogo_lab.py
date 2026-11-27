@@ -73,14 +73,7 @@ def _fecha(conn: Connection, fecha: date) -> int:
     ).scalar_one()
 
 
-def _version(conn: Connection, familia: Familia, version: int, desde: date) -> int:
-    datos = {
-        "familia": familia.codigo,
-        "tipo": familia.tipo,
-        "concepto": familia.concepto,
-        "version": version,
-        "desde": desde,
-    }
+def _catalogos(conn: Connection, familia: Familia) -> None:
     conn.execute(
         text("""
         IF NOT EXISTS (SELECT 1 FROM Contabilidad.TiposAsiento WHERE Codigo=:tipo)
@@ -90,8 +83,19 @@ def _version(conn: Connection, familia: Familia, version: int, desde: date) -> i
             INSERT Contabilidad.ConceptoContable (IdConceptoContable,CodigoConcepto,ConceptoDetalle,Estado)
             SELECT MAX(IdConceptoContable)+1,:concepto,:concepto,'Activo' FROM Contabilidad.ConceptoContable;
         """),
-        datos,
+        {"tipo": familia.tipo, "concepto": familia.concepto},
     )
+
+
+def _version(conn: Connection, familia: Familia, version: int, desde: date) -> int:
+    _catalogos(conn, familia)
+    datos = {
+        "familia": familia.codigo,
+        "tipo": familia.tipo,
+        "concepto": familia.concepto,
+        "version": version,
+        "desde": desde,
+    }
     existente = conn.execute(
         text("""
         SELECT IdPlantillaAsiento FROM Contabilidad.PlantillaAsiento
@@ -185,9 +189,10 @@ def _probar_asiento(
     fecha: date,
     dia: int,
     modelo: OperacionContable,
+    monto_inicial: int = 100,
 ) -> None:
     bases = dict.fromkeys(l.base for l in familia.lineas)
-    importes = {base: Decimal(100 + 7 * i) for i, base in enumerate(bases)}
+    importes = {base: Decimal(monto_inicial + 7 * i) for i, base in enumerate(bases)}
     codigos = {l.cuenta for l in familia.lineas}
     esperadas = [(l.cuenta, l.lado, importes[l.base]) for l in familia.lineas]
     with engine.connect() as conn:

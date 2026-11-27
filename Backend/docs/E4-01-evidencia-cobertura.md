@@ -32,12 +32,12 @@ Resultados sobre la rama basada en `4089d27`. El ensayo SQL local pasó las 32 f
 | #434 · Cuadre e imputabilidad | Ensayos negativos de descuadre y cuenta no imputable. Se conserva el criterio de imputación actual. | El cierre de #371 decide la política futura. |
 | #434 · Pruebas por tipo y período cerrado | Catálogo SQL de 32 familias y ensayo de período cerrado. | El cierre persistente de un día hábil sigue en E4-06. |
 
-## Tipos sin plantilla E4-01 seleccionable en Dev
+## Tipos con cobertura pendiente en el corte original
 
 | Tipo activo | Trabajo de Contabilidad | Dependencia |
 | --- | --- | --- |
-| `ATM_FALTANTE` | Candidato a completar con el tipo existente. Confirmar el auxiliar `19902505` frente a `19902515` y simular el asiento del faltante aprobado. | ATM certifica el productor del cuadre y el criterio aplicado. |
-| `CREDITO_DESEMBOLSO` | Preparar el caso de una banda con principal, neto y SOLCA reutilizando el tipo si el concepto y contrato coinciden. | Crédito define reparto multibanda, transacción y reverso. La regla general espera esa definición. |
+| `ATM_FALTANTE` | Configuración completa en Dev. V1 ID 37, aprobada y seleccionable desde el 30/11/2026 con `19902515` bajo `199025`. [Regla y evidencia](E4-01-atm-faltante.md). | ATM integra y certifica el productor del cuadre aprobado, con atomicidad, trazabilidad e idempotencia. |
+| `CREDITO_DESEMBOLSO` | La familia `CREDITO_DESEMBOLSO_CUENTA` v1, ID 36, está aprobada y seleccionable en Dev desde el 30/11/2026 para una sola banda. | Crédito integra el productor, rechaza multibanda antes del motor y define el reparto, la transacción y el reverso para la cobertura general. |
 | `BOVEDA_PROVISION` | Cotejar la regla histórica y el banco por agencia antes de preparar la versión. | Bóveda confirma recepción efectiva y liquidación bancaria. |
 | `BOVEDA_EXCEDENTE` | Preparar la dinámica contable una vez confirmadas las etapas y contrapartidas. | Bóveda distingue salida física y abono bancario. |
 | `BOVEDA_TRASLADO` | Probar despacho y recepción por separado con efectivo en tránsito. Evaluar reutilización del tipo para ambas familias. | Bóveda debe emitir ambos eventos y acreditar la recepción del destino. |
