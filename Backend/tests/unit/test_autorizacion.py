@@ -343,6 +343,7 @@ ROLES_POR_RUTA: dict[tuple[str, str], tuple[str, ...]] = {
     ("POST", "/api/v1/tarjetas"): ("ASESOR", "ADMIN"),
     ("GET", "/api/v1/tarjetas"): ("ASESOR", "SUPERVISOR", "ADMIN"),
     ("GET", "/api/v1/tarjetas/{idTarjeta}"): ("ASESOR", "SUPERVISOR", "ADMIN"),
+    ("GET", "/api/v1/tarjetas/por-renovar"): ("ASESOR", "SUPERVISOR", "ADMIN"),
     ("POST", "/api/v1/tarjetas/{idTarjeta}/estado"): ("ASESOR", "SUPERVISOR", "ADMIN"),
     ("POST", "/api/v1/tarjetas/{idTarjeta}/pin"): ("ASESOR", "ADMIN"),
     ("PATCH", "/api/v1/tarjetas/{idTarjeta}/envio"): ("ASESOR", "SUPERVISOR", "ADMIN"),

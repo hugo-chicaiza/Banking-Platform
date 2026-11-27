@@ -37,11 +37,12 @@ class SolicitudTarjeta:
 
     def version(self, conn: Connection, objetivo: Objetivo) -> str:
         tarjeta = repository.obtener_tarjeta(conn, int(objetivo.id), bloquear=True)
-        if (
-            tarjeta is None
-            or tarjeta["id_agencia"] != objetivo.agencia
-            or tarjeta["tipo_tarjeta"] != "Debito"
-        ):
+        if tarjeta is None or tarjeta["tipo_tarjeta"] != "Debito":
+            raise problema(
+                404, "TARJETA_NO_ENCONTRADA", "La tarjeta de débito no existe."
+            )
+        operativa = repository.agencia_solicitud(conn, int(objetivo.id))
+        if (operativa or tarjeta["id_agencia"]) != objetivo.agencia:
             raise problema(
                 404,
                 "TARJETA_NO_ENCONTRADA",
