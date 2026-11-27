@@ -63,10 +63,13 @@ class BovedaContexto:
             "movimientos": {},
             "desgloses": {},
             "arqueos": {},
+            "novedades": {},
             "detalles": {},
             "asientos": [],
             "solicitudes": {},
             "detalle_solicitudes": {},
+            "conteos_solicitudes": {},
+            "cupos_solicitudes": {},
         }
         self.bloqueos: list[int] = []
         self.fallo_asiento: int | None = None
@@ -79,6 +82,20 @@ class BovedaContexto:
             service.repo_contable, "bloquear_contabilizacion", lambda *args: None
         )
         monkeypatch.setattr(service.repo_contable, "obtener_por_id", lambda *args: None)
+        monkeypatch.setattr(
+            service.repo_contable, "plantilla_boveda", self.plantilla_movimiento
+        )
+        monkeypatch.setattr(
+            service.repo_contable,
+            "cuenta_boveda",
+            lambda *args: {
+                "estado": True,
+                "imputable": True,
+            },
+        )
+        monkeypatch.setattr(
+            service.repo_contable, "movimientos_asiento", self.movimientos_asiento
+        )
         monkeypatch.setattr(
             service.contabilidad, "contabilizar_boveda", self.contabilizar
         )
@@ -104,6 +121,10 @@ class BovedaContexto:
             "detalle_arqueo",
             "ajustes_arqueo",
             "aprobar_arqueo",
+            "vincular_ajuste_arqueo",
+            "novedades_arqueos",
+            "crear_novedad",
+            "resolver_novedad",
         ):
             monkeypatch.setattr(repo, nombre, getattr(self, nombre))
         for nombre in (
@@ -115,6 +136,15 @@ class BovedaContexto:
             "crear",
             "resolver",
             "vincular",
+            "anular",
+            "destinos",
+            "conteos",
+            "guardar_conteo",
+            "cupo_ocupado",
+            "reservar_cupo",
+            "liberar_cupo",
+            "despachar",
+            "confirmar",
         ):
             monkeypatch.setattr(
                 solicitudes_repo, nombre, getattr(self, "solicitud_" + nombre)
@@ -146,6 +176,54 @@ class BovedaContexto:
             raise problema(409, "PLANTILLA_BOVEDA_NO_CONFIGURADA", "Falta plantilla.")
         self.state["asientos"].append(datos)
         return len(self.state["asientos"])
+
+    def plantilla_movimiento(self, conn, agencia, tipo, naturaleza):
+        debe, haber = {
+            ("Traslado", "E"): (6, 1),
+            ("Traslado", "I"): (1, 6),
+            ("RetornoRemesa", "I"): (1, 6),
+            ("FaltanteTransito", "E"): (2, 6),
+            ("SobranteTransito", "I"): (6, 3),
+            ("DespachoExcedente", "E"): (6, 1),
+            ("CierreExcedente", "I"): (7, 6),
+            ("ProvisionExterna", "I"): (1, 7),
+        }[(tipo, naturaleza)]
+        return {"debito": debe, "credito": haber, "estado_tipo": "A"}
+
+    def movimientos_asiento(self, conn, asiento):
+        datos = self.state["asientos"][asiento - 1]
+        arqueos = {
+            "AjusteFaltante": (2, 1),
+            "AjusteSobrante": (1, 3),
+            "ReposicionFaltante": (1, 2),
+            "JustificaFaltante": (5, 2),
+            "DescuentoFaltante": (4, 2),
+        }
+        if datos["tipo"] in arqueos:
+            debe, haber = arqueos[datos["tipo"]]
+        else:
+            plantilla = self.plantilla_movimiento(
+                conn, datos["agencia"], datos["tipo"], datos["naturaleza"]
+            )
+            debe, haber = plantilla["debito"], plantilla["credito"]
+        codigos = {
+            1: "110101",
+            2: "160101",
+            3: "290101",
+            4: "250101",
+            5: "450101",
+            6: "190801",
+            7: "110301",
+        }
+        return [
+            {
+                "tipo_movimiento": lado,
+                "monto": datos["monto"],
+                "id_cuenta_contable": cuenta,
+                "codigo_cuenta": codigos[cuenta],
+            }
+            for lado, cuenta in (("DEBITO", debe), ("CREDITO", haber))
+        ]
 
     def listar_bovedas(self, conn, agencia, tipo):
         return [
@@ -266,8 +344,8 @@ class BovedaContexto:
             "fecha_hora_arqueo": datos["ahora"],
             "tipo_arqueo": datos["tipo"],
             "id_usuario_arqueador": datos["actor"],
-            "id_usuario_testigo": datos["testigo"],
-            "estado": "REGISTRADO",
+            "id_usuario_testigo": datos.get("testigo"),
+            "estado": datos["estado"],
             "id_movimiento_ajuste": None,
             "observaciones": datos["observaciones"],
             "saldo_teorico": datos["teorico"],
@@ -316,6 +394,80 @@ class BovedaContexto:
             id_movimiento_ajuste=ajuste,
         )
 
+    def vincular_ajuste_arqueo(self, conn, i, ajuste):
+        self.state["arqueos"][i]["id_movimiento_ajuste"] = ajuste
+
+    def novedades_arqueos(self, conn, ids, ahora):
+        return {
+            i: {
+                **n,
+                "estado": "RESUELTA"
+                if n["fecha_resolucion"] is not None
+                else "VENCIDA"
+                if n["fecha_vencimiento"] <= ahora
+                else "PENDIENTE",
+            }
+            for i, n in self.state["novedades"].items()
+            if i in ids
+        }
+
+    def crear_novedad(self, conn, datos):
+        self.state["novedades"][datos["arqueo"]] = {
+            "id_novedad": len(self.state["novedades"]) + 1,
+            "id_usuario_responsable": datos["responsable"],
+            "monto": datos["monto"],
+            "fecha_vencimiento": datos["vence"],
+            "id_asiento_contable": datos["asiento"],
+            "tipo_resolucion": None,
+            "fecha_resolucion": None,
+            "id_usuario_resolucion": None,
+            "referencia_resolucion": None,
+            "observaciones_resolucion": None,
+            "id_asiento_resolucion": None,
+            "id_movimiento_reposicion": None,
+        }
+
+    def resolver_novedad(self, conn, datos):
+        novedad = next(
+            n
+            for n in self.state["novedades"].values()
+            if n["id_novedad"] == datos["id"]
+        )
+        novedad.update(
+            tipo_resolucion=datos["tipo"],
+            fecha_resolucion=datos["ahora"],
+            id_usuario_resolucion=datos["actor"],
+            referencia_resolucion=datos["referencia"],
+            observaciones_resolucion=datos["observaciones"],
+            id_asiento_resolucion=datos["asiento"],
+            id_movimiento_reposicion=datos["movimiento"],
+        )
+
+    def arqueo_historico(self, cantidad=9):
+        return self.crear_arqueo(
+            self.conn,
+            {
+                "id_boveda": 1,
+                "ahora": service.contabilidad.ahora_ecuador(),
+                "tipo": "Sorpresivo",
+                "actor": 7,
+                "testigo": 12,
+                "estado": "REGISTRADO",
+                "observaciones": None,
+                "teorico": Decimal(200),
+                "fisico": Decimal(20) * cantidad,
+                "corte": self.ultimo_movimiento(self.conn, 1),
+            },
+            [
+                {
+                    "id_denominacion": 1,
+                    "cantidad": cantidad,
+                    "cantidad_esperada": 10,
+                    "valor": Decimal(20),
+                }
+            ],
+        )
+
     def movimiento(self, tipo="ProvisionExterna", **extra):
         return {
             "tipoMovimiento": tipo,
@@ -326,7 +478,6 @@ class BovedaContexto:
     def arqueo(self, cantidad=10, **extra):
         return {
             "tipoArqueo": "Sorpresivo",
-            "idUsuarioTestigo": 9,
             "desglose": [{"idDenominacion": 1, "cantidad": cantidad}],
             **extra,
         }
@@ -337,7 +488,7 @@ class BovedaContexto:
         )
 
     def ejecutar(self, ruta, json, headers=None):
-        """Ejercita creación y aprobación por dos sesiones diferentes."""
+        """Ejercita las etapas físicas con usuarios distintos."""
         creada = self.client.post(
             ruta.replace("/movimientos", "/solicitudes-movimiento"),
             json=json,
@@ -345,11 +496,33 @@ class BovedaContexto:
         )
         if creada.status_code != 201:
             return creada
+        datos = creada.json()
+        if datos["estado"] == "RECIBIDO":
+            return creada
         anterior = self.usuario
         try:
             self.usuario = replace(anterior, id_interno=9)
+            ruta = f"{BASE}/solicitudes-movimiento/{datos['idSolicitudMovimiento']}"
+            aprobada = self.client.post(f"{ruta}/aprobacion")
+            if aprobada.status_code != 200:
+                return aprobada
+            documentos = {"numeroGuia": "GUIA1", "precinto": "PRECINTO1"}
+            if datos["tipoMovimiento"] != "ProvisionExterna":
+                despacho = self.client.post(f"{ruta}/despacho", json=documentos)
+                if despacho.status_code != 200:
+                    return despacho
+            if datos["tipoMovimiento"] == "EnvioExcedente":
+                return self.client.post(
+                    f"{ruta}/cierre", json={"comprobanteBanco": "DEP1"}
+                )
+            self.usuario = replace(
+                anterior,
+                id_interno=10,
+                id_agencia=datos["idAgenciaDestino"] or datos["idAgencia"],
+            )
             return self.client.post(
-                f"{BASE}/solicitudes-movimiento/{creada.json()['idSolicitudMovimiento']}/aprobacion"
+                f"{ruta}/recepcion",
+                json={"desglose": json["desglose"], **documentos},
             )
         finally:
             self.usuario = anterior
@@ -371,7 +544,9 @@ class BovedaContexto:
         filas = [
             deepcopy(s)
             for s in self.state["solicitudes"].values()
-            if (agencia is None or s["id_agencia"] == agencia)
+            if (
+                agencia is None or agencia in {s["id_agencia"], s["id_agencia_destino"]}
+            )
             and (estado is None or s["estado"] == estado)
         ]
         return filas[(page - 1) * page_size : page * page_size], len(filas)
@@ -396,6 +571,7 @@ class BovedaContexto:
             "id_boveda": datos["boveda"],
             "id_boveda_contraparte": datos["contraparte"],
             "id_agencia": datos["agencia"],
+            "id_agencia_destino": datos["agencia_destino"],
             "tipo_movimiento": datos["tipo"],
             "monto": datos["monto"],
             "id_usuario_solicitante": datos["actor"],
@@ -411,12 +587,86 @@ class BovedaContexto:
         self.state["detalle_solicitudes"][i] = deepcopy(detalle)
         return i
 
-    def solicitud_resolver(self, conn, i, estado, actor, ahora, motivo):
+    def solicitud_resolver(
+        self,
+        conn,
+        i,
+        estado,
+        actor,
+        ahora,
+        motivo,
+        cuenta_transito=None,
+        usa_version=None,
+    ):
         self.state["solicitudes"][i].update(
             estado=estado,
             id_usuario_resolucion=actor,
             fecha_resolucion=ahora,
             motivo_resolucion=motivo,
+            id_cuenta_transito=cuenta_transito,
+            usa_plantilla_versionada=usa_version,
+        )
+
+    def solicitud_destinos(self, conn, origen):
+        return [
+            f
+            for i, f in self.state["bovedas"].items()
+            if i != origen and f["estado"] == "A"
+        ]
+
+    def solicitud_conteos(self, conn, ids):
+        return {i: deepcopy(self.state["conteos_solicitudes"].get(i, [])) for i in ids}
+
+    def solicitud_guardar_conteo(self, conn, i, detalle):
+        self.state["conteos_solicitudes"][i] = deepcopy(detalle)
+
+    def solicitud_cupo_ocupado(self, conn, agencia):
+        return agencia in self.state["cupos_solicitudes"]
+
+    def solicitud_reservar_cupo(self, conn, i, agencias):
+        for agencia in agencias:
+            assert agencia not in self.state["cupos_solicitudes"]
+            self.state["cupos_solicitudes"][agencia] = i
+
+    def solicitud_liberar_cupo(self, conn, i):
+        self.state["cupos_solicitudes"] = {
+            agencia: solicitud
+            for agencia, solicitud in self.state["cupos_solicitudes"].items()
+            if solicitud != i
+        }
+
+    def solicitud_anular(self, conn, i, actor, ahora, motivo):
+        self.state["solicitudes"][i].update(
+            estado="ANULADA",
+            id_usuario_anulacion=actor,
+            fecha_anulacion=ahora,
+            motivo_anulacion=motivo,
+        )
+
+    def solicitud_despachar(self, conn, datos):
+        self.state["solicitudes"][datos["solicitud"]].update(
+            estado="DESPACHADO",
+            id_usuario_despacho=datos["actor"],
+            fecha_despacho=datos["ahora"],
+            numero_guia=datos["guia"],
+            precinto=datos["precinto"],
+            id_asiento_despacho=datos["asiento"],
+        )
+
+    def solicitud_confirmar(self, conn, datos):
+        fila = self.state["solicitudes"][datos["solicitud"]]
+        fila.update(
+            estado=datos["estado"],
+            id_usuario_confirmacion=datos["actor"],
+            fecha_confirmacion=datos["ahora"],
+            monto_confirmado=datos["monto"],
+            diferencia=datos["monto"] - fila["monto"],
+            acta_novedad=datos["acta"],
+            comprobante_banco=datos["comprobante"],
+            id_asiento_confirmacion=datos["asiento"],
+            id_asiento_novedad=datos["novedad"],
+            numero_guia=fila.get("numero_guia") or datos["guia"],
+            precinto=fila.get("precinto") or datos["precinto"],
         )
 
     def solicitud_vincular(self, conn, i, ids):

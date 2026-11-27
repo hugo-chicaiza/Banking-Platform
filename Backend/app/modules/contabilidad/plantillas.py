@@ -184,14 +184,29 @@ def _validar_lineas_boveda(
         "PROVISIONEXTERNA": {"110305", "110310", "110315", "110320"},
         "ENVIOEXCEDENTE": {"110305", "110310", "110315", "110320"},
     }
+    efectivo_boveda = "11010505"
+    debe, haber = cuentas.get("DEBITO") or "", cuentas.get("CREDITO") or ""
+    if tipo in permitidas:
+        cuentas_validas = (
+            cuentas.get(efectivo) == efectivo_boveda
+            and cuentas.get(contraparte) in permitidas[tipo]
+        )
+    else:
+        por_cobrar_valida = haber.startswith("1") and haber != efectivo_boveda
+        cuentas_validas = por_cobrar_valida and (
+            (tipo == "REPOSICIONFALTANTE" and debe == efectivo_boveda)
+            or (tipo == "DESCUENTOFALTANTE" and debe.startswith("2"))
+            or (
+                tipo == "JUSTIFICAFALTANTE" and debe not in {"", haber, efectivo_boveda}
+            )
+        )
     if (
         len(lineas) != 2
         or any(
             l["OrigenCuenta"] != "FIJA" or l["ComponenteImporte"] != base
             for l in lineas
         )
-        or cuentas.get(efectivo) != "11010505"
-        or cuentas.get(contraparte) not in permitidas[tipo]
+        or not cuentas_validas
     ):
         raise problema(
             422,

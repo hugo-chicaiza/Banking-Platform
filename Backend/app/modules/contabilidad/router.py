@@ -8,7 +8,7 @@ from app.core.api.middleware import ip_cliente
 from app.core.database.db import cooperativa
 from app.core.security.auth import Usuario, UsuarioActual, require_auth, require_roles
 from app.core.security.operador import IdInterno, auditar, exigir_id_interno
-from app.modules.auth.agencias import agencia_consulta_asientos
+from app.modules.auth.agencias import agencia_consulta_asientos, exigir_matriz
 from app.modules.contabilidad import corte_workos, importaciones, service
 from app.modules.contabilidad.schemas import (
     INT32_MAX,
@@ -28,7 +28,7 @@ from .plantillas import router as plantillas_router
 router = APIRouter(
     prefix="/contabilidad",
     tags=["contabilidad"],
-    dependencies=[Depends(require_auth)],
+    dependencies=[Depends(require_auth), Depends(exigir_matriz)],
 )
 
 Db = Annotated[Connection, Depends(cooperativa)]

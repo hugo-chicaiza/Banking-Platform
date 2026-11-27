@@ -24,6 +24,7 @@ class LaboratorioBoveda:
         self.instancia_predeterminada = (
             os.getenv("BOV_LOCAL_SQL_DEFAULT_INSTANCE") == "1"
         )
+        self.localdb = os.getenv("BOV_LOCAL_SQL_LOCALDB") == "1"
         self.engine = None
         self.creada = False
 
@@ -32,13 +33,16 @@ class LaboratorioBoveda:
             fila = cursor.execute("""
                 SELECT CONVERT(nvarchar(128),SERVERPROPERTY('MachineName')),
                        CONVERT(nvarchar(128),SERVERPROPERTY('InstanceName')),
-                       CONVERT(int,SERVERPROPERTY('EngineEdition')), DB_NAME()
+                       CONVERT(int,SERVERPROPERTY('EngineEdition')), DB_NAME(),
+                       CONVERT(int,SERVERPROPERTY('IsLocalDB'))
             """).fetchone()
+            instancia = None if self.instancia_predeterminada else "SQLEXPRESS"
+            ediciones = (2, 3, 4) if self.instancia_predeterminada else (4,)
             if (
                 fila is None
                 or str(fila[0]).upper() != platform.node().upper()
-                or fila[1] != (None if self.instancia_predeterminada else "SQLEXPRESS")
-                or fila[2] not in ((2, 3, 4) if self.instancia_predeterminada else (4,))
+                or (fila[4] != 1 if self.localdb else fila[1] != instancia)
+                or fila[2] not in ediciones
                 or fila[3] != database
             ):
                 raise RuntimeError("Destino fuera del laboratorio SQL Server local")
@@ -55,9 +59,20 @@ class LaboratorioBoveda:
             self.database,
         }:
             raise RuntimeError("Laboratorio BOV deshabilitado o base no permitida")
-        servidor = "lpc:." if self.instancia_predeterminada else r"lpc:.\SQLEXPRESS"
+        servidor = (
+            r"(localdb)\MSSQLLocalDB"
+            if self.localdb
+            else "lpc:."
+            if self.instancia_predeterminada
+            else r"lpc:.\SQLEXPRESS"
+        )
+        driver = (
+            "ODBC Driver 18 for SQL Server"
+            if self.localdb
+            else "ODBC Driver 17 for SQL Server"
+        )
         raw = pyodbc.connect(
-            f"DRIVER={{ODBC Driver 17 for SQL Server}};SERVER={servidor};"
+            f"DRIVER={{{driver}}};SERVER={servidor};"
             f"DATABASE={database};Trusted_Connection=yes;Encrypt=no;Connection Timeout=5;APP=BOV_Local_Lab;",
             autocommit=autocommit,
             timeout=5,
@@ -109,6 +124,14 @@ class LaboratorioBoveda:
             )
             self.ejecutar_script(raw, solicitudes)
             self.ejecutar_script(raw, solicitudes)
+            for nombre in (
+                "20261127_boveda_movimientos_confirmacion.tsql",
+                "20261127_boveda_reservas_operativas.tsql",
+                "20261127_boveda_arqueos_novedades.tsql",
+            ):
+                migracion = BACKEND / "migrations" / nombre
+                self.ejecutar_script(raw, migracion)
+                self.ejecutar_script(raw, migracion)
             with closing(raw.cursor()) as cursor:
                 cursor.execute(
                     "CREATE TABLE Contabilidad.ConceptoContable "
