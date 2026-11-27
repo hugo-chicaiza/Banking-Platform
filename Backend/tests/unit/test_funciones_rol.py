@@ -152,11 +152,11 @@ def test_valores_iniciales_preservan_la_matriz_de_operaciones_del_equipo():
     for funcion in FUNCIONES:
         for operacion in funcion.operaciones:
             permitidos = set(ROLES_POR_RUTA[operacion]) or set(ROLES)
-            if operacion == (
-                "GET",
-                "/api/v1/clientes/{idCliente}/relaciones/firmantes",
-            ):
-                # La ficha reducida de CAJERO no incluye vínculos de firma.
+            if operacion in {
+                ("GET", "/api/v1/clientes/{idCliente}/relaciones/firmantes"),
+                ("GET", "/api/v1/clientes/{idCliente}/relaciones/tutor"),
+            }:
+                # La ficha reducida de CAJERO no incluye estos vínculos.
                 assert set(funcion.roles_iniciales) - {"CAJERO"} == permitidos
                 continue
             if funcion.id == "contabilidad.plantillas.consultar":

@@ -123,6 +123,8 @@ FUNCIONES = (
             ("PUT", C + "/{idCliente}/documentos/{idDocumento}/principal"),
             ("POST", C + "/{idCliente}/relaciones/firmantes"),
             ("POST", C + "/{idCliente}/relaciones/firmantes/{idRelacion}/fin"),
+            ("POST", C + "/{idCliente}/relaciones/tutor"),
+            ("POST", C + "/{idCliente}/relaciones/tutor/relevo"),
         ),
         "/clientes-busqueda",
         ("clientes.consultar",),
