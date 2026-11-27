@@ -544,6 +544,31 @@ ROLES_POR_RUTA: dict[tuple[str, str], tuple[str, ...]] = {
 # Cobertura de las rutas aditivas y de los contratos incorporados desde develop.
 ROLES_POR_RUTA.update(
     {
+        # E8-01: bitácora de auditoría
+        ("POST", "/api/v1/auditoria/eventos/busqueda"): (
+            "ADMIN",
+            "SUPERVISOR",
+            "AUDITOR",
+        ),
+        ("GET", "/api/v1/auditoria/eventos/{idEvento}"): (
+            "ADMIN",
+            "SUPERVISOR",
+            "AUDITOR",
+        ),
+        ("GET", "/api/v1/auditoria/tipos-evento"): ("ADMIN", "SUPERVISOR", "AUDITOR"),
+        ("GET", "/api/v1/auditoria/objetivos/{tipo}/{id}/eventos"): (
+            "ADMIN",
+            "SUPERVISOR",
+            "AUDITOR",
+        ),
+        ("POST", "/api/v1/auditoria/eventos/exportacion"): ("ADMIN", "AUDITOR"),
+        # E8-02: integridad de la bitácora
+        ("POST", "/api/v1/auditoria/verificaciones"): (
+            "ADMIN",
+            "SUPERVISOR",
+            "AUDITOR",
+        ),
+        ("GET", "/api/v1/auditoria/verificaciones"): ("ADMIN", "SUPERVISOR", "AUDITOR"),
         # Seguridad: permisos de roles (WorkOS) y pestañas por rol
         ("GET", "/api/v1/seguridad/permisos"): ("ADMIN",),
         ("PATCH", "/api/v1/seguridad/permisos/{slug}"): ("ADMIN",),
