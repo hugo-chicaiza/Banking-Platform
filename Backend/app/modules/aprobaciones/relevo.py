@@ -97,12 +97,13 @@ def entregar(
                 ).scalar()
                 if existe is None:
                     id_auditoria = destino.execute(
-                        consulta("""INSERT Auditoria.Auditoria
-                        (UsuarioID,NombreAccion,TablaAfectada,IDRegistro,FechaHora,DireccionIP,Descripcion,Resultado,RolesWorkOS,
-                         IdEvento,CodigoEvento,FechaHoraUTC,IdAgencia,IdSesion,Canal,IdCorrelacion,TipoObjetivo,IdObjetivo,Cambios)
-                        OUTPUT inserted.AuditoriaID VALUES(:interno,:codigo,:tabla,:objetivo,
-                        DATEADD(hour,-5,:fecha),:ip,:descripcion,:resultado,:roles,
-                        :id_evento,:codigo,:fecha,:agencia,:sesion,:canal,:correlacion,:tipo_objetivo,:objetivo,:cambios)"""),
+                        # E8-02: el escritor encadenado asigna secuencia y hash
+                        consulta("""DECLARE @id int; EXEC Auditoria.usp_RegistrarEvento
+                        @UsuarioID=:interno,@NombreAccion=:codigo,@TablaAfectada=:tabla,@IDRegistro=:objetivo,
+                        @DireccionIP=:ip,@Descripcion=:descripcion,@Resultado=:resultado,@RolesWorkOS=:roles,
+                        @IdEvento=:id_evento,@CodigoEvento=:codigo,@FechaHoraUTC=:fecha,@IdAgencia=:agencia,
+                        @IdSesion=:sesion,@Canal=:canal,@IdCorrelacion=:correlacion,@TipoObjetivo=:tipo_objetivo,
+                        @IdObjetivo=:objetivo,@Cambios=:cambios,@AuditoriaID=@id OUTPUT; SELECT @id"""),
                         {
                             "interno": contenido["idInterno"],
                             "codigo": fila["CodigoEvento"],
