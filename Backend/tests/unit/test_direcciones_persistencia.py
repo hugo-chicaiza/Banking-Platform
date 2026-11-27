@@ -199,6 +199,18 @@ def test_fallo_al_confirmar_registro_revierte_la_unidad_cliente_direccion(monkey
     monkeypatch.setattr(service, "validar_tipo_direccion", lambda *args: None)
     monkeypatch.setattr(repository, "crear_cliente", lambda *args, **kwargs: datos)
     conexion = MagicMock(spec=Connection)
+    from app.modules.clientes import documentos_identidad
+    from app.modules.clientes.schemas import ConsultaDocumentoBody
+
+    monkeypatch.setattr(
+        documentos_identidad,
+        "preparar_alta",
+        lambda *_: ConsultaDocumentoBody(
+            tipo_documento="CED",
+            numero=entrada.identificacion,
+        ),
+    )
+    monkeypatch.setattr(documentos_identidad, "insertar", lambda *_, **__: 1)
     conexion.commit.side_effect = RuntimeError("Fallo de confirmación")
     with pytest.raises(RuntimeError, match="Fallo de confirmación"):
         service.registrar_cliente(cast(Connection, conexion), entrada, 7, "127.0.0.1")

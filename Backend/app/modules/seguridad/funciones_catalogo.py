@@ -84,6 +84,7 @@ FUNCIONES = (
         (
             ("POST", C + "/busqueda"),
             ("GET", C + "/{idCliente}"),
+            ("GET", C + "/{idCliente}/documentos"),
             ("GET", C + "/{idCliente}/relaciones/firmantes"),
         ),
         "/clientes-busqueda",
@@ -116,6 +117,9 @@ FUNCIONES = (
         REGISTRO,
         (
             ("PATCH", C + "/{idCliente}"),
+            ("POST", C + "/{idCliente}/documentos"),
+            ("PATCH", C + "/{idCliente}/documentos/{idDocumento}"),
+            ("PUT", C + "/{idCliente}/documentos/{idDocumento}/principal"),
             ("POST", C + "/{idCliente}/relaciones/firmantes"),
             ("POST", C + "/{idCliente}/relaciones/firmantes/{idRelacion}/fin"),
         ),
@@ -606,7 +610,11 @@ FUNCIONES = (
         "Crear registro de catálogo o tasa",
         "Catálogos",
         ("ADMIN",),
-        (("POST", G + "/administracion/{clave}"), ("POST", G + "/tasas-interes")),
+        (
+            ("POST", G + "/administracion/{clave}"),
+            ("POST", G + "/tasas-interes"),
+            ("POST", G + "/tipos-documento"),
+        ),
         "/catalogos",
         ("catalogos.consultar",),
     ),
@@ -615,7 +623,10 @@ FUNCIONES = (
         "Editar registro de catálogo",
         "Catálogos",
         ("ADMIN",),
-        (("PATCH", G + "/administracion/{clave}/{id_registro}"),),
+        (
+            ("PATCH", G + "/administracion/{clave}/{id_registro}"),
+            ("PATCH", G + "/tipos-documento/{codigo}"),
+        ),
         "/catalogos",
         ("catalogos.consultar",),
     ),

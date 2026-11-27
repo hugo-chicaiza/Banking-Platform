@@ -61,18 +61,27 @@ def obtener_cliente_por_identificacion(
 
     Devuelve {id_cliente, estado, tipo_cliente, tipo_documento} o None si no existe.
     """
-    return _one(
-        conn,
-        """
-        SELECT IdCliente     AS id_cliente,
-               Estado        AS estado,
-               TipoCliente   AS tipo_cliente,
-               TipoDocumento AS tipo_documento
+    resultado = conn.execute(
+        text("""
+        SELECT IdCliente AS id_cliente, Estado AS estado,
+               TipoCliente AS tipo_cliente, TipoDocumento AS tipo_documento
         FROM Clientes.Cliente
         WHERE Identificacion = :identificacion
-        """,
+        ORDER BY IdCliente
+        """),
         {"identificacion": identificacion},
     )
+    with resultado:
+        filas = resultado.mappings().fetchmany(2)
+    if len(filas) > 1:
+        from app.core.api.errors import problema
+
+        raise problema(
+            409,
+            "DOCUMENTO_AMBIGUO",
+            "Usa el tipo y el país emisor para consultar el documento.",
+        )
+    return dict(filas[0]) if filas else None
 
 
 def obtener_cliente_tipos(conn: Connection, id_cliente: int) -> dict[str, Any] | None:
