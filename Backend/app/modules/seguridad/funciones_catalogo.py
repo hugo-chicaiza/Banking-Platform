@@ -331,7 +331,7 @@ FUNCIONES = (
         "Consultar tarjetas",
         "Tarjetas",
         GESTORES,
-        (("GET", T), ("GET", T + "/{idTarjeta}")),
+        (("GET", T), ("GET", T + "/por-renovar"), ("GET", T + "/{idTarjeta}")),
         "/tarjetas",
     ),
     _f(

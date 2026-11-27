@@ -46,6 +46,18 @@ def _archivar_bitacora() -> Conteo:
     return tarea_archivar()
 
 
+def _vencer_tarjetas() -> Conteo:
+    from app.modules.tarjetas.tareas import vencer
+
+    return vencer()
+
+
+def _anular_tarjetas_no_retiradas() -> Conteo:
+    from app.modules.tarjetas.tareas import anular_no_retiradas
+
+    return anular_no_retiradas()
+
+
 TAREAS: dict[str, Tarea] = {
     "ATM06_RECUPERACION": Tarea("ATM06_RECUPERACION", _atm06_recuperacion),
     "SIS_VIGILANTE": Tarea("SIS_VIGILANTE", _vigilante),
@@ -55,6 +67,10 @@ TAREAS: dict[str, Tarea] = {
         "AUD_VERIFICAR_INTEGRIDAD", _verificar_integridad
     ),
     "AUD_ARCHIVAR": Tarea("AUD_ARCHIVAR", _archivar_bitacora),
+    "TAR_VENCER": Tarea("TAR_VENCER", _vencer_tarjetas),
+    "TAR_ANULAR_NO_RETIRADAS": Tarea(
+        "TAR_ANULAR_NO_RETIRADAS", _anular_tarjetas_no_retiradas
+    ),
 }
 
 

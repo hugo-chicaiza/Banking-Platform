@@ -2,6 +2,7 @@
 
 import os
 from dataclasses import replace
+from datetime import date
 from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
@@ -19,7 +20,7 @@ from app.modules.aprobaciones.auditoria import ContextoAuditoria
 from app.modules.aprobaciones.identidad import Actor
 from app.modules.aprobaciones.manejadores import registro_inicial
 from app.modules.aprobaciones.servicio import Servicio
-from app.modules.tarjetas import aprobacion, service
+from app.modules.tarjetas import aprobacion, ciclo, service, tareas
 from scripts.recuperar_solicitudes_tarjetas_e610 import recuperar
 from tests.sesion import USUARIO, simular_sesion
 from tests.tarjetas_hsm import instalar
@@ -69,7 +70,8 @@ def bases():
                     Estado varchar(20), EsExtension bit, IdTarjetaTitular int NULL, PinAsignado bit,
                     FechaSolicitud date, FechaResolucion datetime2 NULL, FechaEmision date, FechaExpiracion date,
                     IdAgencia char(3), CreadoPor int, MotivoEstado varchar(30) NULL,
-                    EntregaVerificadaEn datetime2 NULL, SobreDescargadoEn datetime2 NULL
+                    EntregaVerificadaEn datetime2 NULL, SobreDescargadoEn datetime2 NULL,
+                    IdTarjetaReemplazada int NULL
                 );
                 CREATE TABLE Tarjeta.EnviosTarjeta (IdTarjeta int, RequiereEnvio bit, CodigoSeguimiento varchar(64), DespachadoEn datetime2);
                 CREATE TABLE Tarjeta.TransicionEstado (EstadoOrigen varchar(20), EstadoDestino varchar(20));
@@ -83,10 +85,17 @@ def bases():
                 INSERT Tarjeta.TransicionEstado VALUES ('Solicitada','Aprobada'),('Aprobada','Generada'),('Solicitada','Anulada');
                 INSERT Tarjeta.Tarjeta
                 SELECT Id,'tok_qa','5000 00** **** 1234','Debito',N'CLIENTE QA',2,Id,4,'Solicitada',0,NULL,0,
-                       '2026-11-25',NULL,'2026-11-25','2031-11-25','001',11,NULL,NULL,NULL
+                       '2026-11-25',NULL,'2026-11-25','2031-11-25','001',11,NULL,NULL,NULL,NULL
                 FROM (VALUES (321),(322),(323)) AS f(Id);
             """)
             _migrar(cur, coop, "cooperativa/202611180802_aprobaciones_entrega.up.sql")
+            cur.execute("CREATE SCHEMA Organizacion")
+            cur.execute(
+                "CREATE TABLE Organizacion.Agencia (IdAgencia char(3) PRIMARY KEY)"
+            )
+            _migrar(cur, coop, "cooperativa/202611172000_parametros_estructura.up.sql")
+            for _ in range(2):
+                _migrar(cur, coop, "cooperativa/202611271600_tarjetas_ciclo.up.sql")
             for sufijo_sql in ("up", "down", "up", "up"):
                 _migrar(
                     cur,
@@ -104,6 +113,7 @@ def bases():
             for archivo in (
                 "seguridad/202611180800_aprobaciones_catalogo.up.sql",
                 "seguridad/202611180801_aprobaciones_solicitudes.up.sql",
+                "seguridad/202611180804_aprobaciones_tareas.up.sql",
                 "cooperativa/202611180802_aprobaciones_entrega.up.sql",
                 "seguridad/202611261600_tarjetas_aprobaciones.up.sql",
                 "seguridad/202611261600_tarjetas_aprobaciones.down.sql",
@@ -111,6 +121,11 @@ def bases():
                 "seguridad/202611261600_tarjetas_aprobaciones.up.sql",
             ):
                 _migrar(cur, seg, archivo)
+            cur.execute("ALTER TABLE Sistema.Tarea ADD VentanaEsperadaMin int NULL")
+            for sentido in ("up", "down", "up"):
+                _migrar(
+                    cur, seg, f"seguridad/202611271600_tarjetas_ciclo.{sentido}.sql"
+                )
             yield tuple(motores)
         finally:
             for motor in motores:
@@ -248,6 +263,9 @@ def test_recupera_aprueba_y_rechaza_las_tarjetas_ficticias(bases, monkeypatch):
 
         # La caída de una base deja trabajo durable y el reintento aplica el rechazo una sola vez.
         with coop.begin() as conn:
+            conn.execute(
+                text("UPDATE Tarjeta.Tarjeta SET IdAgencia='002' WHERE IdTarjeta=323")
+            )
             aprobacion.programar(conn, 323, titular, "001")
         with monkeypatch.context() as falla:
 
@@ -260,6 +278,7 @@ def test_recupera_aprueba_y_rechaza_las_tarjetas_ficticias(bases, monkeypatch):
             )
         assert aprobacion.reconciliar(cola, org) == (1, 1, 0)
         tercera = recuperar(cola, 323, org)
+        assert client.get(f"{ruta}/{tercera}").json()["idAgencia"] == "001"
         with monkeypatch.context() as falla:
 
             def indisponible(*_):
@@ -311,3 +330,39 @@ def test_recupera_aprueba_y_rechaza_las_tarjetas_ficticias(bases, monkeypatch):
                 "DECLARE @base sysname=DB_NAME(); EXEC sys.sp_set_session_context N'migration_database', @base;"
             )
             conn.exec_driver_sql(sql)
+
+
+def test_e611_ventana_por_agencia_y_tareas_repetibles(bases, monkeypatch):
+    coop, seg = bases
+    fecha = date(2026, 11, 27)
+    monkeypatch.setattr(ciclo, "hoy", lambda: fecha)
+    with seg.connect() as conn:
+        assert conn.execute(
+            text(
+                "SELECT Codigo FROM Sistema.Tarea WHERE Codigo LIKE 'TAR[_]%' AND Estado='A' ORDER BY Codigo"
+            )
+        ).scalars().all() == ["TAR_ANULAR_NO_RETIRADAS", "TAR_VENCER"]
+    with coop.begin() as conn:
+        conn.exec_driver_sql("""
+            UPDATE Tarjeta.Tarjeta SET Estado='Activa', FechaExpiracion='2026-12-27' WHERE IdTarjeta=321;
+            UPDATE Tarjeta.Tarjeta SET Estado='Bloqueada', FechaExpiracion='2026-11-26', MotivoEstado='ROBO' WHERE IdTarjeta=322;
+            UPDATE Tarjeta.Tarjeta SET Estado='Generada', FechaEmision='2026-10-01' WHERE IdTarjeta=323;
+            INSERT Tarjeta.EnviosTarjeta (IdTarjeta, RequiereEnvio, CodigoSeguimiento, DespachadoEn)
+              VALUES (323,1,'QA',SYSUTCDATETIME());
+        """)
+        primera = service.listar_por_renovar(conn, "001", 1, 20)
+        assert [fila.id_tarjeta for fila in primera.items] == [321]
+        assert primera.total == 1
+        assert service.listar_por_renovar(conn, "001", 2, 20).total == 1
+        assert service.listar_por_renovar(conn, "002", 1, 20).total == 0
+        assert tareas.vencer_tarjetas(conn, fecha) == 1
+        assert tareas.anular_tarjetas_no_retiradas(conn, date(2026, 10, 28)) == 0
+        conn.execute(text("DELETE FROM Tarjeta.EnviosTarjeta WHERE IdTarjeta=323"))
+        assert tareas.anular_tarjetas_no_retiradas(conn, date(2026, 10, 28)) == 1
+        assert tareas.vencer_tarjetas(conn, fecha) == 0
+        assert tareas.anular_tarjetas_no_retiradas(conn, date(2026, 10, 28)) == 0
+        assert conn.execute(
+            text(
+                "SELECT IdTarjeta, EstadoActual FROM Tarjeta.TarjetaHis ORDER BY IdTarjeta"
+            )
+        ).all() == [(322, "Vencida"), (323, "Anulada")]
