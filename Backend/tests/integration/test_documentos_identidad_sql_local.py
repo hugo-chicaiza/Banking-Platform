@@ -7,6 +7,7 @@ from pathlib import Path
 from threading import Barrier
 from uuid import uuid4
 
+import pyodbc
 import pytest
 from fastapi import HTTPException
 from sqlalchemy import Connection, create_engine, text
@@ -28,16 +29,35 @@ MIGRACION = (
 
 @pytest.fixture
 def bd():
-    url = (
-        "mssql+pyodbc://localhost/{base}?driver=ODBC+Driver+18+for+SQL+Server"
-        "&TrustServerCertificate=yes"
-    )
+    instancia = os.getenv("E542_LOCALDB_INSTANCE", "EnquoAccesosQA")
+    if not instancia or not all(
+        c.isascii() and (c.isalnum() or c in "_-") for c in instancia
+    ):
+        pytest.fail("Indica únicamente el nombre de una instancia LocalDB.")
+
+    def conectar(base: str, *, autocommit: bool = False):
+        return pyodbc.connect(
+            rf"DRIVER={{ODBC Driver 18 for SQL Server}};SERVER=(localdb)\{instancia};"
+            f"DATABASE={base};Trusted_Connection=yes;TrustServerCertificate=yes;",
+            timeout=5,
+            autocommit=autocommit,
+        )
+
     nombre = "E542_Test_" + uuid4().hex
-    admin = create_engine(url.format(base="master"), isolation_level="AUTOCOMMIT")
-    with admin.connect() as conn:
-        conn.exec_driver_sql(f"CREATE DATABASE [{nombre}]")
-    motor = create_engine(url.format(base=nombre), hide_parameters=True)
+    admin = create_engine(
+        "mssql+pyodbc://",
+        creator=lambda: conectar("master", autocommit=True),
+        isolation_level="AUTOCOMMIT",
+    )
+    motor = None
+    creada = False
     try:
+        with admin.connect() as conn:
+            conn.exec_driver_sql(f"CREATE DATABASE [{nombre}]")
+            creada = True
+        motor = create_engine(
+            "mssql+pyodbc://", creator=lambda: conectar(nombre), hide_parameters=True
+        )
         with motor.begin() as conn:
             conn.exec_driver_sql("CREATE SCHEMA Catalogo")
             conn.exec_driver_sql("CREATE SCHEMA Clientes")
@@ -60,13 +80,15 @@ def bd():
                 conn.exec_driver_sql(lote)
         yield motor
     finally:
-        motor.dispose()
+        if motor is not None:
+            motor.dispose()
         try:
-            with admin.connect() as conn:
-                conn.exec_driver_sql(
-                    f"ALTER DATABASE [{nombre}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE; "
-                    f"DROP DATABASE [{nombre}];"
-                )
+            if creada:
+                with admin.connect() as conn:
+                    conn.exec_driver_sql(
+                        f"ALTER DATABASE [{nombre}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE; "
+                        f"DROP DATABASE [{nombre}];"
+                    )
         finally:
             admin.dispose()
 
