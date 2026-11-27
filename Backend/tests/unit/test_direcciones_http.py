@@ -92,9 +92,10 @@ def test_http_validacion_documento_no_altera_el_contrato_existente(http, monkeyp
         return_value={"valida": True, "existe": False, "mensaje": "Disponible"}
     )
     monkeypatch.setattr(service, "validar_identificacion", validar)
-    respuesta = http.get(
-        "/api/v1/clientes/validar-identificacion",
-        params={"tipoDocumento": "C", "identificacion": "0100000025"},
+    # El documento va en el cuerpo, nunca en la URL (ASVS 14.2.1).
+    respuesta = http.post(
+        "/api/v1/clientes/validaciones/documento",
+        json={"tipoDocumento": "C", "identificacion": "0100000025"},
     )
     assert respuesta.status_code == 200
     assert respuesta.json()["existe"] is False

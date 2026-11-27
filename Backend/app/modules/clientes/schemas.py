@@ -33,13 +33,26 @@ CodigoPostal = Annotated[str, Field(min_length=6, max_length=6, pattern=r"^[0-9]
 # ---------------------------------------------------------------------------
 
 
+class ValidacionDocumentoBody(CamelModel):
+    """Body de POST /api/v1/clientes/validaciones/documento (CLI-01)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    tipo_documento: TipoDocumento
+    identificacion: Annotated[
+        str, StringConstraints(strip_whitespace=True, min_length=1, max_length=13)
+    ]
+
+
 class ValidacionIdentificacion(CamelModel):
-    """Respuesta de GET /api/v1/clientes/validar-identificacion (CLI-01)."""
+    """Respuesta de POST /api/v1/clientes/validaciones/documento (CLI-01)."""
 
     valida: bool
     existe: bool
     id_cliente: int | None = None
     mensaje: str
+    reincorporable: bool = False
+    estado: str | None = None
 
 
 # ---------------------------------------------------------------------------

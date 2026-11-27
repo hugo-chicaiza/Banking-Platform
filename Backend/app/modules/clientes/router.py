@@ -24,6 +24,12 @@ from app.modules.clientes.aprobacion_estado import (
 from app.modules.clientes.aprobacion_estado import (
     objetivo as objetivo_estado,
 )
+from app.modules.clientes.aprobacion_reincorporacion import (
+    CODIGO_REINCORPORACION,
+)
+from app.modules.clientes.aprobacion_reincorporacion import (
+    objetivo as objetivo_reincorporacion,
+)
 from app.modules.clientes.aprobacion_riesgo import (
     CODIGO_RIESGO,
 )
@@ -50,7 +56,7 @@ from app.modules.clientes.schemas import (
     RiesgoRegistrado,
     SolicitudDesafio,
     SolicitudRevelacion,
-    TipoDocumento,
+    ValidacionDocumentoBody,
     ValidacionIdentificacion,
 )
 from app.modules.clientes.visibilidad import aplicar_visibilidad, puede_ver_direcciones
@@ -194,37 +200,114 @@ def obtener_perfil_cliente(
 
 
 # ---------------------------------------------------------------------------
-# GET /api/v1/clientes/validar-identificacion
+# POST /api/v1/clientes/validaciones/documento
 # ---------------------------------------------------------------------------
 # Roles: ASESOR, ADMIN
 
 
-@_gestion_router.get(
-    "/validar-identificacion",
+@_gestion_router.post(
+    "/validaciones/documento",
     operation_id="CLI01",
     response_model=ValidacionIdentificacion,
     dependencies=_ASESOR_ADMIN,
 )
 def validar_identificacion(
-    tipo_documento: Annotated[
-        TipoDocumento,
-        Query(
-            description="Tipo de documento: C (Cédula), R (RUC), P (Pasaporte)",
-            alias="tipoDocumento",
-        ),
-    ],
-    identificacion: Annotated[
-        str,
-        Query(
-            description="Número de documento de identificación",
-            min_length=1,
-            max_length=20,
-        ),
-    ],
+    payload: ValidacionDocumentoBody,
     conn: Db,
 ) -> Any:
     """Valida formato del documento (Módulo 10 para Cédula/RUC) y si ya existe (CLI-01 / C-02)."""
-    return service.validar_identificacion(conn, tipo_documento, identificacion)
+    return service.validar_identificacion(
+        conn, payload.tipo_documento, payload.identificacion
+    )
+
+
+# ---------------------------------------------------------------------------
+# POST /api/v1/clientes/reincorporaciones
+# ---------------------------------------------------------------------------
+# Roles: ASESOR, SUPERVISOR, ADMIN
+
+_ROLES_REINCORPORACION = [Depends(require_roles("ASESOR", "ADMIN"))]
+
+SolicitarReincorporacion = Annotated[
+    Usuario, Depends(require_roles("ASESOR", "SUPERVISOR", "ADMIN"))
+]
+
+
+def _solicitar_reincorporacion(
+    request: Request, usuario: Usuario
+) -> service.SolicitarReincorporacion:
+    def solicitar(id_cliente: int, contenido: dict[str, Any]) -> SolicitudAceptada:
+        actor = aprobaciones.actual(usuario)
+        try:
+            id_solicitud = aprobaciones.servicio().solicitar(
+                actor,
+                CODIGO_REINCORPORACION,
+                objetivo_reincorporacion(id_cliente),
+                contenido,
+                hoy(),
+                aprobaciones.contexto(request, usuario),
+            )
+        except HTTPException as error:
+            detalle: Any = error.detail
+            if (
+                isinstance(detalle, dict)
+                and detalle.get("code") == "SOLICITUD_YA_PENDIENTE"
+            ):
+                raise problema(
+                    409,
+                    "REINCORPORACION_PENDIENTE",
+                    "El cliente ya tiene una reincorporación pendiente de aprobación.",
+                ) from None
+            raise
+        return SolicitudAceptada(id_solicitud=id_solicitud)
+
+    return solicitar
+
+
+@_gestion_router.post(
+    "/reincorporaciones",
+    operation_id="CLIReincorporar",
+    responses={
+        **RESPUESTAS_ERROR,
+        202: {
+            "model": SolicitudAceptada,
+            "description": "Reincorporación enviada a aprobación de otra persona.",
+        },
+        404: {**RESPUESTAS_ERROR[500], "description": "Cliente no encontrado"},
+        409: {
+            **RESPUESTAS_ERROR[500],
+            "description": "Cliente no eliminado o reincorporación pendiente",
+        },
+        422: {
+            **RESPUESTAS_ERROR[500],
+            "description": "Datos inválidos o tipos no coinciden",
+        },
+    },
+    dependencies=_ROLES_REINCORPORACION,
+    openapi_extra={"x-roles": ["ASESOR", "ADMIN"]},
+)
+def solicitar_reincorporacion(
+    payload: ClienteCreate,
+    request: Request,
+    response: Response,
+    usuario: SolicitarReincorporacion,
+    modificado_por: UsuarioAuditoria,
+    conn: Db,
+) -> Response:
+    """Reincorpora un cliente eliminado: valida y envía a la cola de aprobación (202)."""
+    resultado = service.solicitar_reincorporacion(
+        conn,
+        payload,
+        modificado_por,
+        _ip_cliente(request),
+        usuario.agencia(),
+        solicitar=_solicitar_reincorporacion(request, usuario),
+    )
+    return JSONResponse(
+        resultado.model_dump(mode="json", by_alias=True),
+        status_code=202,
+        headers=dict(response.headers),
+    )
 
 
 # ---------------------------------------------------------------------------

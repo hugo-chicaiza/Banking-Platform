@@ -138,10 +138,16 @@ def test_consulta_sql_incluye_retiradas_sin_mezclar_clientes(catalogo):
     catalogo.execute(text("CREATE TABLE Catalogo.Paises (CodigoPais)"))
     catalogo.execute(text("INSERT INTO Catalogo.Paises VALUES ('ECU')"))
     catalogo.execute(
-        text("CREATE TABLE Clientes.Cliente (IdCliente, Identificacion, Estado)")
+        text(
+            "CREATE TABLE Clientes.Cliente "
+            "(IdCliente, Identificacion, Estado, TipoCliente, TipoDocumento)"
+        )
     )
     catalogo.execute(
-        text("INSERT INTO Clientes.Cliente VALUES (1, '0100000025', 'Activo')")
+        text(
+            "INSERT INTO Clientes.Cliente VALUES "
+            "(1, '0100000025', 'Activo', 'Natural', 'C')"
+        )
     )
     assert repository.existe_pais(catalogo, "ECU")
     assert not repository.existe_pais(catalogo, "COL")
