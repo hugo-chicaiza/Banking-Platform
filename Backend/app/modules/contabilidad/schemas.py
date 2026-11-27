@@ -32,6 +32,8 @@ class CuentaContable(CamelModel):
     tipo_cuenta: str
     id_cuenta_superior: int | None  # None en las cuentas de primer nivel
     es_imputable: bool  # solo las imputables reciben movimientos
+    # E4-04: solo recibe asientos automáticos (no se usa en un asiento manual)
+    solo_automatica: bool
     saldo: Money
     estado: str
 

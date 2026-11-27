@@ -84,6 +84,7 @@ def listar_cuentas_contables(
                TipoCuenta       AS tipo_cuenta,
                IdCuentaSuperior AS id_cuenta_superior,
                EsImputable      AS es_imputable,
+               SoloAutomatica   AS solo_automatica,
                Saldo            AS saldo,
                Estado           AS estado
         FROM Contabilidad.CuentasContables
@@ -116,6 +117,7 @@ _CUENTA = """
            TipoCuenta        AS tipo_cuenta,
            IdCuentaSuperior  AS id_cuenta_superior,
            EsImputable       AS es_imputable,
+           SoloAutomatica    AS solo_automatica,
            Saldo             AS saldo,
            Estado            AS estado,
            EsCuentaValuacion AS es_cuenta_valuacion
