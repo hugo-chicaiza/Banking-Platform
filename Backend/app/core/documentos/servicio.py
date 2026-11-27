@@ -22,6 +22,7 @@ import hashlib
 import logging
 import os
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
 from functools import lru_cache
 
@@ -126,6 +127,7 @@ class ServicioDocumentos:
         origen: str,
         generado_por_sistema: bool = False,
         tipos: tuple[str, ...] | None = None,
+        analisis_adicional: Callable[[bytes], None] | None = None,
     ) -> Referencia:
         """Valida, cifra y guarda. `origen` dice qué módulo lo guardó (p. ej.
         "clientes", "creditos"); `tipos` restringe los permitidos (p. ej. solo PDF)."""
@@ -135,7 +137,7 @@ class ServicioDocumentos:
         if tipo is None or (tipos is not None and tipo not in tipos):
             raise TipoNoPermitido()
         if not generado_por_sistema:
-            resultado = analizar(contenido, tipo)
+            resultado = analizar(contenido, tipo, reputacion=analisis_adicional is None)
             if resultado.veredicto == "Rechazado":
                 logger.warning(
                     "documentos: archivo rechazado origen=%s motivo=%s",
@@ -143,6 +145,8 @@ class ServicioDocumentos:
                     resultado.motivo,
                 )
                 raise ArchivoRechazado(resultado.motivo)
+            if analisis_adicional is not None:
+                analisis_adicional(contenido)
         clave = uuid.uuid4().hex
         sha256 = hashlib.sha256(contenido).hexdigest()
         nonce = os.urandom(_NONCE)

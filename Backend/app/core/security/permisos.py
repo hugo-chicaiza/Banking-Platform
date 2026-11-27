@@ -28,6 +28,8 @@ PERMISOS: dict[str, tuple[str, ...]] = {
     "cuentas:aprobar": ("SUPERVISOR",),
     # E5-04: aprobación de cambios sensibles en clientes
     "clientes:aprobar": ("SUPERVISOR",),
+    "cli-archivo": ("ADMIN", "ASESOR"),
+    "cli-archivo-ver": ("ADMIN", "ASESOR", "SUPERVISOR"),
     "prd-consultar": tuple(r for r in _TODOS if r != "CAJERO"),
     "prd-editar": ("ADMIN",),
     "prd-condicion": ("ADMIN",),

@@ -1,0 +1,11 @@
+SET XACT_ABORT ON;
+IF COALESCE(CONVERT(nvarchar(128), SESSION_CONTEXT(N'migration_database')), N'') <> DB_NAME()
+    THROW 57508, 'Falta confirmar la base destino de E5-08.', 1;
+
+BEGIN TRANSACTION;
+DELETE FROM Auditoria.TipoEvento
+WHERE CodigoEvento IN ('CLI_ARCHIVO_SUBIDO','CLI_ARCHIVO_VISTO','CLI_ARCHIVO_RECHAZADO')
+AND NOT EXISTS (SELECT 1 FROM Auditoria.Auditoria a WHERE a.CodigoEvento=Auditoria.TipoEvento.CodigoEvento);
+DELETE FROM Sistema.Tarea WHERE Codigo='CLI_ARCHIVOS_HUERFANOS'
+AND NOT EXISTS (SELECT 1 FROM Sistema.TareaEjecucion WHERE Codigo='CLI_ARCHIVOS_HUERFANOS');
+COMMIT TRANSACTION;

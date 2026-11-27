@@ -18,6 +18,7 @@ from app.modules.aprobaciones import router as aprobaciones
 from app.modules.aprobaciones.contratos import SolicitudAceptada
 from app.modules.aprobaciones.registro import Objetivo
 from app.modules.clientes import (
+    archivos,
     correos,
     documentos_identidad,
     firmantes,
@@ -903,4 +904,5 @@ router.include_router(_riesgo_router, prefix="/clientes")
 router.include_router(_consultas_router, prefix="/clientes")
 router.include_router(_revelacion_router, prefix="/clientes")
 router.include_router(correos.router, prefix="/clientes")
+router.include_router(archivos.router, prefix="/clientes")
 router.include_router(firmantes.router, prefix="/clientes")

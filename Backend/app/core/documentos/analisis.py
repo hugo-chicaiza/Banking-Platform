@@ -387,7 +387,7 @@ def _reputacion(sha256: str, clave: str) -> str | None:
     return "REPUTACION_MALICIOSA" if maliciosos > 0 else None
 
 
-def analizar(contenido: bytes, tipo: str) -> Resultado:
+def analizar(contenido: bytes, tipo: str, *, reputacion: bool = True) -> Resultado:
     """Veredicto de un archivo de `tipo` (el detectado por contenido, no el declarado).
     Un tipo sin reglas se rechaza (falla cerrado)."""
     if EICAR in contenido:
@@ -408,7 +408,7 @@ def analizar(contenido: bytes, tipo: str) -> Resultado:
         motivo = "FIRMA_EMBEBIDA"
     if motivo:
         return _rechazo(motivo)
-    clave = _clave_reputacion()
+    clave = _clave_reputacion() if reputacion else ""
     if clave:
         motivo = _reputacion(hashlib.sha256(contenido).hexdigest(), clave)
         if motivo:
