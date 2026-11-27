@@ -5,9 +5,9 @@ IF COALESCE(CONVERT(nvarchar(128), SESSION_CONTEXT(N'migration_database')), N'')
 BEGIN TRANSACTION;
 INSERT Auditoria.TipoEvento (CodigoEvento,Modulo,Severidad,EnTransaccion)
 SELECT v.Codigo,v.Modulo,v.Severidad,v.EnTransaccion
-FROM (VALUES ('CLI_ARCHIVO_SUBIDO','clientes','Sensible',0),
-             ('CLI_ARCHIVO_VISTO','clientes','Sensible',1),
-             ('CLI_ARCHIVO_RECHAZADO','clientes','Sensible',0))
+FROM (VALUES ('CLI_ARCHIVO_SUBIDO', 'clientes', 'Sensible', 0),
+             ('CLI_ARCHIVO_VISTO', 'clientes', 'Sensible', 1),
+             ('CLI_ARCHIVO_RECHAZADO', 'clientes', 'Sensible', 0))
   v(Codigo,Modulo,Severidad,EnTransaccion)
 WHERE NOT EXISTS (SELECT 1 FROM Auditoria.TipoEvento WHERE CodigoEvento=v.Codigo);
 

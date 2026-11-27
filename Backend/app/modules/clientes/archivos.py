@@ -1,6 +1,6 @@
 """E5-08: respaldos de una ficha existente. El contenido vive en MongoDB."""
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 from datetime import UTC, datetime
 from typing import Annotated, Any, Literal
 
@@ -177,7 +177,7 @@ class _FormularioArchivo(MultiPartParser):
         super().on_end()
 
 
-async def _flujo_limitado(request: Request) -> AsyncIterator[bytes]:
+async def _flujo_limitado(request: Request) -> AsyncGenerator[bytes, None]:
     total = 0
     try:
         async for fragmento in request.stream():
