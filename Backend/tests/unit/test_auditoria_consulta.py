@@ -191,6 +191,7 @@ def test_busqueda_exitosa_audita_lectura(http, monkeypatch, eventos_auditados):
         },
     )
     assert r.status_code == 200
+    assert r.headers["cache-control"] == "no-store"
     lecturas = [e for e in eventos_auditados if e.accion == "AUD_LECTURA"]
     assert len(lecturas) == 1
     assert lecturas[0].tabla == "Auditoria.Auditoria"

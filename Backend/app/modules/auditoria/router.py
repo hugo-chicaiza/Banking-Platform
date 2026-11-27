@@ -30,12 +30,18 @@ _LECTURA = ("ADMIN", "SUPERVISOR", "AUDITOR")
 _EXPORTACION = ("ADMIN", "AUDITOR")
 MAX_FILAS_EXPORTACION = 1000
 
+
+def _sin_cache(response: Response) -> None:
+    """ASVS 14.3.2: la bitácora no queda en cachés del navegador ni intermedias."""
+    response.headers["Cache-Control"] = "no-store"
+
+
 router = APIRouter(
     prefix="/auditoria",
     tags=["auditoria"],
     route_class=ProblemDetailsRoute,
     responses=RESPUESTAS_ERROR,
-    dependencies=[Depends(require_auth)],
+    dependencies=[Depends(require_auth), Depends(_sin_cache)],
 )
 Seg = Annotated[Connection, Depends(seguridad)]
 Coop = Annotated[Connection, Depends(cooperativa)]
