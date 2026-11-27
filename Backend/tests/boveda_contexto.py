@@ -206,7 +206,15 @@ class BovedaContexto:
                 conn, datos["agencia"], datos["tipo"], datos["naturaleza"]
             )
             debe, haber = plantilla["debito"], plantilla["credito"]
-        codigos = {1: "110101", 2: "160101", 3: "290101", 4: "250101", 5: "450101"}
+        codigos = {
+            1: "110101",
+            2: "160101",
+            3: "290101",
+            4: "250101",
+            5: "450101",
+            6: "190801",
+            7: "110301",
+        }
         return [
             {
                 "tipo_movimiento": lado,
