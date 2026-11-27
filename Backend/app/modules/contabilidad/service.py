@@ -13,9 +13,11 @@ from app.core.security.auth import Usuario
 from app.core.security.operador import auditar
 from app.modules.contabilidad import repository
 from app.modules.contabilidad.schemas import (
+    AsientoManual,
     CuentaContableCrear,
     CuentaContableEditar,
     CuentaContableEstado,
+    MotivoAsientoManual,
 )
 
 log = logging.getLogger(__name__)
@@ -464,6 +466,82 @@ def obtener_asiento(conn: Connection, id_asiento: int) -> dict[str, Any]:
     if asiento is None:
         raise problema(404, "ASIENTO_NO_ENCONTRADO", "El asiento contable no existe.")
     return {**asiento, "detalle": repository.movimientos_asiento(conn, id_asiento)}
+
+
+# ---------------------------------------------------------------------------
+# E4-04 (#383) · Asientos manuales con aprobación y reverso: solo contrato
+# ---------------------------------------------------------------------------
+# Cada función lanza el 501 interno; el router lo cierra con funcion_pendiente
+# (E0-09) y responde 404 FUNCION_NO_DISPONIBLE.
+# Reglas que implementará la lógica (no se validan todavía):
+# - Alta y edición guardan un BORRADOR, aunque esté incompleto o no cuadre.
+# - Solo un BORRADOR se edita, se envía o se anula (409 ASIENTO_NO_EDITABLE).
+# - El envío exige al menos dos líneas y débitos = créditos (422
+#   ASIENTO_NO_CUADRA); cuentas activas, imputables y sin subcuentas (409
+#   CUENTA_CONTABLE_NO_HABILITADA) que no sean solo automáticas (422
+#   CUENTA_SOLO_AUTOMATICA); día y mes contables abiertos (409
+#   PERIODO_CONTABLE_NO_ABIERTO). Queda PENDIENTE_APROBACION en E0-08 (202).
+# - Solo se reversa un asiento MANUAL contabilizado; los de una operación se
+#   reversan desde la operación de origen (409 ASIENTO_DE_OPERACION).
+# - Quien envía no aprueba su propio asiento (403 en /aprobaciones).
+
+
+def crear_asiento_manual(conn: Connection, datos: AsientoManual) -> NoReturn:
+    """POST /asientos: 201 {idAsientoContable} con el asiento en BORRADOR.
+
+    Raises:
+        HTTPException 501 OPERACION_NO_HABILITADA (contrato sin lógica; el router
+            responde 404 FUNCION_NO_DISPONIBLE)
+    """
+    raise _no_habilitada()
+
+
+def editar_asiento_manual(
+    conn: Connection, id_asiento: int, datos: AsientoManual
+) -> NoReturn:
+    """PUT /asientos/{idAsiento}: reemplaza el borrador completo; 200.
+
+    Raises:
+        HTTPException 501 OPERACION_NO_HABILITADA (contrato sin lógica; el router
+            responde 404 FUNCION_NO_DISPONIBLE)
+    """
+    raise _no_habilitada()
+
+
+def enviar_asiento_manual(conn: Connection, id_asiento: int) -> NoReturn:
+    """POST /asientos/{idAsiento}/envio: valida el borrador y lo deja pendiente de
+    aprobación; 202 con la solicitud.
+
+    Raises:
+        HTTPException 501 OPERACION_NO_HABILITADA (contrato sin lógica; el router
+            responde 404 FUNCION_NO_DISPONIBLE)
+    """
+    raise _no_habilitada()
+
+
+def anular_asiento_manual(
+    conn: Connection, id_asiento: int, datos: MotivoAsientoManual
+) -> NoReturn:
+    """POST /asientos/{idAsiento}/anulacion: anula un borrador; 200.
+
+    Raises:
+        HTTPException 501 OPERACION_NO_HABILITADA (contrato sin lógica; el router
+            responde 404 FUNCION_NO_DISPONIBLE)
+    """
+    raise _no_habilitada()
+
+
+def reversar_asiento_manual(
+    conn: Connection, id_asiento: int, datos: MotivoAsientoManual
+) -> NoReturn:
+    """POST /asientos/{idAsiento}/reverso (CON-06): pide el reverso de un asiento
+    manual contabilizado; 202 con la solicitud.
+
+    Raises:
+        HTTPException 501 OPERACION_NO_HABILITADA (contrato sin lógica; el router
+            responde 404 FUNCION_NO_DISPONIBLE)
+    """
+    raise _no_habilitada()
 
 
 def contabilizar_boveda(

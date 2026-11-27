@@ -179,6 +179,12 @@ ROLES_POR_RUTA: dict[tuple[str, str], tuple[str, ...]] = {
         "AUDITOR",
         "ADMIN",
     ),
+    # E4-04 (#383): asientos manuales, solo CONTADOR (el AUDITOR y el ADMIN leen)
+    ("POST", "/api/v1/contabilidad/asientos"): ("CONTADOR",),
+    ("PUT", "/api/v1/contabilidad/asientos/{idAsiento}"): ("CONTADOR",),
+    ("POST", "/api/v1/contabilidad/asientos/{idAsiento}/envio"): ("CONTADOR",),
+    ("POST", "/api/v1/contabilidad/asientos/{idAsiento}/anulacion"): ("CONTADOR",),
+    ("POST", "/api/v1/contabilidad/asientos/{idAsiento}/reverso"): ("CONTADOR",),
     ("PATCH", "/api/v1/agencias/{id_agencia}/estado"): ("ADMIN",),
     ("GET", "/api/v1/organizacion/entidad"): ("ASESOR", "ADMIN"),
     ("POST", "/api/v1/organizacion/entidad"): ("ADMIN",),

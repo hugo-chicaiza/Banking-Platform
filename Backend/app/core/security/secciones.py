@@ -195,6 +195,12 @@ RUTAS_POR_SECCION: dict[str, tuple[tuple[str, str], ...]] = {
     "contabilidad.asientos": (
         ("GET", "/api/v1/contabilidad/asientos"),
         ("GET", "/api/v1/contabilidad/asientos/{idAsiento}"),
+        # E4-04 (#383): asientos manuales (contrato)
+        ("POST", "/api/v1/contabilidad/asientos"),
+        ("PUT", "/api/v1/contabilidad/asientos/{idAsiento}"),
+        ("POST", "/api/v1/contabilidad/asientos/{idAsiento}/envio"),
+        ("POST", "/api/v1/contabilidad/asientos/{idAsiento}/anulacion"),
+        ("POST", "/api/v1/contabilidad/asientos/{idAsiento}/reverso"),
     ),
     "contabilidad.fecha": (
         ("GET", "/api/v1/contabilidad/fechas-contables/actual"),

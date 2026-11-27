@@ -749,6 +749,30 @@ FUNCIONES = (
         (("GET", B + "/asientos"), ("GET", B + "/asientos/{idAsiento}")),
         "/contabilidad/asientos",
     ),
+    # E4-04 (#383): el envío y el reverso quedan pendientes de aprobación (E0-08)
+    _f(
+        "contabilidad.asientos.registrar",
+        "Registrar asientos manuales",
+        "Contabilidad",
+        ("CONTADOR",),
+        (
+            ("POST", B + "/asientos"),
+            ("PUT", B + "/asientos/{idAsiento}"),
+            ("POST", B + "/asientos/{idAsiento}/envio"),
+            ("POST", B + "/asientos/{idAsiento}/anulacion"),
+        ),
+        "/contabilidad/asientos",
+        ("contabilidad.asientos.consultar",),
+    ),
+    _f(
+        "contabilidad.asientos.reversar",
+        "Solicitar reverso de asientos manuales",
+        "Contabilidad",
+        ("CONTADOR",),
+        (("POST", B + "/asientos/{idAsiento}/reverso"),),
+        "/contabilidad/asientos",
+        ("contabilidad.asientos.consultar",),
+    ),
     _f(
         "contabilidad.fecha.consultar",
         "Consultar fecha contable",
