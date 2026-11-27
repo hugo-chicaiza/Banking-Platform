@@ -205,6 +205,8 @@ class Settings(BaseSettings):
     # Documentos (E5-08, P4-10): contenido cifrado (AES-256-GCM) en la colección
     # `documentos` de MongoDB; sin clave o sin MONGO_URI responde 503.
     documentos_clave: SecretStr = SecretStr("")  # AES-256-GCM: 64 hex
+    documentos_clamav_host: str = ""
+    documentos_clamav_port: Annotated[int, Field(ge=1, le=65535)] = 3310
     documentos_max_bytes: Annotated[int, Field(ge=1024, le=15 * 1024 * 1024)] = (
         5 * 1024 * 1024
     )

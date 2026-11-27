@@ -7,6 +7,12 @@ from app.core.tareas.ejecutor import Conteo, Tarea, TareaRechazada
 APROBACIONES = ("APR_RECUPERACION", "APR_RESUMEN_ANTIGUAS", "APR_AUD_RELEVO")
 
 
+def _archivos_huerfanos() -> Conteo:
+    from app.modules.clientes.archivos_huerfanos import ejecutar
+
+    return ejecutar()
+
+
 def _atm06_recuperacion() -> Conteo:
     """Recuperación de cambios de PIN ATM-06 pendientes (antes, solo un web job suelto)."""
     from app.modules.atm.cambio_pin_worker import ejecutar_configurado
@@ -35,6 +41,7 @@ def _inactividad_cuentas() -> Conteo:
 
 
 TAREAS: dict[str, Tarea] = {
+    "CLI_ARCHIVOS_HUERFANOS": Tarea("CLI_ARCHIVOS_HUERFANOS", _archivos_huerfanos),
     "ATM06_RECUPERACION": Tarea("ATM06_RECUPERACION", _atm06_recuperacion),
     "SIS_VIGILANTE": Tarea("SIS_VIGILANTE", _vigilante),
     "CTA_LIBERAR_RETENCIONES": Tarea("CTA_LIBERAR_RETENCIONES", _liberar_retenciones),

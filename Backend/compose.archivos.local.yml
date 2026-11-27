@@ -1,0 +1,18 @@
+services:
+  mongo:
+    image: mongo:8.0
+    ports:
+      - "127.0.0.1:27028:27017"
+    volumes:
+      - archivos_mongo:/data/db
+  clamav:
+    image: clamav/clamav:1.4
+    ports:
+      - "127.0.0.1:13310:3310"
+    volumes:
+      - ./infra/clamav/clamd.local.conf:/etc/clamav/clamd.conf:ro
+      - archivos_firmas:/var/lib/clamav
+
+volumes:
+  archivos_mongo:
+  archivos_firmas:

@@ -141,6 +141,30 @@ FUNCIONES = (
         ("clientes.consultar",),
     ),
     _f(
+        "clientes.archivos.consultar",
+        "Consultar archivos del cliente",
+        "Clientes",
+        PERMISOS["cli-archivo-ver"],
+        (
+            ("GET", C + "/{idCliente}/archivos"),
+            ("GET", C + "/{idCliente}/archivos/{idArchivo}/contenido"),
+        ),
+        "/clientes-busqueda",
+        ("clientes.consultar",),
+    ),
+    _f(
+        "clientes.archivos.gestionar",
+        "Subir o reemplazar archivos del cliente",
+        "Clientes",
+        PERMISOS["cli-archivo"],
+        (
+            ("POST", C + "/{idCliente}/archivos"),
+            ("GET", C + "/{idCliente}/archivos/clases"),
+        ),
+        "/clientes-busqueda",
+        ("clientes.consultar",),
+    ),
+    _f(
         "clientes.direcciones.consultar",
         "Consultar direcciones",
         "Clientes",
