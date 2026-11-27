@@ -144,6 +144,7 @@ ROLES_POR_RUTA: dict[tuple[str, str], tuple[str, ...]] = {
             "actividades-economicas",
             "tipos-antecedente",
             "tipos-direccion",
+            "tipos-documento",
             "denominaciones",
             "agencias",
             "productos",
@@ -212,6 +213,21 @@ ROLES_POR_RUTA: dict[tuple[str, str], tuple[str, ...]] = {
         "ADMIN",
     ),
     ("GET", "/api/v1/clientes/{idCliente}/perfil"): ("ASESOR", "SUPERVISOR", "ADMIN"),
+    ("GET", "/api/v1/clientes/{idCliente}/documentos"): (
+        "ASESOR",
+        "CAJERO",
+        "SUPERVISOR",
+        "ADMIN",
+    ),
+    ("POST", "/api/v1/clientes/{idCliente}/documentos"): ("ASESOR", "ADMIN"),
+    ("PATCH", "/api/v1/clientes/{idCliente}/documentos/{idDocumento}"): (
+        "ASESOR",
+        "ADMIN",
+    ),
+    ("PUT", "/api/v1/clientes/{idCliente}/documentos/{idDocumento}/principal"): (
+        "ASESOR",
+        "ADMIN",
+    ),
     ("GET", "/api/v1/clientes/{idCliente}/direcciones"): ("ASESOR", "ADMIN"),
     ("POST", "/api/v1/clientes/{idCliente}/direcciones"): ("ASESOR", "ADMIN"),
     ("PATCH", "/api/v1/clientes/{idCliente}/direcciones/{idDireccion}"): (
@@ -528,6 +544,8 @@ ROLES_POR_RUTA: dict[tuple[str, str], tuple[str, ...]] = {
         "ADMIN",
     ),
     ("POST", "/api/v1/catalogos/tasas-interes"): ("ADMIN",),
+    ("POST", "/api/v1/catalogos/tipos-documento"): ("ADMIN",),
+    ("PATCH", "/api/v1/catalogos/tipos-documento/{codigo}"): ("ADMIN",),
     ("GET", "/api/v1/catalogos/administracion"): ("ADMIN", "SUPERVISOR", "ASESOR"),
     ("GET", "/api/v1/catalogos/administracion/{clave}"): (
         "ADMIN",
