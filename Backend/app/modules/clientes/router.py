@@ -24,6 +24,7 @@ from app.modules.clientes import (
     gestion_documentos,
     revelacion,
     service,
+    tutores,
 )
 from app.modules.clientes.aprobacion import CODIGO_EDICION, objetivo
 from app.modules.clientes.aprobacion_documentos import CLI as CODIGO_DOCUMENTOS
@@ -904,3 +905,4 @@ router.include_router(_consultas_router, prefix="/clientes")
 router.include_router(_revelacion_router, prefix="/clientes")
 router.include_router(correos.router, prefix="/clientes")
 router.include_router(firmantes.router, prefix="/clientes")
+router.include_router(tutores.router, prefix="/clientes")

@@ -86,6 +86,7 @@ FUNCIONES = (
             ("GET", C + "/{idCliente}"),
             ("GET", C + "/{idCliente}/documentos"),
             ("GET", C + "/{idCliente}/relaciones/firmantes"),
+            ("GET", C + "/{idCliente}/relaciones/tutor"),
         ),
         "/clientes-busqueda",
     ),

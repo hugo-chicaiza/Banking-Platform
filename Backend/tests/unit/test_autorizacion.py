@@ -251,6 +251,16 @@ ROLES_POR_RUTA: dict[tuple[str, str], tuple[str, ...]] = {
         "ASESOR",
         "ADMIN",
     ),
+    ("GET", "/api/v1/clientes/{idCliente}/relaciones/tutor"): (
+        "ASESOR",
+        "SUPERVISOR",
+        "ADMIN",
+    ),
+    ("POST", "/api/v1/clientes/{idCliente}/relaciones/tutor"): ("ASESOR", "ADMIN"),
+    ("POST", "/api/v1/clientes/{idCliente}/relaciones/tutor/relevo"): (
+        "ASESOR",
+        "ADMIN",
+    ),
     ("GET", "/api/v1/clientes/{idCliente}/direcciones"): ("ASESOR", "ADMIN"),
     ("POST", "/api/v1/clientes/{idCliente}/direcciones"): ("ASESOR", "ADMIN"),
     ("PATCH", "/api/v1/clientes/{idCliente}/direcciones/{idDireccion}"): (
@@ -884,6 +894,8 @@ def test_roles_de_la_tarea_pasan_el_control(client, ruta, monkeypatch):
         ("POST", "/api/v1/transacciones/{idTransaccion}/reverso"),
         ("POST", "/api/v1/clientes/{idCliente}/relaciones/firmantes"),
         ("POST", "/api/v1/clientes/{idCliente}/relaciones/firmantes/{idRelacion}/fin"),
+        ("POST", "/api/v1/clientes/{idCliente}/relaciones/tutor"),
+        ("POST", "/api/v1/clientes/{idCliente}/relaciones/tutor/relevo"),
     }
 
     if ruta in rutas_con_vinculacion and r.status_code == 403:
