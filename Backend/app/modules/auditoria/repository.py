@@ -2,7 +2,7 @@
 
 Solo consultas fijas: los filtros opcionales van como `(:x IS NULL OR ...)` y el alcance
 de agencia como lista enlazada (`:todas = 1 OR a.IdAgencia IN :agencias`), nunca texto
-concatenado. Las filas del formato anterior no tienen FechaHoraUTC: se filtran por
+concatenado. Lee la vista activa + archivo (E8-02). Las filas del formato anterior no tienen FechaHoraUTC: se filtran por
 FechaHora (hora local).
 """
 
@@ -22,14 +22,14 @@ _COLUMNAS = """
     COALESCE(a.IdObjetivo, a.IDRegistro) AS IdObjetivo, a.IdCorrelacion, a.Descripcion,
     a.FormatoAnterior"""
 _ORIGEN = """
-    FROM Auditoria.Auditoria AS a
+    FROM Auditoria.vw_Bitacora AS a
     LEFT JOIN Auditoria.TipoEvento AS t ON t.CodigoEvento = COALESCE(a.CodigoEvento, a.NombreAccion)
     LEFT JOIN Organizacion.Usuarios AS u ON u.UsuarioID = a.UsuarioID"""
 _ALCANCE = "(:todas = 1 OR a.IdAgencia IN :agencias)"
 _BUSQUEDA = (
     _ORIGEN
     + """
-    LEFT JOIN Auditoria.EventoDetalle AS ed ON ed.AuditoriaID = a.AuditoriaID
+    LEFT JOIN Auditoria.vw_EventoDetalle AS ed ON ed.AuditoriaID = a.AuditoriaID
     WHERE ((a.FechaHoraUTC >= :utc_desde AND a.FechaHoraUTC < :utc_hasta)
            OR (a.FechaHoraUTC IS NULL AND a.FechaHora >= :local_desde AND a.FechaHora < :local_hasta))
       AND (:usuario IS NULL OR a.UsuarioID = :usuario)
@@ -87,9 +87,9 @@ _APROBACION = text("""
            s.IdInternoResolutor, s.FechaResolucion
     FROM Seguridad.SolicitudAprobacion AS s
     WHERE s.IdSolicitud = TRY_CONVERT(bigint, COALESCE(
-        (SELECT JSON_VALUE(ed.Contenido, '$.idSolicitud') FROM Auditoria.EventoDetalle AS ed
+        (SELECT JSON_VALUE(ed.Contenido, '$.idSolicitud') FROM Auditoria.vw_EventoDetalle AS ed
          WHERE ed.AuditoriaID = :id),
-        (SELECT a.IdObjetivo FROM Auditoria.Auditoria AS a
+        (SELECT a.IdObjetivo FROM Auditoria.vw_Bitacora AS a
          WHERE a.AuditoriaID = :id AND a.TipoObjetivo = 'Seguridad.SolicitudAprobacion')))""")
 _TIPOS = text(
     "SELECT CodigoEvento, Modulo, Severidad FROM Auditoria.TipoEvento "

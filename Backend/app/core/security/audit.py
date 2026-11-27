@@ -108,31 +108,17 @@ def cambios_json(cambios: dict[str, Any] | None) -> str | None:
 
 
 def _insertar(conn: Connection, evento: EventoAuditoria) -> None:
+    # E8-02: único escritor encadenado (secuencia sin huecos y hash); la hora la pone la base
     conn.execute(
         text(
             """
-            INSERT INTO Auditoria.Auditoria (
-                UsuarioID, NombreAccion, TablaAfectada, IDRegistro, FechaHora,
-                DireccionIP, Descripcion, Resultado, RolesWorkOS,
-                IdEvento, CodigoEvento, FechaHoraUTC, IdAgencia, IdSesion, Canal,
-                IdCorrelacion, TipoObjetivo, IdObjetivo, Cambios
-            )
-            VALUES (
-                :usuario, :accion, :tabla, :id_registro,
-                CONVERT(
-                    datetime, SYSDATETIMEOFFSET() AT TIME ZONE 'SA Pacific Standard Time'
-                ),
-                :ip, :descripcion, :resultado,
-                COALESCE(
-                    :roles,
-                    (
-                        SELECT u.RolesWorkOS FROM Organizacion.Usuarios AS u
-                        WHERE u.UsuarioID = :usuario
-                    )
-                ),
-                NEWID(), :accion, SYSUTCDATETIME(), :agencia, :sesion, :canal,
-                :correlacion, :tabla, :id_registro, :cambios
-            )
+            EXEC Auditoria.usp_RegistrarEvento
+                @UsuarioID = :usuario, @NombreAccion = :accion, @TablaAfectada = :tabla,
+                @IDRegistro = :id_registro, @DireccionIP = :ip, @Descripcion = :descripcion,
+                @Resultado = :resultado, @RolesWorkOS = :roles, @CodigoEvento = :accion,
+                @IdAgencia = :agencia, @IdSesion = :sesion, @Canal = :canal,
+                @IdCorrelacion = :correlacion, @TipoObjetivo = :tabla, @IdObjetivo = :id_registro,
+                @Cambios = :cambios
             """
         ),
         {

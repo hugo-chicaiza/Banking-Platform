@@ -186,6 +186,9 @@ def test_cli_en_curso_sale_0_y_rechazo_sale_1(monkeypatch, capsys):
         ("atm06-recovery", "ATM06_RECUPERACION", "0 * * * * *"),
         ("sis-vigilante", "SIS_VIGILANTE", "0 */5 * * * *"),
         ("cuentas-inactividad", "CTA_INACTIVIDAD", "0 5 0 * * *"),
+        # E8-02: 01:00 y 1 de enero 02:00 en Ecuador (UTC-5)
+        ("aud-verificar-integridad", "AUD_VERIFICAR_INTEGRIDAD", "0 0 6 * * *"),
+        ("aud-archivar", "AUD_ARCHIVAR", "0 0 7 1 1 *"),
     ],
 )
 def test_web_jobs_usan_el_ejecutor(job, codigo, programa):

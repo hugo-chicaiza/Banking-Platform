@@ -115,3 +115,29 @@ class TipoEvento(CamelModel):
     codigo: str
     modulo: str
     severidad: str
+
+
+class RangoVerificacion(CamelModel):
+    """E8-02: días de la institución a verificar; el rango va en el cuerpo y es obligatorio."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    desde: date | None = None
+    hasta: date | None = None
+
+
+class Verificacion(CamelModel):
+    id_verificacion: int
+    secuencia_desde: int
+    secuencia_hasta: int
+    resultado: Literal["Integra", "Rota"]
+    primera_rota: int | None = None
+    ejecutada_por: int | None = None
+    fecha_utc: datetime
+
+
+class PageVerificaciones(CamelModel):
+    items: list[Verificacion]
+    total: int
+    page: int
+    page_size: int

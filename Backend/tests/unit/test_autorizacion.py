@@ -562,6 +562,13 @@ ROLES_POR_RUTA.update(
             "AUDITOR",
         ),
         ("POST", "/api/v1/auditoria/eventos/exportacion"): ("ADMIN", "AUDITOR"),
+        # E8-02: integridad de la bitácora
+        ("POST", "/api/v1/auditoria/verificaciones"): (
+            "ADMIN",
+            "SUPERVISOR",
+            "AUDITOR",
+        ),
+        ("GET", "/api/v1/auditoria/verificaciones"): ("ADMIN", "SUPERVISOR", "AUDITOR"),
         # Seguridad: permisos de roles (WorkOS) y pestañas por rol
         ("GET", "/api/v1/seguridad/permisos"): ("ADMIN",),
         ("PATCH", "/api/v1/seguridad/permisos/{slug}"): ("ADMIN",),
