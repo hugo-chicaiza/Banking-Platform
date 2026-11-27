@@ -152,6 +152,13 @@ def test_valores_iniciales_preservan_la_matriz_de_operaciones_del_equipo():
     for funcion in FUNCIONES:
         for operacion in funcion.operaciones:
             permitidos = set(ROLES_POR_RUTA[operacion]) or set(ROLES)
+            if operacion == (
+                "GET",
+                "/api/v1/clientes/{idCliente}/relaciones/firmantes",
+            ):
+                # La ficha reducida de CAJERO no incluye vínculos de firma.
+                assert set(funcion.roles_iniciales) - {"CAJERO"} == permitidos
+                continue
             if funcion.id == "contabilidad.plantillas.consultar":
                 # Ampliación acordada solo de lectura; apagado rige WorkOS anterior.
                 permitidos = {"ADMIN", "SUPERVISOR", "AUDITOR", "CONTADOR"}
