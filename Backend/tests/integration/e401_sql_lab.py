@@ -10,6 +10,8 @@ from pathlib import Path
 from unittest.mock import patch
 from uuid import uuid4
 
+import pytest
+from e401_catalogo_lab import probar_catalogo
 from fastapi import HTTPException
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import DBAPIError
@@ -220,6 +222,19 @@ def probar(database: str, laboratorio: Path) -> None:
     with engine.connect() as conn, conn.begin() as tx:
         conn.execute(
             text("""
+            UPDATE Contabilidad.CuentasContables SET EsImputable=0
+            WHERE CodigoCuenta='11010510'
+            """)
+        )
+        clave = "E401_SQL_NO_IMPUTABLE"
+        with pytest.raises(ErrorContable, match="auxiliar activo e imputable"):
+            generar_asiento(conn, replace(operacion, clave_evento=clave))
+        assert repository.buscar_asiento_evento(conn, clave) is None
+        tx.rollback()
+
+    with engine.connect() as conn, conn.begin() as tx:
+        conn.execute(
+            text("""
             UPDATE Contabilidad.PeriodoContable SET Estado='CERRADO'
             WHERE Anio=2026 AND Mes=10
         """)
@@ -291,6 +306,7 @@ def probar(database: str, laboratorio: Path) -> None:
     assert ids[0] == ids[1]
     with engine.connect() as conn:
         assert len(repository.movimientos_asiento(conn, ids[0])) == 2
+    probar_catalogo(engine, operacion, migraciones)
     print(
         "Migraciones repetibles, cuatro plantillas, comisión cero, reverso, idempotencia concurrente y rollback: OK"
     )
