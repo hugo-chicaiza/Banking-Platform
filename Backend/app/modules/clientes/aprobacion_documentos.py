@@ -61,31 +61,18 @@ class Principal:
         )
 
 
-_CAMPOS = {
-    "nombre": "Nombre",
-    "algoritmo": "Algoritmo",
-    "patron_caracteres": "PatronCaracteres",
-    "longitud_minima": "LongitudMinima",
-    "longitud_maxima": "LongitudMaxima",
-    "aplica_natural": "AplicaNatural",
-    "aplica_juridico": "AplicaJuridico",
-    "requiere_pais": "RequierePais",
-    "requiere_vencimiento": "RequiereVencimiento",
-    "digito_verificador_bloquea": "DigitoVerificadorBloquea",
-    "permite_principal": "PermitePrincipal",
-    "accion_al_vencer": "AccionAlVencer",
-    "activo": "Activo",
-}
-
-
 class Catalogo:
     def leer(self, conn: Connection, objetivo: Objetivo):
-        columnas = ", ".join(
-            f"{columna} AS {campo}" for campo, columna in _CAMPOS.items()
-        )
         return (
             conn.execute(
-                text(f"""SELECT {columnas}, CONVERT(varchar(16), Version, 2) AS version
+                text("""SELECT Nombre AS nombre, Algoritmo AS algoritmo,
+                    PatronCaracteres AS patron_caracteres, LongitudMinima AS longitud_minima,
+                    LongitudMaxima AS longitud_maxima, AplicaNatural AS aplica_natural,
+                    AplicaJuridico AS aplica_juridico, RequierePais AS requiere_pais,
+                    RequiereVencimiento AS requiere_vencimiento,
+                    DigitoVerificadorBloquea AS digito_verificador_bloquea,
+                    PermitePrincipal AS permite_principal, AccionAlVencer AS accion_al_vencer,
+                    Activo AS activo, CONVERT(varchar(16), Version, 2) AS version
                     FROM Catalogo.TipoDocumentoIdentidad WITH (UPDLOCK, HOLDLOCK)
                     WHERE Codigo = :codigo"""),
                 {"codigo": objetivo.id},
@@ -163,14 +150,25 @@ class Catalogo:
     ) -> None:
         plan = self.preparar(conn, objetivo, contenido, hoy())
         if plan.antes:
-            asignaciones = ", ".join(
-                f"{columna} = :{campo}" for campo, columna in _CAMPOS.items()
-            )
-            sql = f"UPDATE Catalogo.TipoDocumentoIdentidad SET {asignaciones} WHERE Codigo = :codigo"
+            sql = """UPDATE Catalogo.TipoDocumentoIdentidad
+                SET Nombre=:nombre, Algoritmo=:algoritmo, PatronCaracteres=:patron_caracteres,
+                    LongitudMinima=:longitud_minima, LongitudMaxima=:longitud_maxima,
+                    AplicaNatural=:aplica_natural, AplicaJuridico=:aplica_juridico,
+                    RequierePais=:requiere_pais, RequiereVencimiento=:requiere_vencimiento,
+                    DigitoVerificadorBloquea=:digito_verificador_bloquea,
+                    PermitePrincipal=:permite_principal, AccionAlVencer=:accion_al_vencer,
+                    Activo=:activo
+                WHERE Codigo=:codigo"""
         else:
-            columnas = ", ".join(_CAMPOS.values())
-            valores = ", ".join(f":{campo}" for campo in _CAMPOS)
-            sql = f"INSERT INTO Catalogo.TipoDocumentoIdentidad (Codigo, {columnas}) VALUES (:codigo, {valores})"
+            sql = """INSERT INTO Catalogo.TipoDocumentoIdentidad (
+                    Codigo, Nombre, Algoritmo, PatronCaracteres, LongitudMinima, LongitudMaxima,
+                    AplicaNatural, AplicaJuridico, RequierePais, RequiereVencimiento,
+                    DigitoVerificadorBloquea, PermitePrincipal, AccionAlVencer, Activo
+                ) VALUES (
+                    :codigo, :nombre, :algoritmo, :patron_caracteres, :longitud_minima, :longitud_maxima,
+                    :aplica_natural, :aplica_juridico, :requiere_pais, :requiere_vencimiento,
+                    :digito_verificador_bloquea, :permite_principal, :accion_al_vencer, :activo
+                )"""
         conn.execute(text(sql), {"codigo": objetivo.id, **plan.despues})
 
 

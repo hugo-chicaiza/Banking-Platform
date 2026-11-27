@@ -1,5 +1,4 @@
 from datetime import date
-from typing import Any
 
 from sqlalchemy import Connection, text
 
@@ -31,21 +30,16 @@ class DocumentoFicha(CamelModel):
     version: str
 
 
-_COLUMNAS = """
-    d.IdDocumento AS id_documento, d.TipoDocumento AS tipo_documento,
-    t.Nombre AS nombre_tipo, d.Numero AS numero, d.CodigoPaisEmision AS codigo_pais_emision,
-    d.FechaEmision AS fecha_emision, d.FechaVencimiento AS fecha_vencimiento,
-    d.Principal AS principal, t.Activo AS tipo_activo, t.PermitePrincipal AS permite_principal,
-    d.Estado AS estado, CONVERT(varchar(16), d.Version, 2) AS version,
-    t.RequiereVencimiento AS requiere_vencimiento, t.RequierePais AS requiere_pais,
-    t.AplicaNatural AS aplica_natural, t.AplicaJuridico AS aplica_juridico
-"""
-
-
 def _documentos(conn: Connection, id_cliente: int, id_documento: int | None = None):
     return conn.execute(
-        text(f"""
-            SELECT {_COLUMNAS}
+        text("""
+            SELECT d.IdDocumento AS id_documento, d.TipoDocumento AS tipo_documento,
+                t.Nombre AS nombre_tipo, d.Numero AS numero, d.CodigoPaisEmision AS codigo_pais_emision,
+                d.FechaEmision AS fecha_emision, d.FechaVencimiento AS fecha_vencimiento,
+                d.Principal AS principal, t.Activo AS tipo_activo, t.PermitePrincipal AS permite_principal,
+                d.Estado AS estado, CONVERT(varchar(16), d.Version, 2) AS version,
+                t.RequiereVencimiento AS requiere_vencimiento, t.RequierePais AS requiere_pais,
+                t.AplicaNatural AS aplica_natural, t.AplicaJuridico AS aplica_juridico
             FROM Clientes.ClienteDocumento d
             JOIN Catalogo.TipoDocumentoIdentidad t WITH (HOLDLOCK) ON t.Codigo = d.TipoDocumento
             WHERE d.IdCliente = :cliente AND (:documento IS NULL OR d.IdDocumento = :documento)
@@ -180,7 +174,6 @@ def actualizar(
         )
     if fila["estado"] == "ANULADO":
         raise problema(409, "DOCUMENTO_ANULADO", "El documento ya está anulado.")
-    cambios: dict[str, Any] = {}
     if datos.accion == "RENOVAR":
         if fila["estado"] != "REGISTRADO":
             raise problema(
@@ -227,29 +220,26 @@ def actualizar(
                 raise problema(
                     409, "DOCUMENTO_DUPLICADO", "El documento ya está registrado."
                 )
+        sql = """UPDATE Clientes.ClienteDocumento
+            SET FechaEmision=:FechaEmision, FechaVencimiento=:FechaVencimiento,
+                CodigoPaisEmision=:CodigoPaisEmision
+            WHERE IdDocumento=:documento"""
         cambios = {
             "FechaEmision": datos.fecha_emision,
             "FechaVencimiento": datos.fecha_vencimiento,
             "CodigoPaisEmision": emisor,
         }
-    elif datos.accion == "ANULAR":
-        if fila["principal"]:
+    else:
+        if datos.accion == "ANULAR" and fila["principal"]:
             raise problema(
                 409,
                 "DOCUMENTO_PRINCIPAL",
                 "Solicita una corrección con otro documento vigente.",
             )
-        cambios = {"Estado": "ANULADO"}
-    else:
-        cambios = {"Estado": "POR_CORREGIR"}
+        sql = "UPDATE Clientes.ClienteDocumento SET Estado=:Estado WHERE IdDocumento=:documento"
+        cambios = {"Estado": "ANULADO" if datos.accion == "ANULAR" else "POR_CORREGIR"}
 
-    asignaciones = ", ".join(f"{columna} = :{columna}" for columna in cambios)
-    conn.execute(
-        text(
-            f"UPDATE Clientes.ClienteDocumento SET {asignaciones} WHERE IdDocumento = :documento"
-        ),
-        {"documento": documento, **cambios},
-    )
+    conn.execute(text(sql), {"documento": documento, **cambios})
     anterior = f"{documento} · {fila['fecha_emision']} · {fila['fecha_vencimiento']} · {fila['estado']}"
     nuevo = f"{documento} · {datos.fecha_emision} · {datos.fecha_vencimiento} · {datos.accion}"
     _historial(conn, cliente, actor, ip, datos.motivo, anterior, nuevo)
