@@ -148,8 +148,10 @@ def test_preparar_cierre_rechaza_y_devuelve_todos_los_puntos(monkeypatch):
         )
 
     assert error.value.status_code == 409
-    assert error.value.detail["code"] == "CIERRE_INCOMPLETO"
-    assert error.value.detail["bloqueos"] == [
+    detalle = getattr(error.value, "detail", None)
+    assert isinstance(detalle, dict)
+    assert detalle["code"] == "CIERRE_INCOMPLETO"
+    assert detalle["bloqueos"] == [
         "saldoCero: Impide — Saldo pendiente.",
         "sinInteresDevengadoImpago: NoVerificable — Origen no disponible.",
     ]
@@ -157,30 +159,28 @@ def test_preparar_cierre_rechaza_y_devuelve_todos_los_puntos(monkeypatch):
 
 def test_aplicacion_cierra_bajo_bloqueo_y_audita_al_aprobador(monkeypatch):
     conn = Mock(spec=Connection)
-    monkeypatch.setattr(cierre, "_cuenta", Mock(return_value=_cuenta()))
-    monkeypatch.setattr(cierre, "get_engine", Mock(return_value=Mock()))
-    monkeypatch.setattr(
-        cierre,
-        "lista_cierre",
-        Mock(
-            return_value=cierre.ListaCierre(
-                id_cuenta=501,
-                puede_cerrar=True,
-                verificaciones=[
-                    cierre.VerificacionCierre(
-                        codigo="saldoCero", resultado="Cumple", detalle="Cero."
-                    )
-                ],
-            )
-        ),
+    cuenta_mock = Mock(return_value=_cuenta())
+    lista_mock = Mock(
+        return_value=cierre.ListaCierre(
+            id_cuenta=501,
+            puede_cerrar=True,
+            verificaciones=[
+                cierre.VerificacionCierre(
+                    codigo="saldoCero", resultado="Cumple", detalle="Cero."
+                )
+            ],
+        )
     )
+    monkeypatch.setattr(cierre, "_cuenta", cuenta_mock)
+    monkeypatch.setattr(cierre, "get_engine", Mock(return_value=Mock()))
+    monkeypatch.setattr(cierre, "lista_cierre", lista_mock)
     actualizar = Mock()
     monkeypatch.setattr(cierre.repository, "actualizar_estado_cuenta", actualizar)
 
     cierre.cerrar(conn, 501, "001", 88, 15)
 
-    assert cierre._cuenta.call_args_list[0].kwargs == {"bloquear": True}
-    assert cierre.lista_cierre.call_args.kwargs["bloquear"] is True
+    assert cuenta_mock.call_args_list[0].kwargs == {"bloquear": True}
+    assert lista_mock.call_args.kwargs["bloquear"] is True
     actualizar.assert_called_once_with(conn, 501, "CERRADA")
     sql, parametros = conn.execute.call_args.args
     assert "INSERT Cuentas.CuentaEvento" in str(sql)
@@ -211,7 +211,9 @@ def test_aplicacion_acredita_aprobacion_de_la_misma_agencia(monkeypatch):
         )
 
     assert error.value.status_code == 409
-    assert error.value.detail["code"] == "APROBACION_NO_VALIDA"
+    detalle = getattr(error.value, "detail", None)
+    assert isinstance(detalle, dict)
+    assert detalle["code"] == "APROBACION_NO_VALIDA"
     sql, parametros = seguridad.execute.call_args.args
     assert "AND IdAgencia=:agencia" in str(sql)
     assert "AND IdInternoResolutor IS NOT NULL" in str(sql)
@@ -260,7 +262,9 @@ def test_certificado_no_disponible_antes_de_cierre():
         cierre.certificado_cierre(conn, 501, "001", "Asesor")
 
     assert error.value.status_code == 409
-    assert error.value.detail["code"] == "CIERRE_PENDIENTE"
+    detalle = getattr(error.value, "detail", None)
+    assert isinstance(detalle, dict)
+    assert detalle["code"] == "CIERRE_PENDIENTE"
 
 
 def test_operacion_cta_cerrar_registrada_para_la_cola_y_openapi():
