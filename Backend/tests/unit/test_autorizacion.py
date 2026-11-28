@@ -455,6 +455,18 @@ ROLES_POR_RUTA: dict[tuple[str, str], tuple[str, ...]] = {
     # CAJ - 04
     ("GET", "/api/v1/caja/jornadas/actual"): ("CAJERO",),
     # CAJ - 07
+    ("GET", "/api/v1/caja/jornadas/{idJornada}/autorizadores-dotacion"): ("CAJERO",),
+    ("GET", "/api/v1/caja/jornadas/{idJornada}/solicitudes-dotacion"): (
+        "CAJERO",
+        "SUPERVISOR",
+    ),
+    ("POST", "/api/v1/caja/jornadas/{idJornada}/solicitudes-dotacion"): ("CAJERO",),
+    ("POST", "/api/v1/caja/solicitudes-dotacion/{idSolicitud}/confirmacion"): (
+        "SUPERVISOR",
+    ),
+    ("POST", "/api/v1/caja/solicitudes-dotacion/{idSolicitud}/rechazo"): (
+        "SUPERVISOR",
+    ),
     ("POST", "/api/v1/caja/jornadas/{idJornada}/dotaciones"): (
         "CAJERO",
         "SUPERVISOR",

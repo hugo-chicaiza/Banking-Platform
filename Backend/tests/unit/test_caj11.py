@@ -178,6 +178,12 @@ def _operaciones() -> dict[tuple[str, str], str]:
     }
 
 
-def test_main_tiene_las_18_operaciones_de_caja() -> None:
+def test_main_expone_las_operaciones_de_caja() -> None:
     ids = {op for (_, ruta), op in _operaciones().items() if "/api/v1/caja" in ruta}
-    assert ids == {f"CAJ{n:02d}" for n in range(1, 19)}
+    assert ids == {f"CAJ{n:02d}" for n in range(1, 19)} | {
+        "CAJ07Autorizadores",
+        "CAJ07Solicitud",
+        "CAJ07Solicitudes",
+        "CAJ07Confirmacion",
+        "CAJ07Rechazo",
+    }

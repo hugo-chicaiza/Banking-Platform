@@ -105,6 +105,7 @@ class Dotacion(CamelModel):
     tipo_dotacion: str | None = None
     monto: Money | None = None
     id_movimiento_boveda: int | None = None
+    id_asiento_contable: int | None = None
     boveda_bajo_minimo: bool | None = None
     estado: str | None = None
 
@@ -201,7 +202,12 @@ def sin_denominaciones_repetidas(
         raise ValueError("El desglose repite una denominación")
 
 
-class DotacionRequest(Entrada):
+class AutorizadorDotacion(CamelModel):
+    id_usuario: int
+    nombre_completo: str
+
+
+class SolicitarDotacion(Entrada):
     id_boveda: IdInt
     autorizado_por: IdInt
     tipo_dotacion: Literal["INICIAL", "ADICIONAL"]
@@ -209,9 +215,35 @@ class DotacionRequest(Entrada):
     observacion: Texto500 | None = None
 
     @model_validator(mode="after")
-    def _desglose_unico(self) -> "DotacionRequest":
+    def _desglose_unico(self) -> "SolicitarDotacion":
         sin_denominaciones_repetidas(self.desglose)
         return self
+
+
+class RechazarDotacion(Entrada):
+    motivo: Annotated[
+        str, StringConstraints(strip_whitespace=True, min_length=1, max_length=500)
+    ]
+
+
+class SolicitudDotacion(CamelModel):
+    id_solicitud: int
+    id_jornada: int
+    id_boveda: int
+    id_agencia: str
+    id_fecha_contable: int
+    solicitado_por: int
+    autorizado_por: int
+    fecha_solicitud: datetime
+    tipo_dotacion: Literal["INICIAL", "ADICIONAL"]
+    desglose: list[Desglose]
+    monto: Money
+    observacion: str | None
+    estado: Literal["PENDIENTE", "CADUCADA", "CONFIRMADA", "RECHAZADA"]
+    resuelto_por: int | None
+    fecha_resolucion: datetime | None
+    motivo: str | None
+    id_dotacion_caja: int | None
 
 
 # --- CAJ-13: generar cuadre ----------

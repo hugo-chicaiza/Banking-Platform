@@ -9,18 +9,24 @@ si el usuario de WorkOS todavía no está vinculado.
 from datetime import date
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, Path, Query, Request, Response
+from fastapi import APIRouter, Depends, Header, Path, Query, Request, Response
 from sqlalchemy import Connection
 
-from app.core.api.errors import RESPUESTAS_ERROR, ProblemDetailsRoute, solo_parametros
+from app.core.api.errors import (
+    RESPUESTAS_ERROR,
+    ProblemDetailsRoute,
+    problema,
+    solo_parametros,
+)
 from app.core.api.middleware import ip_cliente
 from app.core.database.db import cooperativa, seguridad
 from app.core.security.auth import Usuario, UsuarioActual, require_auth, require_roles
-from app.core.security.operador import IdInterno
-from app.modules.caja import service
+from app.core.security.operador import IdInterno, exigir_id_interno
+from app.modules.caja import dotaciones, service
 from app.modules.caja.schemas import (
     INT32_MAX,
     AutorizacionCuadre,
+    AutorizadorDotacion,
     CajaFisica,
     Comprobante,
     ConteoFisico,
@@ -29,14 +35,17 @@ from app.modules.caja.schemas import (
     Devolucion,
     DevolucionRequest,
     Dotacion,
-    DotacionRequest,
+    Entrada,
     Jornada,
     JornadaOpen,
     OperacionVentanilla,
     PageJornada,
     PageMovimientoCaja,
+    RechazarDotacion,
     ReversoRequest,
     SeriesBilletesRequest,
+    SolicitarDotacion,
+    SolicitudDotacion,
 )
 from app.modules.parametros.funciones import funcion_pendiente
 from app.modules.transacciones.dependencias import (
@@ -355,26 +364,135 @@ def abrir_jornada(
 
 @router.post(
     "/jornadas/{idJornada}/dotaciones",
-    response_model=Dotacion,
-    status_code=201,
     operation_id="CAJ07",
+    deprecated=True,
+    status_code=410,
+    response_model=None,
+    responses={
+        410: {
+            **RESPUESTAS_ERROR[409],
+            "description": "Crear una solicitud de dotación y obtener confirmación independiente.",
+        }
+    },
     dependencies=[Depends(require_roles("CAJERO", "SUPERVISOR"))],
 )
-def registrar_dotacion(
-    request: Request,
+def dotacion_directa_retirada(id_jornada: IdJornada) -> None:
+    raise problema(
+        410,
+        "SOLICITUD_DOTACION_REQUERIDA",
+        f"Solicite en /api/v1/caja/jornadas/{id_jornada}/solicitudes-dotacion y espere confirmación.",
+    )
+
+
+IdSolicitudDotacion = Annotated[
+    int, Path(alias="idSolicitud", gt=0, le=9_223_372_036_854_775_807)
+]
+ClaveDotacion = Annotated[
+    str, Header(alias="Idempotency-Key", pattern=r"^[A-Za-z0-9_-]{1,64}$")
+]
+
+
+@router.get(
+    "/jornadas/{idJornada}/autorizadores-dotacion",
+    response_model=list[AutorizadorDotacion],
+    operation_id="CAJ07Autorizadores",
+    dependencies=[Depends(require_roles("CAJERO"))],
+)
+def consultar_autorizadores_dotacion(
     usuario: UsuarioActual,
     id_interno: IdInterno,
     id_jornada: IdJornada,
-    datos: DotacionRequest,
     conn: Conexion,
+) -> list[AutorizadorDotacion]:
+    return dotaciones.consultar_autorizadores(
+        conn, usuario, exigir_id_interno(id_interno), id_jornada
+    )
+
+
+@router.post(
+    "/jornadas/{idJornada}/solicitudes-dotacion",
+    status_code=202,
+    response_model=SolicitudDotacion,
+    operation_id="CAJ07Solicitud",
+    dependencies=[Depends(require_roles("CAJERO"))],
+)
+def solicitar_dotacion(
+    usuario: UsuarioActual,
+    id_interno: IdInterno,
+    id_jornada: IdJornada,
+    datos: SolicitarDotacion,
+    conn: Conexion,
+    clave: ClaveDotacion,
+) -> SolicitudDotacion:
+    return dotaciones.solicitar(
+        conn, usuario, exigir_id_interno(id_interno), id_jornada, datos, clave
+    )
+
+
+@router.get(
+    "/jornadas/{idJornada}/solicitudes-dotacion",
+    response_model=list[SolicitudDotacion],
+    operation_id="CAJ07Solicitudes",
+    dependencies=[Depends(require_roles("CAJERO", "SUPERVISOR"))],
+)
+def consultar_solicitudes_dotacion(
+    usuario: UsuarioActual,
+    id_interno: IdInterno,
+    id_jornada: IdJornada,
+    conn: Conexion,
+    antes_de: Annotated[
+        int | None, Query(alias="antesDe", gt=0, le=9_223_372_036_854_775_807)
+    ] = None,
+) -> list[SolicitudDotacion]:
+    return dotaciones.consultar(
+        conn, usuario, exigir_id_interno(id_interno), id_jornada, antes_de
+    )
+
+
+@router.post(
+    "/solicitudes-dotacion/{idSolicitud}/confirmacion",
+    status_code=201,
+    response_model=Dotacion,
+    responses={200: {"model": Dotacion, "description": "Confirmación ya aplicada"}},
+    operation_id="CAJ07Confirmacion",
+    dependencies=[Depends(require_roles("SUPERVISOR"))],
+)
+def confirmar_dotacion(
+    request: Request,
+    response: Response,
+    usuario: UsuarioActual,
+    id_interno: IdInterno,
+    id_solicitud: IdSolicitudDotacion,
+    conn: Conexion,
+    datos: Entrada | None = None,
 ) -> Dotacion:
-    return service.registrar_dotacion(
+    resultado, repetida = dotaciones.confirmar(
         conn,
         usuario,
-        id_interno,
-        id_jornada,
-        datos,
+        exigir_id_interno(id_interno),
+        id_solicitud,
         ip_cliente(request.scope),
+    )
+    if repetida:
+        response.status_code = 200
+    return resultado
+
+
+@router.post(
+    "/solicitudes-dotacion/{idSolicitud}/rechazo",
+    response_model=SolicitudDotacion,
+    operation_id="CAJ07Rechazo",
+    dependencies=[Depends(require_roles("SUPERVISOR"))],
+)
+def rechazar_dotacion(
+    usuario: UsuarioActual,
+    id_interno: IdInterno,
+    id_solicitud: IdSolicitudDotacion,
+    datos: RechazarDotacion,
+    conn: Conexion,
+) -> SolicitudDotacion:
+    return dotaciones.rechazar(
+        conn, usuario, exigir_id_interno(id_interno), id_solicitud, datos.motivo
     )
 
 

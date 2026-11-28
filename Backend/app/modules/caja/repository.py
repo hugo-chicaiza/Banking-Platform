@@ -1,10 +1,12 @@
 import logging
 from datetime import date, datetime, timedelta
+from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import Connection, bindparam, text
 from sqlalchemy.exc import SQLAlchemyError
 
+from app.core.api.errors import problema
 from app.core.database.db import get_engine
 from app.core.database.procedimientos import ejecutar_con_salidas
 from app.core.security.auth import normalizar_roles
@@ -212,6 +214,7 @@ def listar_dotaciones(conn: Connection, id_jornada: int) -> list[Fila]:
             TipoDotacion,
             Monto,
             IdMovimientoBoveda,
+            IdAsientoContable,
             Estado,
             AutorizadoPor
         FROM Caja.DotacionesCaja
@@ -587,6 +590,100 @@ def autorizador_vigente(id_usuario: int) -> bool:
         return False
     # Misma lectura que la sesión: org-supervisor o supervisor también cuentan
     return "SUPERVISOR" in normalizar_roles(roles.split(","), None)
+
+
+def autorizadores_dotacion(
+    agencia: str, solicitante: int, autorizado: int | None = None
+) -> list[Fila]:
+    with get_engine("seguridad").connect() as conn:
+        filas = _filas(
+            conn,
+            """
+            SELECT u.UsuarioID, u.RolesWorkOS,
+                   LTRIM(RTRIM(CONCAT(u.Nombres, ' ', u.Apellidos))) AS NombreCompleto
+            FROM Organizacion.Usuarios u
+            WHERE u.Estado = 'Activo' AND u.KeyUsuario IS NOT NULL
+              AND u.UsuarioID <> :solicitante
+              AND (:autorizado IS NULL OR u.UsuarioID = :autorizado)
+              AND (
+                  EXISTS (
+                      SELECT 1 FROM Organizacion.UsuarioAgencia a
+                      WHERE a.UsuarioID = u.UsuarioID AND a.Activo = 1 AND a.IdAgencia = :agencia
+                  )
+                  OR (
+                      u.AgenciaID = TRY_CONVERT(int, :agencia)
+                      AND NOT EXISTS (
+                          SELECT 1 FROM Organizacion.UsuarioAgencia a WHERE a.UsuarioID = u.UsuarioID
+                      )
+                  )
+              )
+            ORDER BY NombreCompleto, u.UsuarioID
+            """,
+            {"agencia": agencia, "solicitante": solicitante, "autorizado": autorizado},
+        )
+    return [
+        fila
+        for fila in filas
+        if "SUPERVISOR"
+        in normalizar_roles((fila["RolesWorkOS"] or "").split(","), None)
+    ]
+
+
+def limite_efectivo_caja(conn: Connection, id_caja: int) -> Decimal | None:
+    return conn.scalar(
+        text("SELECT LimiteEfectivoCaja FROM Caja.CajaFisica WHERE IdCajaFisica = :id"),
+        {"id": id_caja},
+    )
+
+
+def preparar_dotacion_inicial(conn: Connection, jornada: int, monto: Decimal) -> None:
+    aplicada = conn.scalar(
+        text("""
+            SELECT TOP (1) IdDotacionCaja FROM Caja.DotacionesCaja WITH (UPDLOCK, HOLDLOCK)
+            WHERE IdJornadaCaja = :id AND TipoDotacion = 'INICIAL' AND Estado <> 'ANULADA'
+        """),
+        {"id": jornada},
+    )
+    if aplicada is not None:
+        raise problema(
+            409,
+            "DOTACION_INICIAL_YA_CONFIRMADA",
+            "La jornada ya tiene dotación inicial.",
+        )
+
+    cuadre = conn.scalar(
+        text(
+            "SELECT TOP (1) 1 FROM Caja.CuadreCaja WHERE IdJornadaCaja = :id AND SaldoInicial <> :monto"
+        ),
+        {"id": jornada, "monto": monto},
+    )
+    if cuadre is not None:
+        raise problema(
+            409,
+            "DOTACION_INICIAL_CUADRE_EXISTENTE",
+            "El cuadre de la jornada ya registró un saldo inicial diferente.",
+        )
+
+    # El procedimiento usa DineroInicial como saldo de apertura al aplicar la INICIAL.
+    conn.execute(
+        text(
+            "UPDATE Caja.JornadasCaja SET DineroInicial = :monto WHERE IdJornadaCaja = :id"
+        ),
+        {"monto": monto, "id": jornada},
+    )
+
+
+def vincular_asiento_dotacion(conn: Connection, dotacion: int, asiento: int) -> None:
+    actualizado = conn.execute(
+        text("""
+            UPDATE Caja.DotacionesCaja SET IdAsientoContable = :asiento
+            OUTPUT inserted.IdDotacionCaja
+            WHERE IdDotacionCaja = :id AND IdAsientoContable IS NULL
+        """),
+        {"asiento": asiento, "id": dotacion},
+    ).scalar_one_or_none()
+    if actualizado is None:
+        raise RuntimeError("No se pudo enlazar el asiento a la dotación.")
 
 
 def registrar_dotacion(
