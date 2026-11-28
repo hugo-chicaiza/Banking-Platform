@@ -1222,6 +1222,32 @@ def test_cta08_asesor_no_modifica_cuenta_de_otra_agencia():
     assert len(db.consultas) == 1
 
 
+def test_e609_cuenta_expone_tipo_certificado_aportacion():
+    cuenta = Cuenta.model_validate(_cuenta_row(tipo_cuenta="CERTIFICADO_APORTACION"))
+
+    assert cuenta.tipo_cuenta == "CERTIFICADO_APORTACION"
+
+
+def test_e609_certificado_no_configura_cupos_fuera_de_ventanilla():
+    db = _fake_conn(
+        [_cuenta_bd_row(tipo_cuenta="CERTIFICADO_APORTACION")],
+        [{"id_canal": 2, "codigo_canal": "MOBI"}],
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        service.actualizar_cupo(
+            cast(Connection, db),
+            501,
+            2,
+            CupoSolicitado.model_validate(_CUPO_SOLICITADO),
+            12,
+        )
+
+    _assert_http_error(exc, 409, "CERTIFICADO_SIN_CUPOS_FUERA_VENTANILLA")
+    assert len(db.consultas) == 2
+    assert db.rollbacks == 1 and db.commits == 0
+
+
 @pytest.mark.parametrize(
     "cambios", [{"montoMaxTransaccion": "401"}, {"cupoMensual": "399"}]
 )
@@ -1774,7 +1800,7 @@ def test_cta05_reactivacion_serializa_cliente_antes_de_cuenta():
     )
     assert _cambiar(db, "ACTIVA").estado == "ACTIVA"
     assert "Clientes.Cliente WITH (UPDLOCK, HOLDLOCK)" in db.consultas[1][0]
-    assert "Cuentas.Cuenta WITH (XLOCK, HOLDLOCK)" in db.consultas[3][0]
+    assert "Cuentas.Cuenta AS c WITH (XLOCK, HOLDLOCK)" in db.consultas[3][0]
     assert db.commits == 1 and db.rollbacks == 0
 
 

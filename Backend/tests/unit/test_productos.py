@@ -28,6 +28,7 @@ from app.modules.productos import repository as repo
 from app.modules.productos.programacion import validar_cupos
 from app.modules.productos.programacion_schemas import CuposNuevos
 from app.modules.productos.router import router
+from app.modules.productos.schemas import ProductoCreate
 from tests.sesion import simular_sesion, usuario_con_roles
 
 BASE = "https://testserver/api/v1/productos"
@@ -189,6 +190,13 @@ def bd(monkeypatch: pytest.MonkeyPatch) -> BdFalsa:
                 "nombre": "Cuenta de ahorro",
                 "tipo_producto": "Cuenta",
                 "tipo_cuenta": "Ahorro",
+            },
+            {
+                "id_tipo_producto": 2,
+                "codigo": "CERTIFICADO_APORTACION",
+                "nombre": "Certificado de aportacion",
+                "tipo_producto": "Cuenta",
+                "tipo_cuenta": "CERTIFICADO_APORTACION",
             },
             {
                 "id_tipo_producto": 4,
@@ -450,7 +458,25 @@ def test_eliminar_solo_en_borrador_sin_uso(bd, admin, asesor):
 
 def test_tipos_de_producto_vienen_con_el_software(bd, asesor):
     r = asesor.get(f"{BASE}/tipos")
-    assert [t["codigo"] for t in r.json()] == ["CUENTA_AHORRO", "CREDITO", "TARJETA"]
+    assert [t["codigo"] for t in r.json()] == [
+        "CUENTA_AHORRO",
+        "CERTIFICADO_APORTACION",
+        "CREDITO",
+        "TARJETA",
+    ]
+
+
+def test_producto_admite_tipo_cuenta_certificado_aportacion():
+    producto = ProductoCreate.model_validate(
+        {
+            "codigoProducto": "APO01",
+            "nombreProducto": "Certificado de aportacion",
+            "tipoProducto": "Cuenta",
+            "tipoCuenta": "CERTIFICADO_APORTACION",
+        }
+    )
+
+    assert producto.tipo_cuenta == "CERTIFICADO_APORTACION"
 
 
 def test_monto_solo_en_cuenta(bd, admin):

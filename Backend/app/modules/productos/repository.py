@@ -49,7 +49,7 @@ def listar_tipos(conn: Connection) -> list[dict[str, Any]]:
                  ELSE 'Cuenta' END AS tipo_producto,
             CASE Codigo WHEN 'CUENTA_CORRIENTE' THEN 'Corriente'
                  WHEN 'CUENTA_AHORRO' THEN 'Ahorro'
-                 WHEN 'CERTIFICADO_APORTACION' THEN 'Ahorro' END AS tipo_cuenta
+                 WHEN 'CERTIFICADO_APORTACION' THEN 'CERTIFICADO_APORTACION' END AS tipo_cuenta
         FROM ProductosFinancieros.TipoProducto WHERE Estado = 'A' ORDER BY IdTipoProducto
     """,
     )
