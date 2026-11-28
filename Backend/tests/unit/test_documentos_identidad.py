@@ -220,6 +220,7 @@ def test_alta_documento_y_direccion_en_misma_transaccion(monkeypatch):
         tipo_cliente="Natural",
         identificacion="1712345675",
         fecha_nacimiento=date(1990, 1, 1),
+        email="documentos@example.invalid",
         fecha_emision=None,
         fecha_vencimiento=None,
     )
@@ -227,6 +228,7 @@ def test_alta_documento_y_direccion_en_misma_transaccion(monkeypatch):
     monkeypatch.setattr(service, "_validar_datos_alta", lambda *_, **__: None)
     monkeypatch.setattr(service, "edad_mayoria", lambda *_: 18)
     monkeypatch.setattr(service, "_validar_persona_y_catalogos", lambda *_: None)
+    monkeypatch.setattr(service.correo_principal.general, "valor", lambda *_: [])
     monkeypatch.setattr(documentos_identidad, "preparar_alta", lambda *_: body)
     monkeypatch.setattr(
         service.repository, "crear_cliente", lambda *_, **__: {"id_cliente": 42}
