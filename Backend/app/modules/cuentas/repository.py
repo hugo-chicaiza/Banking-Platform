@@ -351,10 +351,13 @@ def bloquear_cuenta(conn: Connection, id_cuenta: int) -> dict[str, Any] | None:
     fila = _one(
         conn,
         """
-        SELECT IdCuenta AS id_cuenta, Estado AS estado, RTRIM(IdAgencia) AS id_agencia,
-               Saldo AS saldo, SaldoRetenido AS saldo_retenido
-        FROM Cuentas.Cuenta WITH (XLOCK, HOLDLOCK)
-        WHERE IdCuenta = :id_cuenta
+        SELECT c.IdCuenta AS id_cuenta, c.Estado AS estado,
+               RTRIM(c.IdAgencia) AS id_agencia, c.Saldo AS saldo,
+               c.SaldoRetenido AS saldo_retenido, p.TipoCuenta AS tipo_cuenta
+        FROM Cuentas.Cuenta AS c WITH (XLOCK, HOLDLOCK)
+        INNER JOIN ProductosFinancieros.Producto AS p
+          ON p.IdProducto = c.IdProducto
+        WHERE c.IdCuenta = :id_cuenta
         """,
         {"id_cuenta": id_cuenta},
     )
@@ -457,7 +460,11 @@ def consultar_cupos_efectivos(
 def obtener_canal(conn: Connection, id_canal: int) -> dict[str, Any] | None:
     return _one(
         conn,
-        "SELECT IdCanal AS id_canal FROM Canal.Canal WHERE IdCanal = :id_canal",
+        """
+        SELECT IdCanal AS id_canal, RTRIM(CodigoCanal) AS codigo_canal
+        FROM Canal.Canal
+        WHERE IdCanal = :id_canal
+        """,
         {"id_canal": id_canal},
     )
 
