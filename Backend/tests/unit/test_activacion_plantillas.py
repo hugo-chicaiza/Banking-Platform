@@ -51,7 +51,4 @@ def test_desembolso_vigente_no_certifica_toda_la_matriz_de_credito(monkeypatch):
         repository, "obtener_plantilla", Mock(return_value={"IdPlantillaAsiento": 36})
     )
 
-    assert (
-        _plantillas(Mock(spec=Connection), "CREDITO", date(2026, 11, 30))[1]
-        is None
-    )
+    assert _plantillas(Mock(spec=Connection), "CREDITO", date(2026, 11, 30))[1] is None
