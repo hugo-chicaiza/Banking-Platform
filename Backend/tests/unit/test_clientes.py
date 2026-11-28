@@ -21,6 +21,7 @@ from typing import Any, cast
 from unittest.mock import MagicMock
 
 import pytest
+from fastapi import HTTPException
 
 
 @pytest.fixture(autouse=True)
@@ -316,6 +317,7 @@ def _mock_documentos_alta(monkeypatch):
 
 def test_registrar_cliente_natural_exitoso(monkeypatch):
     conn = _fake_conn()
+    monkeypatch.setattr(service, "edad_mayoria", lambda *_: 18)
     _mock_documentos_alta(monkeypatch)
     payload = _payload_natural_valido()
 
@@ -426,6 +428,56 @@ def test_registrar_cliente_juridico_exitoso(monkeypatch):
     assert cliente.id_cliente == 202
     assert cliente.razon_social == "Empresa Ejemplo S.A."
     assert cliente.apellidos is None
+
+
+@pytest.mark.parametrize("caso", ["sin_tutor", "tutor_falla", "tutor_guardado"])
+def test_alta_menor_con_tutor_es_atomica(monkeypatch, caso):
+    from app.modules.clientes import tutores
+
+    fecha = date(2026, 11, 27)
+    monkeypatch.setattr(service, "hoy", lambda: fecha)
+    monkeypatch.setattr(service, "edad_mayoria", lambda *_: 18)
+    _mock_documentos_alta(monkeypatch)
+    _patch_repo_catalogos_ok(monkeypatch)
+    base = _payload_natural_valido().model_dump()
+    base["fecha_nacimiento"] = date(2015, 1, 1)
+    tutor = tutores.AltaTutor(
+        id_cliente_relacionado=2,
+        fecha_efectiva=fecha,
+        tipo_respaldo="Acta",
+        referencia_respaldo="QA-39",
+    )
+    payload = tutores.ClienteAlta(**base, tutor=None if caso == "sin_tutor" else tutor)
+    crear = MagicMock(return_value={"id_cliente": 44})
+    vincular = MagicMock(return_value=6)
+    auditoria = MagicMock()
+    conn = MagicMock()
+    monkeypatch.setattr(repository, "crear_cliente", crear)
+    monkeypatch.setattr(tutores, "registrar_tutor_inicial", vincular)
+    monkeypatch.setattr(tutores, "auditar_tutor", auditoria)
+    monkeypatch.setattr(service, "Cliente", lambda **datos: datos)
+
+    if caso == "sin_tutor":
+        with pytest.raises(HTTPException) as error:
+            service.registrar_cliente(conn, payload, 7, "127.0.0.1")
+        assert error.value.status_code == 422
+        crear.assert_not_called()
+        conn.commit.assert_not_called()
+    elif caso == "tutor_falla":
+        vincular.side_effect = RuntimeError("Fallo al insertar el vínculo")
+        with pytest.raises(RuntimeError, match="Fallo al insertar"):
+            service.registrar_cliente(conn, payload, 7, "127.0.0.1")
+        crear.assert_called_once()
+        conn.rollback.assert_called_once()
+        conn.commit.assert_not_called()
+        auditoria.assert_not_called()
+    else:
+        assert service.registrar_cliente(conn, payload, 7, "127.0.0.1") == {
+            "id_cliente": 44
+        }
+        vincular.assert_called_once_with(conn, 44, tutor, 7, fecha)
+        conn.commit.assert_called_once()
+        auditoria.assert_called_once_with("CLI_RELACION_INICIADA", 6, 7, "127.0.0.1")
 
 
 def test_registrar_cliente_validaciones_negocio_422(monkeypatch):

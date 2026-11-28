@@ -185,6 +185,7 @@ def test_baja_logica_conserva_identidad_y_registra_antes_despues():
 
 def test_fallo_al_confirmar_registro_revierte_la_unidad_cliente_direccion(monkeypatch):
     entrada = payload()
+    monkeypatch.setattr(service, "edad_mayoria", lambda *_: 18)
     datos = repository.crear_cliente(
         cast(Connection, cursor({"id_cliente": 91}, {"id_direccion": 42}, None)),
         entrada,
