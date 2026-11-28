@@ -600,8 +600,8 @@ def anular_pendientes_vencidas(conn: Connection, fecha: date) -> int:
 
 
 _TRANSICIONES_CUENTA = {
-    "ACTIVA": {"INACTIVA", "BLOQUEADA", "CERRADA"},
-    "INACTIVA": {"ACTIVA", "CERRADA"},
+    "ACTIVA": {"INACTIVA", "BLOQUEADA"},
+    "INACTIVA": {"ACTIVA"},
     "BLOQUEADA": {"ACTIVA"},
     "CERRADA": set(),
 }
@@ -648,30 +648,6 @@ def cambiar_estado_cuenta(
             raise problema(
                 409, "TRANSICION_INVALIDA", "El cambio de estado no está permitido."
             )
-        if payload.estado == "CERRADA":
-            if actual["saldo"] != 0 or actual["saldo_retenido"] != 0:
-                raise problema(
-                    409, "CUENTA_CON_SALDO", "La cuenta tiene saldo o saldo retenido."
-                )
-            desembolsos = repository.desembolsos_de_cuenta(conn, id_cuenta)
-            # PENDIENTE reserva un desembolso; DESEMBOLSADO requiere verificar deuda,
-            # no el estado APROBADA de la solicitud ni un saldo ficticio del resumen.
-            pendiente = any(d["estado"] == "PENDIENTE" for d in desembolsos)
-            solicitudes = sorted(
-                {
-                    d["id_solicitud"]
-                    for d in desembolsos
-                    if d["estado"] == "DESEMBOLSADO"
-                }
-            )
-            if pendiente or any(
-                clientes_service.credito_tiene_deuda(conn, s) for s in solicitudes
-            ):
-                raise problema(
-                    409,
-                    "CUENTA_CON_CREDITO_VIGENTE",
-                    "La cuenta respalda un crédito vigente o un desembolso pendiente.",
-                )
         repository.actualizar_estado_cuenta(conn, id_cuenta, payload.estado)
         resultado = obtener_cuenta(conn, id_cuenta)
         conn.commit()

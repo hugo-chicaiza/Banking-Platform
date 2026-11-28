@@ -126,6 +126,7 @@ def registro_inicial() -> Registro:
     from app.modules.clientes.aprobacion_riesgo import OPERACION_RIESGO
     from app.modules.contabilidad.plantillas import OPERACION_PLANTILLA
     from app.modules.cuentas.cambio_subproducto import OPERACION as cambio_subproducto
+    from app.modules.cuentas.cierre import OPERACION as cierre_cuenta
     from app.modules.cuentas.retenciones_aprobacion import (
         operaciones as operaciones_retencion,
     )
@@ -149,6 +150,7 @@ def registro_inicial() -> Registro:
     registro.agregar(operacion_numeracion())
     registro.agregar(OPERACION_PLANTILLA)
     registro.agregar(cambio_subproducto)
+    registro.agregar(cierre_cuenta)
     registro.agregar(operacion_mapeo())
     registro.agregar(OPERACION_EDICION)
     registro.agregar(OPERACION_DOCUMENTOS)

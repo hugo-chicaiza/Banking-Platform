@@ -254,6 +254,27 @@ FUNCIONES = (
         "/cuentas",
     ),
     _f(
+        "cuentas.cierre.consultar",
+        "Consultar requisitos y certificado de cierre",
+        "Cuentas",
+        ("ASESOR", "SUPERVISOR", "ADMIN", "CUMPLIMIENTO"),
+        (
+            ("GET", Q + "/{idCuenta}/cierre"),
+            ("GET", Q + "/{idCuenta}/certificado-cierre"),
+        ),
+        "/cuentas",
+        ("cuentas.consultar",),
+    ),
+    _f(
+        "cuentas.cierre.solicitar",
+        "Solicitar cierre de cuenta",
+        "Cuentas",
+        ("ASESOR", "ADMIN"),
+        (("POST", Q + "/{idCuenta}/cierre"),),
+        "/cuentas",
+        ("cuentas.cierre.consultar",),
+    ),
+    _f(
         "cuentas.verSaldo",
         "Consultar saldo",
         "Cuentas",

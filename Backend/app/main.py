@@ -24,6 +24,7 @@ from app.modules.catalogos.router import router as catalogos_router
 from app.modules.clientes.router import router as clientes_router
 from app.modules.contabilidad.router import router as contabilidad_router
 from app.modules.creditos.router import router as creditos_router
+from app.modules.cuentas.cierre_api import router as cierre_cuentas_router
 from app.modules.cuentas.retenciones_api import router as retenciones_router
 from app.modules.cuentas.router import router as cuentas_router
 from app.modules.organizacion.router import router as organizacion_router
@@ -79,6 +80,7 @@ app.include_router(clientes_router, prefix=API_V1)
 app.include_router(contabilidad_router, prefix=API_V1)
 app.include_router(creditos_router, prefix=API_V1)
 app.include_router(cuentas_router, prefix=API_V1)
+app.include_router(cierre_cuentas_router, prefix=API_V1)
 app.include_router(retenciones_router, prefix=API_V1)
 app.include_router(organizacion_router, prefix=API_V1)
 app.include_router(institucion_router, prefix=API_V1)
