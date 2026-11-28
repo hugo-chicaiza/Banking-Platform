@@ -195,7 +195,8 @@ def restricciones_cuenta(
                     cl.Estado AS EstadoCliente,
                     cl.TipoCliente,
                     cl.FechaNacimiento,
-                    p.PermiteOperacionesPresenciales
+                    p.PermiteOperacionesPresenciales,
+                    p.TipoCuenta
                 FROM Cuentas.Cuenta AS c WITH (UPDLOCK, HOLDLOCK)
                 LEFT JOIN Clientes.Cliente AS cl WITH (HOLDLOCK)
                     ON cl.IdCliente = c.IdCliente

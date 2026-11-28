@@ -3,7 +3,8 @@
 ProductosFinancieros.Producto: CodigoProducto varchar(10) único, NombreProducto
 varchar(100), TipoProducto (CK Cuenta/Credito/Tarjeta), MontoAperturaMinimo >= 0,
 IdTipoCredito obligatorio en Credito, IdRed obligatorio en Tarjeta, TipoCuenta
-(Ahorro/Corriente) solo en Cuenta, PermiteOperacionesPresenciales, Estado A/I,
+(Ahorro/Corriente/Certificado de aportación) solo en Cuenta,
+PermiteOperacionesPresenciales, Estado A/I,
 Descripcion varchar(250) NULL (migración 20261115). SubProducto: CodigoSubProducto
 varchar(15) único, NombreSubProducto varchar(100), Estado A/I.
 """
@@ -22,7 +23,7 @@ INT32_MAX = 2_147_483_647
 Estado = Literal["A", "I"]
 EstadoCatalogo = Literal["Borrador", "Activo", "Suspendido", "Retirado"]
 TipoClientePermitido = Literal["Natural", "Juridico", "Ambos"]
-TipoCuenta = Literal["Ahorro", "Corriente"]
+TipoCuenta = Literal["Ahorro", "Corriente", "CERTIFICADO_APORTACION"]
 # Sin caracteres de control: termina en pantallas, PDF, reportes y auditoría
 _TEXTO = r"^[^\x00-\x1f\x7f]+$"
 CodigoProducto = Annotated[
