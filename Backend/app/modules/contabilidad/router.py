@@ -8,16 +8,20 @@ from app.core.api.middleware import ip_cliente
 from app.core.database.db import cooperativa
 from app.core.security.auth import Usuario, UsuarioActual, require_auth, require_roles
 from app.core.security.operador import IdInterno, auditar, exigir_id_interno
+from app.modules.aprobaciones.contratos import SolicitudAceptada
 from app.modules.auth.agencias import agencia_consulta_asientos, exigir_matriz
 from app.modules.contabilidad import corte_workos, importaciones, service
 from app.modules.contabilidad.schemas import (
     INT32_MAX,
     Asiento,
+    AsientoManual,
+    AsientoManualCreado,
     CuentaContable,
     CuentaContableCrear,
     CuentaContableEditar,
     CuentaContableEstado,
     FechaContable,
+    MotivoAsientoManual,
     PageAsiento,
 )
 from app.modules.parametros.funciones import funcion_pendiente
@@ -316,6 +320,166 @@ def obtener_asiento(
 
 
 router.include_router(_asientos_router)
+
+
+# ---------------------------------------------------------------------------
+# E4-04 (#383) · Asientos manuales con aprobación y reverso: contrato pendiente
+# ---------------------------------------------------------------------------
+# Roles: solo CONTADOR escribe. El AUDITOR y el ADMIN consultan con CON-04/05.
+# La aprobación se resuelve en /aprobaciones (E0-08) y la hace otra persona.
+# Ramas pendientes de E0-09: el servicio lanza el 501 interno y funcion_pendiente lo
+# cierra con 404 FUNCION_NO_DISPONIBLE (las claves aún no tienen semilla: apagadas).
+_ROLES_ASIENTOS_MANUALES = ["CONTADOR"]
+_asientos_manuales_router = APIRouter(
+    route_class=ProblemDetailsRoute,
+    responses=RESPUESTAS_ERROR,
+    dependencies=[
+        Depends(require_roles(*_ROLES_ASIENTOS_MANUALES)),
+        Depends(solo_parametros()),
+    ],
+)
+IdAsiento = Annotated[int, Path(alias="idAsiento", ge=1, le=INT32_MAX)]
+
+_CLAVE_ASIENTO_MANUAL = "FUNCION_CONTABILIDAD_ASIENTO_MANUAL"
+_CLAVE_REVERSO_ASIENTO = "FUNCION_CONTABILIDAD_REVERSO_ASIENTO"
+_FUNCION_PENDIENTE = "FUNCION_NO_DISPONIBLE: función pendiente (E0-09)."
+# Una sola entrada 404 por ruta: si se combinan dos dicts con 404, el último pisa.
+_FUNCION_NO_DISPONIBLE = {404: _error(404, _FUNCION_PENDIENTE)}
+_ASIENTO_NO_EXISTE = {
+    404: _error(
+        404, f"ASIENTO_NO_ENCONTRADO: el asiento no existe. {_FUNCION_PENDIENTE}"
+    )
+}
+_NO_EDITABLE = (
+    "ASIENTO_NO_EDITABLE: el asiento no está en BORRADOR (ya se envió, se "
+    "contabilizó o se anuló)."
+)
+_SIN_PERMISO_Y_AUTOAPROBACION = _error(
+    403,
+    "SIN_PERMISO: el rol no es CONTADOR. La aprobación la resuelve otra persona en "
+    "POST /aprobaciones/{idSolicitud}/aprobar: quien envió el asiento recibe 403 "
+    "APROBADOR_ES_SOLICITANTE si intenta aprobarlo.",
+)
+_PENDIENTE_APROBACION = {
+    "model": SolicitudAceptada,
+    "description": "Pendiente de aprobación en E0-08 (/aprobaciones).",
+}
+
+
+@_asientos_manuales_router.post(
+    "/asientos",
+    operation_id="E404Crear",
+    status_code=201,
+    response_model=AsientoManualCreado,
+    responses={**_FUNCION_NO_DISPONIBLE},
+    openapi_extra={"x-roles": _ROLES_ASIENTOS_MANUALES},
+)
+def crear_asiento_manual(conn: Db, datos: AsientoManual, usuario: UsuarioActual) -> Any:
+    """Asiento manual en BORRADOR; puede guardarse incompleto o sin cuadrar.
+
+    Las reglas contables (al menos dos líneas, débitos = créditos, cuentas
+    habilitadas, período abierto) se validan al enviarlo.
+    """
+    with funcion_pendiente(_CLAVE_ASIENTO_MANUAL, conn, usuario):
+        return service.crear_asiento_manual(conn, datos)
+
+
+@_asientos_manuales_router.put(
+    "/asientos/{idAsiento}",
+    operation_id="E404Editar",
+    response_model=Asiento,
+    responses={
+        **_ASIENTO_NO_EXISTE,
+        409: _error(409, _NO_EDITABLE),
+    },
+    openapi_extra={"x-roles": _ROLES_ASIENTOS_MANUALES},
+)
+def editar_asiento_manual(
+    conn: Db, id_asiento: IdAsiento, datos: AsientoManual, usuario: UsuarioActual
+) -> Any:
+    """Reemplaza el borrador completo (cabecera y líneas); 200 con el asiento."""
+    with funcion_pendiente(_CLAVE_ASIENTO_MANUAL, conn, usuario):
+        return service.editar_asiento_manual(conn, id_asiento, datos)
+
+
+@_asientos_manuales_router.post(
+    "/asientos/{idAsiento}/envio",
+    operation_id="E404Envio",
+    status_code=202,
+    response_model=SolicitudAceptada,
+    responses={
+        202: _PENDIENTE_APROBACION,
+        403: _SIN_PERMISO_Y_AUTOAPROBACION,
+        **_ASIENTO_NO_EXISTE,
+        409: _error(
+            409,
+            f"{_NO_EDITABLE} CUENTA_CONTABLE_NO_HABILITADA: una cuenta está "
+            "inactiva, no es imputable o tiene subcuentas. "
+            "PERIODO_CONTABLE_NO_ABIERTO: el día o el mes contable no están abiertos.",
+        ),
+        422: _error(
+            422,
+            "ASIENTO_NO_CUADRA: tiene menos de dos líneas o los débitos no suman lo "
+            "mismo que los créditos. CUENTA_SOLO_AUTOMATICA: una cuenta solo admite "
+            "asientos automáticos.",
+        ),
+    },
+    openapi_extra={"x-roles": _ROLES_ASIENTOS_MANUALES},
+)
+def enviar_asiento_manual(
+    conn: Db, id_asiento: IdAsiento, usuario: UsuarioActual
+) -> Any:
+    """Valida el borrador y lo deja PENDIENTE_APROBACION; 202 con la solicitud."""
+    with funcion_pendiente(_CLAVE_ASIENTO_MANUAL, conn, usuario):
+        return service.enviar_asiento_manual(conn, id_asiento)
+
+
+@_asientos_manuales_router.post(
+    "/asientos/{idAsiento}/anulacion",
+    operation_id="E404Anulacion",
+    response_model=Asiento,
+    responses={
+        **_ASIENTO_NO_EXISTE,
+        409: _error(409, _NO_EDITABLE),
+    },
+    openapi_extra={"x-roles": _ROLES_ASIENTOS_MANUALES},
+)
+def anular_asiento_manual(
+    conn: Db, id_asiento: IdAsiento, datos: MotivoAsientoManual, usuario: UsuarioActual
+) -> Any:
+    """Anula un borrador (queda ANULADO); 200 con el asiento."""
+    with funcion_pendiente(_CLAVE_ASIENTO_MANUAL, conn, usuario):
+        return service.anular_asiento_manual(conn, id_asiento, datos)
+
+
+@_asientos_manuales_router.post(
+    "/asientos/{idAsiento}/reverso",
+    operation_id="CON06Reverso",
+    status_code=202,
+    response_model=SolicitudAceptada,
+    responses={
+        202: _PENDIENTE_APROBACION,
+        403: _SIN_PERMISO_Y_AUTOAPROBACION,
+        **_ASIENTO_NO_EXISTE,
+        409: _error(
+            409,
+            "ASIENTO_DE_OPERACION: el asiento no es manual; se reversa desde la "
+            "operación de origen. ASIENTO_YA_REVERSADO: ya tiene reverso. "
+            "ASIENTO_NO_REVERSABLE: no es un original CONTABILIZADO. "
+            "PERIODO_CONTABLE_NO_ABIERTO. CUENTA_CONTABLE_NO_HABILITADA.",
+        ),
+    },
+    openapi_extra={"x-roles": _ROLES_ASIENTOS_MANUALES},
+)
+def reversar_asiento_manual(
+    conn: Db, id_asiento: IdAsiento, datos: MotivoAsientoManual, usuario: UsuarioActual
+) -> Any:
+    """CON-06 · Pide el reverso de un asiento manual contabilizado; 202."""
+    with funcion_pendiente(_CLAVE_REVERSO_ASIENTO, conn, usuario):
+        return service.reversar_asiento_manual(conn, id_asiento, datos)
+
+
+router.include_router(_asientos_manuales_router)
 
 router.include_router(importaciones.router)
 router.include_router(corte_workos.router)

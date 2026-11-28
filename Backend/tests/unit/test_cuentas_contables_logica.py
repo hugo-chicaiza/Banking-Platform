@@ -35,6 +35,7 @@ def _cuenta(**cambios):
         "tipo_cuenta": "ACTIVO",
         "id_cuenta_superior": 5,
         "es_imputable": False,
+        "solo_automatica": False,
         "saldo": Decimal("0.00"),
         "estado": True,
         "es_cuenta_valuacion": False,
@@ -146,6 +147,7 @@ def test_alta_crea_la_cuenta_y_responde_201(client, conn, repo, eventos_auditado
         "tipoCuenta": "ACTIVO",
         "idCuentaSuperior": 9,
         "esImputable": True,
+        "soloAutomatica": False,
         "saldo": 0.0,
         "estado": "Activo",
     }

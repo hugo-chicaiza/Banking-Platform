@@ -32,6 +32,8 @@ class CuentaContable(CamelModel):
     tipo_cuenta: str
     id_cuenta_superior: int | None  # None en las cuentas de primer nivel
     es_imputable: bool  # solo las imputables reciben movimientos
+    # E4-04: solo recibe asientos automáticos (no se usa en un asiento manual)
+    solo_automatica: bool
     saldo: Money
     estado: str
 
@@ -116,3 +118,72 @@ class PageAsiento(CamelModel):
     page: int
     page_size: int
     total: int
+
+
+# E4-04 (#383) · Asientos manuales con aprobación y reverso (contrato)
+# Tamaños tomados de la base de desarrollo: AsientoContable.Concepto varchar(500),
+# IdAgencia char(3); MovimientosContables.Monto decimal(18,2) con CHECK Monto > 0 y
+# TipoMovimiento DEBITO/CREDITO. El concepto se limita a 200 (provisional).
+# El borrador puede guardarse incompleto: "al menos dos líneas, débitos = créditos,
+# cuentas activas e imputables, día y mes abiertos" se validan al enviarlo.
+
+MAX_CONCEPTO_ASIENTO = 200
+MAX_MOTIVO_ASIENTO = 300
+MAX_LINEAS_ASIENTO = 100  # provisional: tope del cuerpo, no regla contable
+
+ConceptoAsiento = Annotated[
+    str,
+    StringConstraints(
+        strip_whitespace=True, min_length=1, max_length=MAX_CONCEPTO_ASIENTO
+    ),
+]
+MotivoAsiento = Annotated[
+    str,
+    StringConstraints(
+        strip_whitespace=True, min_length=1, max_length=MAX_MOTIVO_ASIENTO
+    ),
+]
+MontoLinea = Annotated[
+    Money,
+    Field(
+        gt=0,
+        max_digits=18,
+        decimal_places=2,
+        description="Mayor que 0, con hasta 2 decimales (decimal(18,2)).",
+    ),
+]
+
+
+class LineaAsientoManual(CamelModel):
+    """Una línea del borrador; la cuenta se valida (activa, imputable, no solo
+    automática) al enviar el asiento."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id_cuenta_contable: Annotated[int, Field(strict=True, ge=1, le=INT32_MAX)]
+    tipo_movimiento: Literal["DEBITO", "CREDITO"]
+    monto: MontoLinea
+
+
+class AsientoManual(CamelModel):
+    """Cuerpo de POST /asientos y PUT /asientos/{idAsiento}: el borrador completo."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    concepto: ConceptoAsiento
+    id_agencia: Annotated[str, StringConstraints(pattern=r"^[0-9]{3}$")]
+    lineas: Annotated[list[LineaAsientoManual], Field(max_length=MAX_LINEAS_ASIENTO)]
+
+
+class AsientoManualCreado(CamelModel):
+    """201 de POST /asientos: el asiento queda en BORRADOR."""
+
+    id_asiento_contable: int
+
+
+class MotivoAsientoManual(CamelModel):
+    """Cuerpo de la anulación de un borrador y del reverso de un asiento manual."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    motivo: MotivoAsiento

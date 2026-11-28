@@ -256,6 +256,7 @@ def test_con03_contrato_en_el_openapi():
         "tipoCuenta",
         "idCuentaSuperior",
         "esImputable",
+        "soloAutomatica",
         "saldo",
         "estado",
     }
@@ -272,6 +273,7 @@ def test_con03_cuenta_se_serializa_como_el_contrato():
         tipo_cuenta="Ahorros",
         id_cuenta_superior=None,
         es_imputable=True,
+        solo_automatica=False,
         saldo=Decimal("150.00"),
         estado="Activo",
     )
@@ -284,6 +286,7 @@ def test_con03_cuenta_se_serializa_como_el_contrato():
         "tipoCuenta": "Ahorros",
         "idCuentaSuperior": None,
         "esImputable": True,
+        "soloAutomatica": False,
         "saldo": 150.0,
         "estado": "Activo",
     }
@@ -298,6 +301,7 @@ def _cuenta(**cambios):
         "tipo_cuenta": "ACTIVO",
         "id_cuenta_superior": None,
         "es_imputable": False,
+        "solo_automatica": True,
         "saldo": Decimal("150.00"),
         "estado": True,
     }
@@ -325,6 +329,7 @@ def test_con03_roles_permitidos_reciben_el_plan_de_cuentas(client, monkeypatch, 
             "tipoCuenta": "ACTIVO",
             "idCuentaSuperior": None,
             "esImputable": False,
+            "soloAutomatica": True,
             "saldo": 150.0,
             "estado": "Activo",
         }
