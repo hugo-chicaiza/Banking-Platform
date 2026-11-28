@@ -25,7 +25,6 @@ from app.core.config import settings as configuracion
 from app.core.security import hsm as modulo_hsm
 from app.modules.atm import repository, router, service, session, terminal_auth
 from app.modules.tarjetas import repository as tarjetas_repository
-from app.modules.tarjetas.identificacion import hash_pan
 from tests.pin_version import FECHA_PIN
 
 PAN_FICTICIO = "5000001234567896"
@@ -134,14 +133,22 @@ def laboratorio(tmp_path, monkeypatch, eventos_auditados, caplog):
         ),
         encoding="utf-8",
     )
-    claves = [secrets.token_hex(32), secrets.token_hex(24), secrets.token_hex(32)]
+    claves = [
+        secrets.token_hex(32),
+        secrets.token_hex(24),
+        secrets.token_hex(32),
+        secrets.token_hex(32),
+    ]
     ajustes = configuracion.Settings.model_construct(
         app_env="development",
+        cooperativa_db_server="localhost",
+        seguridad_db_server="localhost",
         atm_terminal_credentials_file=str(registro),
         atm_jwt_private_key_pem=SecretStr(pem),
         atm_jwt_issuer=EMISOR,
         atm_jwt_audience=AUDIENCIA,
         hsm_sim_clave_pan=SecretStr(claves[0]),
+        hsm_sim_clave_hmac_pan=SecretStr(claves[3]),
         hsm_sim_clave_pvk=SecretStr(claves[1]),
         hsm_sim_claves_pin_block={"LAB-PIN-01": SecretStr(claves[2])},
         hsm_sim_referencia_pin_block="LAB-PIN-01",
@@ -152,7 +159,7 @@ def laboratorio(tmp_path, monkeypatch, eventos_auditados, caplog):
     hsm = modulo_hsm.obtener_hsm()
     bloque, referencia = hsm.construir_pin_block(PIN_LAB, PAN_FICTICIO)
     offset, pvk = hsm.generar_offset(bloque, referencia, PAN_FICTICIO)
-    custodia = hsm.cifrar_pan(PAN_FICTICIO, 301)
+    custodia = (*hsm.cifrar_pan(PAN_FICTICIO, 301), 1)
     estado_pin = {
         "estado_pin": "Activo",
         "tiene_pin_asignado": True,
@@ -167,7 +174,7 @@ def laboratorio(tmp_path, monkeypatch, eventos_auditados, caplog):
         "fecha_expiracion": date.today() + timedelta(days=30),
         "nombres_titular": "Persona",
         "apellidos_titular": "Ficticia",
-        "hash_numero_tarjeta": hash_pan(PAN_FICTICIO),
+        "hash_numero_tarjeta": hsm.huella_pan(PAN_FICTICIO),
     }
     motor = MagicMock()
     monkeypatch.setattr(router, "get_engine", motor)
@@ -192,9 +199,7 @@ def laboratorio(tmp_path, monkeypatch, eventos_auditados, caplog):
         return 301 if digest == tarjeta["hash_numero_tarjeta"] else None
 
     monkeypatch.setattr(tarjetas_repository, "obtener_id_tarjeta_por_hash", resolver)
-    monkeypatch.setattr(
-        tarjetas_repository, "obtener_pan_ficticio", lambda *_: custodia
-    )
+    monkeypatch.setattr(tarjetas_repository, "obtener_pan_seguro", lambda *_: custodia)
     monkeypatch.setattr(repository, "obtener_tarjeta", lambda *_: dict(tarjeta))
     monkeypatch.setattr(
         repository, "obtener_pin_para_verificacion", lambda *_: dict(estado_pin)

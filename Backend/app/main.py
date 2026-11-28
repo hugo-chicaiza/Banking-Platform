@@ -92,8 +92,7 @@ app.include_router(boveda_router, prefix=API_V1)
 app.include_router(transacciones_router, prefix=API_V1)
 app.include_router(atm_router, prefix=API_V1)
 app.include_router(auditoria_router, prefix=API_V1)
-# PIN pad simulado para probar TAR-05 y ATM-01: responde 404 en producción
-# (su dependencia _solo_fuera_de_produccion; tests/unit/test_registros.py lo verifica)
+# PIN pad simulado: su dependencia devuelve 404 fuera de development/test.
 app.include_router(tarjetas_pruebas_router, prefix=API_V1)
 
 # Público a propósito: verifica el despliegue sin sesión (fuera de /api, sin require_auth)

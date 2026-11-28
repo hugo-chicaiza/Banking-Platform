@@ -3,6 +3,7 @@ from typing import Any
 
 from sqlalchemy import Connection, text
 
+from app.core.security.hsm import REFERENCIA_HMAC_PAN, VERSION_HMAC_PAN, VERSION_PAN
 from app.core.security.pin_version import PinVersionNoDisponible, version_desde_fecha
 
 _COLUMNAS_TARJETA = """
@@ -255,7 +256,8 @@ def insertar_tarjeta(conn: Connection, datos: dict[str, Any]) -> int:
                 TipoTarjeta, NombresTitular, ApellidosTitular, IdCliente, IdCuenta,
                 IdProducto, IdAgencia, EsExtension, IdTarjetaTitular, FechaSolicitud,
                 FechaEmision, FechaExpiracion, PinAsignado, CreadoPor, IdBIN,
-                IdSubProducto, Estado, RequiereEntregaVerificada, IdTarjetaReemplazada
+                IdSubProducto, Estado, RequiereEntregaVerificada, IdTarjetaReemplazada,
+                VersionClaveHuella, ReferenciaClaveHuella
             )
             OUTPUT INSERTED.IdTarjeta INTO @nuevas
             VALUES (
@@ -264,7 +266,8 @@ def insertar_tarjeta(conn: Connection, datos: dict[str, Any]) -> int:
                 :id_producto, :id_agencia, :es_extension, :id_titular, @hoy,
                 -- FechaEmision es obligatoria: provisional hasta pasar a Generada
                 @hoy, DATEADD(year, 5, @hoy), 0, :creado_por, :id_bin,
-                :id_sub_producto, 'Solicitada', 1, :id_reemplazada
+                :id_sub_producto, 'Solicitada', 1, :id_reemplazada,
+                :version_huella, :referencia_huella
             );
             SELECT IdTarjeta FROM @nuevas;
             """
@@ -551,41 +554,67 @@ def marcar_sobre_descargado(conn: Connection, id_tarjeta: int) -> None:
 # Repositorio aislado de PAN ficticios (SeguridadDB, solo desarrollo y pruebas)
 
 
-def guardar_pan_ficticio(
-    conn_seguridad: Connection, id_tarjeta: int, cifrado: bytes, referencia: str
+def guardar_pan_seguro(
+    conn_seguridad: Connection,
+    id_tarjeta: int,
+    cifrado: bytes,
+    referencia: str,
+    token_tarjeta: str,
 ) -> None:
     """El PAN llega cifrado por el HSM; nunca se guarda en claro."""
     conn_seguridad.execute(
         text(
             """
-            INSERT INTO Pruebas.PanFicticio (IdTarjeta, PanCifrado, ReferenciaClave)
-            VALUES (:id_tarjeta, :cifrado, :referencia)
+            INSERT INTO Tarjetas.TarjetaNumeroCifrado
+                (IdTarjeta, TokenTarjeta, NumeroCifrado, ReferenciaClave, VersionClave)
+            VALUES (:id_tarjeta, :token, :cifrado, :referencia, :version);
             """
         ),
-        {"id_tarjeta": id_tarjeta, "cifrado": cifrado, "referencia": referencia},
+        {
+            "id_tarjeta": id_tarjeta,
+            "token": token_tarjeta,
+            "cifrado": cifrado,
+            "referencia": referencia,
+            "version": VERSION_PAN,
+        },
     )
 
 
-def borrar_pan_ficticio(conn_seguridad: Connection, id_tarjeta: int) -> None:
+def borrar_pan_seguro(conn_seguridad: Connection, id_tarjeta: int) -> None:
     """Compensación de TAR-01 si la tarjeta no llegó a confirmarse."""
     conn_seguridad.execute(
-        text("DELETE FROM Pruebas.PanFicticio WHERE IdTarjeta = :id_tarjeta"),
+        text("DELETE FROM Tarjetas.TarjetaNumeroCifrado WHERE IdTarjeta = :id_tarjeta"),
         {"id_tarjeta": id_tarjeta},
     )
 
 
-def obtener_pan_ficticio(
+def obtener_pan_seguro(
     conn_seguridad: Connection, id_tarjeta: int
-) -> tuple[bytes, str] | None:
+) -> tuple[bytes, str, int] | None:
     fila = _one(
         conn_seguridad,
         """
-        SELECT PanCifrado AS cifrado, ReferenciaClave AS referencia
-        FROM Pruebas.PanFicticio WHERE IdTarjeta = :id_tarjeta
+        SELECT NumeroCifrado AS cifrado, ReferenciaClave AS referencia,
+               VersionClave AS version
+        FROM Tarjetas.TarjetaNumeroCifrado WHERE IdTarjeta = :id_tarjeta
         """,
         {"id_tarjeta": id_tarjeta},
     )
-    return None if fila is None else (bytes(fila["cifrado"]), fila["referencia"])
+    return (
+        None
+        if fila is None
+        else (
+            bytes(fila["cifrado"]),
+            fila["referencia"],
+            int(fila["version"] or 0),
+        )
+    )
+
+
+# Compatibilidad de nombres internos: no accede al esquema legado.
+guardar_pan_ficticio = guardar_pan_seguro
+borrar_pan_ficticio = borrar_pan_seguro
+obtener_pan_ficticio = obtener_pan_seguro
 
 
 # TAR-04 y TAR-05: PIN Offset IBM 3624 en SeguridadDB
@@ -710,11 +739,20 @@ def listar_historial(
 
 
 def obtener_id_tarjeta_por_hash(conn: Connection, hash_pan: bytes) -> int | None:
-    """Resuelve la tarjeta sin enviar el PAN en claro a SQL ni escoger duplicados."""
+    """Resuelve solo una huella con versión conocida, sin enviar el PAN a SQL."""
     id_tarjeta = conn.execute(
         text(
-            "SELECT IdTarjeta FROM Tarjeta.Tarjeta WHERE HashNumeroTarjeta = :hash_pan"
+            """
+            SELECT IdTarjeta FROM Tarjeta.Tarjeta
+            WHERE HashNumeroTarjeta = :hash_pan
+              AND VersionClaveHuella = :version
+              AND ReferenciaClaveHuella = :referencia
+            """
         ),
-        {"hash_pan": hash_pan},
+        {
+            "hash_pan": hash_pan,
+            "version": VERSION_HMAC_PAN,
+            "referencia": REFERENCIA_HMAC_PAN,
+        },
     ).scalar_one_or_none()
     return None if id_tarjeta is None else int(id_tarjeta)

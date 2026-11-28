@@ -3,10 +3,11 @@
 Solo para desarrollo y pruebas, con claves ficticias de la configuración. No es un HSM
 certificado ni cumple ISO 9564, PCI DSS o PCI PIN. En producción no hay simulador:
 `obtener_hsm` lanza HsmNoDisponible hasta integrar el HSM de pagos (ver
-Backend/docs/HSM-Thales.md). Las reglas de negocio solo usan la interfaz `Hsm`.
+Backend/docs/HSM-Thales.md). Las reglas de negocio solo usan la interfaz `HsmClient`.
 
 Operaciones:
 - PAN: AES-256-GCM, ligado al IdTarjeta (dato asociado). Es el "PAN cifrado por HSM".
+- Búsqueda de PAN: HMAC-SHA-256 con clave separada de la clave AES de cifrado.
 - PIN Block: ISO 9564-1 formato 4 con AES-256. La clave se elige por keyReference,
   solo entre las autorizadas en el servidor.
 - PIN Offset: IBM 3624 con una PVK 3DES independiente de la clave del PIN Block.
@@ -21,7 +22,8 @@ Fuera de esa salida de impresión, ningún método devuelve el PIN en claro.
 import hmac
 import os
 import secrets
-from dataclasses import dataclass
+import socket
+from dataclasses import dataclass, field
 from itertools import pairwise
 from typing import Protocol
 
@@ -33,9 +35,12 @@ from pydantic import SecretStr
 
 from app.core.config.settings import get_settings
 
-# Referencias de las claves del simulador que se guardan junto a cada dato
+# Referencias y versiones del simulador; no son identidades de claves gestionadas.
 REFERENCIA_PAN = "SIM-PAN-01"
 REFERENCIA_PVK = "SIM-PVK-01"
+REFERENCIA_HMAC_PAN = "SIM-PAN-HMAC-01"
+VERSION_PAN = 1
+VERSION_HMAC_PAN = 1
 
 # Parámetros de IBM 3624. TAR-05 y ATM-01 deben usar exactamente los mismos
 LONGITUD_PIN = 4
@@ -68,13 +73,21 @@ class PinDebil(ErrorHsm):
     """El PIN no tiene 4 dígitos o es trivial (repetido o secuencia)."""
 
 
-class Hsm(Protocol):
+class HsmClient(Protocol):
+    def huella_pan(self, pan: str) -> bytes:
+        """Devuelve una huella HMAC-SHA-256 de PAN; nunca una SHA simple."""
+        ...
+
     def cifrar_pan(self, pan: str, id_tarjeta: int) -> tuple[bytes, str]:
         """Devuelve (PAN cifrado, referencia de clave)."""
         ...
 
     def descifrar_pan(
-        self, cifrado: bytes, referencia: str, id_tarjeta: int
+        self,
+        cifrado: bytes,
+        referencia: str,
+        id_tarjeta: int,
+        version: int = VERSION_PAN,
     ) -> str: ...
 
     def construir_pin_block(self, pin: str, pan: str) -> tuple[str, str]:
@@ -109,6 +122,9 @@ class Hsm(Protocol):
         offset: str,
         referencia_pvk: str,
     ) -> bool: ...
+
+
+Hsm = HsmClient
 
 
 def es_pin_debil(pin: str) -> bool:
@@ -173,10 +189,16 @@ def _bytes_hex(valor: str, largo: int) -> bytes:
 
 @dataclass(frozen=True)
 class HsmSimulado:
-    clave_pan: bytes
-    clave_pvk: bytes
-    claves_pin_block: dict[str, bytes]
+    clave_pan: bytes = field(repr=False)
+    clave_pvk: bytes = field(repr=False)
+    claves_pin_block: dict[str, bytes] = field(repr=False)
     referencia_pin_block: str
+    clave_hmac_pan: bytes = field(default=b"", repr=False)
+
+    def huella_pan(self, pan: str) -> bytes:
+        if not pan.isascii() or not pan.isdigit() or not self.clave_hmac_pan:
+            raise HsmNoDisponible("Clave HMAC de PAN ausente o PAN inválido")
+        return hmac.new(self.clave_hmac_pan, pan.encode("ascii"), "sha256").digest()
 
     # --- PAN -------------------------------------------------------------------------
 
@@ -187,8 +209,14 @@ class HsmSimulado:
         )
         return nonce + cifrado, REFERENCIA_PAN
 
-    def descifrar_pan(self, cifrado: bytes, referencia: str, id_tarjeta: int) -> str:
-        if referencia != REFERENCIA_PAN:
+    def descifrar_pan(
+        self,
+        cifrado: bytes,
+        referencia: str,
+        id_tarjeta: int,
+        version: int = VERSION_PAN,
+    ) -> str:
+        if referencia != REFERENCIA_PAN or version != VERSION_PAN:
             raise HsmNoDisponible("Referencia de clave de PAN desconocida")
         try:
             claro = AESGCM(self.clave_pan).decrypt(
@@ -302,11 +330,26 @@ def _clave(valor: str, largos: tuple[int, ...]) -> bytes:
     return datos
 
 
-def obtener_hsm() -> Hsm:
+def _servidor_local(valor: str) -> bool:
+    servidor = valor.strip().casefold()
+    if servidor.startswith(("tcp:", "lpc:")):
+        servidor = servidor.split(":", 1)[1]
+    host = servidor.split(",", 1)[0].split("\\", 1)[0].strip("[]")
+    return host in {"localhost", "127.0.0.1", "::1", ".", "(local)", "(localdb)"} or (
+        host == socket.gethostname().casefold()
+    )
+
+
+def obtener_hsm() -> HsmClient:
     """El simulador fuera de producción y con todas sus claves configuradas."""
     s = get_settings()
-    if s.app_env == "production":
-        raise HsmNoDisponible("Sin HSM de pagos en producción")
+    if s.app_env != "development" or not all(
+        _servidor_local(servidor)
+        for servidor in (s.cooperativa_db_server, s.seguridad_db_server)
+    ):
+        raise HsmNoDisponible(
+            "El adaptador simulado solo se permite en development con bases locales"
+        )
     try:
         claves_pin_block = {
             ref: _clave(clave.get_secret_value(), (32,))
@@ -317,7 +360,19 @@ def obtener_hsm() -> Hsm:
             clave_pvk=_clave(s.hsm_sim_clave_pvk.get_secret_value(), (16, 24)),
             claves_pin_block=claves_pin_block,
             referencia_pin_block=s.hsm_sim_referencia_pin_block,
+            clave_hmac_pan=_clave(
+                getattr(s, "hsm_sim_clave_hmac_pan", SecretStr("")).get_secret_value(),
+                (32,),
+            ),
         )
+        claves = [
+            hsm.clave_pan,
+            hsm.clave_hmac_pan,
+            hsm.clave_pvk,
+            *hsm.claves_pin_block.values(),
+        ]
+        if len(set(claves)) != len(claves):
+            raise ValueError("Claves reutilizadas")
     except ValueError:
         raise HsmNoDisponible("Claves del HSM simulado ausentes o inválidas") from None
     if hsm.referencia_pin_block not in claves_pin_block:

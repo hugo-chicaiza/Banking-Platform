@@ -8,7 +8,7 @@ Clasificación: **C4 Restringido** (datos de tarjeta y autenticación; su exposi
 
 | Activo | Clase | Dónde vive | Retención | Flujos | Protección |
 |---|---|---|---|---|---|
-| Número de tarjeta (PAN) | C4 | `SeguridadDB` (PAN cifrado; en desarrollo `Pruebas.PanFicticio`, solo PAN ficticios) | Vida de la tarjeta + plazo regulatorio | HSM simulado ↔ backend; nunca al navegador ni a registros | AES-256-GCM ligado al `IdTarjeta` (`core/security/hsm.py`). Huella con clave: E6-12. Enmascarado en registros (`enmascarar`) |
+| Número de tarjeta (PAN) | C4 | `SeguridadDB.Tarjetas.TarjetaNumeroCifrado` (solo PAN sintético en bases locales de development) | Vida de la tarjeta + plazo regulatorio | Adaptador simulado en desarrollo ↔ backend; nunca al navegador ni a registros | AES-256-GCM ligado al `IdTarjeta`; HMAC-SHA-256 de búsqueda con clave separada; máscara en respuestas |
 | PIN | C4 | Nunca se guarda en claro. Se guarda el **Offset IBM 3624** (`Tarjetas.TarjetaPIN.PINOffset`) y la referencia de la PVK | Vida de la tarjeta | PIN pad → PIN Block ISO-4 (AES-256) → HSM | El backend nunca ve el PIN en claro salvo la salida de impresión del sobre (TAR-07) |
 | Sobre del PIN (PDF) | C4 | MongoDB o, solo fuera de producción, carpeta local `.sobres_pin` | Hasta su única entrega | Generación → entrega única | AES-256-GCM en reposo (`SOBRE_PIN_CLAVE`); se entrega una vez y se elimina |
 | PIN Block | C4 | En tránsito, nunca persistido | — | PIN pad/ATM → backend → HSM | AES-256 por `keyReference` autorizada |
@@ -20,7 +20,7 @@ Clasificación: **C4 Restringido** (datos de tarjeta y autenticación; su exposi
 | Documentos subidos y generados | C3 | MongoDB (`banking_platform`) | Según el módulo | Usuario → análisis de malware → almacén | AES-256-GCM (`DOCUMENTOS_CLAVE`), dato asociado = clave del documento; validación por contenido |
 | Bitácora de auditoría | C3 | `SeguridadDB.Auditoria.*` | Permanente | Todos los módulos → auditoría | Solo inserción (disparador); sin PAN, PIN, tokens ni secretos |
 | Registros de la aplicación | C2 | App Service (stdout) | Ver [inventario de registros](../inventario-registros.md) | Backend → App Service | Sin query string ni cuerpos; `enmascarar` como última barrera |
-| Secretos de configuración | C4 | Configuración de App Service, secretos de GitHub Actions, `.env` local (nunca en el repositorio) | Hasta su rotación | — | Ver [inventario de claves](02-inventario-claves.md); gitleaks en el CI |
+| Secretos de configuración | C4 | Almacén gestionado aprobado; `.env` local solo para development | Hasta su rotación | — | `HSM_SIM_*` solo claves ficticias locales; no se configuran en App Service. Ver [inventario de claves](02-inventario-claves.md) |
 | Respaldos de las bases | C3/C4 | Google Drive (E0-02) | Según la política de respaldos | GitHub Actions → Drive | Cifrados antes de salir del runner |
 
 ## Recursos
