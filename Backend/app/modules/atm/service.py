@@ -48,9 +48,14 @@ class PinVerificado:
 
 def identificar_tarjeta(conn: Connection, numero_tarjeta: str) -> int:
     """Reutiliza el hash binario de TAR-01 y consulta sin enviar el PAN a SQL."""
-    id_tarjeta = tarjetas_repository.obtener_id_tarjeta_por_hash(
-        conn, hash_pan(numero_tarjeta)
-    )
+    try:
+        hsm = obtener_hsm()
+        huella = hash_pan(numero_tarjeta, hsm)
+    except ErrorHsm:
+        raise problema(
+            503, "HSM_NO_DISPONIBLE", "La huella PAN no está disponible."
+        ) from None
+    id_tarjeta = tarjetas_repository.obtener_id_tarjeta_por_hash(conn, huella)
     if id_tarjeta is None:
         raise problema(409, "TARJETA_NO_ACTIVA", "La tarjeta no está activa.")
     return id_tarjeta
@@ -418,7 +423,7 @@ async def autenticar_pin_ficticio_atm(
             raise problema(409, "TARJETA_NO_ACTIVA", "La tarjeta no está activa.")
         pan = pan_de_prueba(conn_pin, id_tarjeta, hsm)
         try:
-            if not validar_hash_pan(pan, tarjeta["hash_numero_tarjeta"]):
+            if not validar_hash_pan(pan, tarjeta["hash_numero_tarjeta"], hsm):
                 raise problema(
                     409, "TARJETA_NO_DISPONIBLE", "No se puede verificar esta tarjeta."
                 )

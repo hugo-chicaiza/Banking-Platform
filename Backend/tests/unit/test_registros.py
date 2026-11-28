@@ -117,5 +117,8 @@ def test_produccion_sin_documentacion_y_sin_la_ruta_de_prueba_del_pin_pad():
     prod = _rutas("production")
     assert not [r for r in prod["rutas"] if "docs" in r or "openapi" in r]
     assert prod["pin_pad"] == 404  # la ruta de prueba no responde en producción
-    # En desarrollo sí existe la documentación: la prueba distingue los dos casos
-    assert "/api/docs" in _rutas("development")["rutas"]
+    # En staging tampoco responde; en development la ruta existe pero exige autenticación.
+    assert _rutas("staging")["pin_pad"] == 404
+    desarrollo = _rutas("development")
+    assert "/api/docs" in desarrollo["rutas"]
+    assert desarrollo["pin_pad"] != 404

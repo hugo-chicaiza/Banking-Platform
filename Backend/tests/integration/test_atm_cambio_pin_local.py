@@ -170,7 +170,7 @@ def lab(monkeypatch):
         return {
             "estado_tarjeta": lab.coop["estado"],
             "tipo_tarjeta": "Debito",
-            "hash_numero_tarjeta": hash_pan(PAN),
+            "hash_numero_tarjeta": hash_pan(PAN, HSM),
             "fecha_expiracion": date(2099, 1, 1),
         }
 

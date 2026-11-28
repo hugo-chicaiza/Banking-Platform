@@ -178,10 +178,12 @@ class Settings(BaseSettings):
     # True = se rechaza (403) toda petición que no venga del Worker con el secreto
     proxy_exigido: bool = False
 
-    # HSM simulado de tarjetas (app/core/security/hsm.py): claves ficticias en hex.
-    # Vacías = HSM no disponible (503). En producción nunca se usan. Deben ser las
-    # mismas en local y Azure: comparten la base donde está el PAN cifrado.
+    # Adaptador simulado solo para development con bases locales y datos sintéticos.
+    # No configurar en staging/Azure/producción; no sustituye un HSM o almacén gestionado.
     hsm_sim_clave_pan: SecretStr = SecretStr("")  # AES-256: 64 hex
+    hsm_sim_clave_hmac_pan: SecretStr = SecretStr(
+        ""
+    )  # HMAC-SHA-256: clave independiente de 64 hex
     hsm_sim_clave_pvk: SecretStr = SecretStr("")  # 3DES IBM 3624: 32 o 48 hex
     # keyReference -> clave AES-256 del PIN Block ISO-4 (64 hex), en JSON
     hsm_sim_claves_pin_block: dict[str, SecretStr] = {}

@@ -28,7 +28,7 @@ from sqlalchemy.exc import DBAPIError
 
 from app.core.config.settings import Settings
 from app.core.database.session_scope import sesion_sql_acotada
-from app.core.security.hsm import HsmSimulado
+from app.core.security.hsm import REFERENCIA_HMAC_PAN, HsmSimulado
 from app.core.security.pin_version import version_desde_fecha
 from app.modules.atm import (
     repository,
@@ -301,6 +301,13 @@ def catalogos(engines):
 def lab(engines, catalogos, monkeypatch, request):
     uid = uuid.uuid4().hex
     coop, seg = engines["cooperativa"], engines["seguridad"]
+    hsm = HsmSimulado(
+        clave_pan=secrets.token_bytes(32),
+        clave_pvk=secrets.token_bytes(16),
+        claves_pin_block={"LABKEY": secrets.token_bytes(32)},
+        referencia_pin_block="LABKEY",
+        clave_hmac_pan=secrets.token_bytes(32),
+    )
     tipo = "Corriente" if getattr(request, "param", None) == "Corriente" else "Ahorro"
     credito = getattr(request, "param", None) == "Credito"
     with coop.begin() as c:
@@ -348,7 +355,9 @@ def lab(engines, catalogos, monkeypatch, request):
             {
                 "TokenTarjeta": "LAB-" + uid,
                 "NumeroEnmascarado": "500000******0000",
-                "HashNumeroTarjeta": hashlib.sha256(pan.encode()).digest(),
+                "HashNumeroTarjeta": hsm.huella_pan(pan),
+                "VersionClaveHuella": 1,
+                "ReferenciaClaveHuella": REFERENCIA_HMAC_PAN,
                 "NombreTarjeta": "LABORATORIO FICTICIO",
                 "TipoTarjeta": "Credito" if credito else "Debito",
                 "NombresTitular": "CLIENTE LAB",
@@ -366,17 +375,11 @@ def lab(engines, catalogos, monkeypatch, request):
             },
             "IdTarjeta",
         )
-    hsm = HsmSimulado(
-        clave_pan=secrets.token_bytes(32),
-        clave_pvk=secrets.token_bytes(16),
-        claves_pin_block={"LABKEY": secrets.token_bytes(32)},
-        referencia_pin_block="LABKEY",
-    )
     bloque, referencia = hsm.construir_pin_block("7392", pan)
     offset, pvk = hsm.generar_offset(bloque, referencia, pan)
     with seg.begin() as c:
         cifrado, ref = hsm.cifrar_pan(pan, tarjeta)
-        tarjetas_repo.guardar_pan_ficticio(c, tarjeta, cifrado, ref)
+        tarjetas_repo.guardar_pan_ficticio(c, tarjeta, cifrado, ref, "LAB-" + uid)
         tarjetas_repo.guardar_pin_generado(c, tarjeta, offset, pvk, False)
         version = version_desde_fecha(
             c.scalar(

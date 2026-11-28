@@ -1,5 +1,6 @@
 """HSM simulado: PAN cifrado, PIN Block ISO 9564-1 formato 4 e IBM 3624 PIN Offset."""
 
+import hashlib
 import json
 from types import SimpleNamespace
 
@@ -37,6 +38,29 @@ def _abrir_iso4(bloque: str, clave: bytes, pan: str) -> bytes:
 # PAN
 
 
+def test_pan_huella_es_hmac_separado_de_clave_cifrado():
+    huella = HSM.huella_pan(PAN)
+
+    assert len(huella) == 32
+    assert huella != hashlib.sha256(PAN.encode()).digest()
+
+
+def test_pan_huella_falla_cerrado_sin_clave_hmac():
+    hsm = HsmSimulado(HSM.clave_pan, HSM.clave_pvk, HSM.claves_pin_block, REFERENCIA)
+
+    with pytest.raises(HsmNoDisponible):
+        hsm.huella_pan(PAN)
+
+
+def test_repr_hsm_no_revela_material_de_claves():
+    representacion = repr(HSM)
+
+    assert repr(HSM.clave_pan) not in representacion
+    assert repr(HSM.clave_hmac_pan) not in representacion
+    assert repr(HSM.clave_pvk) not in representacion
+    assert repr(HSM.claves_pin_block) not in representacion
+
+
 def test_pan_cifrado_ida_y_vuelta_sin_texto_claro():
     cifrado, referencia = HSM.cifrar_pan(PAN, 301)
 
@@ -57,6 +81,13 @@ def test_pan_no_se_descifra_con_otra_clave():
 
     with pytest.raises(HsmNoDisponible):
         otro.descifrar_pan(cifrado, referencia, 301)
+
+
+def test_pan_no_se_descifra_con_version_desconocida():
+    cifrado, referencia = HSM.cifrar_pan(PAN, 301)
+
+    with pytest.raises(HsmNoDisponible):
+        HSM.descifrar_pan(cifrado, referencia, 301, version=2)
 
 
 # PIN Block ISO 9564-1 formato 4
@@ -180,7 +211,10 @@ def test_pin_que_no_son_4_digitos_es_debil(pin):
 def _ajustes(**cambios):
     base = {
         "app_env": "development",
+        "cooperativa_db_server": "localhost",
+        "seguridad_db_server": "127.0.0.1",
         "hsm_sim_clave_pan": SecretStr("00" * 32),
+        "hsm_sim_clave_hmac_pan": SecretStr("33" * 32),
         "hsm_sim_clave_pvk": SecretStr("11" * 16),
         "hsm_sim_claves_pin_block": {"TEST-KEY-01": SecretStr("22" * 32)},
         "hsm_sim_referencia_pin_block": "TEST-KEY-01",
@@ -198,13 +232,19 @@ def test_obtener_hsm_con_claves_validas(monkeypatch):
     "cambios",
     [
         {"app_env": "production"},
+        {"app_env": "staging"},
+        {"cooperativa_db_server": "sql.example.test"},
+        {"seguridad_db_server": "sql.example.test"},
         {"hsm_sim_clave_pan": SecretStr("")},
         {"hsm_sim_clave_pan": SecretStr("00" * 16)},
+        {"hsm_sim_clave_hmac_pan": SecretStr("")},
+        {"hsm_sim_clave_hmac_pan": SecretStr("00" * 16)},
         {"hsm_sim_clave_pvk": SecretStr("11" * 8)},
         {"hsm_sim_clave_pvk": SecretStr("no-hex")},
         {"hsm_sim_claves_pin_block": {}},
         {"hsm_sim_claves_pin_block": {"TEST-KEY-01": SecretStr("22" * 16)}},
         {"hsm_sim_referencia_pin_block": "OTRA"},
+        {"hsm_sim_clave_hmac_pan": SecretStr("00" * 32)},
     ],
 )
 def test_sin_hsm_en_produccion_ni_con_claves_invalidas(monkeypatch, cambios):

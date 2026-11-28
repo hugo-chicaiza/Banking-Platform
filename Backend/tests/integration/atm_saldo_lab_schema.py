@@ -26,7 +26,7 @@ ROOTS = {
     },
     "seguridad": {
         "Tarjetas.TarjetaPIN",
-        "Pruebas.PanFicticio",
+        "Tarjetas.TarjetaNumeroCifrado",
         "Seguridad.SesionesATMRevocadas",
     },
 }

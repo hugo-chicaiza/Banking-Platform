@@ -24,6 +24,7 @@ HSM = HsmSimulado(
     clave_pvk=bytes(range(100, 116)),
     claves_pin_block={REFERENCIA: CLAVE_AES},
     referencia_pin_block=REFERENCIA,
+    clave_hmac_pan=bytes(range(64, 96)),
 )
 # Vectores fijos de laboratorio, independientes del generador del simulador:
 # ISO-4: campo PIN 447392AAAAAAAAAA0011223344556677, campo PAN
@@ -193,7 +194,10 @@ def test_pan_cifrado_rechaza_custodia_invalida(fallo):
 def configuracion(monkeypatch):
     settings = Settings.model_construct(
         app_env="development",
+        cooperativa_db_server="localhost",
+        seguridad_db_server=r"127.0.0.1\SQLEXPRESS",
         hsm_sim_clave_pan=SecretStr(HSM.clave_pan.hex()),
+        hsm_sim_clave_hmac_pan=SecretStr(HSM.clave_hmac_pan.hex()),
         hsm_sim_clave_pvk=SecretStr(HSM.clave_pvk.hex()),
         hsm_sim_claves_pin_block={REFERENCIA: SecretStr(CLAVE_AES.hex())},
         hsm_sim_referencia_pin_block=REFERENCIA,
@@ -221,6 +225,8 @@ def test_factory_prohibe_simulador_en_produccion(configuracion):
     [
         ("hsm_sim_clave_pan", SecretStr("")),
         ("hsm_sim_clave_pan", SecretStr("ZZ" * 32)),
+        ("hsm_sim_clave_hmac_pan", SecretStr("")),
+        ("hsm_sim_clave_hmac_pan", SecretStr("ZZ" * 32)),
         ("hsm_sim_clave_pvk", SecretStr("00" * 8)),
         ("hsm_sim_claves_pin_block", {REFERENCIA: SecretStr("00" * 16)}),
         ("hsm_sim_referencia_pin_block", "NO-AUTORIZADA"),

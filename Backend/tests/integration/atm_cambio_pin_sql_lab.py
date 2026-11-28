@@ -232,7 +232,7 @@ def preparar():
                 "SET ANSI_NULLS ON; SET QUOTED_IDENTIFIER ON; SET ANSI_PADDING ON; SET ANSI_WARNINGS ON; SET ARITHABORT ON; SET CONCAT_NULL_YIELDS_NULL ON; SET NUMERIC_ROUNDABORT OFF;",
             )
             esquemas = (
-                ("Tarjetas", "Seguridad", "Pruebas", "Auditoria", "Organizacion")
+                ("Tarjetas", "Seguridad", "Auditoria", "Organizacion")
                 if tipo == "seguridad"
                 else ("Tarjeta", "Canal", "ATM")
             )
@@ -252,7 +252,10 @@ def preparar():
                         RequiereCambio bit NOT NULL DEFAULT 0,
                         CHECK (Estado IN ('Activo','Bloqueado','Inactivo')), CHECK (IntentosFallidos>=0));
                     CREATE UNIQUE INDEX UX_TarjetaPIN_ID_Tarjeta ON Tarjetas.TarjetaPIN(ID_Tarjeta) WHERE ID_Tarjeta IS NOT NULL;
-                    CREATE TABLE Pruebas.PanFicticio(IdTarjeta int PRIMARY KEY, PanCifrado varbinary(max) NOT NULL, ReferenciaClave varchar(32) NOT NULL);
+                    CREATE TABLE Tarjetas.TarjetaNumeroCifrado(
+                        IdTarjeta int PRIMARY KEY, TokenTarjeta varchar(64) NOT NULL UNIQUE,
+                        NumeroCifrado varbinary(256) NOT NULL, ReferenciaClave varchar(32) NOT NULL,
+                        VersionClave smallint NOT NULL CHECK(VersionClave>=1));
                     CREATE TABLE Seguridad.SesionesATMRevocadas(Jti uniqueidentifier PRIMARY KEY,FechaRevocacion datetime2(7) NOT NULL DEFAULT SYSUTCDATETIME(),FechaExpiracion datetime2(0) NOT NULL);
                     CREATE TABLE Organizacion.Usuarios(UsuarioID int PRIMARY KEY, RolesWorkOS varchar(200) NULL);
                     CREATE TABLE Auditoria.Auditoria(AuditoriaID int IDENTITY PRIMARY KEY,
@@ -271,7 +274,15 @@ def preparar():
                     """
                     CREATE TABLE Canal.Canal(IdCanal int PRIMARY KEY,CodigoCanal varchar(10) NOT NULL,Estado char(1) NOT NULL,RequiereTarjeta bit NOT NULL,RequierePin bit NOT NULL,RequiereTerminal bit NOT NULL);
                     CREATE TABLE ATM.ATM(IdATM int PRIMARY KEY,CodigoATM char(8) NOT NULL,TipoTerminal varchar(10) NOT NULL,Estado char(1) NOT NULL,IdCanal int NOT NULL REFERENCES Canal.Canal(IdCanal));
-                    CREATE TABLE Tarjeta.Tarjeta(IdTarjeta int PRIMARY KEY,IdCliente int NOT NULL,IdCuenta int NOT NULL,NombresTitular varchar(250) NOT NULL,ApellidosTitular varchar(250) NOT NULL,PinAsignado bit NOT NULL,TipoTarjeta varchar(10) NOT NULL,FechaEmision date NOT NULL,FechaExpiracion date NOT NULL,Estado varchar(20) NOT NULL,HashNumeroTarjeta varbinary(32) NOT NULL,RequiereEntregaVerificada bit NOT NULL DEFAULT (0));
+                    CREATE TABLE Tarjeta.Tarjeta(
+                        IdTarjeta int PRIMARY KEY, TokenTarjeta varchar(64) NOT NULL,
+                        IdCliente int NOT NULL, IdCuenta int NOT NULL,
+                        NombresTitular varchar(250) NOT NULL, ApellidosTitular varchar(250) NOT NULL,
+                        PinAsignado bit NOT NULL, TipoTarjeta varchar(10) NOT NULL,
+                        FechaEmision date NOT NULL, FechaExpiracion date NOT NULL, Estado varchar(20) NOT NULL,
+                        HashNumeroTarjeta varbinary(32) NOT NULL, VersionClaveHuella smallint NOT NULL,
+                        ReferenciaClaveHuella varchar(32) NOT NULL,
+                        RequiereEntregaVerificada bit NOT NULL DEFAULT (0));
                     CREATE TABLE Tarjeta.TarjetaHis(IdHistorial bigint IDENTITY PRIMARY KEY,IdTarjeta int NOT NULL REFERENCES Tarjeta.Tarjeta(IdTarjeta),TipoEvento varchar(20) NOT NULL,EstadoAnterior varchar(20) NULL,EstadoActual varchar(20) NULL,Descripcion varchar(500) NOT NULL,IdCanal int NULL REFERENCES Canal.Canal(IdCanal),RealizadoPor int NOT NULL,DireccionIP varchar(45) NULL,FechaEvento datetime2(7) NOT NULL DEFAULT SYSUTCDATETIME());
                     INSERT Canal.Canal VALUES(1,'ATM','A',1,1,1);
                     INSERT ATM.ATM VALUES(1,'ATM00001','ATM','A',1);

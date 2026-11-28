@@ -238,7 +238,7 @@ def cambiar_pin(
                 pan = service.pan_de_prueba(seg, sesion.id_tarjeta, hsm)
                 try:
                     if not service.validar_hash_pan(
-                        pan, tarjeta["hash_numero_tarjeta"]
+                        pan, tarjeta["hash_numero_tarjeta"], hsm
                     ):
                         raise no_confirmado()
                     correcto = service.verificar_pin_atm(
