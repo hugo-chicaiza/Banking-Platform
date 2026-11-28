@@ -405,7 +405,6 @@ ROLES_POR_RUTA: dict[tuple[str, str], tuple[str, ...]] = {
         "SUPERVISOR",
         "ADMIN",
     ),
-    ("POST", "/api/v1/pruebas/pin-block"): ("ADMIN",),
     ("GET", "/api/v1/tarjetas/{idTarjeta}/historial"): (
         "SUPERVISOR",
         "AUDITOR",
@@ -749,6 +748,17 @@ def test_tabla_de_roles_cubre_todas_las_rutas_protegidas():
         set(_rutas_api()) - _PUBLICAS - _TERMINALES - {("POST", "/api/v1/auth/refresh")}
     )
     assert protegidas == set(ROLES_POR_RUTA)
+
+
+def test_pin_block_oculto_exige_sesion(client, eventos_auditados):
+    ruta = "/api/v1/pruebas/pin-block"
+    assert ruta not in app.openapi()["paths"]
+
+    respuesta = client.post(ruta, json={"idTarjeta": 301, "pin": "7392"})
+
+    assert respuesta.status_code == 401
+    assert _code(respuesta) == "NO_AUTENTICADO"
+    assert eventos_auditados[-1].accion == "ACCESO_DENEGADO"
 
 
 @pytest.mark.parametrize("agencia", ["002", None])

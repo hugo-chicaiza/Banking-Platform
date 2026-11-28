@@ -1,4 +1,3 @@
-import hashlib
 from datetime import date, timedelta
 from typing import Any, cast
 from unittest.mock import MagicMock
@@ -50,13 +49,14 @@ def entorno_atm(monkeypatch):
         "estado_tarjeta": "Activa",
         "pin_asignado": True,
         "fecha_expiracion": date.today() + timedelta(days=30),
-        "hash_numero_tarjeta": hashlib.sha256(e.pan.encode()).digest(),
+        "hash_numero_tarjeta": b"h" * 32,
     }
     e.leer_tarjeta.return_value = e.tarjeta
     e.leer_pin.return_value = e.estado
     e.resultado.return_value = {"intentos_fallidos": 0, "estado_pin": "Activo"}
     e.leer_pan.return_value = e.pan
     e.factory.return_value = e.hsm
+    e.hsm.huella_pan.return_value = e.tarjeta["hash_numero_tarjeta"]
     e.hsm.verificar_pin.return_value = True
     e.engine.begin.return_value.__enter__.return_value = e.conn_pin
     e.engine.begin.return_value.__exit__.return_value = False
@@ -300,17 +300,19 @@ def test_actualizacion_sql_intentos_con_mock(correcto):
 
 def test_pan_compartido_descifra_con_id_y_referencia(monkeypatch):
     conn, hsm = MagicMock(), MagicMock()
-    leer = MagicMock(return_value=(b"cifrado ficticio", "SIM-PAN-01"))
-    monkeypatch.setattr(tarjetas_repository, "obtener_pan_ficticio", leer)
+    leer = MagicMock(return_value=(b"cifrado ficticio", "SIM-PAN-01", 1))
+    monkeypatch.setattr(tarjetas_repository, "obtener_pan_seguro", leer)
     hsm.descifrar_pan.return_value = "5000001234567896"
     assert pan_de_prueba(conn, 1, hsm) == hsm.descifrar_pan.return_value
-    hsm.descifrar_pan.assert_called_once_with(b"cifrado ficticio", "SIM-PAN-01", 1)
+    hsm.descifrar_pan.assert_called_once_with(
+        b"cifrado ficticio", "SIM-PAN-01", 1, version=1
+    )
 
 
-@pytest.mark.parametrize("guardado", [None, (b"cifrado ficticio", "SIM-PAN-01")])
+@pytest.mark.parametrize("guardado", [None, (b"cifrado ficticio", "SIM-PAN-01", 1)])
 def test_pan_compartido_traduce_ausencia_o_error(monkeypatch, guardado):
     monkeypatch.setattr(
-        tarjetas_repository, "obtener_pan_ficticio", MagicMock(return_value=guardado)
+        tarjetas_repository, "obtener_pan_seguro", MagicMock(return_value=guardado)
     )
     hsm = MagicMock()
     hsm.descifrar_pan.side_effect = HsmNoDisponible()
@@ -325,14 +327,16 @@ def test_repositorio_pan_compartido_con_mock():
         {
             "cifrado": b"ficticio",
             "referencia": "SIM-PAN-01",
+            "version": 1,
         }
     ]
-    assert tarjetas_repository.obtener_pan_ficticio(conn, 1) == (
+    assert tarjetas_repository.obtener_pan_seguro(conn, 1) == (
         b"ficticio",
         "SIM-PAN-01",
+        1,
     )
     conn.execute.return_value.mappings.return_value = []
-    assert tarjetas_repository.obtener_pan_ficticio(conn, 1) is None
+    assert tarjetas_repository.obtener_pan_seguro(conn, 1) is None
 
 
 @pytest.mark.anyio
@@ -416,8 +420,10 @@ async def test_errores_del_hsm_real_no_consumen_intentos(
         clave_pvk=bytes(range(100, 116)),
         claves_pin_block={"TEST-KEY-01": bytes(range(32, 64))},
         referencia_pin_block="TEST-KEY-01",
+        clave_hmac_pan=bytes(range(200, 232)),
     )
     e.factory.return_value = hsm
+    e.tarjeta["hash_numero_tarjeta"] = hsm.huella_pan(e.pan)
     e.estado["intentos_fallidos"] = 2
     bloque, referencia = hsm.construir_pin_block("7392", e.pan)
     if fallo == "bloque":
@@ -445,8 +451,10 @@ async def test_atm_verifica_offset_generado_por_hsm_real(
         clave_pvk=bytes(range(100, 116)),
         claves_pin_block={"TEST-KEY-01": bytes(range(32, 64))},
         referencia_pin_block="TEST-KEY-01",
+        clave_hmac_pan=bytes(range(200, 232)),
     )
     e.factory.return_value = hsm
+    e.tarjeta["hash_numero_tarjeta"] = hsm.huella_pan(e.pan)
     inicial, referencia = hsm.construir_pin_block("7392", e.pan)
     offset, pvk = hsm.generar_offset(inicial, referencia, e.pan)
     e.estado.update(pin_offset=offset, referencia_clave_pvk=pvk)

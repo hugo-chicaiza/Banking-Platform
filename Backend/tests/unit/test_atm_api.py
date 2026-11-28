@@ -234,6 +234,7 @@ def cadena(api, monkeypatch):
         clave_pvk=bytes(range(100, 116)),
         claves_pin_block={"TEST-KEY-01": bytes(range(32, 64))},
         referencia_pin_block="TEST-KEY-01",
+        clave_hmac_pan=bytes(range(64, 96)),
     )
     monkeypatch.setattr(service, "obtener_hsm", lambda: e.hsm)
     e.body = dict(BODY)
@@ -257,7 +258,7 @@ def cadena(api, monkeypatch):
         "fecha_expiracion": date.today() + timedelta(days=30),
         "nombres_titular": "Titular",
         "apellidos_titular": "Prueba",
-        "hash_numero_tarjeta": hash_pan(BODY["numeroTarjeta"]),
+        "hash_numero_tarjeta": hash_pan(BODY["numeroTarjeta"], HSM),
     }
     monkeypatch.setattr(
         repository,
@@ -288,8 +289,13 @@ def cadena(api, monkeypatch):
     )
     monkeypatch.setattr(
         tarjetas_repository,
-        "obtener_pan_ficticio",
-        MagicMock(return_value=e.hsm.cifrar_pan(BODY["numeroTarjeta"], 301)),
+        "obtener_pan_seguro",
+        MagicMock(
+            return_value=(
+                *e.hsm.cifrar_pan(BODY["numeroTarjeta"], 301),
+                1,
+            )
+        ),
     )
     monkeypatch.setattr(
         repository,
@@ -469,8 +475,8 @@ def test_tar01_tar04_atm01_comparten_pan_y_pin_generado(api, monkeypatch, caplog
         cooperativa, seguridad, TarjetaCreate.model_validate(PAYLOAD), 900, None
     )
     assert tarjeta.estado_actual == "Solicitada"
-    assert capturado["hash_pan"] == hash_pan(PAN)
-    cifrado, referencia_pan = memoria.pans[301]
+    assert capturado["hash_pan"] == hash_pan(PAN, HSM)
+    cifrado, referencia_pan, _ = memoria.pans[301]
     assert HSM.descifrar_pan(cifrado, referencia_pan, 301) == PAN
     assert PAN.encode() not in cifrado
 

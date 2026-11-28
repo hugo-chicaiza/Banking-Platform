@@ -384,8 +384,8 @@ def historial_tarjeta(
 
 
 def _solo_fuera_de_produccion() -> None:
-    """El PIN pad simulado no existe en producción: allí responde 404."""
-    if get_settings().app_env == "production":
+    """El PIN pad simulado solo responde en development/test."""
+    if get_settings().app_env not in ("development", "test"):
         raise problema(404, "NO_ENCONTRADO", "El recurso no existe.")
 
 
@@ -395,6 +395,7 @@ router_pruebas = APIRouter(
     route_class=ProblemDetailsRoute,
     responses=RESPUESTAS_ERROR,
     tags=["pruebas"],
+    include_in_schema=False,
     dependencies=[
         Depends(_solo_fuera_de_produccion),
         Depends(require_auth),
@@ -424,7 +425,7 @@ def pin_block_prueba(
     conn_seguridad: Annotated[Connection, Depends(seguridad)],
 ) -> Any:
     """Arma el PIN Block ISO-4 cifrado de una tarjeta, como lo haría el PIN pad, para
-    usarlo en TAR-05 (o ATM-01). Solo fuera de producción.
+    usarlo en TAR-05 (o ATM-01). Solo en development/test.
     """
     id_tarjeta, pin = entrada
     return service.construir_pin_block_prueba(conn, conn_seguridad, id_tarjeta, pin)

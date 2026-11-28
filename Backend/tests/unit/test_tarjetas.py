@@ -4,7 +4,6 @@
 cierran fuera de development.
 """
 
-import hashlib
 import logging
 import re
 from dataclasses import replace
@@ -367,7 +366,9 @@ def test_emitir_guarda_mascara_y_hash_que_corresponden_a_un_pan_luhn(client, emi
     datos = emision["tarjeta"]
     assert len(datos["mascara"]) == 19
     assert datos["mascara"].startswith("5000 00** **** ")
-    assert len(datos["hash_pan"]) == hashlib.sha256().digest_size
+    assert len(datos["hash_pan"]) == 32
+    assert datos["version_huella"] == 1
+    assert datos["referencia_huella"] == "SIM-PAN-HMAC-01"
     assert datos["token"].startswith("tok_")
     assert not any(
         isinstance(v, str) and v.isdigit() and len(v) >= 13 for v in datos.values()
@@ -380,10 +381,11 @@ def test_emitir_custodia_el_pan_cifrado_y_coincide_con_hash_y_mascara(
     r = client.post(BASE, json=PAYLOAD)
 
     assert r.status_code == 201
-    cifrado, referencia = seg.pans[301]
+    cifrado, referencia, version = seg.pans[301]
+    assert version == 1
     pan = HSM.descifrar_pan(cifrado, referencia, 301)
     datos = emision["tarjeta"]
-    assert hashlib.sha256(pan.encode()).digest() == datos["hash_pan"]
+    assert HSM.huella_pan(pan) == datos["hash_pan"]
     assert service._enmascarar(pan) == datos["mascara"]
     assert pan.encode() not in cifrado
     # SeguridadDB (PAN) se confirma antes que CooperativaDB (tarjeta)
@@ -395,7 +397,7 @@ def test_emitir_no_expone_el_pan_en_respuesta_ni_logs(client, emision, seg, capl
 
     r = client.post(BASE, json=PAYLOAD)
 
-    cifrado, referencia = seg.pans[301]
+    cifrado, referencia, _ = seg.pans[301]
     pan = HSM.descifrar_pan(cifrado, referencia, 301)
     assert pan not in r.text and pan not in caplog.text
 
@@ -419,7 +421,7 @@ def test_emitir_fallo_al_custodiar_revierte_la_tarjeta(
     def falla(*_a):
         raise DBAPIError("INSERT x", {}, Exception("caida"))
 
-    monkeypatch.setattr(repository, "guardar_pan_ficticio", falla)
+    monkeypatch.setattr(repository, "guardar_pan_seguro", falla)
 
     r = client.post(BASE, json=PAYLOAD)
 
@@ -1675,7 +1677,7 @@ def test_openapi_documenta_las_seis_rutas_y_el_pin_sin_body():
     assert "get" in rutas[f"{BASE}/{{idTarjeta}}/historial"]
     # TAR-05: el PIN lo genera el HSM; el cliente nunca lo envía
     assert "requestBody" not in rutas[f"{BASE}/{{idTarjeta}}/pin"]["post"]
-    assert "post" in rutas["/api/v1/pruebas/pin-block"]
+    assert "/api/v1/pruebas/pin-block" not in rutas
 
 
 def test_openapi_tar04_trae_un_motivo_de_ejemplo_legible():

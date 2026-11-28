@@ -14,6 +14,8 @@ from sqlalchemy.exc import DBAPIError
 from app.core.api.errors import problema, traducir_error_bd
 from app.core.security import audit
 from app.core.security.hsm import (
+    REFERENCIA_HMAC_PAN,
+    VERSION_HMAC_PAN,
     ClaveNoAutorizada,
     ErrorHsm,
     Hsm,
@@ -186,13 +188,15 @@ def pan_de_prueba(conn_seguridad: Connection, id_tarjeta: int, hsm: Hsm) -> str:
 
     Solo existe fuera de producción. Nunca se registra ni se devuelve en la API.
     """
-    guardado = repository.obtener_pan_ficticio(conn_seguridad, id_tarjeta)
+    guardado = repository.obtener_pan_seguro(conn_seguridad, id_tarjeta)
     if guardado is None:
         raise problema(
-            503, "PAN_NO_DISPONIBLE", "La tarjeta no tiene un PAN ficticio custodiado."
+            503, "PAN_NO_DISPONIBLE", "No hay un PAN disponible para la tarjeta."
         )
     try:
-        return hsm.descifrar_pan(guardado[0], guardado[1], id_tarjeta)
+        return hsm.descifrar_pan(
+            guardado[0], guardado[1], id_tarjeta, version=guardado[2]
+        )
     except ErrorHsm:
         raise problema(
             503, "PAN_NO_DISPONIBLE", "No se pudo recuperar el PAN ficticio."
@@ -321,7 +325,7 @@ def _compensar_pan(conn_seguridad: Connection, id_tarjeta: int) -> None:
     falla, queda un PAN de un IdTarjeta que no existe (los IDENTITY no se reutilizan).
     """
     try:
-        repository.borrar_pan_ficticio(conn_seguridad, id_tarjeta)
+        repository.borrar_pan_seguro(conn_seguridad, id_tarjeta)
         conn_seguridad.commit()
     except DBAPIError:
         conn_seguridad.rollback()
@@ -422,12 +426,15 @@ def _emitir(
 
         # El PAN en claro solo vive aquí: se custodia cifrado por el HSM
         pan = _generar_pan(subproducto["codigo_bin"])
+        token_tarjeta = f"tok_{secrets.token_urlsafe(32)}"
         id_tarjeta = repository.insertar_tarjeta(
             conn,
             {
-                "token": f"tok_{secrets.token_urlsafe(32)}",
+                "token": token_tarjeta,
                 "mascara": _enmascarar(pan),
-                "hash_pan": hash_pan(pan),
+                "hash_pan": hash_pan(pan, hsm),
+                "version_huella": VERSION_HMAC_PAN,
+                "referencia_huella": REFERENCIA_HMAC_PAN,
                 "nombre_tarjeta": payload.nombre_tarjeta,
                 "tipo_tarjeta": payload.tipo_tarjeta,
                 "nombres": cuenta["nombres"],
@@ -450,7 +457,9 @@ def _emitir(
             raise _error_hsm(exc, "PAN_NO_DISPONIBLE") from None
         finally:
             del pan
-        repository.guardar_pan_ficticio(conn_seguridad, id_tarjeta, cifrado, referencia)
+        repository.guardar_pan_seguro(
+            conn_seguridad, id_tarjeta, cifrado, referencia, token_tarjeta
+        )
         # Si algo falla desde aquí, crear_tarjeta borra el PAN (no-op si no llegó al commit)
         custodiado.append(id_tarjeta)
         operacion.id_registro = id_tarjeta

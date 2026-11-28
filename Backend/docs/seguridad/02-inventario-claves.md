@@ -1,12 +1,13 @@
 # 02 · Inventario de claves y secretos
 
-Regla: **una clave por propósito**; ninguna se reutiliza entre funciones. Todas llegan por configuración
-(App Service, secretos de GitHub, `.env` local que nunca se versiona) y ninguna tiene valor por defecto de despliegue:
-sin la clave, la función responde 503 o no se activa.
+Regla: **una clave por propósito**; ninguna se reutiliza entre funciones. Los secretos de despliegue deben proceder de
+un almacén gestionado aprobado. Las claves `HSM_SIM_*` son una excepción de laboratorio, solo para `development` con
+bases locales y datos sintéticos; no deben configurarse en Azure, staging ni producción.
 
 | Clave / secreto (configuración) | Propósito | Algoritmo | Longitud | Origen | Rotación |
 |---|---|---|---|---|---|
-| `HSM_SIM_CLAVE_PAN` | Cifrar el PAN | AES-256-GCM, dato asociado = `IdTarjeta` | 256 bits (64 hex) | Generada por el equipo (HSM **simulado**) | Al pasar al HSM real; re-cifrado de PAN en esa migración |
+| `HSM_SIM_CLAVE_PAN` | Cifrar PAN sintético | AES-256-GCM, dato asociado = `IdTarjeta` | 256 bits (64 hex) | Generada para laboratorio; no es una clave gestionada | No usar en despliegues; migrar mediante proveedor aprobado antes de cualquier dato real |
+| `HSM_SIM_CLAVE_HMAC_PAN` | Búsqueda exacta de PAN sintético sin hash vulnerable a diccionario | HMAC-SHA-256; clave independiente de `HSM_SIM_CLAVE_PAN` | 256 bits (64 hex) | Generada para laboratorio; no es una clave gestionada | `ReferenciaClaveHuella` + `VersionClaveHuella` y backfill local verificado; rotación real requiere proveedor aprobado |
 | `HSM_SIM_CLAVE_PVK` | PVK para el **PIN Offset IBM 3624** | 3DES (TDEA) | 112/168 bits (32 o 48 hex) | Generada por el equipo (simulado) | Con el HSM real |
 | `HSM_SIM_CLAVES_PIN_BLOCK` (JSON `keyReference → clave`; la de pruebas: `HSM_SIM_REFERENCIA_PIN_BLOCK`) | PIN Block ISO 9564-1 formato 4 | AES-256 | 256 bits | Generada por el equipo (simulado) | Agregar una referencia nueva y retirar la anterior |
 | `SOBRE_PIN_CLAVE` | Cifrar el sobre del PIN en reposo | AES-256-GCM | 256 bits | Generada por el equipo | Anual o ante sospecha; los sobres viven poco |
@@ -32,6 +33,7 @@ real asuma la verificación.
 
 ## HSM simulado
 
-`app/core/security/hsm.py` **no es un HSM certificado** (no cumple ISO 9564, PCI DSS ni PCI PIN): existe solo para
-desarrollo y pruebas con claves ficticias. En producción `obtener_hsm` lanza `HsmNoDisponible` hasta integrar el HSM de
-pagos (documento de integración pendiente). Las reglas de negocio solo dependen de la interfaz `Hsm`, así el cambio no toca los módulos.
+`app/core/security/hsm.py` **no es un HSM certificado** (no cumple PCI DSS ni PCI PIN): existe solo para
+desarrollo y pruebas con claves ficticias y PAN sintéticos. `obtener_hsm` lo rechaza fuera de `development`; staging y
+producción deben fallar cerrados hasta que exista una integración aprobada con HSM/gestión de claves. No se debe
+presentar el adaptador local como certificado ni configurar sus claves en App Service.

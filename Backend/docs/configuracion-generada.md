@@ -16,6 +16,13 @@ COOPERATIVA_NOMBRE y COOPERATIVA_SITIO_WEB son respaldos opcionales antes del al
 | `LIMITE_PETICIONES_ACTIVO` | `<class 'bool'>` | `True` | Por minuto y por IP. Mientras no se configure el proxy en Azure, todos llegan con la misma IP y comparten el límite. |
 | `EDITOR_ACCESOS_ACTIVO` | `<class 'bool'>` | `False` | Parámetro editor accesos activo |
 | `EDITOR_FUNCIONES_ACTIVO` | `<class 'bool'>` | `False` | Parámetro editor funciones activo |
+| `REVELACION_EXIGE_MFA` | `<class 'bool'>` | `False` | E5-05: código MFA (WorkOS TOTP) antes de mostrar datos completos del cliente. Pendiente: apagado hasta validarlo con usuarios; la revelación sigue auditada. |
+| `E104_POLITICA_ROLES_ACTIVA` | `<class 'bool'>` | `False` | Parámetro e104 politica roles activa |
+| `E104_POLITICA_ROLES` | `str \| None` | `None` | Parámetro e104 politica roles |
+| `E104_PERMISO_APROBAR_ROLES` | `<class 'str'>` | `''` | Parámetro e104 permiso aprobar roles |
+| `E104_RECUPERAR_CORREO` | `<class 'bool'>` | `False` | Parámetro e104 recuperar correo |
+| `E104_VERIFICAR_ASIGNACION_CAJA` | `<class 'bool'>` | `False` | Parámetro e104 verificar asignacion caja |
+| `E104_CORTE_ASIGNACION_CAJA` | `<class 'bool'>` | `False` | Parámetro e104 corte asignacion caja |
 | `LIMITE_LECTURA_POR_MINUTO` | `<class 'int'>` | `300` | Parámetro limite lectura por minuto |
 | `LIMITE_ESCRITURA_POR_MINUTO` | `<class 'int'>` | `60` | Parámetro limite escritura por minuto |
 | `LIMITE_SENSIBLE_POR_MINUTO` | `<class 'int'>` | `5` | Parámetro limite sensible por minuto |
@@ -62,7 +69,8 @@ COOPERATIVA_NOMBRE y COOPERATIVA_SITIO_WEB son respaldos opcionales antes del al
 | `FRONTEND_ORIGIN_REGEX` | `<class 'str'>` | `''` | Solo backend-dev, nunca producción: orígenes extra del FE (previews de PR de Cloudflare), aceptados si llegan en X-Forwarded-Host desde el Worker. Ejemplo: ^https://[a-z0-9-]+-banking-platform-front\.cuenta\.workers\.dev$ |
 | `PROXY_SECRETO` | `<class 'pydantic.types.SecretStr'>` | `Secreto; nunca se documenta su valor` | ASVS 4.1.3 / 15.3.4: secreto compartido con el Worker de Cloudflare. Solo una petición que lo trae (X-Proxy-Secreto) puede fijar la IP del usuario (X-Cliente-Ip). Vacío (local) = se usa la IP de la conexión. Mismo valor que el secreto del Worker |
 | `PROXY_EXIGIDO` | `<class 'bool'>` | `False` | True = se rechaza (403) toda petición que no venga del Worker con el secreto |
-| `HSM_SIM_CLAVE_PAN` | `<class 'pydantic.types.SecretStr'>` | `Secreto; nunca se documenta su valor` | HSM simulado de tarjetas (app/core/security/hsm.py): claves ficticias en hex. Vacías = HSM no disponible (503). En producción nunca se usan. Deben ser las mismas en local y Azure: comparten la base donde está el PAN cifrado. |
+| `HSM_SIM_CLAVE_PAN` | `<class 'pydantic.types.SecretStr'>` | `Secreto; nunca se documenta su valor` | Adaptador simulado solo para development con bases locales y datos sintéticos. No configurar en staging/Azure/producción; no sustituye un HSM o almacén gestionado. |
+| `HSM_SIM_CLAVE_HMAC_PAN` | `<class 'pydantic.types.SecretStr'>` | `Secreto; nunca se documenta su valor` | Parámetro hsm sim clave hmac pan |
 | `HSM_SIM_CLAVE_PVK` | `<class 'pydantic.types.SecretStr'>` | `Secreto; nunca se documenta su valor` | Parámetro hsm sim clave pvk |
 | `HSM_SIM_CLAVES_PIN_BLOCK` | `dict[str, pydantic.types.SecretStr]` | `Secreto; nunca se documenta su valor` | keyReference -> clave AES-256 del PIN Block ISO-4 (64 hex), en JSON |
 | `HSM_SIM_REFERENCIA_PIN_BLOCK` | `<class 'str'>` | `'TEST-KEY-01'` | La que usa el endpoint de pruebas que simula el PIN pad |
@@ -75,4 +83,5 @@ COOPERATIVA_NOMBRE y COOPERATIVA_SITIO_WEB son respaldos opcionales antes del al
 | `MONGO_DB` | `<class 'str'>` | `'banking_platform'` | Parámetro mongo db |
 | `DOCUMENTOS_CLAVE` | `<class 'pydantic.types.SecretStr'>` | `Secreto; nunca se documenta su valor` | Documentos (E5-08, P4-10): contenido cifrado (AES-256-GCM) en la colección `documentos` de MongoDB; sin clave o sin MONGO_URI responde 503. |
 | `DOCUMENTOS_MAX_BYTES` | `<class 'int'>` | `5242880` | Parámetro documentos max bytes |
+| `VIRUSTOTAL_API_KEY` | `<class 'pydantic.types.SecretStr'>` | `Secreto; nunca se documenta su valor` | Reputación opcional por hash (core/documentos/analisis.py). Vacía = solo reglas locales. Solo se envía el SHA-256, nunca el archivo (LOPDP). |
 | `WORKOS_AUDIT_USER_IDS` | `dict[str, Annotated[int, FieldInfo(annotation=NoneType, required=True, metadata=[Strict(strict=True), Ge(ge=1), Le(le=2147483647)])]]` | `Factoría dict` | Vínculos administrados por despliegue, nunca por el navegador ni por email. |

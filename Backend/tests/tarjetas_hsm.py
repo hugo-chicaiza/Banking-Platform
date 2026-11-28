@@ -8,7 +8,7 @@ IBM 3624 se prueban de punta a punta.
 from dataclasses import dataclass, field
 from typing import Any
 
-from app.core.security.hsm import HsmSimulado
+from app.core.security.hsm import VERSION_PAN, HsmSimulado
 from app.modules.tarjetas import repository, service
 
 REFERENCIA = "TEST-KEY-01"
@@ -17,6 +17,7 @@ HSM = HsmSimulado(
     clave_pvk=bytes(range(100, 116)),
     claves_pin_block={REFERENCIA: bytes(range(32, 64))},
     referencia_pin_block=REFERENCIA,
+    clave_hmac_pan=bytes(range(64, 96)),
 )
 # PAN ficticio de la tarjeta 301 (BIN de prueba 500000, Luhn válido)
 PAN = "5000001234567896"
@@ -24,13 +25,14 @@ PAN = "5000001234567896"
 
 @dataclass
 class SeguridadEnMemoria:
-    """Pruebas.PanFicticio y Tarjetas.TarjetaPIN."""
+    """Custodia sintética versionada y Tarjetas.TarjetaPIN."""
 
-    pans: dict[int, tuple[bytes, str]] = field(default_factory=dict)
+    pans: dict[int, tuple[bytes, str, int]] = field(default_factory=dict)
     pines: dict[int, dict[str, Any]] = field(default_factory=dict)
 
     def custodiar(self, id_tarjeta: int = 301, pan: str = PAN) -> None:
-        self.pans[id_tarjeta] = HSM.cifrar_pan(pan, id_tarjeta)
+        cifrado, referencia = HSM.cifrar_pan(pan, id_tarjeta)
+        self.pans[id_tarjeta] = (cifrado, referencia, VERSION_PAN)
 
     def pin(self, id_tarjeta: int = 301) -> dict[str, Any]:
         return self.pines[id_tarjeta]
@@ -40,8 +42,8 @@ def instalar(monkeypatch) -> SeguridadEnMemoria:
     memoria = SeguridadEnMemoria()
     monkeypatch.setattr(service, "obtener_hsm", lambda: HSM)
 
-    def guardar_pan(_c, id_tarjeta, cifrado, referencia):
-        memoria.pans[id_tarjeta] = (cifrado, referencia)
+    def guardar_pan(_c, id_tarjeta, cifrado, referencia, token_tarjeta):
+        memoria.pans[id_tarjeta] = (cifrado, referencia, VERSION_PAN)
 
     def guardar_pin(_c, id_tarjeta, offset, referencia_pvk, requiere_cambio):
         memoria.pines[id_tarjeta] = {
@@ -52,12 +54,12 @@ def instalar(monkeypatch) -> SeguridadEnMemoria:
             "intentos": 0,
         }
 
-    monkeypatch.setattr(repository, "guardar_pan_ficticio", guardar_pan)
+    monkeypatch.setattr(repository, "guardar_pan_seguro", guardar_pan)
     monkeypatch.setattr(
-        repository, "borrar_pan_ficticio", lambda _c, i: memoria.pans.pop(i, None)
+        repository, "borrar_pan_seguro", lambda _c, i: memoria.pans.pop(i, None)
     )
     monkeypatch.setattr(
-        repository, "obtener_pan_ficticio", lambda _c, i: memoria.pans.get(i)
+        repository, "obtener_pan_seguro", lambda _c, i: memoria.pans.get(i)
     )
     monkeypatch.setattr(repository, "guardar_pin_generado", guardar_pin)
     return memoria

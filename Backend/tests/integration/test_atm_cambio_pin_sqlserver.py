@@ -11,6 +11,7 @@ import pytest
 from fastapi import HTTPException
 from sqlalchemy import text
 
+from app.core.security.hsm import REFERENCIA_HMAC_PAN
 from app.core.security.pin_version import version_desde_fecha
 from app.modules.atm import cambio_pin_service as svc
 from app.modules.atm import repository, service, session
@@ -55,12 +56,29 @@ def sql(laboratorio_sql, monkeypatch):
     fecha = datetime(2026, 1, 1)
     offset, pvk = HSM.generar_offset(*HSM.construir_pin_block("4826", PAN), PAN)
     cifrado, ref = HSM.cifrar_pan(PAN, tarjeta)
+    token = "LAB-" + str(tarjeta)
     with engines["cooperativa"].begin() as c:
         c.execute(
             text(
-                "INSERT Tarjeta.Tarjeta VALUES(:id,1,1,'Cliente','Sintetico',1,'Debito','20260101','20990101','Activa',:hash,0)"
+                """
+                INSERT Tarjeta.Tarjeta (
+                    IdTarjeta, TokenTarjeta, IdCliente, IdCuenta, NombresTitular,
+                    ApellidosTitular, PinAsignado, TipoTarjeta, FechaEmision,
+                    FechaExpiracion, Estado, HashNumeroTarjeta, VersionClaveHuella,
+                    ReferenciaClaveHuella
+                )
+                VALUES (
+                    :id, :token, 1, 1, 'Cliente', 'Sintetico', 1, 'Debito',
+                    '20260101', '20990101', 'Activa', :hash, 1, :referencia_hmac
+                )
+                """
             ),
-            {"id": tarjeta, "hash": service.hash_pan(PAN)},
+            {
+                "id": tarjeta,
+                "token": token,
+                "hash": service.hash_pan(PAN, HSM),
+                "referencia_hmac": REFERENCIA_HMAC_PAN,
+            },
         )
     with engines["seguridad"].begin() as c:
         c.execute(
@@ -70,8 +88,14 @@ def sql(laboratorio_sql, monkeypatch):
             {"id": tarjeta, "fecha": fecha, "offset": offset, "pvk": pvk},
         )
         c.execute(
-            text("INSERT Pruebas.PanFicticio VALUES(:id,:pan,:ref)"),
-            {"id": tarjeta, "pan": cifrado, "ref": ref},
+            text(
+                """
+                INSERT Tarjetas.TarjetaNumeroCifrado
+                    (IdTarjeta, TokenTarjeta, NumeroCifrado, ReferenciaClave, VersionClave)
+                VALUES (:id, :token, :pan, :ref, 1)
+                """
+            ),
+            {"id": tarjeta, "token": token, "pan": cifrado, "ref": ref},
         )
     sesion = session.SesionATM(
         str(uuid4()),

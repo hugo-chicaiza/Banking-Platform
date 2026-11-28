@@ -324,10 +324,16 @@ def test_ciclo_completo_pin_generado_activacion_bloqueo_e_historial(client, bd, 
     assert hsm.verificar_pin(bloque, referencia, pan, offset, "SIM-PVK-01")
     assert pin not in r.text and offset not in r.text
     custodia = seg.execute(
-        text("SELECT ReferenciaClave FROM Pruebas.PanFicticio WHERE IdTarjeta = :i"),
+        text(
+            """
+            SELECT ReferenciaClave, VersionClave
+            FROM Tarjetas.TarjetaNumeroCifrado WHERE IdTarjeta = :i
+            """
+        ),
         {"i": id_tarjeta},
     ).one()
     assert custodia[0] == "SIM-PAN-01"
+    assert custodia[1] == 1
 
     # Generar: fija FechaEmision; activar a mano no se permite
     r = cambiar("Generada")

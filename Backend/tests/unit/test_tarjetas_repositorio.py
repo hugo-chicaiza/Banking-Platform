@@ -3,6 +3,7 @@
 from datetime import date
 from unittest.mock import MagicMock
 
+from app.core.security.hsm import REFERENCIA_HMAC_PAN
 from app.modules.tarjetas import repository
 from tests.pin_version import FECHA_PIN
 
@@ -36,6 +37,42 @@ def test_emision_inserta_solicitada_con_fecha_de_solicitud():
     sql = str(conn.execute.call_args.args[0])
     assert "FechaSolicitud" in sql and "'Solicitada'" in sql
     assert "'Generada'" not in sql
+
+
+def test_guardar_pan_seguro_usa_tabla_versionada_sin_pruebas():
+    conn = MagicMock()
+
+    repository.guardar_pan_seguro(conn, 301, b"\x01\x02", "SIM-PAN-01", "tok_prueba")
+
+    sql, params = conn.execute.call_args.args
+    texto = str(sql)
+    assert "Tarjetas.TarjetaNumeroCifrado" in texto
+    assert "Pruebas" not in texto
+    assert "INSERT INTO Tarjetas.TarjetaNumeroCifrado" in texto
+    assert "MERGE" not in texto
+    assert params == {
+        "id_tarjeta": 301,
+        "token": "tok_prueba",
+        "cifrado": b"\x01\x02",
+        "referencia": "SIM-PAN-01",
+        "version": 1,
+    }
+
+
+def test_busqueda_pan_solo_acepta_version_hmac_conocida():
+    conn = MagicMock()
+    conn.execute.return_value.scalar_one_or_none.return_value = 301
+
+    assert repository.obtener_id_tarjeta_por_hash(conn, b"h" * 32) == 301
+
+    sql, params = conn.execute.call_args.args
+    assert "VersionClaveHuella = :version" in str(sql)
+    assert "ReferenciaClaveHuella = :referencia" in str(sql)
+    assert params == {
+        "hash_pan": b"h" * 32,
+        "version": 1,
+        "referencia": REFERENCIA_HMAC_PAN,
+    }
 
 
 def test_guardar_pin_generado_actualiza_o_inserta_habilitado():

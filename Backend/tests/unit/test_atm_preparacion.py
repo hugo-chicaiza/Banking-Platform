@@ -1,6 +1,5 @@
 """Identificación y preparación de ATM-01; sin sesión ni terminal ficticios."""
 
-import hashlib
 import json
 from datetime import date, timedelta
 from typing import Annotated, Any, cast
@@ -19,6 +18,7 @@ from app.modules.atm.schemas import ATMAuthRequest
 from app.modules.tarjetas import repository as tarjetas_repository
 from app.modules.tarjetas.identificacion import hash_pan
 from tests.pin_version import VERSION_PIN
+from tests.tarjetas_hsm import HSM
 
 PAN = "5000001234567896"
 BLOQUE = "A" * 32
@@ -41,21 +41,25 @@ def sin_base_real(monkeypatch):
 
 
 def test_hash_compartido_es_el_binario_de_tar01():
-    esperado = hashlib.sha256(PAN.encode()).digest()
-    assert hash_pan(PAN) == esperado
-    assert isinstance(hash_pan(PAN), bytes)
-    assert len(hash_pan(PAN)) == 32
+    esperado = HSM.huella_pan(PAN)
+    assert hash_pan(PAN, HSM) == esperado
+    assert isinstance(hash_pan(PAN, HSM), bytes)
+    assert len(hash_pan(PAN, HSM)) == 32
 
 
 @pytest.mark.parametrize("id_tarjeta", [301, None])
 def test_busqueda_parametrizada_no_envia_pan_a_sql(id_tarjeta):
     conn = MagicMock()
     conn.execute.return_value.scalar_one_or_none.return_value = id_tarjeta
-    digest = hash_pan(PAN)
+    digest = hash_pan(PAN, HSM)
     assert tarjetas_repository.obtener_id_tarjeta_por_hash(conn, digest) == id_tarjeta
     sql, params = conn.execute.call_args.args
     assert "WHERE HashNumeroTarjeta = :hash_pan" in str(sql)
-    assert params == {"hash_pan": digest}
+    assert params == {
+        "hash_pan": digest,
+        "version": 1,
+        "referencia": "SIM-PAN-HMAC-01",
+    }
     assert PAN not in str(sql)
     assert PAN not in str(params)
 
@@ -64,7 +68,7 @@ def test_busqueda_no_escoge_una_tarjeta_si_el_hash_esta_duplicado():
     conn = MagicMock()
     conn.execute.return_value.scalar_one_or_none.side_effect = MultipleResultsFound()
     with pytest.raises(MultipleResultsFound):
-        tarjetas_repository.obtener_id_tarjeta_por_hash(conn, hash_pan(PAN))
+        tarjetas_repository.obtener_id_tarjeta_por_hash(conn, hash_pan(PAN, HSM))
 
 
 def test_schema_contrato_aprobado_y_secretos_ocultos():
@@ -228,6 +232,7 @@ def entorno(monkeypatch):
     monkeypatch.setattr(repository, "obtener_tarjeta", e.leer_tarjeta)
     monkeypatch.setattr(repository, "obtener_cuentas_autorizadas", e.cuentas)
     monkeypatch.setattr(tarjetas_repository, "obtener_id_tarjeta_por_hash", e.resolver)
+    monkeypatch.setattr(service, "obtener_hsm", lambda: HSM)
     monkeypatch.setattr(service, "autenticar_pin_ficticio_atm", e.pin)
     return e
 
@@ -238,7 +243,7 @@ async def test_flujo_interno_resuelve_id_y_reutiliza_autenticacion(entorno):
     resultado = await service.validar_acceso_atm(
         e.conn, ATMAuthRequest.model_validate(BODY)
     )
-    e.resolver.assert_called_once_with(e.conn, hash_pan(PAN))
+    e.resolver.assert_called_once_with(e.conn, hash_pan(PAN, HSM))
     e.pin.assert_awaited_once_with(e.conn, 301, BLOQUE, "TEST-KEY-01")
     e.cuentas.assert_called_once_with(e.conn, 301)
     assert resultado.id_atm == 1

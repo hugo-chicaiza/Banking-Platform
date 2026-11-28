@@ -6,7 +6,6 @@ demuestra locks ni sintaxis del motor Azure SQL y nunca abre conexiones externas
 
 import asyncio
 import copy
-import hashlib
 import socket
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
@@ -224,7 +223,7 @@ def lab(monkeypatch, tmp_path):
         "validar_tarjeta",
         lambda *_: {
             "estado_tarjeta": "Activa",
-            "hash_numero_tarjeta": hashlib.sha256(PAN.encode()).digest(),
+            "hash_numero_tarjeta": HSM.huella_pan(PAN),
         },
     )
     acceso = service.AccesoATMValidado(

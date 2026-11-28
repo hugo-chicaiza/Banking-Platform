@@ -1,11 +1,11 @@
-"""Identificación compartida del PAN, con la representación binaria de TAR-01."""
+"""Identificación compartida del PAN mediante HMAC-SHA-256."""
 
-import hashlib
+from app.core.security.hsm import Hsm, obtener_hsm
 
 
-def hash_pan(pan: str) -> bytes:
-    """Calcula el mismo SHA-256 binario usado en la emisión; no conserva el PAN.
-
-    La validación del formato pertenece al componente que recibe la entrada.
-    """
-    return hashlib.sha256(pan.encode()).digest()
+def hash_pan(pan: str, hsm: Hsm | None = None) -> bytes:
+    """Calcula la huella HMAC; no existe ruta SHA ni huella sin clave."""
+    if not isinstance(pan, str):
+        raise TypeError("PAN inválido")
+    servicio = hsm if hsm is not None else obtener_hsm()
+    return servicio.huella_pan(pan)
