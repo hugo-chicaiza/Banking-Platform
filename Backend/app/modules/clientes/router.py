@@ -219,6 +219,14 @@ def obtener_perfil_cliente(
 # Roles: ASESOR, ADMIN
 
 
+@_gestion_router.get("/registro/requisitos", dependencies=_EDITAR_CLIENTE)
+def requisitos_registro(conn: Db) -> tutores.RequisitosAlta:
+    fecha = hoy()
+    return tutores.RequisitosAlta(
+        edad_mayoria=tutores.edad_mayoria(conn, fecha), fecha_actual=fecha
+    )
+
+
 @_gestion_router.post(
     "/validaciones/documento",
     operation_id="CLI01",
@@ -340,7 +348,7 @@ def solicitar_reincorporacion(
     dependencies=_EDITAR_CLIENTE,
 )
 def registrar_cliente(
-    payload: ClienteCreate,
+    payload: tutores.ClienteAlta,
     request: Request,
     creado_por: UsuarioAuditoria,
     conn: Db,

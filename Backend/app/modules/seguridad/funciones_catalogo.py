@@ -70,6 +70,7 @@ FUNCIONES = (
         "Clientes",
         REGISTRO,
         (
+            ("GET", C + "/registro/requisitos"),
             ("POST", C + "/validaciones/documento"),
             ("POST", C),
             ("POST", C + "/reincorporaciones"),
