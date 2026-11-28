@@ -781,14 +781,11 @@ _PERMITIDAS = {
     ("INACTIVA", "ACTIVA"),
     ("ACTIVA", "BLOQUEADA"),
     ("BLOQUEADA", "ACTIVA"),
-    ("ACTIVA", "CERRADA"),
-    ("INACTIVA", "CERRADA"),
 }
 _ESTADO_BD = {
     "ACTIVA": "Activa",
     "INACTIVA": "Inactiva",
     "BLOQUEADA": "Bloqueada",
-    "CERRADA": "Cerrada",
 }
 _CUPO_BODY = {
     "cupoDiario": "400.00",
@@ -837,7 +834,7 @@ def _historial_row(**cambios):
 
 def _cambiar(
     db: _FakeConn,
-    estado: EstadoCuenta = "CERRADA",
+    estado: EstadoCuenta = "INACTIVA",
     motivo: str = "Solicitud del titular",
 ) -> Cuenta:
     return service.cambiar_estado_cuenta(
@@ -861,8 +858,6 @@ def test_cta05_matriz_completa(anterior, nuevo, eventos_auditados):
     respuestas = [*previas, [_cuenta_bd_row(estado=_ESTADO_BD[anterior])]]
     valida = (anterior, nuevo) in _PERMITIDAS
     if valida:
-        if nuevo == "CERRADA":
-            respuestas.append([])
         respuestas.extend([[], [_cuenta_bd_row(estado=_ESTADO_BD[nuevo])]])
     db = _fake_conn(*respuestas)
     if valida:
@@ -872,8 +867,7 @@ def test_cta05_matriz_completa(anterior, nuevo, eventos_auditados):
         assert not db.respuestas
         sql, parametros = db.consultas[-2]
         assert parametros == {"id_cuenta": 501, "estado": _ESTADO_BD[nuevo]}
-        assert "FechaCierre = CASE" in sql
-        assert "AT TIME ZONE 'SA Pacific Standard Time'" in sql
+        assert "SET Estado = :estado" in sql
         assert all("Tarjeta." not in sql for sql, _ in db.consultas)
     else:
         with pytest.raises(HTTPException) as exc:
@@ -891,66 +885,17 @@ def test_cta05_matriz_completa(anterior, nuevo, eventos_auditados):
     assert evento.resultado == ("Exitoso" if valida else "Fallido")
 
 
-@pytest.mark.parametrize("saldo,retenido", [("0.01", "0"), ("0", "0.01"), ("1", "1")])
-def test_cta05_cierre_con_importes(saldo, retenido):
-    db = _fake_conn(
-        [_cuenta_bd_row(saldo=Decimal(saldo), saldo_retenido=Decimal(retenido))]
-    )
-    with pytest.raises(HTTPException) as exc:
-        _cambiar(db)
-    _assert_http_error(exc, 409, "CUENTA_CON_SALDO")
-    assert db.rollbacks == 1 and db.commits == 0 and len(db.consultas) == 1
-
-
-def test_cta05_cuenta_inexistente():
-    db = _fake_conn([])
-    with pytest.raises(HTTPException) as exc:
-        _cambiar(db)
-    _assert_http_error(exc, 404, "CUENTA_NO_ENCONTRADA")
-    assert db.rollbacks == 1 and db.commits == 0
-
-
-@pytest.mark.parametrize(
-    "estado,deuda,bloquea",
-    [
-        ("PENDIENTE", False, True),
-        ("DESEMBOLSADO", True, True),
-        ("DESEMBOLSADO", False, False),
-        ("REVERSADO", True, False),
-    ],
-)
-def test_cta05_credito_vinculado_y_deuda_real(monkeypatch, estado, deuda, bloquea):
-    respuestas = [[_cuenta_bd_row()], [{"id_solicitud": 99, "estado": estado}]]
-    if not bloquea:
-        respuestas.extend([[], [_cuenta_bd_row(estado="Cerrada")]])
-    db = _fake_conn(*respuestas)
-    llamadas = []
-
-    def tiene_deuda(conn, solicitud):
-        assert conn is db and solicitud == 99
-        llamadas.append(solicitud)
-        return deuda
-
-    monkeypatch.setattr(service.clientes_service, "credito_tiene_deuda", tiene_deuda)
-    if bloquea:
-        with pytest.raises(HTTPException) as exc:
-            _cambiar(db)
-        _assert_http_error(exc, 409, "CUENTA_CON_CREDITO_VIGENTE")
-        assert db.rollbacks == 1 and db.commits == 0
-    else:
-        assert _cambiar(db).estado == "CERRADA"
-    sql, params = db.consultas[1]
-    assert "IdCuentaDesembolso = :id_cuenta" in sql
-    assert "WITH (UPDLOCK, HOLDLOCK)" in sql
-    assert params == {"id_cuenta": 501}
-    assert llamadas == ([99] if estado == "DESEMBOLSADO" else [])
+def test_cta05_no_cierra_sin_la_cola_de_aprobaciones():
+    with pytest.raises(ValidationError):
+        CuentaEstadoUpdate.model_validate(
+            {"estado": "CERRADA", "motivo": "Solicitud del titular"}
+        )
 
 
 @pytest.mark.parametrize(
     "etapa",
     [
         "bloquear_cuenta",
-        "desembolsos_de_cuenta",
         "actualizar_estado_cuenta",
         "obtener_cuenta_por_id",
         "commit",
@@ -959,7 +904,7 @@ def test_cta05_credito_vinculado_y_deuda_real(monkeypatch, estado, deuda, bloque
 def test_cta05_rollback_y_auditoria_ante_cualquier_fallo(
     monkeypatch, etapa, eventos_auditados
 ):
-    db = _fake_conn([_cuenta_bd_row()], [], [], [_cuenta_bd_row(estado="Cerrada")])
+    db = _fake_conn([_cuenta_bd_row()], [], [_cuenta_bd_row()])
 
     def fallar(*args, **kwargs):
         raise RuntimeError("fallo simulado")

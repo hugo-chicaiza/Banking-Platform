@@ -305,6 +305,19 @@ ROLES_POR_RUTA: dict[tuple[str, str], tuple[str, ...]] = {
     ("GET", "/api/v1/creditos/tipos/{idTipoCredito}/condiciones"): ("ASESOR", "ADMIN"),
     ("POST", "/api/v1/creditos/simulaciones"): ("ASESOR", "ADMIN"),
     ("POST", "/api/v1/cuentas"): ("ASESOR", "ADMIN"),
+    ("GET", "/api/v1/cuentas/{idCuenta}/cierre"): (
+        "ASESOR",
+        "SUPERVISOR",
+        "ADMIN",
+        "CUMPLIMIENTO",
+    ),
+    ("POST", "/api/v1/cuentas/{idCuenta}/cierre"): ("ASESOR", "ADMIN"),
+    ("GET", "/api/v1/cuentas/{idCuenta}/certificado-cierre"): (
+        "ASESOR",
+        "SUPERVISOR",
+        "ADMIN",
+        "CUMPLIMIENTO",
+    ),
     ("GET", "/api/v1/cuentas/{idCuenta}/retenciones"): ("SUPERVISOR", "CUMPLIMIENTO"),
     ("POST", "/api/v1/cuentas/{idCuenta}/retenciones"): ("SUPERVISOR", "CUMPLIMIENTO"),
     ("POST", "/api/v1/cuentas/{idCuenta}/retenciones/{idRet}/liberacion"): (
@@ -882,6 +895,7 @@ def test_roles_de_la_tarea_pasan_el_control(client, ruta, monkeypatch):
         }
         or "/retenciones" in ruta[1]
         or ruta[1] == "/api/v1/cuentas/{idCuenta}/subproducto"
+        or ruta == ("POST", "/api/v1/cuentas/{idCuenta}/cierre")
         or ruta == ("POST", "/api/v1/tarjetas")
     ):
         from app.modules.aprobaciones import identidad
@@ -919,6 +933,7 @@ def test_roles_de_la_tarea_pasan_el_control(client, ruta, monkeypatch):
         ("POST", "/api/v1/clientes/{idCliente}/relaciones/firmantes/{idRelacion}/fin"),
         ("POST", "/api/v1/clientes/{idCliente}/relaciones/tutor"),
         ("POST", "/api/v1/clientes/{idCliente}/relaciones/tutor/relevo"),
+        ("POST", "/api/v1/cuentas/{idCuenta}/cierre"),
     }
 
     if ruta in rutas_con_vinculacion and r.status_code == 403:
