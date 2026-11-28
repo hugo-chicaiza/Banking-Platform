@@ -11,6 +11,7 @@ from sqlalchemy import Connection
 from app.core.api.errors import problema
 from app.modules.aprobaciones.registro import Objetivo, Operacion, Plan
 from app.modules.clientes import (
+    correo_principal,
     documentos_identidad,
     gestion_documentos,
     repository,
@@ -216,7 +217,8 @@ class EdicionCliente:
             )
             for campo, valor in cambios.items()
         ]
-        repository.actualizar_cliente_sensible(conn, fila["id_cliente"], cambios)
+        with correo_principal.traducir_conflicto():
+            repository.actualizar_cliente_sensible(conn, fila["id_cliente"], cambios)
         for campo, observaciones, anterior, nuevo in historial:
             repository.insertar_historial_cliente(
                 conn,

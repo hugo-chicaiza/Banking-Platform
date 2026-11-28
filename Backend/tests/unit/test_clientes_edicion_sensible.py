@@ -322,6 +322,7 @@ def bd(monkeypatch):
         "duplicado": False,
         "archivo": True,
         "exige": False,
+        "dominios": [],
     }
     monkeypatch.setattr(
         repository, "bloquear_datos_sensibles", lambda _c, _i: estado["fila"]
@@ -334,7 +335,15 @@ def bd(monkeypatch):
     monkeypatch.setattr(
         repository, "archivo_respaldo_valido", lambda _c, _i, _a: estado["archivo"]
     )
-    monkeypatch.setattr(general, "valor", lambda _c, _clave, _f: estado["exige"])
+    monkeypatch.setattr(
+        general,
+        "valor",
+        lambda _c, clave, _f: (
+            estado["dominios"]
+            if clave == service.correo_principal.PARAMETRO_DOMINIOS
+            else estado["exige"]
+        ),
+    )
     estado["actualizar"] = MagicMock()
     estado["historial"] = MagicMock()
     monkeypatch.setattr(repository, "actualizar_cliente_sensible", estado["actualizar"])
@@ -444,6 +453,16 @@ def test_correo_no_exige_respaldo(bd):
         MagicMock(), OBJETIVO, _contenido(email="nuevo@correo.ec"), HOY
     )
     assert plan.despues == {"email": "nuevo@correo.ec"}
+
+
+def test_aplicar_revalida_dominio_antes_de_escribir(bd):
+    contenido = _contenido(email="nuevo@correo.ec")
+    assert MANEJADOR.preparar(MagicMock(), OBJETIVO, contenido, HOY).despues
+    bd["dominios"] = ["correo.ec"]
+    with pytest.raises(HTTPException) as exc:
+        MANEJADOR.aplicar(MagicMock(), OBJETIVO, contenido, "user_01", 55)
+    _assert_problema(exc, 422, "DOMINIO_BLOQUEADO")
+    bd["actualizar"].assert_not_called()
 
 
 def test_aplicar_actualiza_e_historial_enlaza_la_solicitud(bd):
