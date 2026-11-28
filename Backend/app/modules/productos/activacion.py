@@ -18,9 +18,12 @@ from app.modules.parametros.service import hoy
 # Tipos cuyo dinero entra por canales: necesitan cupos en al menos uno.
 TIPOS_CON_CUPOS = ("CUENTA_AHORRO", "CUENTA_CORRIENTE")
 
-# E4-01 documenta CAJA_DEPOSITO para depósitos en ventanilla en cuentas de ahorro.
-# La matriz exhaustiva de operaciones por producto todavía está pendiente.
-_PLANTILLAS_CONFIRMADAS = {"CUENTA_AHORRO": ("CAJA_DEPOSITO",)}
+# Familias cuya necesidad por tipo está confirmada. La presencia de estas
+# plantillas no certifica que el conjunto completo de operaciones esté cubierto.
+_PLANTILLAS_CONFIRMADAS = {
+    "CUENTA_AHORRO": ("CAJA_DEPOSITO",),
+    "CREDITO": ("CREDITO_DESEMBOLSO_CUENTA",),
+}
 
 DESCRIPCION = {
     "PRODUCTO_ACTIVO": "El producto está activo",
