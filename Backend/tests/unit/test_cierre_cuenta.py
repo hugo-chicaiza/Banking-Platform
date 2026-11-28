@@ -34,9 +34,7 @@ def test_lista_cierre_nombra_todos_los_impedimentos_simultaneos(monkeypatch):
     monkeypatch.setattr(cierre, "_credito_vigente", Mock(return_value=True))
     monkeypatch.setattr(cierre, "_solicitudes_pendientes", Mock(return_value=True))
 
-    resultado = cierre.lista_cierre(
-        Mock(spec=Connection), 501, "001", seguridad=Mock()
-    )
+    resultado = cierre.lista_cierre(Mock(spec=Connection), 501, "001", seguridad=Mock())
 
     por_codigo = {v.codigo: v.resultado for v in resultado.verificaciones}
     assert por_codigo == {
@@ -102,7 +100,13 @@ def test_tarjetas_generadas_y_solicitadas_cuentan_como_vivas():
 
     sql, parametros = conn.execute.call_args.args
     assert "Estado NOT IN" in str(sql)
-    assert set(parametros.values()) == {501, "Anulada", "Cancelada", "Cerrada", "Vencida"}
+    assert set(parametros.values()) == {
+        501,
+        "Anulada",
+        "Cancelada",
+        "Cerrada",
+        "Vencida",
+    }
 
 
 def test_retencion_activa_de_monto_cero_no_se_ignora():
@@ -275,6 +279,7 @@ def test_operacion_cta_cerrar_registrada_para_la_cola_y_openapi():
         "CTACierreSolicitar"
     )
     assert paths["/api/v1/cuentas/{idCuenta}/cierre"]["post"]["responses"]["202"]
-    assert paths[
-        "/api/v1/cuentas/{idCuenta}/certificado-cierre"
-    ]["get"]["operationId"] == "CTACertificadoCierre"
+    assert (
+        paths["/api/v1/cuentas/{idCuenta}/certificado-cierre"]["get"]["operationId"]
+        == "CTACertificadoCierre"
+    )

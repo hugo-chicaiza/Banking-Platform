@@ -41,16 +41,8 @@ class ListaCierre(CamelModel):
     verificaciones: list[VerificacionCierre]
 
 
-def _verificacion(
-    codigo: str, cumple: bool | None, detalle: str
-) -> VerificacionCierre:
-    resultado = (
-        "NoVerificable"
-        if cumple is None
-        else "Cumple"
-        if cumple
-        else "Impide"
-    )
+def _verificacion(codigo: str, cumple: bool | None, detalle: str) -> VerificacionCierre:
+    resultado = "NoVerificable" if cumple is None else "Cumple" if cumple else "Impide"
     return VerificacionCierre(codigo=codigo, resultado=resultado, detalle=detalle)
 
 
@@ -61,17 +53,21 @@ def _cuenta(
     *,
     bloquear: bool = False,
 ) -> dict[str, Any]:
-    consulta = text("""
+    consulta = (
+        text("""
         SELECT IdCuenta, NumeroCuenta, IdCliente, RTRIM(IdAgencia) AS IdAgencia,
                Estado, Saldo, SaldoRetenido, FechaCierre
         FROM Cuentas.Cuenta WITH (XLOCK,HOLDLOCK)
         WHERE IdCuenta=:id AND IdAgencia=:agencia
-    """) if bloquear else text("""
+    """)
+        if bloquear
+        else text("""
         SELECT IdCuenta, NumeroCuenta, IdCliente, RTRIM(IdAgencia) AS IdAgencia,
                Estado, Saldo, SaldoRetenido, FechaCierre
         FROM Cuentas.Cuenta
         WHERE IdCuenta=:id AND IdAgencia=:agencia
     """)
+    )
     fila = (
         conn.execute(
             consulta,
@@ -164,9 +160,7 @@ def _version(cuenta: dict[str, Any]) -> str:
 
 
 def _impedimentos(lista: ListaCierre) -> list[str]:
-    return [
-        f"{v.codigo}: {v.resultado} — {v.detalle}" for v in lista.verificaciones
-    ]
+    return [f"{v.codigo}: {v.resultado} — {v.detalle}" for v in lista.verificaciones]
 
 
 def lista_cierre(
@@ -187,10 +181,7 @@ def lista_cierre(
         id_cuenta,
         excluir_solicitud,
     )
-    saldo_cero = (
-        cuenta["Saldo"] == Decimal(0)
-        and cuenta["SaldoRetenido"] == Decimal(0)
-    )
+    saldo_cero = cuenta["Saldo"] == Decimal(0) and cuenta["SaldoRetenido"] == Decimal(0)
     verificaciones = [
         _verificacion(
             "saldoCero",
@@ -261,7 +252,10 @@ class Cierre:
                 422, "CONTENIDO_INVALIDO", "Indique el motivo del cierre."
             ) from None
         lista = lista_cierre(
-            conn, int(objetivo.id), _agencia(objetivo), seguridad=get_engine("seguridad")
+            conn,
+            int(objetivo.id),
+            _agencia(objetivo),
+            seguridad=get_engine("seguridad"),
         )
         if not lista.puede_cerrar:
             raise problema(
