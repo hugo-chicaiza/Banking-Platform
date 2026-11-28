@@ -38,7 +38,6 @@ from app.modules.caja.schemas import (
     Devolucion,
     DevolucionRequest,
     Dotacion,
-    DotacionRequest,
     Jornada,
     JornadaOpen,
     MovimientoCaja,
@@ -326,6 +325,7 @@ def _dotacion(fila: Fila, bajo_minimo: bool | None = None) -> Dotacion:
         tipo_dotacion=fila["TipoDotacion"],
         monto=fila["Monto"],
         id_movimiento_boveda=fila["IdMovimientoBoveda"],
+        id_asiento_contable=fila.get("IdAsientoContable"),
         boveda_bajo_minimo=bajo_minimo,
         estado=fila["Estado"],
     )
@@ -822,107 +822,6 @@ def monto_de_desglose(conn: Connection, desglose: list[Desglose]) -> Decimal:
         (decimal(valores[d.id_denominacion]) * d.cantidad for d in desglose),
         Decimal(0),
     )
-
-
-def registrar_dotacion(
-    conn: Connection,
-    usuario: Usuario,
-    id_interno: int | None,
-    id_jornada: int,
-    datos: DotacionRequest,
-    ip: str,
-) -> Dotacion:
-    with auditar(
-        "REGISTRAR_DOTACION",
-        "Caja.DotacionesCaja",
-        usuario,
-        ip,
-        f"jornada={id_jornada} tipo={datos.tipo_dotacion} boveda={datos.id_boveda}",
-    ) as registro:
-        actor = exigir_id_interno(id_interno)
-
-        with conn.begin():
-            jornada = jornada_bloqueada(conn, id_jornada)
-
-            modo = verificar_alcance(
-                usuario,
-                actor,
-                jornada,
-                ("CAJERO", "SUPERVISOR"),
-            )
-
-            if jornada["Estado"] != "ABIERTA":
-                raise problema(
-                    409,
-                    "JORNADA_NO_ABIERTA",
-                    "La jornada no está ABIERTA.",
-                )
-
-            validar_custodia(
-                modo,
-                actor,
-                datos.autorizado_por,
-                jornada["IdUsuario"],
-            )
-
-            verificar_autorizador(modo, datos.autorizado_por)
-
-            # El cuadre toma SaldoInicial = DineroInicial (FK CuadreCaja ->
-            # JornadasCaja) y no suma la INICIAL: si difieren, el efectivo real
-            # nunca cuadraría. Con la jornada aún sin actividad, se puede cancelar.
-            if datos.tipo_dotacion == "INICIAL" and monto_de_desglose(
-                conn, datos.desglose
-            ) != decimal(jornada["DineroInicial"]):
-                raise problema(
-                    422,
-                    "DOTACION_INICIAL_NO_COINCIDE",
-                    "La dotación INICIAL debe ser igual al dinero inicial de la jornada.",
-                )
-
-            ahora = ahora_ecuador()
-            id_fecha = fecha_contable(conn, ahora)
-            salida = repo.registrar_dotacion(
-                conn,
-                id_jornada,
-                datos.id_boveda,
-                datos.autorizado_por,
-                datos.tipo_dotacion,
-                desglose_json(datos.desglose),
-                datos.observacion,
-                id_fecha,
-            )
-
-            id_dotacion = int(salida["IdDotacionCaja"])
-            registro.id_registro = str(id_dotacion)
-            id_movimiento = str(salida["IdMovimientoBoveda"])
-
-            fila = repo.obtener_dotacion(conn, id_dotacion)
-
-            if fila is None:
-                raise RuntimeError("La dotación no se encontró tras registrarla")
-
-            generar_asiento(
-                conn,
-                OperacionContable(
-                    codigo_plantilla="DOT_CAJA",
-                    clave_evento=f"DOTACION_CAJA:{id_dotacion}",
-                    id_agencia=jornada["IdAgencia"].strip(),
-                    id_fecha_contable=id_fecha,
-                    id_usuario=actor,
-                    fecha_hora=ahora,
-                    importes={"PRINCIPAL": decimal(fila["Monto"])},
-                ),
-            )
-            registro.confirmar(
-                conn,
-                objetivo="Boveda.MovimientoBoveda",
-                id_objetivo=id_movimiento,
-                cambios={"idDotacionCaja": registro.id_registro},
-            )
-            return _dotacion(
-                fila,
-                bool(salida["BovedaBajoMinimo"]),
-            )
 
 
 # --- CAJ-13: generar cuadre ----------

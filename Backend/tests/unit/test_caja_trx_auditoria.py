@@ -15,7 +15,6 @@ from sqlalchemy.exc import OperationalError
 
 from app.core.security.operador import auditar
 from app.modules.caja import repository as caja_repo
-from app.modules.caja import service as caja_service
 from app.modules.caja.router import router as caja_router
 from app.modules.caja.schemas import Desglose, Jornada
 from app.modules.transacciones import repository as trx_repo
@@ -23,7 +22,6 @@ from app.modules.transacciones.router import router as trx_router
 from tests.caja_contexto import (
     BASE,
     CUADRE,
-    DOTACION,
     ID_CAJERO,
     ID_SUPERVISOR,
     JORNADA,
@@ -149,99 +147,6 @@ def test_h02_caj18_sigue_rechazando_cuadre_desactualizado(ctx: Contexto) -> None
 
     assert r.status_code == 409
     assert code(r) == "CUADRE_DESACTUALIZADO"
-
-
-# --- H-03 · CAJ-07 INICIAL distinta del DineroInicial --------------------------------
-
-CUERPO_INICIAL = {
-    "idBoveda": 2,
-    "autorizadoPor": ID_SUPERVISOR,
-    "tipoDotacion": "INICIAL",
-    "desglose": [{"idDenominacion": 1, "cantidad": 3}],
-}
-
-
-def _preparar_dotacion(ctx: Contexto, valor: str) -> None:
-    # Esta suite verifica custodia; el motor contable se prueba en su propia suite.
-    ctx.monkeypatch.setattr(caja_service, "generar_asiento", MagicMock(return_value=1))
-    ctx.fake("obtener_jornada", JORNADA)  # DineroInicial 100.50
-    ctx.fake("valores_denominaciones", {1: Decimal(valor)})
-    ctx.fake("autorizador_vigente", True)
-    ctx.fake("id_fecha_contable", 20261104)
-    ctx.fake(
-        "registrar_dotacion",
-        {"IdDotacionCaja": 801, "IdMovimientoBoveda": 9001, "BovedaBajoMinimo": False},
-    )
-    ctx.fake("obtener_dotacion", DOTACION)
-
-
-def test_h03_caj07_inicial_distinta_del_dinero_inicial_422(ctx: Contexto) -> None:
-    _preparar_dotacion(ctx, "50.00")  # 3 x 50 = 150 != 100.50
-
-    r = ctx.cliente.post(f"{BASE}/jornadas/55/dotaciones", json=CUERPO_INICIAL)
-
-    assert r.status_code == 422
-    assert code(r) == "DOTACION_INICIAL_NO_COINCIDE"
-    assert not ctx.llamadas["registrar_dotacion"]
-
-
-def test_h03_caj07_inicial_igual_al_dinero_inicial_201(ctx: Contexto) -> None:
-    _preparar_dotacion(ctx, "33.50")  # 3 x 33.50 = 100.50
-
-    r = ctx.cliente.post(f"{BASE}/jornadas/55/dotaciones", json=CUERPO_INICIAL)
-
-    assert r.status_code == 201, r.text
-    assert len(ctx.llamadas["registrar_dotacion"]) == 1
-
-
-def test_h03_caj07_adicional_no_se_compara_con_dinero_inicial(ctx: Contexto) -> None:
-    _preparar_dotacion(ctx, "50.00")
-
-    r = ctx.cliente.post(
-        f"{BASE}/jornadas/55/dotaciones",
-        json={**CUERPO_INICIAL, "tipoDotacion": "ADICIONAL"},
-    )
-
-    assert r.status_code == 201, r.text
-    assert (
-        "valores_denominaciones" not in ctx.llamadas
-        or not ctx.llamadas["valores_denominaciones"]
-    )
-
-
-def test_h03_caj07_inicial_con_denominacion_inexistente_422(ctx: Contexto) -> None:
-    _preparar_dotacion(ctx, "50.00")
-    ctx.fake("valores_denominaciones", {})
-
-    r = ctx.cliente.post(f"{BASE}/jornadas/55/dotaciones", json=CUERPO_INICIAL)
-
-    assert r.status_code == 422
-    assert code(r) == "DENOMINACION_NO_ENCONTRADA"
-    assert not ctx.llamadas["registrar_dotacion"]
-
-
-# --- H-04 · autorizadoPor sin validar (CAJ-07 y CAJ-15 con el cajero como actor) ----
-
-
-def test_h04_caj07_cajero_con_autorizador_no_valido_422(ctx: Contexto) -> None:
-    _preparar_dotacion(ctx, "33.50")
-    ctx.fake("autorizador_vigente", False)
-
-    r = ctx.cliente.post(f"{BASE}/jornadas/55/dotaciones", json=CUERPO_INICIAL)
-
-    assert r.status_code == 422
-    assert code(r) == "AUTORIZADOR_NO_VALIDO"
-    assert not ctx.llamadas["registrar_dotacion"]
-
-
-def test_h04_caj07_supervisor_no_consulta_autorizador(ctx: Contexto) -> None:
-    _preparar_dotacion(ctx, "33.50")
-    ctx.fake("autorizador_vigente", AssertionError("No aplica al supervisor"))
-    ctx.como("SUPERVISOR", id_interno=ID_SUPERVISOR)
-
-    r = ctx.cliente.post(f"{BASE}/jornadas/55/dotaciones", json=CUERPO_INICIAL)
-
-    assert r.status_code == 201, r.text
 
 
 def test_h04_caj15_cajero_con_autorizador_no_valido_422(ctx: Contexto) -> None:
