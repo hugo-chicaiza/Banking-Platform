@@ -287,7 +287,7 @@ def _patch_repo_catalogos_ok(monkeypatch):
     )
 
 
-def _mock_documentos_alta(monkeypatch):
+def _mock_documentos_alta(monkeypatch, dominios=()):
     from app.modules.clientes import documentos_identidad
 
     def validar(conn, consulta):
@@ -313,6 +313,28 @@ def _mock_documentos_alta(monkeypatch):
         ),
     )
     monkeypatch.setattr(documentos_identidad, "insertar", lambda *_, **__: 1)
+    monkeypatch.setattr(
+        service.correo_principal.general, "valor", lambda *_: list(dominios)
+    )
+
+
+def test_alta_normaliza_correo_y_rechaza_dominio_bloqueado_sin_escribir(monkeypatch):
+    conn = MagicMock(spec=Connection)
+    _mock_documentos_alta(monkeypatch, dominios=("Bloqueado.Example",))
+    _patch_repo_catalogos_ok(monkeypatch)
+    monkeypatch.setattr(service, "edad_mayoria", lambda *_: 18)
+    crear = MagicMock()
+    monkeypatch.setattr(repository, "crear_cliente", crear)
+    datos = _payload_natural_valido().model_dump()
+    datos["email"] = "  Persona@BLOQUEADO.EXAMPLE  "
+    payload = ClienteCreate.model_validate(datos)
+
+    assert payload.email == "persona@bloqueado.example"
+    with pytest.raises(HTTPException) as error:
+        service.registrar_cliente(conn, payload, 7, "127.0.0.1")
+    _assert_http_error(error, 422, "DOMINIO_BLOQUEADO")
+    crear.assert_not_called()
+    conn.commit.assert_not_called()
 
 
 def test_registrar_cliente_natural_exitoso(monkeypatch):

@@ -1,7 +1,13 @@
 from datetime import date, datetime
 from typing import Annotated, Any, Literal
 
-from pydantic import ConfigDict, Field, StringConstraints, field_validator
+from pydantic import (
+    BeforeValidator,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    field_validator,
+)
 from pydantic.json_schema import SkipJsonSchema
 
 from app.core.api.schemas import CamelModel, Money
@@ -25,6 +31,12 @@ TextoCliente = Annotated[
 ]
 EmailCliente = Annotated[
     str, Field(min_length=5, max_length=150, pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+]
+EmailPrincipal = Annotated[
+    EmailCliente,
+    BeforeValidator(
+        lambda valor: valor.strip().lower() if isinstance(valor, str) else valor
+    ),
 ]
 CodigoPostal = Annotated[str, Field(min_length=6, max_length=6, pattern=r"^[0-9]{6}$")]
 
@@ -205,7 +217,7 @@ class ClienteCreate(CamelModel):
     codigo_pais_nacionalidad: str = Field(default="ECU", min_length=3, max_length=3)
     telefono_convencional: str | None = Field(default=None, max_length=15)
     telefono_celular: str = Field(min_length=7, max_length=15)
-    email: EmailCliente
+    email: EmailPrincipal
     consentimiento_datos: bool
     direccion: DireccionCreate
 
@@ -310,7 +322,7 @@ class ClienteUpdate(CamelModel):
     telefono_celular: str | SkipJsonSchema[None] = Field(
         default=None, min_length=7, max_length=15
     )
-    email: EmailCliente | SkipJsonSchema[None] = None
+    email: EmailPrincipal | SkipJsonSchema[None] = None
     fecha_nacimiento: date | SkipJsonSchema[None] = None
     tipo_documento: TipoDocumento | SkipJsonSchema[None] = None
     identificacion: Identificacion | SkipJsonSchema[None] = None
@@ -339,7 +351,7 @@ class CambiosSensibles(CamelModel):
     fecha_nacimiento: date | None = None
     tipo_documento: TipoDocumento | None = None
     identificacion: Identificacion | None = None
-    email: EmailCliente | None = None
+    email: EmailPrincipal | None = None
 
     @field_validator(
         *(c for c in _NO_ANULABLES if c != "telefono_celular"), mode="before"

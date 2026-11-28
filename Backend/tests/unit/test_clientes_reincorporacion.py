@@ -23,6 +23,7 @@ from app.main import app
 from app.modules.aprobaciones.contratos import SolicitudAceptada
 from app.modules.aprobaciones.manejadores import registro_inicial
 from app.modules.clientes import (
+    correo_principal,
     repository,
     router,
     service,
@@ -407,6 +408,7 @@ def test_manejador_contenido_invalido_422(
 def test_preparar_sin_datos_personales_en_antes_despues(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(correo_principal.general, "valor", lambda *_: [])
     conn = MagicMock()
     payload = _payload_reincorporacion()
     contenido = ContenidoReincorporacion(
@@ -451,6 +453,7 @@ def test_preparar_sin_datos_personales_en_antes_despues(
 
 
 def test_aplicar_reincorporacion_completa(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(correo_principal.general, "valor", lambda *_: [])
     conn = MagicMock()
     payload = _payload_reincorporacion()
     contenido = ContenidoReincorporacion(

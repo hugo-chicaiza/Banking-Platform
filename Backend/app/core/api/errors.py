@@ -180,7 +180,8 @@ def traducir_error_bd(
     Solo se lee exc.orig para sacar el número del THROW: str(exc) trae el SQL y sus
     parámetros, que pueden ser tokens o hashes.
     """
-    numeros = [int(n) for n in _DB_NUMERO_RE.findall(str(exc.orig))]
+    mensaje_bd = str(exc.orig)
+    numeros = [int(n) for n in _DB_NUMERO_RE.findall(mensaje_bd)]
 
     # CTA-08 publica otro nombre para el mismo THROW; los consumidores existentes
     # conservan CUPO_EXCEDE_PRODUCTO. Las traducciones siguen centralizadas aquí.
@@ -196,6 +197,8 @@ def traducir_error_bd(
         # El mensaje de SQL Server trae el valor repetido (una cédula, por ejemplo):
         # solo se registra el número
         logger.warning("registro duplicado db_code=%s", duplicado)
+        if "'UX_Cliente_EmailPrincipal'" in mensaje_bd:
+            return problema(409, "EMAIL_DUPLICADO", "Ese correo ya está registrado.")
         return problema(409, "REGISTRO_DUPLICADO", "El registro ya existe.")
 
     numero = next((n for n in numeros if 50000 <= n <= 59999), None)

@@ -14,7 +14,7 @@ from app.modules.aprobaciones.contratos import SolicitudAceptada
 from app.modules.catalogos.tipos_direccion import (
     validar_activo as validar_tipo_direccion,
 )
-from app.modules.clientes import repository, tutores
+from app.modules.clientes import correo_principal, repository, tutores
 from app.modules.clientes.habilitacion import activar_si_cumple
 from app.modules.clientes.relaciones import edad_en, edad_mayoria
 from app.modules.clientes.schemas import (
@@ -263,6 +263,8 @@ def validar_cambios_sensibles(
     validar_estado_editable(actual["estado"])
     finales = actual | cambios
     _validar_tipo_persona(finales)
+    if "email" in cambios:
+        correo_principal.validar_dominio(conn, cambios["email"], hoy)
     if "fecha_nacimiento" in cambios and cambios["fecha_nacimiento"] >= hoy:
         raise problema(
             422,
@@ -1049,6 +1051,7 @@ def registrar_cliente(
             422, "TUTOR_NO_APLICA", "El tutor solo se registra para un menor."
         )
 
+    correo_principal.validar_dominio(conn, payload.email, fecha)
     relacion = None
     try:
         cliente_dict: dict[str, Any] = repository.crear_cliente(

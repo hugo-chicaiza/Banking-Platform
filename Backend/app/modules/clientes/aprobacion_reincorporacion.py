@@ -10,8 +10,9 @@ from sqlalchemy import Connection
 from app.core.api.errors import problema
 from app.core.api.schemas import CamelModel
 from app.modules.aprobaciones.registro import Objetivo, Operacion, Plan
-from app.modules.clientes import repository
+from app.modules.clientes import correo_principal, repository
 from app.modules.clientes.schemas import ClienteCreate
+from app.modules.parametros.service import hoy as hoy_ecuador
 
 CODIGO_REINCORPORACION = "CLI-REINCORPORAR"
 TIPO_OBJETIVO = "ClienteReincorporacion"
@@ -84,6 +85,7 @@ class ManejadorReincorporacion:
     ) -> Plan:
         datos = _contenido(contenido)
         fila = _reincorporable(conn, objetivo, datos)
+        correo_principal.validar_dominio(conn, datos.datos.email, hoy)
         return Plan(
             datos.model_dump(mode="json", by_alias=True),
             {"estado": "Eliminado"},
@@ -105,16 +107,18 @@ class ManejadorReincorporacion:
         datos = _contenido(contenido)
         _reincorporable(conn, objetivo, datos)
         cliente_datos = datos.datos
+        correo_principal.validar_dominio(conn, cliente_datos.email, hoy_ecuador())
         id_cliente = int(objetivo.id)
 
         # 1. Actualización SQL de datos personales y estado a Pendiente
-        repository.reincorporar_cliente(
-            conn,
-            id_cliente,
-            cliente_datos,
-            id_agencia=datos.id_agencia,
-            id_solicitud=id_solicitud,
-        )
+        with correo_principal.traducir_conflicto():
+            repository.reincorporar_cliente(
+                conn,
+                id_cliente,
+                cliente_datos,
+                id_agencia=datos.id_agencia,
+                id_solicitud=id_solicitud,
+            )
 
         # 2. Inserción de nueva dirección principal
         # snake_case: es lo que espera repository.insertar_direccion
