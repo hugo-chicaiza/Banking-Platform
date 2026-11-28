@@ -1463,6 +1463,9 @@ def verificar_operable_en_ventanilla(
         detalles = {
             "CLIENTE_NO_ACTIVO": "El cliente no está Activo.",
             "PRODUCTO_SIN_OPERACION_PRESENCIAL": "El producto no admite ventanilla.",
+            "CERTIFICADO_REQUIERE_APORTE_ESPECIALIZADO": (
+                "El certificado requiere el flujo contable de aportes."
+            ),
             "CUENTA_NO_ACTIVA": "La cuenta no admite este movimiento.",
             "MENOR_SIN_TUTOR": "La cuenta del menor no tiene un tutor autorizado vigente.",
         }

@@ -11,7 +11,7 @@ from pydantic import (
 
 from app.core.api.schemas import CamelModel, Money
 
-TipoCuenta = Literal["Ahorro", "Corriente"]
+TipoCuenta = Literal["Ahorro", "Corriente", "CERTIFICADO_APORTACION"]
 MonedaUsd = Literal[840]
 ID_MONEDA_USD: MonedaUsd = 840
 

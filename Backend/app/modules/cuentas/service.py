@@ -19,6 +19,7 @@ from app.modules.clientes.relaciones import (
 )
 from app.modules.contabilidad.service import ZONA_ECUADOR
 from app.modules.cuentas import repository
+from app.modules.cuentas.certificados import es_cuenta_certificado
 from app.modules.cuentas.schemas import (
     ID_MONEDA_USD,
     AutorizadoCuenta,
@@ -201,6 +202,8 @@ def cuenta_operable(
         motivos.append("CUENTA_NO_ACTIVA")
     if datos["EstadoCliente"] != "Activo":
         motivos.append("CLIENTE_NO_ACTIVO")
+    if es_cuenta_certificado(datos.get("TipoCuenta")):
+        motivos.append("CERTIFICADO_REQUIERE_APORTE_ESPECIALIZADO")
     if canal == "VENT" and not datos["PermiteOperacionesPresenciales"]:
         motivos.append("PRODUCTO_SIN_OPERACION_PRESENCIAL")
 
@@ -677,9 +680,11 @@ def obtener_cupos(conn: Connection, id_cuenta: int) -> list[CupoEfectivo]:
     return _cupos_efectivos(conn, id_cuenta)
 
 
-def _validar_canal(conn: Connection, id_canal: int) -> None:
-    if repository.obtener_canal(conn, id_canal) is None:
+def _validar_canal(conn: Connection, id_canal: int) -> dict:
+    canal = repository.obtener_canal(conn, id_canal)
+    if canal is None:
         raise problema(404, "CANAL_NO_ENCONTRADO", "El canal no existe.")
+    return canal
 
 
 def actualizar_cupo(
@@ -697,7 +702,16 @@ def actualizar_cupo(
         cuenta = repository.bloquear_cuenta(conn, id_cuenta)
         if cuenta is None or (agencia is not None and cuenta["id_agencia"] != agencia):
             raise problema(404, "CUENTA_NO_ENCONTRADA", "La cuenta no existe.")
-        _validar_canal(conn, id_canal)
+        canal = _validar_canal(conn, id_canal)
+        if (
+            es_cuenta_certificado(cuenta.get("tipo_cuenta"))
+            and canal.get("codigo_canal") != "VENT"
+        ):
+            raise problema(
+                409,
+                "CERTIFICADO_SIN_CUPOS_FUERA_VENTANILLA",
+                "Los certificados solo admiten cupos de ventanilla.",
+            )
         producto = repository.bloquear_cupo_producto(conn, id_cuenta, id_canal)
         if producto is None:
             raise problema(

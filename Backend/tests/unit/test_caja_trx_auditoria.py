@@ -298,6 +298,31 @@ def test_e602_cuenta_bloqueada_admite_creditos(
     assert cuenta_operable(ctx.conn, 501, naturaleza, "VENT") == esperado
 
 
+@pytest.mark.parametrize("naturaleza", ["C", "D"])
+def test_e609_certificado_no_usa_movimientos_genericos_de_caja(
+    ctx: Contexto, naturaleza: str
+) -> None:
+    from app.modules.cuentas.service import cuenta_operable
+
+    ctx.fake(
+        "restricciones_cuenta",
+        {
+            "EstadoCuenta": "Activa",
+            "EstadoCliente": "Activo",
+            "TipoCliente": "Juridico",
+            "FechaNacimiento": None,
+            "PermiteOperacionesPresenciales": True,
+            "TipoCuenta": "CERTIFICADO_APORTACION",
+        },
+        trx_repo,
+    )
+
+    assert cuenta_operable(ctx.conn, 501, naturaleza, "VENT") == (
+        False,
+        ["CERTIFICADO_REQUIERE_APORTE_ESPECIALIZADO"],
+    )
+
+
 def test_h05_deposito_con_titular_activo_sigue_igual(ctx: Contexto) -> None:
     preparar_ventanilla(ctx)
 
